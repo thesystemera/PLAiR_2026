@@ -5,11 +5,11 @@ from sqlalchemy import select
 from typing import Optional
 import stripe
 
-from keys import api_secrets
+from config.settings import settings
 from database.models import User
 from services import log_service, auth_service
 
-stripe.api_key = api_secrets.STRIPE_SECRET_KEY
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 stripe_router = APIRouter()
 
@@ -39,7 +39,7 @@ async def get_current_user(
 
 @stripe_router.get('/stripe_key')
 async def get_stripe_key():
-    return JSONResponse({'publishableKey': api_secrets.STRIPE_PUBLISHABLE_KEY})
+    return JSONResponse({'publishableKey': settings.STRIPE_PUBLISHABLE_KEY})
 
 @stripe_router.post('/create-checkout-session')
 async def create_checkout_session(
@@ -76,7 +76,7 @@ async def create_checkout_session(
 async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     payload = await request.body()
     sig_header = request.headers.get('Stripe-Signature')
-    endpoint_secret = api_secrets.STRIPE_WEBHOOK_SECRET
+    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
 
     try:
         event = stripe.Webhook.construct_event(

@@ -1,5 +1,5 @@
 import httpx
-from keys import api_secrets
+from config.settings import settings
 from services import log_service
 
 class EventsService:
@@ -9,7 +9,7 @@ class EventsService:
     async def get_ticketmaster_events(self, city, country_code, start_date, end_date):
         url = "https://app.ticketmaster.com/discovery/v2/events.json"
         params = {
-            "apikey": api_secrets.TICKETMASTER_API_KEY,
+            "apikey": settings.TICKETMASTER_API_KEY,
             "city": city,
             "countryCode": country_code,
             "startDateTime": start_date.strftime("%Y-%m-%dT%H:%M:%SZ"),

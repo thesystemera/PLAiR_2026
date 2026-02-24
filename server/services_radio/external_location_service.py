@@ -1,11 +1,11 @@
 import asyncio
 import googlemaps
-from keys import api_secrets
+from config.settings import settings
 from services import log_service
 
 class LocationService:
     def __init__(self):
-        self.gmaps = googlemaps.Client(key=api_secrets.GOOGLE_PLACES_API_KEY)
+        self.gmaps = googlemaps.Client(key=settings.GOOGLE_PLACES_API_KEY)
         log_service.system("Location Service Initialized")
 
     async def get_nearby_places(self, query, location, radius=1500, max_results=5):

@@ -3,7 +3,7 @@ import datetime
 from collections import defaultdict
 from async_lru import alru_cache
 
-from keys import api_secrets
+from config.settings import settings
 from services import log_service
 
 class WebService:
@@ -78,7 +78,7 @@ class WebService:
                 log_service.external("Weather: Retrieved weather data from cache")
                 return cached_data
 
-        weather_api_key = api_secrets.WEATHER_API_KEY
+        weather_api_key = settings.WEATHER_API_KEY
         base_url = "https://api.openweathermap.org/data/2.5/"
         endpoint = "weather" if forecast_type == 'current' else "forecast"
         endpoint_url = f"{base_url}{endpoint}?lat={float(latitude)}&lon={float(longitude)}&appid={weather_api_key}&units=metric"

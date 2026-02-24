@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 BASE_DIR = Path(__file__).parent.parent.parent
 
@@ -269,6 +272,21 @@ class Settings:
     ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
     TTS_CONCURRENCY_LIMIT: int = int(os.getenv("TTS_CONCURRENCY_LIMIT", "4"))
 
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
+    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+    YOUTUBE_CLIENT_ID: str = os.getenv("YOUTUBE_CLIENT_ID", "")
+    YOUTUBE_CLIENT_SECRET: str = os.getenv("YOUTUBE_CLIENT_SECRET", "")
+    YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
+
+    GOOGLE_PLACES_API_KEY: str = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    MUSIXMATCH_API_KEY: str = os.getenv("MUSIXMATCH_API_KEY", "")
+    WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
+    TICKETMASTER_API_KEY: str = os.getenv("TICKETMASTER_API_KEY", "")
+
     SUNO_API_KEY: str = os.getenv("SUNO_API_KEY", "")
     SUNO_BASE_URL: str = os.getenv("SUNO_BASE_URL", "https://api.sunoapi.org/api/v1")
     SUNO_CALLBACK_URL: str = os.getenv("SUNO_CALLBACK_URL", "https://example.com/callback")
@@ -277,32 +295,7 @@ class Settings:
 
     @classmethod
     def load_api_key_from_file(cls, key_name: str) -> str:
-        if not getattr(cls, key_name, ""):
-            try:
-                import sys
-                keys_path = str(BASE_DIR / "server" / "keys")
-                if keys_path not in sys.path:
-                    sys.path.insert(0, keys_path)
-                from api_secrets import ELEVENLABS_API_KEY
-                if key_name == "ELEVENLABS_API_KEY":
-                    cls.ELEVENLABS_API_KEY = ELEVENLABS_API_KEY
-            except ImportError as e:
-                print(f"[SETTINGS] Failed to import api_secrets: {e}")
-            except Exception as e:
-                print(f"[SETTINGS] Unexpected error loading key: {e}")
-
-        if key_name == "GEMINI_API_KEY" and not cls.GEMINI_API_KEY:
-            key_file = BASE_DIR / "server" / "keys" / "gemini_key.txt"
-            if key_file.exists():
-                cls.GEMINI_API_KEY = key_file.read_text().strip()
-        elif key_name == "SUNO_API_KEY" and not cls.SUNO_API_KEY:
-            key_file = BASE_DIR / "server" / "keys" / "suno_key.txt"
-            if key_file.exists():
-                cls.SUNO_API_KEY = key_file.read_text().strip()
-        elif key_name == "ELEVENLABS_API_KEY" and not cls.ELEVENLABS_API_KEY:
-            key_file = BASE_DIR / "server" / "keys" / "elevenlabs_key.txt"
-            if key_file.exists():
-                cls.ELEVENLABS_API_KEY = key_file.read_text().strip()
+        """Returns the named API key from environment (loaded via .env at startup)."""
         return getattr(cls, key_name, "")
 
     @classmethod
