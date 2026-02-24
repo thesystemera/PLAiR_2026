@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description" content="Personalized Localized Adaptive Interactive Radio - Your AI-powered music companion" />
+    <meta name="theme-color" content="#000000" />
+
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/images/plair_icon_192.png" />
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PLAiR" />
+    <link rel="apple-touch-icon" href="/images/plair_icon_192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/images/plair_icon_512.png" />
+
+    <link rel="manifest" href="/manifest.json" />
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <script src="https://js.stripe.com/v3/"></script>
+
+    <title>PLAiR - Personalized Localized Adaptive Interactive Radio</title>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <audio id="recordButtonPress1" src="/audio/interface/record_button_press_1.mp3" preload="auto"></audio>
+    <audio id="recordButtonPress2" src="/audio/interface/record_button_press_2.mp3" preload="auto"></audio>
+    <audio id="recordButtonPress3" src="/audio/interface/record_button_press_3.mp3" preload="auto"></audio>
+    <audio id="recordButtonRelease1" src="/audio/interface/record_button_release_1.mp3" preload="auto"></audio>
+    <audio id="recordButtonRelease2" src="/audio/interface/record_button_release_2.mp3" preload="auto"></audio>
+    <audio id="recordButtonRelease3" src="/audio/interface/record_button_release_3.mp3" preload="auto"></audio>
+    <audio id="broadcastSound" src="/audio/interface/broadcast.mp3" preload="auto"></audio>
+    <audio id="txtSound" src="/audio/interface/txt.mp3" preload="auto"></audio>
+    <audio id="transcriptSound" src="/audio/interface/transcript.mp3" preload="auto"></audio>
+    <audio id="botSound" src="/audio/interface/bot.mp3" preload="auto"></audio>
+    <audio id="commandSound" src="/audio/interface/command.mp3" preload="auto"></audio>
+    <audio id="warningSound" src="/audio/interface/warning.mp3" preload="auto"></audio>
+    <audio id="errorSound" src="/audio/interface/error.mp3" preload="auto"></audio>
+    <audio id="infoSound" src="/audio/interface/info.mp3" preload="auto"></audio>
+    <audio id="spotifyTrackChangeSound" src="/audio/interface/spotify_track_change.mp3" preload="auto"></audio>
+    <audio id="spotifyErrorSound" src="/audio/interface/spotify_error.mp3" preload="auto"></audio>
+    <audio id="stopSound" src="/audio/interface/stop.mp3" preload="auto"></audio>
+
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
