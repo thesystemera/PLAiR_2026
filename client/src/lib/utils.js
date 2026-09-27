@@ -10,3 +10,14 @@ export function formatDateShort(dateStr) {
   const date = new Date(dateStr)
   return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 }
+
+export function isWebGL2Available() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2')
+    if (!gl) return false
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    return true
+  } catch {
+    return false
+  }
+}

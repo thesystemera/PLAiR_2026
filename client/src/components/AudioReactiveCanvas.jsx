@@ -1,5 +1,5 @@
 import {memo, useEffect, useMemo, useRef, useState} from 'react'
-import {Canvas, useFrame} from '@react-three/fiber'
+import {Canvas, useFrame, useThree} from '@react-three/fiber'
 import {
     CanvasTexture,
     ClampToEdgeWrapping,
@@ -22,6 +22,9 @@ import {
 import {TextRenderer} from '../lib/textRenderer'
 import {useUIState, useVideoClips} from '../contexts/UIStateContext'
 import {PANEL, useDynamicTheme} from '../contexts/DynamicThemeContext'
+import {VisualErrorBoundary} from './VisualErrorBoundary'
+import {isWebGL2Available} from '../lib/utils'
+import {logger} from '../lib/logger'
 
 
 
@@ -1315,6 +1318,31 @@ function MultiPassPlane({
   )
 }
 
+function ContextLossMonitor({ onContextLostChange }) {
+  const gl = useThree(state => state.gl)
+
+  useEffect(() => {
+    const canvas = gl.domElement
+    const handleLost = () => {
+      logger.warn('[AudioReactiveCanvas] WebGL context lost, showing fallback')
+      onContextLostChange(true)
+    }
+    const handleRestored = () => {
+      logger.info('[AudioReactiveCanvas] WebGL context restored')
+      onContextLostChange(false)
+    }
+    canvas.addEventListener('webglcontextlost', handleLost)
+    canvas.addEventListener('webglcontextrestored', handleRestored)
+    return () => {
+      canvas.removeEventListener('webglcontextlost', handleLost)
+      canvas.removeEventListener('webglcontextrestored', handleRestored)
+      onContextLostChange(false)
+    }
+  }, [gl, onContextLostChange])
+
+  return null
+}
+
 const LyricsRenderer = memo(function LyricsRenderer({
   lyricDataRef,
   lyricCanvasRef,
@@ -1374,10 +1402,11 @@ const LyricsRenderer = memo(function LyricsRenderer({
   return null
 })
 
-export const AudioReactiveCanvas = memo(function AudioReactiveCanvas({
+const AudioReactiveScene = memo(function AudioReactiveScene({
   depthMap,
   captureResolution = 128,
   glassBlurFactor = 1.0,
+  onContextLostChange,
 }) {
   const { currentArtwork } = useDynamicTheme()
   const { audioFeatures, lyricTimestamps, engineState, isOfflineRendering, settingsState } = useUIState()
@@ -1466,8 +1495,43 @@ export const AudioReactiveCanvas = memo(function AudioReactiveCanvas({
           lyricTextureRef={lyricTextureRef}
           lastWordRef={lastWordRef}
         />
+        <ContextLossMonitor onContextLostChange={onContextLostChange} />
       </Canvas>
     </>
+  )
+})
+
+const VisualFallback = memo(function VisualFallback() {
+  const { currentArtwork } = useDynamicTheme()
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
+      {currentArtwork && (
+        <div
+          className="absolute -inset-16 bg-cover bg-center opacity-60"
+          style={{ backgroundImage: `url(${currentArtwork})`, filter: 'blur(48px)' }}
+        />
+      )}
+      <div className="absolute inset-0 bg-black/50" />
+    </div>
+  )
+})
+
+export const AudioReactiveCanvas = memo(function AudioReactiveCanvas(props) {
+  const [webglAvailable] = useState(isWebGL2Available)
+  const [contextLost, setContextLost] = useState(false)
+
+  useEffect(() => {
+    if (!webglAvailable) logger.warn('[AudioReactiveCanvas] WebGL2 unavailable, using static fallback')
+  }, [webglAvailable])
+
+  if (!webglAvailable) return <VisualFallback />
+
+  return (
+    <VisualErrorBoundary name="AudioReactiveCanvas" fallback={<VisualFallback />}>
+      <AudioReactiveScene {...props} onContextLostChange={setContextLost} />
+      {contextLost && <VisualFallback />}
+    </VisualErrorBoundary>
   )
 })
 
