@@ -330,7 +330,7 @@ class AIService(SingletonService):
             call_timeout_s: float = 8.0,
             on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
             followup_tools: Optional[set] = None,
-            expected_tools: Optional[set] = None,
+            review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
             spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
@@ -344,7 +344,7 @@ class AIService(SingletonService):
         def build_configs(declarations):
             if not declarations:
                 plain = types.GenerateContentConfig(**base)
-                return plain, plain, plain
+                return plain, plain
             with_tools = types.GenerateContentConfig(
                 **base,
                 tools=[types.Tool(function_declarations=declarations)],
@@ -354,9 +354,9 @@ class AIService(SingletonService):
             def mode(value):
                 return with_tools.model_copy(update={"tool_config": types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(mode=value))})
-            return with_tools, mode(types.FunctionCallingConfigMode.NONE), mode(types.FunctionCallingConfigMode.ANY)
+            return with_tools, mode(types.FunctionCallingConfigMode.NONE)
 
-        tool_config, final_config, forced_config = build_configs(function_declarations)
+        tool_config, final_config = build_configs(function_declarations)
         declared = {declaration.name for declaration in function_declarations or []}
 
         contents: list = [types.Content(role="user", parts=[types.Part.from_text(text=user_message)])]
@@ -364,8 +364,7 @@ class AIService(SingletonService):
         preambles: list = []
         round_usage: list = []
         strikes = 0
-        force_next = False
-        nudged = False
+        reviewed = False
         tool_rounds = 0
         rounds = 0
 
@@ -383,7 +382,7 @@ class AIService(SingletonService):
                 spec=spec,
                 client=self.client,
                 contents=contents,
-                config=final_config if is_last else forced_config if force_next else tool_config,
+                config=final_config if is_last else tool_config,
                 prefer=model
             )
             round_usage.append(usage)
@@ -394,26 +393,22 @@ class AIService(SingletonService):
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
             text = self._visible_text(parts)
 
-            force_next = False
-            missing = sorted(expected_tools or ()) if not any(
-                call["name"] in (expected_tools or ()) for call in calls_log) else []
-            if not function_calls and missing and not nudged and not is_last:
-                nudged = force_next = True
-                log_service.warning(f"DJ tool turn: planned {', '.join(missing)} not called - nudging")
-                if text.strip():
-                    preambles.append(text)
-                    if on_preamble is not None:
-                        try:
-                            await on_preamble(text, [])
-                        except Exception as e:
-                            log_service.error(f"DJ preamble handler failed: {e}")
-                if parts:
-                    contents.append(content)
-                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=(
-                    f"[STUDIO] Nothing has happened yet: saying it on air does nothing. The producer planned "
-                    f"{', '.join(missing)} for this message. Call it now (or the tool that fits better). Your line "
-                    f"already aired, so don't repeat it; after the result, add at most one short line."))]))
-                continue
+            if not function_calls and review is not None and not reviewed and not is_last:
+                prompt = review(text, calls_log)
+                if prompt:
+                    reviewed = True
+                    log_service.detail(f"DJ tool turn: review step ({prompt[:80]})", "ai")
+                    if text.strip():
+                        preambles.append(text)
+                        if on_preamble is not None:
+                            try:
+                                await on_preamble(text, [])
+                            except Exception as e:
+                                log_service.error(f"DJ preamble handler failed: {e}")
+                    if parts:
+                        contents.append(content)
+                    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
+                    continue
 
             if not function_calls:
                 finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
@@ -448,6 +443,12 @@ class AIService(SingletonService):
 
             contents.append(content)
 
+            done_with = self._done_with(function_calls)
+            if done_with:
+                released = self._release_done_results(contents, done_with)
+                if released:
+                    log_service.ai(f"Released {released} used tool result(s): {', '.join(sorted(done_with))}")
+
             for fc in function_calls:
                 log_service.ai(f"🔧 DJ tool call: {fc.name}({dict(fc.args) if fc.args else {}})")
 
@@ -468,7 +469,7 @@ class AIService(SingletonService):
                 if {declaration.name for declaration in refreshed} != declared:
                     function_declarations = refreshed
                     declared = {declaration.name for declaration in refreshed}
-                    tool_config, final_config, forced_config = build_configs(refreshed)
+                    tool_config, final_config = build_configs(refreshed)
                     log_service.detail(f"DJ tools now: {', '.join(sorted(declared))}", "ai")
 
     @staticmethod
@@ -523,6 +524,44 @@ class AIService(SingletonService):
         if cls._result_size(capped) <= max_chars:
             return capped
         return {**cls._tool_history_summary(str(result.get("tool", "tool")), result), "truncated": True}
+
+    @staticmethod
+    def _done_with(function_calls) -> Dict[str, str]:
+        done: Dict[str, str] = {}
+        for fc in function_calls:
+            raw = (dict(fc.args) if fc.args else {}).get("_done_with")
+            if isinstance(raw, dict):
+                done.update({str(k): str(v or "")[:300] for k, v in raw.items() if k})
+            elif isinstance(raw, list):
+                done.update({str(item): "" for item in raw if item})
+            elif isinstance(raw, str) and raw:
+                done[raw] = ""
+        return done
+
+    @staticmethod
+    def _release_done_results(contents: list, done_with: Dict[str, str]) -> int:
+        released = 0
+        for idx, content in enumerate(contents):
+            if content.role != "user" or not content.parts or not any(p.function_response for p in content.parts):
+                continue
+            rebuilt = []
+            changed = False
+            for part in content.parts:
+                fr = part.function_response
+                payload = fr.response if fr else None
+                if fr is None or fr.name not in done_with or (isinstance(payload, dict) and payload.get("released")):
+                    rebuilt.append(part)
+                    continue
+                summary = {"released": True, "tool": fr.name}
+                if done_with[fr.name]:
+                    summary["what_you_took"] = done_with[fr.name]
+                rebuilt.append(types.Part(function_response=types.FunctionResponse(id=fr.id, name=fr.name,
+                                                                                   response=summary)))
+                changed = True
+                released += 1
+            if changed:
+                contents[idx] = types.Content(role=content.role, parts=rebuilt)
+        return released
 
     @classmethod
     def _compress_prior_tool_responses(cls, contents: list, min_chars: int) -> int:

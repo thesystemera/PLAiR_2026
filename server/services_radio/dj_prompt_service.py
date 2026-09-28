@@ -23,6 +23,8 @@ from services.llm_router import LLM_LIVE, LLM_ANNOUNCE, LLM_INTERPRET
 from services.llm_result_cache import cache_key, interpretation_caches
 from config.settings import settings
 
+PARTIAL_SIGN_OFF = re.compile(r"\b(partial|partly|incomplete|not done)\b", re.IGNORECASE)
+
 BROADCAST_CUE = "Write the script for this segment now, following the instructions above."
 
 SCRIPT_PROVIDER_NOTES = {
@@ -805,6 +807,16 @@ class DJPromptService:
         return response_text.strip().strip('"')
 
     @staticmethod
+    def _review_step(text: str) -> str | None:
+        if "[TASK]" not in text:
+            return ("[STUDIO] No [TASK] sign-off yet: did you do what you told the listener you'd do? If not, do it "
+                    "now. Then sign off with [TASK]. Your line already aired, so don't repeat it.")
+        if not PARTIAL_SIGN_OFF.search(text.rsplit("[TASK]", 1)[1]):
+            return None
+        return ("[STUDIO] You signed off partial: do what you told the listener you'd do now, then sign off again. "
+                "Your line already aired, so don't repeat it.")
+
+    @staticmethod
     def _split_interactive_response(response_text: str) -> tuple[str, str]:
         cut = min((index for index in (response_text.find("[INTERNAL DIALOGUE]"), response_text.find("[TASK]"))
                    if index >= 0), default=len(response_text))
@@ -815,7 +827,6 @@ class DJPromptService:
                                        on_route=None) -> dict:
         from services_radio.dj_tools import (
             declarations_for,
-            PLAN_GATED_TOOLS,
             READ_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
@@ -871,7 +882,7 @@ class DJPromptService:
             user_message=user_message,
             function_declarations=declarations_for(tool_runtime.ctx.planned),
             refresh_tools=lambda: declarations_for(tool_runtime.ctx.planned, tool_runtime.ctx.granted),
-            expected_tools=(tool_runtime.ctx.planned or set()) & PLAN_GATED_TOOLS,
+            review=lambda text, calls: self._review_step(text),
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
             max_tokens=self.config['dj_tokens'],
@@ -905,7 +916,8 @@ class DJPromptService:
         return {
             "status": "ok",
             "main": main_response,
-            "notes": " ".join(preamble_notes + [notes_section]).strip(),
+            "notes": " ".join([note.split("[TASK]", 1)[0] if "[TASK]" in notes_section else note
+                               for note in preamble_notes] + [notes_section]).strip(),
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
             "rounds": result.get("rounds")

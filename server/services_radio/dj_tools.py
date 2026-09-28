@@ -242,6 +242,14 @@ COST_TEXT = {
     "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
     "segment": "expensive: a web lookup plus a full produced segment of 30-60 s on air",
 }
+DONE_WITH = {"type": "object", "additionalProperties": {"type": "string"},
+             "description": "Earlier tool results you have finished using this turn: {tool_name: what you took from "
+                            "it in a few words}. The studio then drops them from your context."}
+for _declaration in DJ_FUNCTION_DECLARATIONS:
+    _schema_json = _declaration.parameters_json_schema or {"type": "object", "properties": {}}
+    _schema_json.setdefault("properties", {})["_done_with"] = DONE_WITH
+    _declaration.parameters_json_schema = _schema_json
+
 TOOL_COSTS = {name: "segment" for name in SEGMENT_TOOLS}
 TOOL_COSTS["pulse_search"] = "live"
 for _declaration in DJ_FUNCTION_DECLARATIONS:

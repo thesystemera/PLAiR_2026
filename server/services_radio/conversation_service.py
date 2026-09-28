@@ -17,6 +17,9 @@ TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
 RECENT_ACTION_WINDOW_S = 15 * 60
 
+temp_conversations: Dict[str, List[str]] = {}
+_temp_conversation_touched: Dict[str, float] = {}
+
 def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
     if not text_history:
         return text_history
