@@ -1,5 +1,5 @@
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -8,6 +8,11 @@ PUBLIC = ROOT / "client" / "public" / "images"
 CHARCOAL = (23, 18, 16)
 IVORY = (255, 248, 233)
 AMBER = (245, 158, 11)
+TILE = (252, 244, 229)
+ICON_BODY_WIDTH = 0.80
+MASKABLE_SAFE_RADIUS = 0.42
+BODY_MARGIN = 14
+BODY_FEATHER = 7
 
 
 def cleaned_radio():
@@ -20,6 +25,42 @@ def cleaned_radio():
     draw.rectangle((0, 612, 626, 626), fill=0)
     radio.putalpha(alpha)
     return radio
+
+
+def body_box(symbol):
+    rgba = symbol.load()
+    xs, ys = [], []
+    for y in range(0, symbol.height, 2):
+        for x in range(0, symbol.width, 2):
+            r, g, b, a = rgba[x, y]
+            if a > 200 and abs(r - TILE[0]) + abs(g - TILE[1]) + abs(b - TILE[2]) >= 40:
+                xs.append(x)
+                ys.append(y)
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def tile_icon(symbol, box, size, scale):
+    canvas = Image.new("RGBA", (size, size), (*TILE, 255))
+    alpha = Image.new("L", symbol.size, 0)
+    ImageDraw.Draw(alpha).rectangle((box[0] - BODY_MARGIN, box[1] - BODY_MARGIN,
+                                     box[2] + BODY_MARGIN, box[3] + BODY_MARGIN), fill=255)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(BODY_FEATHER))
+    symbol = symbol.copy()
+    symbol.putalpha(ImageChops.multiply(symbol.getchannel("A"), alpha))
+    scaled = symbol.resize((round(symbol.width * scale), round(symbol.height * scale)), Image.Resampling.LANCZOS)
+    center_x = (box[0] + box[2]) / 2 * scale
+    center_y = (box[1] + box[3]) / 2 * scale
+    canvas.alpha_composite(scaled, (round(size / 2 - center_x), round(size / 2 - center_y)))
+    return canvas.convert("RGB")
+
+
+def full_icon(symbol, box, size):
+    return tile_icon(symbol, box, size, ICON_BODY_WIDTH * size / (box[2] - box[0]))
+
+
+def maskable_icon(symbol, box, size):
+    half_diagonal = ((box[2] - box[0]) ** 2 + (box[3] - box[1]) ** 2) ** 0.5 / 2
+    return tile_icon(symbol, box, size, MASKABLE_SAFE_RADIUS * size / half_diagonal)
 
 
 def make_wordmark(color, output):
@@ -102,20 +143,15 @@ def main():
     radio = cleaned_radio()
     symbol = radio.resize((1024, 1024), Image.Resampling.LANCZOS)
     symbol.save(BRAND / "symbol-transparent.png")
-    background = Image.new("RGBA", (1024, 1024), (*CHARCOAL, 255))
-    background.alpha_composite(symbol)
-    icon = background.convert("RGB")
+    box = body_box(symbol)
+    icon = full_icon(symbol, box, 1024)
     icon.save(BRAND / "icon-master.png")
     icon.save(PUBLIC / "plair_icon.png")
     for size in (192, 512):
-        icon.resize((size, size), Image.Resampling.LANCZOS).save(PUBLIC / f"plair_icon_{size}.png")
-        maskable = Image.new("RGB", (size, size), CHARCOAL)
-        inset = round(size * 0.1)
-        inner = icon.resize((size - 2 * inset, size - 2 * inset), Image.Resampling.LANCZOS)
-        maskable.paste(inner, (inset, inset))
+        full_icon(symbol, box, size).save(PUBLIC / f"plair_icon_{size}.png")
         name = "plair_icon_maskable_192.png" if size == 192 else "plair_icon_maskable.png"
-        maskable.save(PUBLIC / name)
-    icon.resize((180, 180), Image.Resampling.LANCZOS).save(PUBLIC / "apple-touch-icon.png")
+        maskable_icon(symbol, box, size).save(PUBLIC / name)
+    full_icon(symbol, box, 180).save(PUBLIC / "apple-touch-icon.png")
     icon.save(PUBLIC / "favicon.ico", sizes=[(16, 16), (32, 32), (48, 48)])
     wordmark = make_wordmark(IVORY, BRAND / "wordmark-white.png")
     make_wordmark(CHARCOAL, BRAND / "wordmark-dark.png")
