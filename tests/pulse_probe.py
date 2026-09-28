@@ -20,6 +20,8 @@ from services_radio.external_web_service import WebService  # noqa: E402
 from services_radio.news_store import NewsStore  # noqa: E402
 
 PROBES = [
+    ("", ["community"], None),
+    ("family", ["community"], None),
     ("", None, None),
     ("jazz", None, "weekend"),
     ("jazz soul gigs", ["event"], "week"),
@@ -39,6 +41,8 @@ async def main() -> None:
     parser.add_argument("--tz", default="Pacific/Auckland")
     parser.add_argument("--fetch", action="store_true", help="allow live fetches")
     parser.add_argument("--embed", action="store_true", help="load the T5 embedder (GPU)")
+    parser.add_argument("--refresh", action="store_true", help="run the region's collectors first (live APIs)")
+    parser.add_argument("--links", action="store_true", help="print cross-links for each result")
     parser.add_argument("queries", nargs="*")
     args = parser.parse_args()
 
@@ -56,8 +60,13 @@ async def main() -> None:
     services.news_service = NewsService(None, store=NewsStore(AsyncSessionLocal), embedder=embedder)
     services.location_service = LocationService()
     services.events_service = EventsService()
+    from services.user_content_database_service import UserContentDatabaseService
+    services.user_content_service = UserContentDatabaseService()
+    await services.user_content_service.initialize()
     regional_kb.set_regional_knowledge(regional_kb.RegionalKnowledgeService(
-        regional_kb.RegionalKnowledgeStore(AsyncSessionLocal), [], embedder=embedder))
+        regional_kb.RegionalKnowledgeStore(AsyncSessionLocal),
+        [regional_kb.TicketmasterEventsCollector(services.events_service),
+         regional_kb.CommunityCollector(lambda: services.user_content_service)], embedder=embedder))
     area_signals.install([ReverseGeocodeSignal(area_store)])
     pulse = pulse_kb.Pulse(pulse_kb.default_nodes())
     pulse_kb.install(pulse)
@@ -66,6 +75,8 @@ async def main() -> None:
     listener_location.guest_locations.update(session_id, args.lat, args.lon, 30, args.tz)
     listener = await pulse.listener(None, session_id)
     print(f"region={listener.region} tz={listener.tz_name} place={listener.location.description!r}")
+    if args.refresh and listener.region:
+        print("refresh:", await regional_kb.get_regional_knowledge().refresh(listener.region, force=True))
 
     probes = [(q, None, None) for q in args.queries] if args.queries else PROBES
     for text, kinds, when in probes:
@@ -73,7 +84,10 @@ async def main() -> None:
                                                       when=when, allow_fetch=args.fetch, record_demand=False))
         print(f"\n== '{text}' kinds={kinds} when={when}: {len(items)}")
         for item in items:
-            print(f"  {item.score:.2f} {json.dumps(item.brief(listener.tz_name), ensure_ascii=False)[:230]}")
+            print(f"  {item.score:.2f} {json.dumps(item.brief(listener.tz_name), ensure_ascii=False)[:260]}")
+            if args.links:
+                for link in await pulse.related(listener, item.id):
+                    print(f"       -> {link['reason']}: {link['title'][:80]}")
 
 
 if __name__ == "__main__":

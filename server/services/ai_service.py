@@ -329,7 +329,8 @@ class AIService(SingletonService):
             max_rounds: int = 4,
             call_timeout_s: float = 8.0,
             on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
-            followup_tools: Optional[set] = None
+            followup_tools: Optional[set] = None,
+            spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
         if temperature is None:
             temperature = settings.GEMINI_DJ_TEMPERATURE
@@ -370,7 +371,7 @@ class AIService(SingletonService):
                     log_service.ai(f"Compressed {compressed} prior tool result(s) before round {rounds}")
 
             response, usage, _, model = await llm_router.gemini_generate_chain(
-                spec=llm_router.LLM_LIVE,
+                spec=spec,
                 client=self.client,
                 contents=contents,
                 config=final_config if is_last else tool_config,

@@ -558,6 +558,13 @@ A new Radio Mode feature, `personal` ("For you"), is a segment class like the ot
 - Tool mode is on and is the only DJ path. The Producer AI plans the tools (`needs_tools`, `tool_plan`), coverage decides whether the plan is needed, and the nodes `tool_guidance` and route-aware `guidelines_critical` carry the decision into the prompt. Tool-free turns use HAL11000 for actions by design. Design notes taken from LifeSpan: planner before the loop, tool discipline in the prompt, capped recovery on empty replies, fillers outside the model.
 - Test (guest on K Road, 28 Sep): gigs, jazz, All Blacks, coffee, city trends and the current band were all answered with real specifics in 3.6-6.4 s. Live Ticketmaster and Places fetches ran only on misses and were saved for everyone.
 
+### Built 28-29 Sep 2026 (second pass): nuggets, links and autonomy
+
+- **Nugget facets.** Every item in `regional_items` carries subject (T5 vector), place, time and names. Ticketmaster events keep venue coordinates, address and performers. Shoutouts are community nuggets for their city (`CommunityCollector`, every 15 min), with suburb, grid point, category tags and age. Queries slice by subject, kind, time window, distance from the listener, age, and order (newest, soonest, nearest).
+- **Links.** A shoutout or headline that names a venue or performer links to that gig (and back). Items on the same subject link by vector, and venues and places within 600 m link as "nearby". The DJ sees `linked` notes in results; `pulse_detail` lists the connections.
+- **Announcer menu.** Between tracks, the announcer gets a menu of pulse items sized to the window and decides what to use, or nothing.
+- **For You.** A rare Radio Mode feature, about every two hours per listener. It is a free-roaming read-only agent: told only to research a two-minute narrative for this listener, it discovers the listener's taste, recent conversation and what's on air through tools, explores the city's nuggets and picks its own angle. First test (owner account): "Your Eden Terrace Local Loop", 8 tool calls in 8 s, every beat grounded in a tool result.
+
 ### What to add (on top; nothing removed)
 
 The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.

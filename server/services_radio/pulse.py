@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import math
+import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -48,6 +50,17 @@ AREA_WORDS = ("air", "quality", "pollen", "hay", "fever", "allergy", "allergies"
 SHOUTOUT_BROWSE = "recent community messages and shoutouts"
 LISTENER_CACHE_S = 60
 CONTEXT_MEMO_S = 15
+NEAR_RADIUS_M = 3000
+LINK_NAME_MIN_CHARS = 4
+LINK_STOP_NAMES = {"the", "live", "music", "tour", "night", "show", "festival", "auckland", "wellington", "sydney",
+                   "melbourne", "london", "new york", "los angeles", "tba", "n/a", "various artists", "concert"}
+
+
+def _recency(moment: Optional[datetime]) -> float:
+    if moment is None:
+        return 0.5
+    days = max(0.0, (datetime.now(timezone.utc) - moment).total_seconds() / 86400.0)
+    return 0.5 ** (days / max(settings.PULSE_RECENCY_HALF_LIFE_DAYS, 0.1))
 LISTENER_CACHE_MAX = 2000
 OFFERED_MAX = 4000
 
@@ -99,6 +112,13 @@ class PulseItem:
     aired: bool = False
     live: bool = False
     payload: dict = field(default_factory=dict)
+    published: Optional[datetime] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    area: str = ""
+    entities: list = field(default_factory=list)
+    links: list = field(default_factory=list)
+    vector: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
     def brief(self, tz_name: Optional[str] = None) -> dict:
         entry = {"id": self.id, "kind": self.kind, "title": _clip(self.title, 120)}
@@ -106,19 +126,41 @@ class PulseItem:
             entry["text"] = _clip(self.text)
         if self.when:
             entry["when"] = _local_when(self.when, tz_name)
+        if self.published and self.kind in (KIND_COMMUNITY, KIND_NEWS):
+            entry["age"] = _age(self.published)
+        if self.area:
+            entry["area"] = _clip(self.area, 60)
         if self.distance_m is not None:
             entry["distance"] = f"{self.distance_m} m" if self.distance_m < 1000 else f"{self.distance_m / 1000:.1f} km"
         if self.source:
             entry["source"] = self.source
+        if self.links:
+            entry["linked"] = [f"{link['reason']}: {_clip(link['title'], 70)}" for link in self.links[:3]]
         if self.aired:
             entry["aired_recently"] = True
         return entry
 
     def line(self, tz_name: Optional[str] = None) -> str:
         brief = self.brief(tz_name)
-        extras = " | ".join(str(brief[k]) for k in ("text", "when", "distance") if k in brief)
+        extras = " | ".join(str(brief[k]) for k in ("text", "when", "age", "area", "distance") if k in brief)
+        if brief.get("linked"):
+            extras += " | linked: " + "; ".join(brief["linked"])
         return f"- [{self.kind}] {brief['title']}" + (f" ({extras})" if extras else "") + (
             " [already mentioned to this listener]" if self.aired else "")
+
+
+def _age(moment: datetime) -> str:
+    seconds = max(0.0, (datetime.now(timezone.utc) - moment).total_seconds())
+    if seconds < 3600:
+        return "just now"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    days = int(seconds // 86400)
+    return "yesterday" if days == 1 else f"{days} days ago" if days < 60 else f"{days // 30} months ago"
+
+
+def _distance_m(a: tuple, b: tuple) -> float:
+    return place_memory.distance_m(a[0], a[1], b[0], b[1])
 
 
 def _local_when(moment: datetime, tz_name: Optional[str]) -> str:
@@ -158,6 +200,10 @@ class PulseQuery:
     allow_fetch: bool = False
     record_demand: bool = True
     query_vector: Optional[np.ndarray] = None
+    near_me: bool = False
+    radius_m: Optional[float] = None
+    max_age_days: Optional[float] = None
+    sort: str = "relevance"
 
     @property
     def words(self) -> set:
@@ -217,6 +263,19 @@ def _text_score(q: PulseQuery, base: float, text: str, tags: Iterable[str] = (),
     return 0.6 * rel + 0.4 * base
 
 
+def from_regional(item: regional_kb.KnowledgeItem, score: float) -> PulseItem:
+    if item.kind == regional_kb.KIND_EVENT:
+        text = ", ".join(part for part in (item.text, " / ".join(item.tags[1:] or item.tags)) if part)
+    else:
+        text = item.text
+    return PulseItem(
+        id=f"{item.kind}:{item.item_id}", kind=item.kind, title=item.title, text=text,
+        when=item.starts_at or (item.published_at if item.kind == regional_kb.KIND_NEWS else None),
+        source=item.attribution, url=item.url, score=score, published=item.published_at, latitude=item.latitude,
+        longitude=item.longitude, area=item.area, entities=list(item.entities), vector=item.vector,
+        payload={"audio_path": item.url} if item.kind == regional_kb.KIND_COMMUNITY else {})
+
+
 class EventsNode(KnowledgeNode):
     name = "events"
     kinds = (KIND_EVENT,)
@@ -224,13 +283,9 @@ class EventsNode(KnowledgeNode):
     def _items(self, q: PulseQuery, scored) -> list[PulseItem]:
         items = []
         for base, item in scored:
-            value = _text_score(q, base, item.embed_text, item.tags, item.vector)
-            if value is None:
-                continue
-            items.append(PulseItem(
-                id=f"event:{item.item_id}", kind=KIND_EVENT, title=item.title,
-                text=", ".join(part for part in (item.text, " / ".join(item.tags[1:] or item.tags)) if part),
-                when=item.starts_at, source=item.attribution, url=item.url, score=value))
+            value = _text_score(q, base, " ".join([item.embed_text, *item.entities]), item.tags, item.vector)
+            if value is not None:
+                items.append(from_regional(item, value))
         return items
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
@@ -326,11 +381,13 @@ class NewsNode(KnowledgeNode):
                 published = datetime.fromisoformat(str(article.get("publishedAt")).replace("Z", "+00:00"))
             except ValueError:
                 pass
+            if published is not None and published.tzinfo is None:
+                published = published.replace(tzinfo=timezone.utc)
             items.append(PulseItem(
                 id=f"news:{article.get('id')}", kind=KIND_NEWS, title=article.get("title") or "",
                 text=(article.get("source") or {}).get("name", ""), when=published, source="Google News",
                 url=article.get("url") or "", score=max(0.1, score - rank * 0.04), aired=bool(article.get("aired")),
-                payload={"article_id": article.get("id")}))
+                payload={"article_id": article.get("id")}, published=published))
         return items
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
@@ -430,39 +487,18 @@ class CommunityNode(KnowledgeNode):
     kinds = (KIND_COMMUNITY,)
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
-        search = services.user_content_vector_search_service
-        if search is None:
+        regional = regional_kb.get_regional_knowledge()
+        if regional is None or q.listener.region is None:
             return []
-        from services.user_content_database_service import coarse_location
-        results = await search.search(query=q.text or SHOUTOUT_BROWSE,
-                                      n_results=max(q.limit * 2, 8), user_location=q.listener.location.coords,
-                                      use_ai_analysis=False)
-        city = (q.listener.region.name if q.listener.region else "").lower()
+        pool = await regional.store.items(q.listener.region.key, (regional_kb.KIND_COMMUNITY,))
         items = []
-        for shoutout in results or []:
-            user_data = shoutout.get("user_data") or {}
-            place = coarse_location(user_data.get("location") or shoutout.get("location")) or ""
-            message = (shoutout.get("transcription") or "").strip()
-            if not message:
-                continue
-            local = bool(city) and city in place.lower()
-            score = min(1.0, float(shoutout.get("final_score") or 0.5)) * (1.0 if local else 0.8)
-            when = None
-            try:
-                when = datetime.fromisoformat(str(shoutout.get("timestamp")).replace("Z", "+00:00"))
-                when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
-            except ValueError:
-                pass
-            value = _text_score(q, score, message) if q.text != SHOUTOUT_BROWSE else score
-            if value is None:
-                continue
-            score = value
-            name = user_data.get("username") or shoutout.get("username") or "a listener"
-            items.append(PulseItem(
-                id=f"shoutout:{shoutout.get('id') or shoutout.get('content_id') or shoutout.get('audio_url')}",
-                kind=KIND_COMMUNITY, title=f"Shoutout from {name}" + (f" ({place})" if place else ""),
-                text=f'"{_clip(message, 160)}"', when=when, source="PLAiR listeners", score=score,
-                payload={"audio_url": shoutout.get("audio_url") or ""}))
+        for item in pool:
+            base = 0.4 + 0.3 * _recency(item.published_at)
+            if q.listener.region.name.lower() in (item.area or "").lower():
+                base += 0.1
+            value = _text_score(q, base, " ".join([item.title, item.text, item.area]), item.tags, item.vector)
+            if value is not None:
+                items.append(from_regional(item, value))
         return items
 
 
@@ -531,7 +567,11 @@ class RegionCharts:
             if genre:
                 genres[genre] = genres.get(genre, 0.0) + count
             if rank < 5 and listeners >= settings.PULSE_CHART_MIN_LISTENERS:
-                label = f"{track.get('title') or 'Unknown'} by {track.get('artists') or 'Unknown'}"
+                params = track.get("generation_params") or {}
+                title, artist = (params.get("title") or "").strip(), (params.get("artist_name") or "").strip()
+                if not title:
+                    continue
+                label = f"{title} by {artist}" if artist else title
                 value = _text_score(q, 0.7 - rank * 0.08, f"{label} {genre}", [genre])
                 if value is not None:
                     items.append(PulseItem(id=f"chart:{region.key}:{track_id}", kind=KIND_CHART,
@@ -632,6 +672,7 @@ class Pulse:
         self._offered: OrderedDict[tuple, float] = OrderedDict()
         self._region_keys: OrderedDict[str, tuple[float, Optional[str]]] = OrderedDict()
         self._context_memo: OrderedDict[tuple, tuple[float, asyncio.Future]] = OrderedDict()
+        self._link_cache: dict[str, tuple] = {}
 
     def node(self, name: str) -> Optional[KnowledgeNode]:
         return next((n for n in self.nodes if n.name == name), None)
@@ -740,7 +781,10 @@ class Pulse:
                     fetched = []
                 known = {item.id for item in items}
                 items.extend(item for item in fetched if item.id not in known)
+        items = self._apply_facets(q, items)
         ranked = self._rank(q, items)
+        if ranked and q.listener.region is not None:
+            await self.annotate_links(q.listener, ranked)
         if q.record_demand and q.text:
             primary = next((n.name for n in nodes if found.get(n.name)), live_node.name if live_node else
                            (nodes[0].name if len(nodes) == 1 else "any"))
@@ -751,6 +795,124 @@ class Pulse:
             f"{', live ' + live_node.name if live_node else ''}) {(time.perf_counter() - started) * 1000:.0f} ms",
             "pulse")
         return ranked
+
+    def _apply_facets(self, q: PulseQuery, items: list[PulseItem]) -> list[PulseItem]:
+        point = q.listener.location.coords
+        radius = q.radius_m or (NEAR_RADIUS_M if q.near_me else None)
+        kept = []
+        for item in items:
+            if point and item.latitude is not None and item.longitude is not None and item.distance_m is None:
+                item.distance_m = int(_distance_m(point, (item.latitude, item.longitude)))
+            if radius and (item.distance_m is None or item.distance_m > radius):
+                continue
+            if q.max_age_days is not None and item.published is not None and \
+                    (q.listener.now - item.published).total_seconds() > q.max_age_days * 86400:
+                continue
+            if item.kind in (KIND_NEWS, KIND_COMMUNITY):
+                item.score *= 0.6 + 0.4 * _recency(item.published)
+            if (q.near_me or q.sort == "nearest") and item.distance_m is not None:
+                item.score *= 0.5 + 0.5 * math.exp(-item.distance_m / 2000.0)
+            kept.append(item)
+        return kept
+
+    def _sort(self, q: PulseQuery, items: list[PulseItem]) -> list[PulseItem]:
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        far = datetime.max.replace(tzinfo=timezone.utc)
+        if q.sort == "newest":
+            return sorted(items, key=lambda i: i.published or i.when or epoch, reverse=True)
+        if q.sort == "soonest":
+            return sorted(items, key=lambda i: i.when if i.when and i.when >= q.listener.now else far)
+        if q.sort == "nearest":
+            return sorted(items, key=lambda i: i.distance_m if i.distance_m is not None else 10 ** 9)
+        return sorted(items, key=lambda item: item.score, reverse=True)
+
+    async def _link_index(self, region_key: str) -> dict:
+        regional = regional_kb.get_regional_knowledge()
+        generation = regional.store._generations.get(region_key, 0) if regional else 0
+        cached = self._link_cache.get(region_key)
+        if cached and cached[0] == generation and time.monotonic() - cached[1] < 600:
+            return cached[2]
+        pool = await regional.store.items(region_key, (regional_kb.KIND_EVENT, regional_kb.KIND_PLACE,
+                                                       regional_kb.KIND_NEWS, regional_kb.KIND_COMMUNITY))
+        names: dict[str, list] = {}
+        by_id = {}
+        for item in pool:
+            pulse_id = f"{item.kind}:{item.item_id}"
+            by_id[pulse_id] = item
+            candidates = list(item.entities)
+            if item.kind == regional_kb.KIND_EVENT:
+                candidates.append(item.title)
+            for name in candidates:
+                key = " ".join((name or "").lower().split())
+                if len(key) >= LINK_NAME_MIN_CHARS and key not in LINK_STOP_NAMES:
+                    names.setdefault(key, []).append(pulse_id)
+        pattern = re.compile(r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b",
+                             re.IGNORECASE) if names else None
+        mentions: dict[str, set] = {}
+        for pulse_id, item in by_id.items():
+            if pattern is None or item.kind not in (regional_kb.KIND_COMMUNITY, regional_kb.KIND_NEWS):
+                continue
+            for match in pattern.finditer(f"{item.title} {item.text}"):
+                for target in names.get(" ".join(match.group(1).lower().split()), []):
+                    if target != pulse_id:
+                        mentions.setdefault(pulse_id, set()).add((target, match.group(1)))
+                        mentions.setdefault(target, set()).add((pulse_id, match.group(1)))
+        index = {"by_id": by_id, "mentions": mentions}
+        self._link_cache[region_key] = (generation, time.monotonic(), index)
+        return index
+
+    async def related(self, listener: PulseListener, pulse_id: str, limit: int = 6) -> list[dict]:
+        if listener.region is None:
+            return []
+        index = await self._link_index(listener.region.key)
+        item = index["by_id"].get(pulse_id)
+        found: dict[str, dict] = {}
+        for target, name in index["mentions"].get(pulse_id, ()):
+            other = index["by_id"].get(target)
+            if other is not None:
+                reason = f"mentions {name}" if item is not None and item.kind in (
+                    regional_kb.KIND_COMMUNITY, regional_kb.KIND_NEWS) else f"{other.kind} mentioning {name}"
+                found[target] = {"id": target, "kind": other.kind, "title": other.title, "reason": reason}
+        if item is not None:
+            precise = (regional_kb.KIND_EVENT, regional_kb.KIND_PLACE)
+            here = (item.latitude, item.longitude) if item.latitude is not None and item.kind in precise else None
+            titles = {link["title"] for link in found.values()}
+            for other_id, other in index["by_id"].items():
+                if other_id == pulse_id or other_id in found or other.kind == item.kind or other.title in titles:
+                    continue
+                if item.vector is not None and other.vector is not None and \
+                        float(np.dot(item.vector, other.vector)) >= settings.PULSE_LINK_SIMILARITY:
+                    found[other_id] = {"id": other_id, "kind": other.kind, "title": other.title,
+                                       "reason": "same subject"}
+                    titles.add(other.title)
+                elif here and other.latitude is not None and other.kind in precise and \
+                        _distance_m(here, (other.latitude, other.longitude)) <= settings.PULSE_LINK_DISTANCE_M:
+                    found[other_id] = {"id": other_id, "kind": other.kind, "title": other.title, "reason": "nearby"}
+                    titles.add(other.title)
+        order = {"mentions": 0, "same": 1, "nearby": 2}
+        ranked = sorted(found.values(), key=lambda link: order.get(link["reason"].split(" ")[0], 0))
+        return ranked[:limit]
+
+    async def annotate_links(self, listener: PulseListener, items: list[PulseItem]) -> None:
+        try:
+            index = await self._link_index(listener.region.key)
+        except Exception as e:
+            log_service.warning(f"[PULSE] link index failed: {type(e).__name__}: {e}")
+            return
+        for item in items:
+            links = []
+            seen = set()
+            for target, name in sorted(index["mentions"].get(item.id, ())):
+                other = index["by_id"].get(target)
+                if other is None or target in seen:
+                    continue
+                seen.add(target)
+                if item.kind in (KIND_COMMUNITY, KIND_NEWS):
+                    links.append({"id": target, "title": other.title, "reason": f"mentions {name}"})
+                else:
+                    links.append({"id": target, "title": f"{other.title}: {_clip(other.text, 60)}",
+                                  "reason": f"{other.kind} mentioning it"})
+            item.links = links[:3]
 
     def _rank(self, q: PulseQuery, items: list[PulseItem]) -> list[PulseItem]:
         seen = set()
@@ -764,8 +926,8 @@ class Pulse:
         for item in unique:
             if item.aired:
                 item.score -= settings.PULSE_AIRED_PENALTY
-        unique.sort(key=lambda item: item.score, reverse=True)
-        if q.kinds is not None and len(q.kinds) == 1:
+        unique = self._sort(q, unique)
+        if (q.kinds is not None and len(q.kinds) == 1) or q.sort != "relevance":
             return unique[:q.limit]
         by_kind: dict[str, list[PulseItem]] = {}
         for item in unique:
@@ -779,42 +941,49 @@ class Pulse:
 
     async def detail(self, listener: PulseListener, item_id: str) -> Optional[dict]:
         kind, _, key = item_id.partition(":")
-        if kind == KIND_EVENT or kind == KIND_PLACE:
-            regional = regional_kb.get_regional_knowledge()
-            if kind == KIND_PLACE:
-                place = await place_memory.get_place(key)
-                if place:
-                    return {"id": item_id, "kind": kind, **{k: v for k, v in place.items() if v not in (None, "")}}
-            if regional is None or listener.region is None:
-                return None
-            pool = await regional.store.items(listener.region.key, (kind,))
-            match = next((i for i in pool if i.item_id == key or i.item_id.startswith(key)), None)
-            if match is None:
-                return None
-            related = [other.title for other in pool if other is not match and match.text and other.text and
-                       other.text.split(",")[0] == match.text.split(",")[0]][:4]
-            entry = {"id": item_id, "kind": kind, "title": match.title, "details": match.text, "tags": match.tags,
-                     "url": match.url, "source": match.attribution}
-            if match.starts_at:
-                entry["when"] = _local_when(match.starts_at, listener.tz_name)
-            if related:
-                entry["also_at_this_venue"] = related
-            return entry
-        if kind == KIND_NEWS and services.news_service is not None and key.isdigit():
+        entry = None
+        if kind == KIND_PLACE and ":" not in key:
+            place = await place_memory.get_place(key)
+            if place:
+                entry = {"id": item_id, "kind": kind, **{k: v for k, v in place.items()
+                                                         if v not in (None, "") and k not in ("latitude", "longitude")}}
+        elif kind in (KIND_EVENT, KIND_PLACE, KIND_COMMUNITY, KIND_NEWS) and ":" in key and listener.region:
+            index = await self._link_index(listener.region.key)
+            match = index["by_id"].get(item_id)
+            if match is not None:
+                entry = {"id": item_id, "kind": kind, "title": match.title, "details": match.text,
+                         "tags": match.tags, "source": match.attribution}
+                if match.starts_at:
+                    entry["when"] = _local_when(match.starts_at, listener.tz_name)
+                if match.published_at:
+                    entry["age"] = _age(match.published_at)
+                if match.area:
+                    entry["area"] = match.area
+                if match.entities:
+                    entry["names"] = match.entities
+                if kind == KIND_COMMUNITY and match.url:
+                    entry["audio"] = f"${match.url}$"
+                    entry["how_to_play"] = "Put the audio value in your reply to play the clip on air."
+        if entry is None and kind == KIND_NEWS and services.news_service is not None and key.isdigit():
             items = await services.news_service.store.items([int(key)])
             item = items.get(int(key))
-            if item is None:
-                return None
-            article = item.as_article()
-            return {"id": item_id, "kind": kind, "title": article.get("title"),
-                    "details": article.get("description") or "", "source": (article.get("source") or {}).get("name"),
-                    "published": article.get("publishedAt"), "tags": getattr(item, "tags", None)}
-        if kind == KIND_ARTIST:
+            if item is not None:
+                article = item.as_article()
+                entry = {"id": item_id, "kind": kind, "title": article.get("title"),
+                         "details": article.get("description") or "",
+                         "source": (article.get("source") or {}).get("name"),
+                         "published": article.get("publishedAt"), "tags": article.get("tags")}
+        if entry is None and kind == KIND_ARTIST:
             found = await self.node("artists").search(PulseQuery(listener=listener, text=key, kinds={KIND_ARTIST}))
             if found:
-                return {"id": item_id, "kind": kind, "title": found[0].title,
-                        "details": services.web_service.cached_artist_biography(key) or found[0].text}
-        return None
+                entry = {"id": item_id, "kind": kind, "title": found[0].title,
+                         "details": services.web_service.cached_artist_biography(key) or found[0].text}
+        if entry is None:
+            return None
+        related = await self.related(listener, item_id)
+        if related:
+            entry["related"] = [{k: v for k, v in link.items() if k != "kind"} for link in related]
+        return entry
 
     async def listener_context(self, listener: PulseListener) -> dict:
         from services_radio.dj_bank_sources import compact_listener_notes

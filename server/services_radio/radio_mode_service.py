@@ -19,7 +19,7 @@ from services_radio.music_beds import music_beds
 
 PUBLIC_STATUSES = ("rendering", "ready", "on_air")
 TTS_TYPE = "radio_segment"
-BUILD_TIMEOUT_S = 25.0
+BUILD_TIMEOUT_S = 50.0
 NO_CONTENT_BACKOFF_S = 300.0
 FAILURE_BACKOFF_S = 180.0
 SHARED_SCRIPTS_MAX = 200
@@ -293,7 +293,10 @@ class RadioModeService:
                                     boundary_at, sess.last_break_at, sess.feature_anchor, sess.served)
         if slot is None:
             return
-        kinds = [slot.kind] if slot.clock else schedule.feature_rotation(features, sess.feature_turn)
+        kinds = [slot.kind] if slot.clock else schedule.feature_rotation(
+            [k for k in features if k != "for_you"], sess.feature_turn)
+        if not slot.clock and "for_you" in features and radio_segments.for_you_due(sess.session_id):
+            kinds = ["for_you"] + kinds
         if not kinds:
             return
         first = radio_segments.get_segment(kinds[0])
@@ -413,6 +416,7 @@ class RadioModeService:
             catalog_service=self.catalog_service,
             aired={key for key, at in sess.aired.items() if now - at < settings.RADIO_AIRED_MEMORY_S},
             location=location,
+            prefs=sess.prefs,
         )
 
     def _shared_key(self, segment, content, ctx) -> str:

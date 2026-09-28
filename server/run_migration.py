@@ -65,6 +65,11 @@ def main():
     with _sync_engine.connect() as conn:
         migrate_users_table(conn)
         for table_name, col_name, col_def in (("regional_items", "embedding", "BYTEA"),
+                                              ("regional_items", "published_at", "TIMESTAMP WITH TIME ZONE"),
+                                              ("regional_items", "latitude", "DOUBLE PRECISION"),
+                                              ("regional_items", "longitude", "DOUBLE PRECISION"),
+                                              ("regional_items", "area", "VARCHAR"),
+                                              ("regional_items", "entities", "TEXT DEFAULT '[]' NOT NULL"),
                                               ("play_events", "region_key", "VARCHAR")):
             print(f"\n[CHECK] {table_name}.{col_name}...")
             if not column_exists(conn, table_name, col_name):

@@ -291,6 +291,12 @@ class Settings:
     PULSE_CHART_MIN_LISTENERS: int = int(os.getenv("PULSE_CHART_MIN_LISTENERS", "2"))
     PULSE_CHART_CACHE_S: float = float(os.getenv("PULSE_CHART_CACHE_S", "900"))
     PULSE_CONTEXT_ITEMS: int = int(os.getenv("PULSE_CONTEXT_ITEMS", "4"))
+    PULSE_COMMUNITY_ENABLED: bool = os.getenv("PULSE_COMMUNITY_ENABLED", "true").lower() == "true"
+    PULSE_COMMUNITY_REFRESH_S: int = int(os.getenv("PULSE_COMMUNITY_REFRESH_S", "900"))
+    PULSE_COMMUNITY_TTL_DAYS: int = int(os.getenv("PULSE_COMMUNITY_TTL_DAYS", "365"))
+    PULSE_RECENCY_HALF_LIFE_DAYS: float = float(os.getenv("PULSE_RECENCY_HALF_LIFE_DAYS", "7"))
+    PULSE_LINK_SIMILARITY: float = float(os.getenv("PULSE_LINK_SIMILARITY", "0.9"))
+    PULSE_LINK_DISTANCE_M: float = float(os.getenv("PULSE_LINK_DISTANCE_M", "600"))
     PULSE_COVERAGE_MIN_SCORE: float = float(os.getenv("PULSE_COVERAGE_MIN_SCORE", "0.6"))
     PULSE_COVERAGE_MIN_ITEMS: int = int(os.getenv("PULSE_COVERAGE_MIN_ITEMS", "2"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
@@ -543,6 +549,14 @@ class Settings:
     DJ_BANK_REPEAT_S: int = int(os.getenv("DJ_BANK_REPEAT_S", str(2 * 3600)))
     DJ_BANK_SHORT_WINDOW_S: float = float(os.getenv("DJ_BANK_SHORT_WINDOW_S", "8"))
     DJ_BANK_MEDIUM_WINDOW_S: float = float(os.getenv("DJ_BANK_MEDIUM_WINDOW_S", "20"))
+    PULSE_AGENT_TIMEOUT_S: float = float(os.getenv("PULSE_AGENT_TIMEOUT_S", "20"))
+    PULSE_AGENT_MAX_ROUNDS: int = int(os.getenv("PULSE_AGENT_MAX_ROUNDS", "3"))
+    RADIO_FOR_YOU_INTERVAL_S: float = float(os.getenv("RADIO_FOR_YOU_INTERVAL_S", "7200"))
+    RADIO_FOR_YOU_MAX_ROUNDS: int = int(os.getenv("RADIO_FOR_YOU_MAX_ROUNDS", "8"))
+    RADIO_FOR_YOU_TIMEOUT_S: float = float(os.getenv("RADIO_FOR_YOU_TIMEOUT_S", "45"))
+    DJ_ANNOUNCER_MENU_ENABLED: bool = os.getenv("DJ_ANNOUNCER_MENU_ENABLED", "true").lower() == "true"
+    DJ_ANNOUNCER_PULSE_KINDS: list = [k.strip() for k in os.getenv(
+        "DJ_ANNOUNCER_PULSE_KINDS", "event,place,community,news,chart,trend").split(",") if k.strip()]
 
     RADIO_MODE_ENABLED: bool = os.getenv("RADIO_MODE_ENABLED", "true").lower() == "true"
     RADIO_SEGMENTS_DISABLED: frozenset = frozenset(

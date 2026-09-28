@@ -55,6 +55,15 @@ def valid_timezone(name: Optional[str]) -> Optional[str]:
     return candidate if candidate in pytz.all_timezones_set else None
 
 
+def menu_for_window(window_s: Optional[float]) -> tuple[int, int]:
+    seconds = window_s or 0.0
+    if seconds <= settings.DJ_BANK_SHORT_WINDOW_S:
+        return 2, 1
+    if seconds <= settings.DJ_BANK_MEDIUM_WINDOW_S:
+        return 4, 2
+    return 7, 3
+
+
 def items_for_window(window_s: Optional[float]) -> int:
     seconds = window_s or 0.0
     if seconds <= settings.DJ_BANK_SHORT_WINDOW_S:
@@ -204,7 +213,7 @@ class DJContentBank:
         self._touch(self._offered, session, offered)
 
     def select_talking_points(self, session_id: Optional[str], candidates: list[TalkingPoint],
-                              window_s: Optional[float]) -> list[TalkingPoint]:
+                              window_s: Optional[float], menu: bool = False) -> list[TalkingPoint]:
         session = session_id or ""
         now = time.time()
         offered = {k: at for k, at in self._offered.get(session, {}).items() if now - at < settings.DJ_BANK_REPEAT_S}
@@ -215,11 +224,14 @@ class DJContentBank:
                 return point.priority
             return point.priority - (0.6 if recent[-1] == point.category else 0.3)
 
+        count = menu_for_window(window_s)[0] if menu else items_for_window(window_s)
+        per_category = 2 if menu else 1
         chosen: list[TalkingPoint] = []
-        for point in sorted((p for p in candidates if p.text and p.key not in offered), key=score, reverse=True):
-            if len(chosen) >= items_for_window(window_s):
+        for point in sorted((p for p in candidates if p.text and p.key not in offered),
+                            key=score, reverse=True):
+            if len(chosen) >= count:
                 break
-            if any(c.category == point.category for c in chosen):
+            if sum(1 for c in chosen if c.category == point.category) >= per_category:
                 continue
             chosen.append(point)
 

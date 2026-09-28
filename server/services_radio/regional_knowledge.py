@@ -10,7 +10,7 @@ from typing import Awaitable, Callable, Iterable, Optional
 
 import numpy as np
 import pytz
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config import settings
@@ -23,6 +23,7 @@ from services_radio.external_news_service import resolve_country
 KIND_EVENT = "event"
 KIND_PLACE = "place"
 KIND_NEWS = "news"
+KIND_COMMUNITY = "community"
 
 EVENTS_COLLECTOR_ENABLED = settings.REGIONAL_EVENTS_ENABLED
 EVENTS_REFRESH_S = settings.REGIONAL_EVENTS_REFRESH_S
@@ -39,6 +40,7 @@ MAX_ITEMS_PER_REGION_KIND = settings.REGIONAL_MAX_ITEMS_PER_KIND
 READ_CACHE_S = settings.REGIONAL_READ_CACHE_S
 TZ_CITY_MATCH_KM = settings.REGIONAL_CITY_MATCH_KM
 ACTIVE_GUEST_MAX_AGE_S = settings.REGIONAL_ACTIVE_GUEST_MAX_AGE_S
+PULSE_GRID_DEG = 0.01
 
 _IGNORED_TAGS = {"", "undefined", "other", "miscellaneous", "n/a"}
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -76,6 +78,11 @@ class KnowledgeItem:
     attribution: str = ""
     cost_usd: float = 0.0
     vector: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
+    published_at: Optional[datetime] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    area: str = ""
+    entities: list = field(default_factory=list)
 
     @property
     def item_id(self) -> str:
@@ -251,11 +258,15 @@ class TicketmasterEventsCollector(Collector):
         tags = [t for t in (event.get("segment"), event.get("genre"), event.get("subgenre"))
                 if t and t.strip().lower() not in _IGNORED_TAGS]
         details = ", ".join(part for part in (event.get("venue"), event.get("date"), event.get("time", "")[:5]) if part)
+        venue = event.get("venue") if event.get("venue") not in (None, "", "N/A") else ""
+        entities = [name for name in [venue, *(event.get("performers") or [])] if name]
         return KnowledgeItem(
             source="ticketmaster", kind=KIND_EVENT, region_key=region.key, external_id=str(event_id),
             title=str(event["name"])[:200], text=details[:200], tags=tags, starts_at=starts_at,
             expires_at=(starts_at or now) + timedelta(hours=6), url=event.get("url") or "",
-            attribution="Ticketmaster",
+            attribution="Ticketmaster", latitude=event.get("venue_lat"), longitude=event.get("venue_lon"),
+            area=", ".join(p for p in (event.get("venue_address"), event.get("city")) if p)[:120],
+            entities=list(dict.fromkeys(entities)),
         )
 
     async def fetch(self, region: Region) -> list[KnowledgeItem]:
@@ -294,8 +305,8 @@ class GoogleNewsCollector(Collector):
             items.append(KnowledgeItem(
                 source="google_news", kind=KIND_NEWS, region_key=region.key, external_id=str(article["id"]),
                 title=article["title"][:200], text=(article.get("source") or {}).get("name", "")[:200],
-                tags=["local news"], starts_at=None, expires_at=expires, url=article.get("url") or "",
-                attribution="Google News"))
+                tags=["local news", *(article.get("tags") or [])][:6], starts_at=None, expires_at=expires,
+                url=article.get("url") or "", attribution="Google News", published_at=published))
         return items
 
 
@@ -333,7 +344,9 @@ class GooglePlacesCollector(Collector):
         from services_radio import place_memory
         remembered = await place_memory.get_place(item.external_id.split("|", 1)[0])
         if remembered:
-            return replace(item, title=remembered["name"], text=remembered.get("type") or "")
+            return replace(item, title=remembered["name"], text=remembered.get("type") or "",
+                           latitude=remembered.get("latitude"), longitude=remembered.get("longitude"),
+                           area=remembered.get("address") or "", entities=[remembered["name"]])
         now = time.monotonic()
         self._hydrations = [t for t in self._hydrations if now - t < 3600]
         if len(self._hydrations) >= PLACE_HYDRATIONS_PER_HOUR or not self.available():
@@ -343,6 +356,86 @@ class GooglePlacesCollector(Collector):
         if not summary:
             return None
         return replace(item, title=summary["name"], text=summary.get("type") or "")
+
+
+class CommunityCollector(Collector):
+    name = "shoutouts"
+    kind = KIND_COMMUNITY
+    refresh_s = settings.PULSE_COMMUNITY_REFRESH_S
+    enabled = settings.PULSE_COMMUNITY_ENABLED
+
+    def __init__(self, content_service_getter: Callable[[], object]):
+        self.content_service_getter = content_service_getter
+        self._regions: dict[str, Optional[str]] = {}
+
+    def available(self) -> bool:
+        return self.enabled and self.content_service_getter() is not None
+
+    def region_key_of(self, shoutout: dict) -> Optional[str]:
+        shoutout_id = str(shoutout.get("id") or "")
+        if shoutout_id in self._regions:
+            return self._regions[shoutout_id]
+        from services_radio.listener_location import ListenerLocation, address_city, nearest_timezone
+        user_data = shoutout.get("user_data") or {}
+        address = user_data.get("location") or ""
+        try:
+            lat, lon = float(user_data.get("latitude")), float(user_data.get("longitude"))
+        except (TypeError, ValueError):
+            lat = lon = None
+        country = resolve_country(address) or ""
+        location = ListenerLocation(latitude=lat, longitude=lon, city=address_city(address), country_code=country,
+                                    timezone=nearest_timezone(lat, lon, country) if lat is not None else None)
+        region = resolve_region(None, None, location=location) if lat is not None else None
+        self._regions[shoutout_id] = region.key if region else None
+        return self._regions[shoutout_id]
+
+    @staticmethod
+    def to_item(region_key: str, shoutout: dict, now: datetime) -> Optional[KnowledgeItem]:
+        text = (shoutout.get("full_transcription") or shoutout.get("transcription") or "").strip()
+        if not text or not shoutout.get("id"):
+            return None
+        meta = shoutout.get("transcription_metadata") or {}
+        user_data = shoutout.get("user_data") or {}
+        try:
+            published = datetime.fromisoformat(str(shoutout.get("timestamp")).replace("Z", "+00:00"))
+            published = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
+        except ValueError:
+            published = now
+        expires = published + timedelta(days=settings.PULSE_COMMUNITY_TTL_DAYS)
+        if expires <= now:
+            return None
+        address = user_data.get("location") or ""
+        parts = [p.strip() for p in address.split(",") if p.strip() and not any(ch.isdigit() for ch in p)]
+        area = ", ".join(dict.fromkeys(parts[1:3] if len(parts) > 2 else parts[:2]))
+        try:
+            lat = round(float(user_data.get("latitude")) / PULSE_GRID_DEG) * PULSE_GRID_DEG
+            lon = round(float(user_data.get("longitude")) / PULSE_GRID_DEG) * PULSE_GRID_DEG
+        except (TypeError, ValueError):
+            lat = lon = None
+        tags = [t for t in [meta.get("category"), *(meta.get("tags") or [])] if t][:6]
+        kind_label = "reply" if shoutout.get("parent_id") else "shoutout"
+        return KnowledgeItem(
+            source="shoutouts", kind=KIND_COMMUNITY, region_key=region_key, external_id=str(shoutout["id"]),
+            title=f"{kind_label.title()} from {user_data.get('username') or 'a listener'}",
+            text=text[:200], tags=tags, expires_at=expires, published_at=published,
+            url=f"/api/user_content/shoutouts/audio/{str(shoutout['id']).replace('_', '/', 1)}.mp3",
+            attribution="PLAiR listeners",
+            latitude=lat, longitude=lon, area=area[:120],
+        )
+
+    async def fetch(self, region: Region) -> list[KnowledgeItem]:
+        service = self.content_service_getter()
+        now = datetime.now(timezone.utc)
+        items = []
+        for shoutout in list((getattr(service, "shoutouts", None) or {}).values()):
+            if shoutout.get("content_type", "shoutout") != "shoutout" or shoutout.get("private"):
+                continue
+            if self.region_key_of(shoutout) != region.key:
+                continue
+            item = self.to_item(region.key, shoutout, now)
+            if item:
+                items.append(item)
+        return items
 
 
 class RegionalKnowledgeStore:
@@ -378,11 +471,17 @@ class RegionalKnowledgeStore:
                     "external_id": item.external_id, "title": item.title, "text": item.text,
                     "tags": json.dumps(item.tags), "starts_at": item.starts_at, "expires_at": item.expires_at,
                     "url": item.url, "attribution": item.attribution, "fetched_at": now,
+                    "published_at": item.published_at, "latitude": item.latitude, "longitude": item.longitude,
+                    "area": item.area or None, "entities": json.dumps(item.entities),
                 } for item in items]
                 stmt = pg_insert(RegionalItem).values(rows)
+                changed = (stmt.excluded.title != RegionalItem.title) | (stmt.excluded.text != RegionalItem.text) | \
+                    (stmt.excluded.tags != RegionalItem.tags)
                 stmt = stmt.on_conflict_do_update(constraint="uq_regional_items_source_id", set_={
-                    column: stmt.excluded[column] for column in
-                    ("kind", "title", "text", "tags", "starts_at", "expires_at", "url", "attribution", "fetched_at")})
+                    **{column: stmt.excluded[column] for column in
+                       ("kind", "title", "text", "tags", "starts_at", "expires_at", "url", "attribution", "fetched_at",
+                        "published_at", "latitude", "longitude", "area", "entities")},
+                    "embedding": case((changed, None), else_=RegionalItem.embedding)})
                 await db.execute(stmt)
             await db.execute(delete(RegionalItem).where(RegionalItem.expires_at < now))
             overflow = (
@@ -436,7 +535,8 @@ class RegionalKnowledgeStore:
             source=row.source, kind=row.kind, region_key=row.region_key, external_id=row.external_id,
             title=row.title or "", text=row.text or "", tags=json.loads(row.tags or "[]"), starts_at=row.starts_at,
             expires_at=row.expires_at, url=row.url or "", attribution=row.attribution or "",
-            vector=_unit(row.embedding),
+            vector=_unit(row.embedding), published_at=row.published_at, latitude=row.latitude,
+            longitude=row.longitude, area=row.area or "", entities=json.loads(row.entities or "[]"),
         ) for row in rows]
         if self._generations.get(region_key, 0) == generation:
             now_s = time.monotonic()

@@ -294,6 +294,11 @@ class RegionalItem(Base):
     attribution = Column(String, nullable=True)
     fetched_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     embedding = Column(LargeBinary, nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    area = Column(String, nullable=True)
+    entities = Column(Text, nullable=False, default="[]")
 
     __table_args__ = (UniqueConstraint("region_key", "source", "external_id", name="uq_regional_items_source_id"),)
 

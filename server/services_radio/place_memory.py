@@ -203,6 +203,7 @@ async def get_place(place_id: str) -> Optional[dict]:
             row = await db.get(PlaceCache, place_id)
         if row is None or row.expires_at <= datetime.now(timezone.utc):
             return None
-        return {"name": row.name, "type": row.type or ""}
+        return {"name": row.name, "type": row.type or "", "address": row.address or "",
+                "latitude": row.latitude, "longitude": row.longitude}
     except Exception:
         return None

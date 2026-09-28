@@ -20,6 +20,13 @@ GENERIC_EVENT_WORDS = {"event", "events", "concert", "concerts", "gig", "gigs", 
 _LATLONG = re.compile(r"^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$")
 
 
+
+def _float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 class EventsService:
     def __init__(self):
         self._cache: dict[tuple, tuple[float, list]] = {}
@@ -128,6 +135,11 @@ class EventsService:
             "price_range": f"{price.get('min')}-{price.get('max')} {price.get('currency', '')}" if price.get("min") else "",
             "status": event.get("dates", {}).get("status", {}).get("code", ""),
             "info": (event.get("info") or event.get("description") or "")[:160],
+            "venue_address": ((venue.get("address") or {}).get("line1") or ""),
+            "venue_lat": _float((venue.get("location") or {}).get("latitude")),
+            "venue_lon": _float((venue.get("location") or {}).get("longitude")),
+            "performers": [a.get("name") for a in (event.get("_embedded", {}).get("attractions") or [])
+                           if a.get("name")][:6],
         }
 
     async def fetch_event_pages(self, latlong: str, country_code, start_date, end_date, pages: int) -> list[dict]:

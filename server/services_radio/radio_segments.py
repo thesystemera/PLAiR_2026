@@ -8,7 +8,10 @@ import pytz
 
 from services import log_service
 from services.user_content_database_service import coarse_location
-from services_radio import area_geocode, area_signals, dj_bank_sources
+import time
+
+from config import settings
+from services_radio import area_geocode, area_signals, dj_bank_sources, pulse_agent
 from services_radio import regional_knowledge as regional_kb
 from services_radio.dj_content_bank import artist_key, clip, fact_sentences
 from services_radio.external_news_service import resolve_country
@@ -36,6 +39,7 @@ class SegmentContext:
     catalog_service: Any
     aired: set = field(default_factory=set)
     location: Any = None
+    prefs: Any = None
 
     @property
     def is_guest(self) -> bool:
@@ -462,7 +466,57 @@ class TriviaSegment(RadioSegment):
         return None
 
 
-for _segment in (NewsSegment(), CitySegment(), LocalSegment(), CommunitySegment(), TriviaSegment()):
+_for_you_runs: dict[str, float] = {}
+
+
+def for_you_due(session_id: str, now: Optional[float] = None) -> bool:
+    last = _for_you_runs.get(session_id)
+    return last is None or (now or time.time()) - last >= settings.RADIO_FOR_YOU_INTERVAL_S
+
+
+class ForYouSegment(RadioSegment):
+    kind = "for_you"
+    label = "For You"
+    pref = "features"
+    target_s = (100, 140)
+    moods = ("warm", "upbeat", "chill")
+    instruction = (
+        "FOR YOU - a two-minute narrative the station's producer built just for this listener (its angle is the "
+        "SEGMENT title). Tell it as a story, following the beats in SEGMENT DATA in order and connecting them the "
+        "way a friend who knows the city and their taste would; talk to the listener directly. Warm and specific, never creepy: show what the station knows, don't "
+        "recite it. Only facts from SEGMENT DATA. Close by handing back to the music."
+    )
+
+    async def build(self, ctx: SegmentContext) -> Optional[SegmentContent]:
+        if not for_you_due(ctx.session_id):
+            return None
+        _for_you_runs[ctx.session_id] = time.time()
+        avoid = []
+        if ctx.prefs is not None and not getattr(ctx.prefs, "local", True):
+            avoid.append("gigs, events and places")
+        if ctx.prefs is not None and not getattr(ctx.prefs, "community", True):
+            avoid.append("listener shoutouts")
+        brief = (
+            f"FOR YOU: research a two-minute narrative feature made for this one listener. It's "
+            f"{ctx.now_local.strftime('%A %I:%M %p').replace(' 0', ' ')} where they are. Find out who they are, what "
+            "they've been talking about and what's on air, then dig through everything the station knows and build "
+            "the story you think they'd genuinely love right now. Vary the angle; don't default to gigs."
+        )
+        if avoid:
+            brief += " The listener has switched off " + " and ".join(avoid) + "; leave those out."
+        result = await pulse_agent.gather_facts(brief, ctx.user_id, ctx.session_id, ctx.aired,
+                                                timeout_s=settings.RADIO_FOR_YOU_TIMEOUT_S,
+                                                max_rounds=settings.RADIO_FOR_YOU_MAX_ROUNDS)
+        if len(result.facts) < 3:
+            _for_you_runs.pop(ctx.session_id, None)
+            return None
+        return SegmentContent(facts=result.facts, keys=result.keys, moods=self.moods,
+                              notes=[f"City: {ctx.place_name}"] if ctx.place_name else [],
+                              title=result.angle or "Made for you")
+
+
+for _segment in (NewsSegment(), CitySegment(), ForYouSegment(), LocalSegment(), CommunitySegment(),
+                 TriviaSegment()):
     register(_segment)
 
 

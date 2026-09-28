@@ -421,7 +421,8 @@ async def lifespan(_app: FastAPI):
     regional_kb.set_regional_knowledge(regional_kb.RegionalKnowledgeService(
         regional_kb.RegionalKnowledgeStore(AsyncSessionLocal),
         [regional_kb.TicketmasterEventsCollector(events_service), regional_kb.GooglePlacesCollector(location_service),
-         regional_kb.GoogleNewsCollector(news_service)],
+         regional_kb.GoogleNewsCollector(news_service),
+         regional_kb.CommunityCollector(lambda: services.user_content_service)],
         embedder=text_embedder
     ))
     regional_kb.get_regional_knowledge().embed_items()
