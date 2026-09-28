@@ -1,8 +1,10 @@
 # PLAiR City Pulse
 
-Design brief · Draft 0.1 · 27 Sep 2026 · For discussion
+Design brief · Draft 0.2 · 28 Sep 2026 · For discussion
 
 A shared, always-fresh picture of what is happening in each listener's city: gigs, venues, weather, news and, above all, the local PLAiR community. It is gathered once per city, stored in one searchable place, and handed to the DJs, the announcer and any agent that needs it, targeted to each listener's taste.
+
+Draft 0.2 adds the **knowledge commons** (section 15): nothing a listener looks up is thrown away, what people ask for is itself a signal about the city, and the hosts get read tools so they can connect the dots from what is already on hand. Section 3 now records a code audit of where we are (28 Sep), and section 16 covers the realtime DJs' tool use.
 
 Published version: https://claude.ai/artifact/1BNkXZQA9snyL9iwTaeciT
 
@@ -23,6 +25,8 @@ Today the DJs can reach some of that, but only on demand and one API call at a t
 
 City Pulse separates **gathering** from **speaking**. Collectors keep a regional store fresh in the background, and every part of PLAiR reads from that store instead of calling outside services.
 
+The longer-term aim is a station that is genuinely alive: a cached, vectorised, self-organising body of local knowledge that grows with every listener request and every background sweep, stays current on its own, and lets the hosts pick from it freely: between tracks, in features, or through their own tool use. It saves money and bandwidth because most answers are already on hand, and it gives PLAiR a fingerprint of each city: what people there are listening to, asking about and talking about.
+
 ## 2. Principles
 
 - **Gather once per city, target per listener.** A fetch serves everyone in the region. Personalisation happens at read time, locally, without an LLM call per listener.
@@ -30,6 +34,10 @@ City Pulse separates **gathering** from **speaking**. Collectors keep a regional
 - **Everything is an item.** A gig, a café, a headline, a shoutout, a weather change and a trivia fact share one schema, so one query can mix them.
 - **Local embeddings, cheap enrichment.** Semantic search uses the T5 model already on the server. Any LLM enrichment runs in batches on DeepSeek during off-peak hours, under a daily budget.
 - **Plugins, not a monolith.** Each source is a small collector with one interface. Adding a source means adding one file and a settings block.
+- **Every lookup is a contribution.** When a listener's request forces a live fetch, the result is written back to the shared store for everyone in that area (write-through). Nothing fetched is used once and dropped.
+- **Store first, fetch last.** Every read tries what is on hand, then fetches live only on a miss, inside a budget, and saves what it got (read-through).
+- **Demand is data.** What listeners ask for is recorded anonymously per city. It steers what the collectors prefetch and gives the hosts something to talk about ("a lot of you have been asking about late-night food").
+- **The hosts connect the dots.** Given compact, relevant facts (or read tools that return them), the hosts can link a gig to a listener's taste, the weather to a shoutout, a headline to a neighbourhood. The old brace-command system stays; this is an extra layer on top.
 - **The sound stays sacred.** City Pulse only changes what the hosts know. The performance planner, overlaps, meta, breaths, impulses and the 0.8 clip similarity stay exactly as they are.
 
 ## 3. What exists today
@@ -39,14 +47,45 @@ City Pulse separates **gathering** from **speaking**. Collectors keep a regional
 | Weather | `external_web_service.py`, hourly updater | working | OpenWeatherMap, cached 30 min per ~1 km, persisted in `area_cache` so restarts don't refetch. Users and located guests (hourly change cues for guests are kept in memory only). |
 | News | `external_news_service.py` + `news_store.py` | working | Google News only (country editions, topic sections, city geo feeds, search). Persistent semantic store, shared per country; see section 9. |
 | Events | `external_events_service.py` | working | Ticketmaster Discovery v2. Keyword bug fixed 27 Sep (genre was dropped). |
-| Places | `external_location_service.py` | blocked | Places API (New) not enabled in the Google project. Needs enabling with billing. |
+| Places | `external_location_service.py` + `place_memory.py` | working | PLAiR Google project key (Places New). Collector keeps 50 place IDs per city; on-demand searches write through to `place_cache` / `place_searches`. |
 | Artist bios, lyrics | MusicBrainz → Wikidata → Wikipedia; catalog | working | Bios persisted 30 days in `artist_biographies`, misses 24 h, shared by everyone. |
 | Shoutouts search | `user_content_vector_*` | working | T5 embeddings + Annoy index; the model City Pulse follows. |
 | Listener persona | `persona_service.py` | working | Updated every 5 interactions. Not yet seen by the announcer. |
 | Content bank | `services_radio/dj_content_bank.py` | on | "Already aired" memory and next-artist trivia prefetch. |
-| City events pool | being built | in progress | One Ticketmaster sweep per city, tagged by Ticketmaster genres, matched to taste. Shaped as the first City Pulse collector. |
+| City events pool | `regional_knowledge.py` | working | One Ticketmaster sweep per city every 8 h, 28 days ahead, tagged by Ticketmaster genres, matched to taste. On-demand gig searches write through to the pool. |
 | Cost tracking | `services/usage_tracking.py` | working | Every paid call attributed to a user, guest or "system". Collectors report here. |
 | Announcer | `announcer_service.py` | working | Picks one of six prompt presets by window length (≤5 s … >25 s). |
+
+### Audit: where we are (28 Sep 2026)
+
+**What's in the database now:** 3 active regions (Auckland, Los Angeles, New York) with 956 regional items (754 events, 150 place IDs, 52 Auckland local headlines). There are also 256 stored news stories from 22 pulls, 35 aired-news rows, 83 artist bios, 8 area-signal cells, and 5 cached places from 1 stored place search.
+
+**Scheduler:** `background_tasks_service.regional_knowledge_refresher` starts 3 min after boot and runs every 30 min. It covers the active regions: users with a play in the last 14 days, located guests (24 h), and guest session timezones. Collectors: events every 8 h, places every 14 days, news hourly.
+
+**Write-through, by domain:**
+
+| Domain | Background collector | A listener's request is saved for everyone | Where it lands |
+|---|---|---|---|
+| Events | yes | yes (`context_service.get_regional_events_data` → `regional.ingest`) | `regional_items` |
+| News | yes (city geo feed only) | yes, but on-demand pulls carry no region | `news_items` / `news_pulls`; only the collector's city headlines reach `regional_items` |
+| Places | yes (bare IDs) | yes | `place_cache` / `place_searches`; not `regional_items` (hydrated names are never written back) |
+| Weather | hourly for users | yes, per ~1 km cell | `area_cache` (`weather_*`), `weather_data` per user |
+| Area signals | no (lazy) | yes, per grid cell | `area_cache` |
+| Artist bios | no | yes | `artist_biographies` |
+| Shoutouts | n/a | n/a | user-content vector DB; not in the pulse |
+| Lyrics | n/a | interpretation cached | catalog + `llm_result_cache` |
+
+**Readers:** the announcer (through `bank_talking_points`: events and places, taste-scored, with a 2 h per-session "already offered" memory), Radio Mode segments (city, local, news with an aired ledger), and the DJ conversation (`local_happenings`, but only when the listener's words look like a gig question).
+
+**Gaps against this brief:**
+
+1. **Five stores, no single query.** Knowledge is split across `regional_items`, `news_items`, `place_cache`, `area_cache`, `artist_biographies` and the shoutout index. Each consumer knows which store to read; nothing can ask "what do we know about X near here" across all of them.
+2. **No semantic search over regional items.** `regional_items` has no embedding column. A text query is a substring or tag match; only genre/tag labels have cached T5 vectors. News items do store embeddings.
+3. **Demand is not recorded as a signal.** `news_pulls` and `place_searches` keep the queries they needed, but nothing aggregates what a city asks for, and nothing feeds it back into prefetch or on-air talk.
+4. **No community kind.** Shoutouts are searched directly, station stats are global (not per city), and there are no city charts or local artists.
+5. **Listener memory is thin.** It's the persona/profile/interests text on the `User` row, rewritten by Gemini every 5 engagements. There are no structured facts, no location history and no "What the DJs know about me" panel.
+6. **The live DJ barely sees the pulse.** Interactive turns get `local_happenings` (regex-gated), current weather and the persona. Talking points, news store, places, area signals and listener notes are wired only into the announcer and Radio Mode.
+7. **Tool use is half built.** See section 16.
 
 ## 4. Architecture
 
@@ -252,6 +291,9 @@ For comparison, the plan nets about $4.55 per subscriber after Stripe fees, and 
 | 3 | Memory · ~1 week | Listener memory from conversations, extracted nightly off-peak. "What the DJs know about me" panel. |
 | 4 | Talk breaks · built 28 Sep 2026 | Opt-in Radio Mode: news on the hour, city update at :30, features every 15/20/30 min, 30–60 s over a music bed. News/city scripts shared per city and half hour, reused by the TTS clip cache. Details in section 14. |
 | 5 | App surface | "What's on in your city" in the app, linked to shoutouts and gigs. |
+| 6 | Commons foundation · ~1 week | Section 15, steps A–D: the `pulse` facade over the existing stores, item embeddings and semantic search, the demand ledger, and the missing write-through (regioned news, named places). No new outside APIs. |
+| 7 | Knowledge tools · ~1 week | Section 16: the `city_pulse` context node for every interactive turn (tool mode on or off), then the read tools (`pulse_search`, `pulse_detail`, `listener_context`, `city_trends`), tests, and tool mode switched on for a trial. |
+| 8 | Personal features · ~1–2 weeks | Section 15, "Made for you": the `personal` Radio Mode feature built by a bounded, read-only agent from taste, habits, neighbourhoods and the pulse; consented neighbourhood history. |
 
 ## 13. Open questions
 
@@ -263,6 +305,10 @@ For comparison, the plan nets about $4.55 per subscriber after Stripe fees, and 
 6. **Talk breaks.** Answered in Phase 4: opt-in, never mid-song; the song finishes, the hosts talk over a quiet bed, and the next track is posted under their last seconds. Frequency is the listener's choice (15/20/30 min).
 7. **"In the style of".** Catalog tracks carry the name of the real artist each AI track was modelled on. Should hosts frame trivia as "in the style of"?
 8. **App panel.** Is a visible "What's on" page part of the product, or should the pulse stay behind the DJs?
+9. **Demand on air.** How many distinct listeners must ask about something before the hosts may mention it as a city trend? The proposal is at least 3, never naming anyone.
+10. **Neighbourhood history.** Should "places you spend time" (neighbourhood names and counts, never coordinates) be opt-in for everyone? The proposal is opt-in, users only.
+11. **Tool mode.** When the knowledge tools exist, should tool mode become the default for signed-in listeners while guests stay on two-pass, which is cheaper?
+12. **Places terms.** Hydrated place names written back into the pool extend what we keep from Google. The owner already chose 30-day caching; confirm it also covers the pool.
 
 
 ## 14. Radio Mode: talk breaks (Phase 4, built 28 Sep 2026)
@@ -382,6 +428,165 @@ One segment script is about 4–5k prompt tokens and 0.6–1k output tokens: rou
 - Headless Chrome (`--disable-gpu --mute-audio`) against the Vite dev server and a mock backend: a full guest break (ready, hold, on air, bed, ducking, post, end, the ON AIR badge on the active and a second, inactive device) and a skip during the break.
 - Five real LLM scripts (news, city, local, community, trivia) checked for tone, facts and length.
 - Stings harness (91 checks): the clock for all 1440 minutes (exact parts only, parsed back to the same time), exact-key cache, window thresholds, rotation, time-check spacing, Radio Mode and listener gating, no back-to-back repeats, talk-break exclusion, mid-track rules, the sting stream through the live encoder, the break lead-in and the announcer hook. A real render set on the P6000 (about 2 minutes of GPU) was checked with Whisper.
+
+## 15. The knowledge commons (Draft 0.2)
+
+City Pulse started as "gather once per city". The commons goes further: every source, every background sweep and every listener request feeds one living body of knowledge. It organises itself by place, kind and meaning, stays fresh on its own, and anything that speaks can draw on it. The aim is threefold: fewer outside calls, a real fingerprint of each city, and hosts that sound like they live there.
+
+### Knowledge nodes (plugins over the existing stores)
+
+The data already lives in good, purpose-built stores (section 3 audit). The commons does not migrate them into one table. Each store gets a thin **knowledge node** adapter, and one facade queries them all.
+
+```python
+class KnowledgeNode:
+    name: str              # "events", "news", "places", "weather", "area", "bios", "shoutouts", "charts", "memory", "trends"
+    kinds: set[str]        # item kinds it answers
+    scope: str             # region | cell | point | artist | listener
+    personal: bool         # listener-only items (memory)
+
+    async def search(self, q: PulseQuery) -> list[PulseItem]   # on-hand only, never calls out
+    async def fetch(self, q: PulseQuery) -> list[PulseItem]    # optional: live, budgeted, writes through
+```
+
+`pulse.query(PulseQuery)` fans out to the nodes that match the requested kinds. It merges the results, drops duplicates (same story, same venue), removes what this listener has already heard, and ranks by:
+
+- relevance: tags, words and T5 meaning;
+- taste: the existing `Taste`;
+- freshness;
+- proximity in time and distance;
+- novelty;
+- demand: what the city is asking about.
+
+When `allow_fetch` is set and the store has too little, the best node's `fetch()` runs once, inside the caller's budget, and saves what it gets for everyone. Adding a domain (traffic, holidays, sports fixtures, transit alerts) means writing one node and, if it needs one, one collector.
+
+`PulseItem` stays as in section 5, plus `node`, `freshness` and `demand` fields for ranking.
+
+### Semantic search
+
+- Add an `embedding` column to `regional_items`, filled in the background from `embed_text` on the GPU executor, the same way `news_items` already does it.
+- City scale is small: at most 400 items per kind per region. A brute-force numpy cosine over a region's vectors, held with the existing read cache, takes well under a millisecond, so no Annoy index is needed yet. pgvector stays optional (question 5).
+- Keep the scoring hybrid. Mean-pooled flan-T5 is unreliable on short topics (section 9), so meaning never wins on its own: a hit needs a tag or word overlap, or a strong cosine on the full item text.
+
+### Demand ledger: the city's fingerprint
+
+Every read that comes from a listener's own request (DJ turn, tool call, app search) records what was asked. System reads such as Radio Mode builds and prefetch are not recorded.
+
+```text
+pulse_demand          region_key, node, normalised query, query embedding, day,
+                      asks, distinct_askers, served_from_store, served_live, last_asked_at
+pulse_demand_askers   demand_id, day, asker_hash      # daily-salted hash, purged after 2 days
+```
+
+Similar queries collapse into one row, matched by words plus T5, the same way news reuse works. No user ids and no coordinates are stored.
+
+It is used for:
+
+- **The fingerprint:** a weekly top list per city. For example, Auckland this week: jazz gigs, late-night food, All Blacks, the rain.
+- **Steering prefetch:** a query asked by 3 or more distinct listeners in a region is added to that node's next sweep: a Ticketmaster keyword, a news topic, or a places category. Demand makes the store grow where people are actually curious.
+- **On air:** trending asks become `community` items ("a few of you have been asking where to eat late"). They only air once at least 3 distinct listeners have asked (question 9).
+- **Savings:** the store vs live split per node shows how much the commons saves. `usage_tracking.record_api_call(cached=True)` already supports this.
+
+City charts belong to the same layer: what a region played, liked and banned this week, computed in SQL. That needs a `region_key` on new `play_events` rows, set from the listener location resolver at play time.
+
+### Freshness and upkeep
+
+Items stay current three ways:
+
+- **Scheduled collectors**, as today.
+- **Demand-driven sweeps**, from the ledger above.
+- **User-driven live fetches**, which refresh the shared entry for everyone.
+
+A read of an item that is stale but not yet expired returns it at once and schedules a background refresh, the pattern area signals already use. Every item keeps a hard `expires_at`. Each node has a daily budget and reports its spend to usage tracking.
+
+### Personal layer
+
+Personal items are only ever read for their own listener (section 11 still applies).
+
+**Listener facts.** Phase 3 memory becomes structured rather than one persona paragraph:
+
+```text
+listener_facts   user_id, kind, text, embedding, source, confidence, created_at, last_confirmed_at, expires_at
+```
+
+- Kinds: `likes`, `dislikes`, `plans` ("going to Laneway"), `life`, `places`.
+- They are extracted nightly off-peak from conversations (`LLM_BACKGROUND`).
+- Sensitive topics are never stored.
+- Listeners can view and delete them in the "What the DJs know about me" panel.
+- The persona text stays as a summary.
+
+**Neighbourhood history.** This is opt-in and for users only (question 10).
+
+```text
+listener_areas   user_id, neighbourhood, city, region_key, hour_bucket, weekday_bucket, visits, last_seen_at
+```
+
+- The names come from `area_geocode` at listening time. It stores names and counts only, never coordinates.
+- It lets PLAiR tell "home turf" and "the work area" apart from travelling ("you're in Wellington this week"). A traveller can still hear about their home city.
+- Guests keep the current behaviour: memory only, 6 h.
+
+### Made for you (personal features)
+
+A new Radio Mode feature, `personal` ("For you"), is a segment class like the others (section 14). Its `build()` differs: it runs a small **read-only agent** instead of a fixed fact query.
+
+- **Inputs:** taste, listener facts, usual neighbourhoods, local time and weather, and the pulse. The agent reads them through the section 16 read tools.
+- **Limits:** `LLM_INTERPRET`, at most 3 rounds, no live fetches beyond the node budgets, and no action tools. The script is prepared 120 s ahead anyway, so the extra rounds cost no air time.
+- **Output:** 3–5 connected facts in the usual `data_radio_segment` format. The script prompt, performance planner and sound are unchanged.
+- **Example:** "Your jazz Friday: a trio at a K Road bar ten minutes from where you usually listen, the rain clears by eight, and two Auckland listeners shouted out the same band last week."
+- **Cost:** about $0.003–0.006 per feature, capped per listener per day.
+
+## 16. DJ tool use: the knowledge layer for the realtime hosts
+
+### Where it is today (audit, 28 Sep)
+
+- **Two-pass flow (live default).** The DJ reply is spoken first. The HAL11000 pass then extracts brace commands, which `dj_command_executor` runs. The DJ never sees what the commands did.
+- **Tool mode** (`DJ_TOOL_USE_ENABLED`, **off** in `.env`) runs one Gemini conversation per turn with 15 tools (section 5 of `CLAUDE.md`).
+  - It has run live once: 27 Sep, a guest end-to-end test. `search_and_play` and `get_news` executed, `rate_track` was correctly blocked for the guest, and the turn took about 6 s.
+  - There are no automated tests.
+- **The content tools can't look anything up.** `get_news`, `get_weather`, `get_events`, `find_places`, `get_artist_biography`, `explain_lyrics` and `play_shoutouts` return only `{"status": "scheduled"}`. The facts go to a separate interpretation prompt that airs after the reply. In tool mode the hosts can act but cannot look things up. Only `search_and_play` returns data (the matching titles).
+- **What an interactive turn sees without tools:** `local_happenings` (only when the words match a gig regex), current weather, persona/profile, and recent airings. Talking points, the news store, places, area signals and listener notes reach only the announcer and Radio Mode.
+- **Robustness gaps in tool mode:**
+  - The tool turn calls Gemini directly (`llm_router.gemini_generate`), so it skips the `LLM_LIVE` provider chain and circuit breaker.
+  - After any tool record or spoken preamble, a failure no longer falls back to two-pass.
+  - An empty final text leaves the turn silent.
+- **The announcer and Radio Mode use no tools.** Their facts go straight into the prompt.
+
+### What to add (on top; nothing removed)
+
+The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.
+
+**1. A `city_pulse` context node for every interactive turn, in both flows.**
+- It calls `pulse.query(text=<listener's words>, listener=..., limit≈4, allow_fetch=False)` and returns compact facts, at most about 400 characters, wrapped as untrusted data.
+- It replaces the regex gate on `local_happenings`.
+- The ranking is local and costs a few dozen prompt tokens.
+- This alone lets the hosts connect dots from what is already on hand, even with tool mode off.
+
+**2. Read tools that return data to the model (tool mode).**
+
+| Tool | Returns | Calls out? |
+|---|---|---|
+| `pulse_search(query, kinds?, when?, near_me?)` | up to 6 items: id, kind, title, ≤160-char text, when, distance, freshness, `aired_recently` | Store first. Live only on a miss, at most 2 fetches per turn, and saved for everyone. |
+| `pulse_detail(item_id)` | the full item plus related items (same venue, artist or story) | hydrate only |
+| `listener_context()` | taste summary, listener facts, neighbourhood, local time, what they heard recently | never |
+| `city_trends(period?)` | what the city is playing, asking about and shouting out | never |
+
+How the read tools work:
+
+- They don't count against the segment cap, and they record demand.
+- They only return the listener's own personal items.
+- With these, "any jazz on Friday?" gets a one-line answer in the reply itself. The long-form segment tools remain for a full bulletin or a detailed rundown.
+
+**Before switching tool mode on:**
+
+1. Route the tool turn through the `LLM_LIVE` chain.
+2. Fall back to two-pass when the final text is empty.
+3. Add tests: a mocked Gemini, tool dispatch, the guards, the fallback, and the read tools.
+
+**Latency:**
+- Read tools answer locally in milliseconds. The cost is one more Gemini round, about 1–2 s on flash-lite.
+- The existing preamble speech covers it: a "let me check" line is spoken at once.
+- The `city_pulse` node answers most questions with no extra round at all.
+
+**Free range off the live path.** Radio Mode features ("Made for you"), nightly per-city scripts and other agents use the same read tools with more rounds, because they are prepared ahead of air time.
 
 ---
 
