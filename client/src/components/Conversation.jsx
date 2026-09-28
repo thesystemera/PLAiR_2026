@@ -1,13 +1,14 @@
 import { logger } from '../lib/logger'
-import { useState, useEffect, useRef } from 'react'
+import { memo, useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { api } from '../lib/api'
-import { messageMotion } from '../lib/motion'
-import { FadeSwap } from './Motion'
+import { messageMotion, TWEEN } from '../lib/motion'
+import { Expandable, ExpandChevron, FadeSwap } from './Motion'
+import { ActivityCard } from './DJActivity'
 
 const USER_MESSAGE_MOTION = messageMotion(true)
 const DJ_MESSAGE_MOTION = messageMotion(false)
@@ -189,8 +190,51 @@ const DJ_COLORS = {
   }
 }
 
-const cleanCommandContent = (content) => {
-    return content.replace(/\[HAL11000]\s*/g, '').trim();
+const COMMAND_SOURCES = [
+  { tag: '[STUDIO TOOLS]', source: 'tool' },
+  { tag: '[HAL11000]', source: 'hal11000' },
+]
+
+const InternalDialogueBubble = memo(function InternalDialogueBubble({ speaker, content }) {
+  const [open, setOpen] = useState(false)
+  const name = DJ_SPEAKERS[speaker]?.name
+
+  return (
+    <motion.div
+      layout
+      transition={TWEEN.layout}
+      onClick={() => setOpen(value => !value)}
+      role="button"
+      aria-expanded={open}
+      className={`border bg-gray-500/10 border-gray-500/30 text-gray-400 max-w-[80%] w-fit overflow-hidden cursor-pointer ${open ? 'p-3 rounded-lg' : 'px-3 py-1 rounded-full'}`}
+    >
+      <motion.div layout="position" className="flex items-center gap-2 text-xs">
+        <Brain className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+        <span className="font-medium">Internal dialogue{name ? ` · ${name}` : ''}</span>
+        <ExpandChevron open={open} size={14} />
+      </motion.div>
+      <Expandable open={open}>
+        <p className="mt-2 text-sm italic whitespace-pre-wrap break-words">{content}</p>
+      </Expandable>
+    </motion.div>
+  )
+})
+
+function commandEntries(raw, extra) {
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  const pattern = /(\[STUDIO TOOLS]|\[HAL11000])/g
+  const pieces = raw.split(pattern)
+  const entries = []
+  let source = 'hal11000'
+  for (const piece of pieces) {
+    const known = COMMAND_SOURCES.find(item => item.tag === piece)
+    if (known) {
+      source = known.source
+    } else if (piece.trim()) {
+      entries.push({ ...extra, type: 'command', source, content: piece.trim() })
+    }
+  }
+  return entries
 }
 
 const getCategoryIcon = (messageType) => {
@@ -213,6 +257,8 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
   const prevConversationLengthRef = useRef(0)
   const scrollTimeoutRef = useRef(null)
   const loadingRef = useRef(false)
+  const liveTurnsRef = useRef(new Set())
+  const sayCountRef = useRef(0)
   const uiSound = useUISound(window.audioEngine)
   const { token } = useAuth()
   const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
@@ -292,6 +338,10 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
         displayContent = displayContent.replace(/\s{2,}/g, ' ').trim();
     }
 
+    if (type === MESSAGE_TYPES.INTERNAL) {
+      return <InternalDialogueBubble key={key} speaker={speaker} content={displayContent} />
+    }
+
     const getMessageStyle = () => {
       if (type === MESSAGE_TYPES.INTERNAL) {
         return 'bg-gray-500/10 border-gray-500/30 text-gray-400 italic'
@@ -363,13 +413,22 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
 
   useWebSocketSubscribe('transcription_complete', (data) => {
     if (data.text) {
-      setConversations(prev => [...prev, {
-        type: 'user',
-        content: data.text,
-        timestamp: new Date().toISOString(),
-        isFastTranscription: true,
-        inputMethod: 'voice'
-      }])
+      setConversations(prev => {
+        const betterIndex = prev.findIndex(c =>
+          c.type === 'user' && c.awaitingFast && Date.now() - new Date(c.timestamp) < 30000)
+        if (betterIndex !== -1) {
+          const updated = [...prev]
+          updated[betterIndex] = { ...updated[betterIndex], awaitingFast: false }
+          return updated
+        }
+        return [...prev, {
+          type: 'user',
+          content: data.text,
+          timestamp: new Date().toISOString(),
+          isFastTranscription: true,
+          inputMethod: 'voice'
+        }]
+      })
       uiSound.playTranscript()
     }
   })
@@ -409,11 +468,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
             })
           }
         } else if (conv.type === 'command' && typeof conv.content === 'string') {
-          processedConversations.push({
-            ...conv,
-            content: cleanCommandContent(conv.content),
-            messageType: conv.messageType
-          })
+          processedConversations.push(...commandEntries(conv.content, { timestamp: conv.timestamp, messageType: conv.messageType }))
         } else if (conv.type === 'user' && typeof conv.content === 'string') {
            processedConversations.push({
             ...conv,
@@ -436,133 +491,122 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     }
   }
 
+  const upsertUser = (text, messageType, inputMethod) => {
+    const cleaned = text.replace(/\[LISTENER TXT]\s*/, '').trim()
+    if (!cleaned) return
+    setConversations(prev => {
+      const fastIndex = prev.findIndex(c =>
+        c.type === 'user' &&
+        c.isFastTranscription === true &&
+        Math.abs(new Date(c.timestamp) - new Date()) < 30000
+      )
+      if (fastIndex !== -1) {
+        const updated = [...prev]
+        updated[fastIndex] = {
+          ...updated[fastIndex],
+          content: cleaned,
+          isFastTranscription: false,
+          messageType,
+        }
+        return updated
+      }
+      return [...prev, {
+        type: 'user',
+        content: cleaned,
+        timestamp: new Date().toISOString(),
+        isFastTranscription: false,
+        awaitingFast: (inputMethod || 'voice') === 'voice',
+        messageType,
+        inputMethod: inputMethod || 'voice'
+      }]
+    })
+  }
+
+  const botEntries = (content, messageType, idPrefix) => {
+    const parsed = typeof content === 'string' ? parseMessage(content) : []
+    const timestamp = new Date().toISOString()
+    if (parsed.length === 0) {
+      return [{ id: idPrefix && `${idPrefix}:0`, type: 'bot', content, timestamp, messageType }]
+    }
+    return parsed.map((msg, idx) => ({
+      id: idPrefix && `${idPrefix}:${idx}`,
+      type: 'bot',
+      content: msg.content,
+      timestamp,
+      messageType,
+      djMessageType: msg.type,
+      djSpeaker: msg.speaker
+    }))
+  }
+
+  const playBotSound = (content) => {
+    if (content.includes('[BROADCAST]')) uiSound.playBroadcast()
+    else if (content.includes('[TXT]')) uiSound.playTxt()
+    else uiSound.playBot()
+  }
+
+  useWebSocketSubscribe('dj_activity', (data) => {
+    if (!data?.phase || !data.turn_id) return
+    const turnId = data.turn_id
+    if (data.phase === 'turn') {
+      liveTurnsRef.current.add(turnId)
+      if (data.input) upsertUser(data.input, 'interactive', data.origin === 'text' ? 'text' : 'voice')
+      return
+    }
+    if (!liveTurnsRef.current.has(turnId)) return
+    if (data.phase === 'say' && data.text) {
+      sayCountRef.current += 1
+      const entries = botEntries(data.text, 'interactive', `${turnId}:say${sayCountRef.current}`)
+      setConversations(prev => [...prev, ...entries])
+      playBotSound(data.text)
+    } else if (data.phase === 'start' && data.call_id) {
+      const entry = {
+        id: data.call_id,
+        turnId,
+        type: 'activity',
+        source: data.source || 'tool',
+        tool: data.tool,
+        kinds: data.kinds || [],
+        label: data.label || data.tool,
+        command: data.command || '',
+        state: 'running',
+        summary: '',
+        live: false,
+        startedAt: Date.now(),
+        timestamp: new Date().toISOString(),
+        messageType: 'interactive'
+      }
+      setConversations(prev => prev.some(c => c.id === entry.id)
+        ? prev.map(c => c.id === entry.id ? { ...c, ...entry } : c)
+        : [...prev, entry])
+      uiSound.playCommand()
+    } else if (data.phase === 'result' && data.call_id) {
+      setConversations(prev => prev.map(c => c.id === data.call_id
+        ? { ...c, state: data.outcome || 'done', summary: data.summary || '', live: !!data.live, finishedAt: Date.now() }
+        : c))
+    } else if (data.phase === 'done') {
+      setConversations(prev => prev.map(c => c.turnId === turnId && c.state === 'running'
+        ? { ...c, state: 'done', finishedAt: Date.now() }
+        : c))
+    }
+  })
+
   useWebSocketSubscribe('conversation_update', (data) => {
     const newMessages = []
     const messageType = data.message_type || 'interactive'
+    const streamed = !!data.turn_id && liveTurnsRef.current.has(data.turn_id)
 
-    if (data.user_input) {
-      setConversations(prev => {
-        const fastMessageIndex = prev.findIndex(c =>
-          c.type === 'user' &&
-          c.isFastTranscription === true &&
-          Math.abs(new Date(c.timestamp) - new Date()) < 30000
-        )
-
-        const cleanedUserInput = data.user_input.replace(/\[LISTENER TXT]\s*/, '').trim()
-
-        if (fastMessageIndex !== -1) {
-          const updated = [...prev]
-          updated[fastMessageIndex] = {
-            type: 'user',
-            content: cleanedUserInput,
-            timestamp: updated[fastMessageIndex].timestamp,
-            isFastTranscription: false,
-            messageType: messageType,
-            inputMethod: updated[fastMessageIndex].inputMethod || 'voice'
-          }
-          return updated
-        } else {
-          return [...prev, {
-            type: 'user',
-            content: cleanedUserInput,
-            timestamp: new Date().toISOString(),
-            isFastTranscription: false,
-            messageType: messageType,
-            inputMethod: data.input_method || 'voice'
-          }]
-        }
-      })
+    if (data.user_input && !streamed) {
+      upsertUser(data.user_input, messageType, data.input_method)
     }
 
-    if (data.bot_response) {
-      const content = data.bot_response
-      const parsedMessages = typeof content === 'string' ? parseMessage(content) : []
+    if (data.bot_response && !streamed) {
+      newMessages.push(...botEntries(data.bot_response, messageType))
+      playBotSound(data.bot_response)
+    }
 
-      if (parsedMessages.length > 1) {
-        let cumulativeDelay = 0
-
-        parsedMessages.forEach((msg, idx) => {
-          if (idx > 0) {
-            cumulativeDelay += 200 + Math.random() * 600
-          }
-          const delay = cumulativeDelay
-
-          setTimeout(() => {
-            setConversations(prev => [...prev, {
-              type: 'bot',
-              content: msg.content,
-              timestamp: new Date().toISOString(),
-              messageType: messageType,
-              djMessageType: msg.type,
-              djSpeaker: msg.speaker
-            }])
-
-            if (msg.type === MESSAGE_TYPES.BROADCAST) {
-              uiSound.playBroadcast()
-            } else if (msg.type === MESSAGE_TYPES.TXT) {
-              uiSound.playTxt()
-            } else {
-              uiSound.playBot()
-            }
-          }, delay)
-        })
-
-        if (data.commands) {
-          setTimeout(() => {
-            setConversations(prev => [...prev, {
-              type: 'command',
-              content: cleanCommandContent(data.commands),
-              timestamp: new Date().toISOString(),
-              messageType: messageType
-            }])
-            uiSound.playCommand()
-          }, cumulativeDelay + 300)
-        }
-      } else {
-        if (parsedMessages.length === 1) {
-             const msg = parsedMessages[0]
-             newMessages.push({
-                type: 'bot',
-                content: msg.content,
-                timestamp: new Date().toISOString(),
-                messageType: messageType,
-                djMessageType: msg.type,
-                djSpeaker: msg.speaker
-             })
-        } else {
-            newMessages.push({
-                type: 'bot',
-                content: content,
-                timestamp: new Date().toISOString(),
-                messageType: messageType
-            })
-        }
-
-        if (content.includes('[BROADCAST]')) {
-          uiSound.playBroadcast()
-        } else if (content.includes('[TXT]')) {
-          uiSound.playTxt()
-        } else {
-          uiSound.playBot()
-        }
-
-        if (data.commands) {
-          newMessages.push({
-            type: 'command',
-            content: cleanCommandContent(data.commands),
-            timestamp: new Date().toISOString(),
-            messageType: messageType
-          })
-          uiSound.playCommand()
-        }
-      }
-    } else if (data.commands) {
-      newMessages.push({
-        type: 'command',
-        content: cleanCommandContent(data.commands),
-        timestamp: new Date().toISOString(),
-        messageType: messageType
-      })
+    if (data.commands && !streamed) {
+      newMessages.push(...commandEntries(data.commands, { timestamp: new Date().toISOString(), messageType }))
       uiSound.playCommand()
     }
 
@@ -627,6 +671,26 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
       )
     }
 
+    if (conv.type === 'activity') {
+      return <ActivityCard call={conv} />
+    }
+
+    if (conv.type === 'command') {
+      const lines = conv.content.split('\n').filter(line => line.trim())
+      return (
+        <ActivityCard
+          call={{
+            source: conv.source || 'hal11000',
+            tool: conv.source === 'tool' ? 'tool' : 'hal11000',
+            label: conv.source === 'tool' ? 'Actions and lookups' : 'Commands sent',
+            summary: `${lines.length} command${lines.length === 1 ? '' : 's'}`,
+            command: lines.join('\n'),
+            state: 'done'
+          }}
+        />
+      )
+    }
+
     if (conv.type === 'bot') {
       return renderDJMessage({
         key: `${idx}`,
@@ -640,27 +704,14 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
 
     const colors = getMessageColors(conv.type)
 
-    let displayContent = conv.content;
-
-    if (conv.type === 'command') {
-        displayContent = cleanCommandContent(conv.content);
-    } else {
-        displayContent = displayContent.replace(/\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ');
-        displayContent = displayContent.replace(/\s{2,}/g, ' ').trim();
-    }
+    const displayContent = conv.content.replace(/\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ').replace(/\s{2,}/g, ' ').trim()
 
     return (
-      <div className={`p-3 rounded-lg border ${colors} max-w-[80%] w-fit ${['command', 'info', 'warning', 'error'].includes(conv.type) ? 'mx-auto' : ''}`}>
-        {['command', 'info', 'warning', 'error'].includes(conv.type) ? (
-          <div className="text-center">
-            <div className="flex items-center justify-center gap-2 mb-1">
-              <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide opacity-70">
-                {conv.type === 'command' && <span className="mr-1">&gt;_</span>}
-                {getMessageIcon(conv.type)}
-                {conv.type}
-              </span>
-            </div>
-            <p className="text-sm whitespace-pre-wrap break-words">{parseShoutoutLinks(displayContent)}</p>
+      <div className={`border ${colors} max-w-[80%] w-fit ${['info', 'warning', 'error'].includes(conv.type) ? 'mx-auto px-3 py-1.5 rounded-full' : 'p-3 rounded-lg'}`}>
+        {['info', 'warning', 'error'].includes(conv.type) ? (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="shrink-0 opacity-80">{getMessageIcon(conv.type)}</span>
+            <span className="break-words">{parseShoutoutLinks(displayContent)}</span>
           </div>
         ) : (
           <div className={`flex items-start gap-2`}>

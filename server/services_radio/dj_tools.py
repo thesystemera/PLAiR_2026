@@ -24,6 +24,7 @@ BRACE_TARGETS = {"current": "current", "previous": "earlier", "next": "later"}
 
 SAVE_TOOLS = {"save_shoutout", "save_shoutout_reply", "save_opinion"}
 READ_TOOLS = {"pulse_search", "pulse_detail", "listener_context", "city_trends"}
+TOOLS_PREFIX = "[STUDIO TOOLS]"
 PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
 PULSE_WHEN = ["now", "today", "tonight", "tomorrow", "weekend", "week", "month"]
 PULSE_SORT = ["relevance", "newest", "soonest", "nearest"]
@@ -236,7 +237,37 @@ DJ_FUNCTION_DECLARATIONS = [
     ),
 ]
 
-TOOL_NAMES = {declaration.name for declaration in DJ_FUNCTION_DECLARATIONS}
+EXTRA_TOOL_NAMES = [declaration.name for declaration in DJ_FUNCTION_DECLARATIONS]
+READ_TOOLS.add("request_tools")
+TOOL_NAMES = set(EXTRA_TOOL_NAMES)
+CORE_TOOLS = {"pulse_search", "search_and_play", "playback_control", "rate_track"}
+TOOL_COMPANIONS = {"pulse_search": {"pulse_detail"}, "city_trends": {"pulse_detail"}}
+
+
+def request_tools_declaration(missing: List[types.FunctionDeclaration]) -> types.FunctionDeclaration:
+    return types.FunctionDeclaration(
+        name="request_tools",
+        description="Rarely needed: only when the listener clearly wants something none of your current tools can do "
+                    "(the producer misread the message). The tools below are NOT in your kit yet; request the ones you "
+                    "need and they become available on your next step. " + "; ".join(
+                        f"{d.name}: {d.description.split('.')[0]}" for d in missing),
+        parameters_json_schema=_schema({
+            "names": {"type": "array", "items": _enum([d.name for d in missing], "Tool name."),
+                      "description": "Tools you need."},
+            "reason": _string("What the listener actually meant, in a few words."),
+        }, ["names"]),
+    )
+
+
+def declarations_for(*groups: Optional[set]) -> List[types.FunctionDeclaration]:
+    names = set(CORE_TOOLS)
+    for group in groups:
+        for name in group or ():
+            names.add(name)
+            names |= TOOL_COMPANIONS.get(name, set())
+    kit = [declaration for declaration in DJ_FUNCTION_DECLARATIONS if declaration.name in names]
+    missing = [declaration for declaration in DJ_FUNCTION_DECLARATIONS if declaration.name not in names]
+    return kit + [request_tools_declaration(missing)] if missing else kit
 
 
 def _brace(*tokens: str, value: Optional[str] = None) -> str:
@@ -249,6 +280,7 @@ def _brace(*tokens: str, value: Optional[str] = None) -> str:
 ACTIVITY = {
     "pulse_search": "checking the station's notes on {query}",
     "pulse_detail": "reading the details",
+    "request_tools": "grabbing more studio tools",
     "listener_context": "remembering what this listener's into",
     "city_trends": "checking what the whole city's been playing",
     "search_and_play": "digging through the crates for {query}",
@@ -262,6 +294,19 @@ ACTIVITY = {
     "explain_lyrics": "reading the lyric sheet",
     "play_shoutouts": "going through the listener shoutouts",
 }
+
+
+LABELS = {
+    "playback_control": "working the transport",
+    "rate_track": "rating the track",
+    "save_shoutout": "posting the shoutout",
+    "save_shoutout_reply": "posting the reply",
+    "save_opinion": "saving the review",
+}
+
+
+def activity_label(name: str, args: Dict[str, Any]) -> str:
+    return tool_activity([(name, args)]) or LABELS.get(name, name.replace("_", " "))
 
 
 def tool_activity(calls) -> str:
@@ -288,6 +333,10 @@ def activity_summary(name: str, result: Any) -> tuple[str, str]:
     if not isinstance(result, dict):
         return "done", ""
     status = result.get("status") or "ok"
+    if result.get("granted"):
+        return "done", "now has " + ", ".join(result["granted"])
+    if status == "refused":
+        return "blocked", str(result.get("reason") or "refused")[:80]
     if status in FAILED_STATUSES:
         return "failed", "nothing doing" if status in ("no_results", "not_found", "no_lyrics") else "couldn't"
     if status == "empty":
@@ -299,6 +348,9 @@ def activity_summary(name: str, result: Any) -> tuple[str, str]:
             singular, plural = KIND_NOUNS.get(kind, (kind, kind))
             parts.append(f"{len(items)} {singular if len(items) == 1 else plural}")
         return ("found", " · ".join(parts[:4])) if parts else ("empty", "nothing on hand")
+    if result.get("not_in_catalog"):
+        instead = result.get("now_playing") or (result.get("queued") or [""])[0]
+        return "empty", (f"no {', '.join(result['not_in_catalog'])}" + (f" · closest: {instead}" if instead else ""))[:100]
     if result.get("now_playing"):
         return "found", f"playing {result['now_playing']}"
     if result.get("queued"):
@@ -306,10 +358,14 @@ def activity_summary(name: str, result: Any) -> tuple[str, str]:
     items = result.get("items")
     if isinstance(items, list):
         return ("found", f"{len(items)} found") if items else ("empty", "nothing on hand")
+    if status == "scheduled":
+        return "done", "segment airs after the reply" if name in SEGMENT_TOOLS else "on it"
     return "done", "on it" if name in SEGMENT_TOOLS else "done"
 
 
 def command_string(name: str, args: Dict[str, Any]) -> str:
+    if name == "request_tools":
+        return _brace("request_tools", *(args.get("names") or []), value=args.get("reason"))
     if name == "pulse_search":
         return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "", value=args.get("query"))
     if name == "pulse_detail":
@@ -370,6 +426,8 @@ class DJTurnContext:
     turn_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     activity_sent: bool = False
     planned: Optional[set] = None
+    granted: set = field(default_factory=set)
+    recent_commands: set = field(default_factory=set)
 
     async def activity(self, phase: str, **data) -> None:
         if self.notify is None:
@@ -428,6 +486,14 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"item_id": text("item_id", True)}
     if name == "listener_context":
         return {}
+    if name == "request_tools":
+        names = args.get("names") or []
+        if isinstance(names, str):
+            names = [names]
+        names = [str(n).strip() for n in names if str(n).strip() in EXTRA_TOOL_NAMES]
+        if not names:
+            raise ValueError(f"'names' must be from {', '.join(EXTRA_TOOL_NAMES)}")
+        return {"names": names, "reason": text("reason") or ""}
     if name == "city_trends":
         return {"topic": text("topic") or ""}
     if name == "search_and_play":
@@ -488,9 +554,10 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
 
     listener_text = ctx.transcription or ""
 
-    if name in PLAN_GATED_TOOLS and ctx.planned is not None and name not in ctx.planned:
-        return ("The listener's current message doesn't ask for that; earlier requests in the conversation were "
-                "already handled. Answer this message only.")
+    if (name in PLAN_GATED_TOOLS and command_string(name, args) in ctx.recent_commands
+            and not (ctx.planned and name in ctx.planned)):
+        return ("That exact action was already carried out for an earlier message. Only repeat it if the listener "
+                "asks again in this message.")
 
     if name in SAVE_TOOLS:
         if not ctx.user_id:
@@ -547,6 +614,7 @@ class DJToolRuntime:
             "pulse_detail": self._pulse_detail,
             "listener_context": self._listener_context,
             "city_trends": self._city_trends,
+            "request_tools": self._request_tools,
         }
 
     @property
@@ -562,6 +630,7 @@ class DJToolRuntime:
             args = normalize_tool_args(name, raw_args or {})
         except ValueError as e:
             self.ctx.records.append({"name": name, "args": raw_args, "status": "invalid", "reason": str(e)})
+            await self._flash(name, raw_args or {}, "failed", f"bad arguments: {e}"[:80])
             return {"status": "error", "reason": str(e)}
 
         refusal = authorize_tool_call(name, args, self.ctx)
@@ -569,6 +638,7 @@ class DJToolRuntime:
         if refusal:
             log_service.warning(f"[DJ TOOLS] Blocked {name}({args}) for session {self.session_dict.get('session_id')}: {refusal}")
             self.ctx.records.append({"name": name, "args": args, "status": "blocked", "reason": refusal})
+            await self._flash(name, args, "blocked", refusal[:80])
             return {"status": "refused", "reason": refusal, "on_air": FAILED_ACTION_NOTE}
 
         if name in SEGMENT_TOOLS:
@@ -579,31 +649,49 @@ class DJToolRuntime:
         record = {"name": name, "args": args, "status": "executed", "command": command_string(name, args)}
         self.ctx.records.append(record)
         call_id = f"{self.ctx.turn_id}:{self.ctx.calls_made}"
-        await self.ctx.activity("start", call_id=call_id, tool=name, label=tool_activity([(name, args)]) or name,
-                                query=str(args.get("query") or "")[:80], kinds=list(args.get("kinds") or []))
-        if name in READ_TOOLS:
-            log_service.detail(f"[DJ TOOLS] {record['command']} for session {self.session_dict.get('session_id')}",
-                               "commands")
-        else:
-            log_service.commands(f"[DJ TOOLS] Executing {record['command']} for session {self.session_dict.get('session_id')}")
+        await self.ctx.activity("start", call_id=call_id, tool=name, source="tool", label=activity_label(name, args),
+                                command=record["command"], query=str(args.get("query") or "")[:80],
+                                kinds=list(args.get("kinds") or []))
+        log_service.detail(f"[DJ TOOLS] {record['command']} for session {self.session_dict.get('session_id')}",
+                           "commands")
         try:
             result = await handler(args)
         except Exception:
-            await self.ctx.activity("result", call_id=call_id, tool=name, outcome="failed", summary="couldn't")
+            record["outcome"] = "failed"
+            await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome="failed",
+                                    summary="couldn't")
             raise
         record["result"] = result
         outcome, summary = activity_summary(name, result)
-        await self.ctx.activity("result", call_id=call_id, tool=name, outcome=outcome, summary=summary,
+        record["outcome"], record["summary"] = outcome, summary
+        await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome=outcome, summary=summary,
                                 live=bool(isinstance(result, dict) and result.get("live")))
         if isinstance(result, dict) and result.get("status") in FAILED_STATUSES:
             result = {**result, "on_air": FAILED_ACTION_NOTE}
         return result
 
+    async def _flash(self, name: str, args: Dict[str, Any], outcome: str, summary: str) -> None:
+        call_id = f"{self.ctx.turn_id}:x{len(self.ctx.records)}"
+        await self.ctx.activity("start", call_id=call_id, tool=name, source="tool", label=activity_label(name, args))
+        await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome=outcome, summary=summary)
+
+    def action_commands(self) -> List[str]:
+        return [record["command"] for record in self.ctx.executed if record["name"] in PLAN_GATED_TOOLS]
+
     def commands_for_display(self) -> Optional[str]:
-        commands = [record["command"] for record in self.ctx.executed if record["name"] not in READ_TOOLS]
+        commands = [record["command"] for record in self.ctx.executed]
         if not commands:
             return None
-        return "[HAL11000]" + "\n".join(commands)
+        return TOOLS_PREFIX + "\n".join(commands)
+
+    def summary(self) -> str:
+        parts = []
+        for record in self.ctx.records:
+            if record["status"] == "executed":
+                parts.append(f"{record['command']} -> {record.get('summary') or record.get('outcome') or 'done'}")
+            else:
+                parts.append(f"{record['name']} {record['status']} ({record.get('reason') or ''})")
+        return "; ".join(parts)
 
     async def _pulse_listener(self):
         from services_radio.pulse import get_pulse
@@ -648,6 +736,11 @@ class DJToolRuntime:
         if pulse is None:
             return {"status": "empty"}
         return {"status": "ok", "note": READ_NOTE, "listener": await pulse.listener_context(listener)}
+
+    async def _request_tools(self, args):
+        self.ctx.granted.update(args["names"])
+        return {"status": "ok", "granted": args["names"],
+                "note": "Those tools are now available: call them now."}
 
     async def _city_trends(self, args):
         from services_radio.pulse import KIND_CHART, KIND_TREND, PulseQuery

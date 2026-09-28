@@ -330,6 +330,8 @@ class AIService(SingletonService):
             call_timeout_s: float = 8.0,
             on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
             followup_tools: Optional[set] = None,
+            expected_tools: Optional[set] = None,
+            refresh_tools: Optional[Callable[[], list]] = None,
             spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
         if temperature is None:
@@ -338,25 +340,32 @@ class AIService(SingletonService):
             max_tokens = 2048
 
         base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
-        if function_declarations:
-            tool_config = types.GenerateContentConfig(
+
+        def build_configs(declarations):
+            if not declarations:
+                plain = types.GenerateContentConfig(**base)
+                return plain, plain, plain
+            with_tools = types.GenerateContentConfig(
                 **base,
-                tools=[types.Tool(function_declarations=function_declarations)],
+                tools=[types.Tool(function_declarations=declarations)],
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
             )
-            final_config = tool_config.model_copy(update={
-                "tool_config": types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
-                )
-            })
-        else:
-            tool_config = final_config = types.GenerateContentConfig(**base)
+
+            def mode(value):
+                return with_tools.model_copy(update={"tool_config": types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(mode=value))})
+            return with_tools, mode(types.FunctionCallingConfigMode.NONE), mode(types.FunctionCallingConfigMode.ANY)
+
+        tool_config, final_config, forced_config = build_configs(function_declarations)
+        declared = {declaration.name for declaration in function_declarations or []}
 
         contents: list = [types.Content(role="user", parts=[types.Part.from_text(text=user_message)])]
         calls_log: list = []
         preambles: list = []
         round_usage: list = []
         strikes = 0
+        force_next = False
+        nudged = False
         tool_rounds = 0
         rounds = 0
 
@@ -374,7 +383,7 @@ class AIService(SingletonService):
                 spec=spec,
                 client=self.client,
                 contents=contents,
-                config=final_config if is_last else tool_config,
+                config=final_config if is_last else forced_config if force_next else tool_config,
                 prefer=model
             )
             round_usage.append(usage)
@@ -384,6 +393,27 @@ class AIService(SingletonService):
             parts = list(content.parts) if content and content.parts else []
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
             text = self._visible_text(parts)
+
+            force_next = False
+            missing = sorted(expected_tools or ()) if not any(
+                call["name"] in (expected_tools or ()) for call in calls_log) else []
+            if not function_calls and missing and not nudged and not is_last:
+                nudged = force_next = True
+                log_service.warning(f"DJ tool turn: planned {', '.join(missing)} not called - nudging")
+                if text.strip():
+                    preambles.append(text)
+                    if on_preamble is not None:
+                        try:
+                            await on_preamble(text, [])
+                        except Exception as e:
+                            log_service.error(f"DJ preamble handler failed: {e}")
+                if parts:
+                    contents.append(content)
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(text=(
+                    f"[STUDIO] Nothing has happened yet: saying it on air does nothing. The producer planned "
+                    f"{', '.join(missing)} for this message. Call it now (or the tool that fits better). Your line "
+                    f"already aired, so don't repeat it; after the result, add at most one short line."))]))
+                continue
 
             if not function_calls:
                 finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
@@ -432,6 +462,14 @@ class AIService(SingletonService):
                     response=self._cap_tool_result(result, settings.LLM_TOOL_RESULT_MAX_CHARS)
                 )))
             contents.append(types.Content(role="user", parts=response_parts))
+
+            if refresh_tools is not None:
+                refreshed = refresh_tools()
+                if {declaration.name for declaration in refreshed} != declared:
+                    function_declarations = refreshed
+                    declared = {declaration.name for declaration in refreshed}
+                    tool_config, final_config, forced_config = build_configs(refreshed)
+                    log_service.detail(f"DJ tools now: {', '.join(sorted(declared))}", "ai")
 
     @staticmethod
     def _recovery_message(finish: str, used_tools: bool) -> Optional[str]:

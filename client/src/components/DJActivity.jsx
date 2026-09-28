@@ -1,18 +1,19 @@
-import { memo, useCallback, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  BookOpen, Brain, Check, CircleSlash, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
-  Newspaper, Radio, Save, Search, SkipForward, Ticket, TrendingUp, User
+  Ban, BookOpen, Brain, Check, CircleSlash, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
+  Newspaper, Radio, Save, Search, SkipForward, Ticket, TrendingUp, User, Wrench, X
 } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { PRESETS } from '../lib/motion'
+import { PRESETS, TWEEN } from '../lib/motion'
+import { Expandable } from './Motion'
 
 const LINGER_MS = 2600
 const DONE_MS = 1400
 const STALE_MS = 20000
-const MAX_VISIBLE = 3
+const MAX_VISIBLE = 4
 const LOOKUP_EFFECT = { x: 0.5, y: 0.3, intensity: 0.5 }
 
 const TOOL_ICONS = {
@@ -51,16 +52,109 @@ const KIND_ICONS = {
   trend: TrendingUp,
 }
 
-function iconFor(call) {
+export const SOURCES = {
+  producer: { name: 'Producer', icon: Brain, bubble: 'bg-violet-500/10 border-violet-500/30 text-violet-300', chip: 'border-violet-400/40 text-violet-300' },
+  tool: { name: 'Studio tool', icon: Wrench, bubble: 'bg-teal-500/10 border-teal-500/30 text-teal-300', chip: 'border-teal-400/40 text-teal-300' },
+  hal11000: { name: 'HAL 11000', icon: Cpu, bubble: 'bg-green-500/10 border-green-500/30 text-green-300', chip: 'border-green-400/40 text-green-300' },
+}
+
+const STATES = {
+  running: { icon: Loader2, text: 'text-white/60', spin: true },
+  found: { icon: Check, text: 'text-emerald-300' },
+  done: { icon: Check, text: 'text-emerald-300' },
+  empty: { icon: CircleSlash, text: 'text-zinc-400' },
+  failed: { icon: X, text: 'text-red-300' },
+  blocked: { icon: Ban, text: 'text-amber-300' },
+}
+
+const ICONS = { ...KIND_ICONS, ...TOOL_ICONS, search: Search, tool: Wrench }
+
+function iconKey(call) {
   if (call.tool === 'pulse_search') {
-    return call.kinds?.length === 1 ? (KIND_ICONS[call.kinds[0]] || Search) : Search
+    return call.kinds?.length === 1 && KIND_ICONS[call.kinds[0]] ? call.kinds[0] : 'search'
   }
-  return TOOL_ICONS[call.tool] || Search
+  if (TOOL_ICONS[call.tool]) return call.tool
+  return call.source === 'hal11000' ? 'hal11000' : call.source === 'producer' ? 'producer' : 'tool'
 }
 
 function sentenceCase(text) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : ''
 }
+
+export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  const source = SOURCES[call.source] || SOURCES.tool
+  const state = STATES[call.state] || STATES.done
+  const running = call.state === 'running'
+  const full = running || open
+  const Icon = ICONS[iconKey(call)]
+  const SourceIcon = source.icon
+  const StateIcon = state.icon
+
+  return (
+    <motion.div
+      layout
+      transition={TWEEN.layout}
+      onClick={() => !running && setOpen(value => !value)}
+      role={running ? undefined : 'button'}
+      aria-expanded={running ? undefined : full}
+      animate={{ opacity: full ? 1 : 0.72 }}
+      whileHover={full ? undefined : { opacity: 1 }}
+      className={`border ${source.bubble} max-w-[80%] w-fit overflow-hidden ${running ? '' : 'cursor-pointer'} ${full ? 'p-3 rounded-lg' : 'px-3 py-1 rounded-full'}`}
+    >
+      {full ? (
+        <motion.div layout="position" className="flex items-start gap-2">
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <SourceIcon className="w-4 h-4" aria-hidden="true" />
+            <Icon className={`w-4 h-4 ${running ? 'animate-pulse' : ''}`} aria-hidden="true" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-xs font-medium tracking-wide opacity-70">{source.name}</span>
+              <span className={`flex items-center gap-1 text-xs ${state.text}`}>
+                {call.live && <span className="uppercase tracking-wide">live</span>}
+                <StateIcon className={`w-4 h-4 ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
+              </span>
+            </div>
+            <p className="text-sm break-words">{sentenceCase(call.label || call.tool)}</p>
+            {call.summary && <p className={`text-xs mt-0.5 break-words ${state.text}`}>{call.summary}</p>}
+            <Expandable open={!!call.command}>
+              <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-black/20 px-2 py-1.5 font-mono text-xs opacity-80 whitespace-pre-wrap break-words">
+                {call.command}
+              </pre>
+            </Expandable>
+          </div>
+        </motion.div>
+      ) : (
+        <motion.span layout="position" className="flex items-center gap-2 min-w-0 text-xs">
+          <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span className="font-medium truncate">{sentenceCase(call.label || call.tool)}</span>
+          {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
+          <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text}`} aria-hidden="true" />
+        </motion.span>
+      )}
+    </motion.div>
+  )
+})
+
+const ActivityChip = memo(function ActivityChip({ call }) {
+  const source = SOURCES[call.source] || SOURCES.tool
+  const state = STATES[call.state] || STATES.done
+  const Icon = ICONS[iconKey(call)]
+  const StateIcon = state.icon
+
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs whitespace-nowrap max-w-[92vw] backdrop-blur-sm ${source.chip}`}
+      style={{ backgroundColor: 'rgba(10, 10, 12, 0.82)' }}
+    >
+      <Icon className={`w-3.5 h-3.5 shrink-0 ${call.state === 'running' ? 'animate-pulse' : ''}`} aria-hidden="true" />
+      <span className="font-semibold text-white/90 truncate">{sentenceCase(call.label || call.tool)}</span>
+      {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
+      <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text} ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
+    </span>
+  )
+})
 
 export function DJActivityBridge() {
   const { reportEngineStatus } = useUISelector(state => ({ reportEngineStatus: state.reportEngineStatus }))
@@ -89,8 +183,9 @@ export function DJActivityBridge() {
         id: data.call_id,
         turnId: data.turn_id,
         tool: data.tool,
+        source: data.source || 'tool',
         kinds: data.kinds || [],
-        label: sentenceCase(data.label || data.tool),
+        label: data.label || data.tool,
         state: 'running',
         summary: '',
         live: false,
@@ -138,33 +233,12 @@ export const DJActivity = memo(function DJActivity() {
       aria-live="polite"
     >
       <AnimatePresence initial={false}>
-        {!hidden && (calls || []).map(call => <ActivityChip key={call.id} call={call} />)}
+        {!hidden && (calls || []).map(call => (
+          <motion.div key={call.id} layout="position" {...PRESETS.fadeSlide}>
+            <ActivityChip call={call} />
+          </motion.div>
+        ))}
       </AnimatePresence>
     </div>
-  )
-})
-
-const ActivityChip = memo(function ActivityChip({ call }) {
-  const Icon = iconFor(call)
-  const running = call.state === 'running'
-  const ok = call.state === 'found' || call.state === 'done'
-  const StateIcon = running ? Loader2 : ok ? Check : CircleSlash
-
-  return (
-    <motion.div layout="position" {...PRESETS.fadeSlide}>
-      <span
-        className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs whitespace-nowrap max-w-[92vw] backdrop-blur-sm"
-        style={{ borderColor: 'var(--theme-accent-60, rgba(255, 255, 255, 0.28))', backgroundColor: 'rgba(10, 10, 12, 0.82)' }}
-      >
-        <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--theme-accent-85, #ffffff)' }} aria-hidden="true" />
-        <span className="font-semibold text-white/90 truncate">{call.label}</span>
-        {call.summary && <span className="text-white/60 truncate">· {call.summary}</span>}
-        {call.live && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-300">live</span>}
-        <StateIcon
-          className={`w-3.5 h-3.5 shrink-0 ${running ? 'animate-spin text-white/60' : ok ? 'text-emerald-400' : 'text-white/40'}`}
-          aria-hidden="true"
-        />
-      </span>
-    </motion.div>
   )
 })

@@ -799,7 +799,7 @@ class DemandLedger:
             return cached[1]
         since = datetime.now(timezone.utc) - timedelta(days=days)
         rows = [(rowid, meta) for rowid, meta in vectors.rows(region_key, since) if not node or meta.get("intent") == node]
-        embedded = await run_on_gpu_executor(lambda: [(meta, vectors.vector(rowid, meta)) for rowid, meta in rows])
+        embedded = await run_on_gpu_executor(lambda: [(meta, vectors.weighted(meta)) for _, meta in rows])
         topics = _cluster_requests(embedded)
         self._topics[cache_key] = (time.monotonic(), topics)
         return topics

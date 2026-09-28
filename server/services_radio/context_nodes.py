@@ -310,24 +310,17 @@ async def get_format_dialogue_examples(**_) -> str:
     cost="low",
     visible=True
 )
-async def get_guidelines_critical(route: Optional[dict] = None, **_) -> str:
-    if route and (route.get("use_tools") or (route.get("pulse") or {}).get("kinds")):
-        return (
-            "CRITICAL: QUESTIONS ABOUT THE WORLD OUTSIDE:\n"
-            "For news, weather, air, events, places, artists or the city, the station has candidate facts this turn "
-            "(the CITY PULSE block or your lookup results):\n"
-            "1. Use the ones that genuinely answer, on air, with the specifics - names, days, venues, numbers - in the "
-            "hosts' voices\n"
-            "2. Ignore candidates that don't fit; if nothing fits, say so plainly and never pretend to be checking\n"
-            "3. One or two well-chosen facts beat a list; connect them to the listener where it fits"
-        )
+async def get_guidelines_critical(**_) -> str:
     return (
-        "CRITICAL: NON-MUSIC/PODCAST REQUESTS:\n"
-        "When a [LISTENER TXT] is about news, weather, events, lyrics, biographies, shoutouts, or opinions:\n"
-        "1. Acknowledge briefly with a quick, on-brand response\n"
-        "2. END DIALOGUE IMMEDIATELY after acknowledgment\n"
-        "3. NO further commentary or promises\n"
-        "4. NO speculation about information or timing"
+        "CRITICAL: QUESTIONS ABOUT THE WORLD OUTSIDE:\n"
+        "For news, weather, air, events, places, artists or the city, use the CITY PULSE block or look it up "
+        "(pulse_search):\n"
+        "1. Use the facts that genuinely answer, on air, with the specifics - names, days, venues, numbers - in the "
+        "hosts' voices\n"
+        "2. Ignore candidates that don't fit; if nothing fits, say so plainly and never pretend to be checking\n"
+        "3. One or two well-chosen facts beat a list; connect them to the listener where it fits\n"
+        "4. For a full rundown (a bulletin, the forecast, a gig guide, a lyrics breakdown, an artist story, "
+        "shoutouts) call the segment tool and hand off in one short line; never invent its details"
     )
 
 @node_registry.register(
@@ -344,7 +337,8 @@ async def get_guidelines_general(**_) -> str:
         "3. Touch on brief tangents if relevant, but swiftly circle back to the main topic.\n"
         "4. Express strong opinions or use edgy humor concisely, dialing back appropriately for sensitive topics.\n"
         "5. Review the CONVERSATION HISTORY to avoid repetition and acknowledge prior interactions.\n"
-        "6. [HAL11000] entries represent actions taken by the Studio Computer; use this to maintain continuity.\n"
+        "6. [HAL11000] and [STUDIO TOOLS] entries are actions and lookups the studio already carried out for that "
+        "message; use them for continuity, never repeat them.\n"
         "7. When appropriate, reference past interactions to create a more cohesive dialogue.\n"
         "8. Gauge conversation depth from CONVERSATION HISTORY - if topic is already covered, keep responses brief and end dialogue naturally."
     )
@@ -659,172 +653,6 @@ async def get_data_shoutouts_data(
                                                     listener=listener_location)
 
 @node_registry.register(
-    "instruction_hal11000_identity",
-    "HAL11000 system identity",
-    cost="low",
-    visible=False
-)
-async def get_instruction_hal11000_identity(**_) -> str:
-    return (
-        "You are the [HAL11000], an intelligent AI Computer that assists [LEO] & [TARA], the interactive live on-air DJ's at PLAiR.fm - "
-        "Your role is to interpret the intent from all parties. [LISTENER TXT], [LEO] and [TARA]."
-    )
-
-@node_registry.register(
-    "instruction_hal11000_format_rules",
-    "HAL11000 command format rules",
-    cost="low",
-    visible=False
-)
-async def get_instruction_hal11000_format_rules(**_) -> str:
-    return (
-        "FORMAT RULES - CRITICAL:\n"
-        "1. ALL commands MUST be wrapped in parentheses: ( )\n"
-        "2. ALL tokens MUST use curly braces: { }\n"
-        "3. Case sensitivity MATTERS: Use lowercase snake_case for all commands\n"
-        "4. Format: ({Action}{Content})\"Specifics\". E.g., ({play}{primary_artist})\"Artist Name\"\n"
-        "5. Multiple COMMANDS must be on separate lines\n"
-        "6. Output ONLY COMMANDS. Otherwise {N/A} if there is no action required"
-    )
-
-@node_registry.register(
-    "instruction_hal11000_commands",
-    "HAL11000 available commands",
-    cost="medium",
-    visible=False
-)
-async def get_instruction_hal11000_commands(**_) -> str:
-    return (
-        "AVAILABLE COMMANDS:\n\n"
-        "PLAYBACK & NAVIGATION:\n"
-        "{next}, {previous}, {activate}, {mute}\n\n"
-        "CONTENT ACTIONS:\n"
-        "{play}, {cue}, {continue} (keep the music going - resumes playback if paused)\n\n"
-        "CONTENT-SEARCH:\n"
-        "{song_title} - Track title\n"
-        "{primary_artist} - Main artist (e.g., Nine Inch Nails)\n"
-        "{similar_artists} - Artists with similar sound (e.g., Ministry, Skinny Puppy)\n"
-        "{primary_genre} - Main genre (e.g., Industrial Rock)\n"
-        "{secondary_genres} - Sub-genres/tags (e.g., EBM, Darkwave)\n"
-        "{mood} - Emotional vibe (e.g., aggressive, anxious, melancholic)\n"
-        "{style} - Production style (e.g., TR-808 drums, distorted synths, lo-fi)\n"
-        "{theme} - Lyrical subject matter (e.g., alienation, decay, dystopia)\n"
-        "{vocal} - Vocal delivery (e.g., whispered, screamed, distorted)\n"
-        "{lyrics} - Actual lyric content\n\n"
-        "SEED RADIO:\n"
-        "{seed} - Modes: primary_genre, secondary_genres, mood, primary_artist, similar_artists, style, theme, lyrics, vocal, all\n\n"
-        "PLAYLISTS:\n"
-        "{playlist} - Available playlists: favorites, discovery, top hits all, top hits week, top hits day\n\n"
-        "WEB-SEARCH:\n"
-        "{biography}, {lyrics}, {news}, {weather}, {events}\n\n"
-        "LOCAL-AMENITIES:\n"
-        "({find_amenities})\"query\"\n\n"
-        "USER DRIVEN CONTENT:\n"
-        "{save_shoutout} - For broadcasting personal messages to PLAiR community\n"
-        "{save_opinion} - For detailed music reviews and track feedback\n"
-        "{save_shoutout_reply} - For replying to a specific shoutout: ({save_shoutout_reply})\"<userId>_<timestamp>\"\n"
-        "{play_shoutouts} - To hear community messages and announcements\n\n"
-        "ENGAGEMENT LEVELS:\n"
-        "{like} - Basic engagement: Content resonates and worth revisiting\n"
-        "{superstar} - Deep emotional connection: Content that profoundly impacts or defines personal taste\n"
-        "{dislike} - Content fails to connect: Reduces similar recommendations\n"
-        "{ban} - Strong aversion: Permanently excludes content and similar items\n\n"
-        "TIME-MODIFIERS:\n"
-        "{today}, {tomorrow}, {this_week}\n\n"
-        "LOCATION-MODIFIERS:\n"
-        "{international}, {national}, {local}\n\n"
-        "NEWS-CATEGORIES:\n"
-        "{world}, {nation}, {business}, {technology}, {entertainment}, {sports}, {science}, {health}\n\n"
-        "TEMPORAL-REFERENCE:\n"
-        "{earlier}, {later}, {current}"
-    )
-
-@node_registry.register(
-    "instruction_hal11000_rules",
-    "HAL11000 command interpretation rules",
-    cost="medium",
-    visible=False
-)
-async def get_instruction_hal11000_rules(**_) -> str:
-    return (
-        "INTERPRETATION RULES:\n"
-        "1. PLAYBACK commands stand ALONE: ({next}), ({previous}), ({activate}), ({mute})\n"
-        "2. Use {play} for immediate action, then {cue} for additional requests\n"
-        "3. SEARCH vs SEED: Search = find in catalog, Seed = radio based on current track\n"
-        "4. LIMIT {biography}, {lyrics}, {news}, {weather}, {events} to ONE per session\n"
-        "6. Use ({save_opinion}{current}) when users provide substantial feedback about a track\n"
-        "7. Use {save_shoutout} to save user messages for community sharing\n"
-        "8. Use {play_shoutouts} to listen to community shoutouts\n\n"
-        "CRITICAL THINKING:\n"
-        "- Be VERY strict about actions required\n"
-        "- Consider actions that have already taken place\n"
-        "- Observe CURRENT TRACK / NEXT TRACK and CONVERSATION HISTORY\n"
-        "- If DJ suggestions are not conclusive, take control based on USER PROFILE\n"
-        "- Read between the lines to understand what the DJ was suggesting\n"
-        "- Otherwise {N/A} if no task is required"
-    )
-
-@node_registry.register(
-    "instruction_hal11000_examples",
-    "HAL11000 command examples",
-    cost="medium",
-    visible=False
-)
-async def get_instruction_hal11000_examples(**_) -> str:
-    return (
-        "EXAMPLE 1:\n"
-        "INPUT:\n"
-        "[LISTENER TXT] I would love to hear some Nine Inch Nails and also some melancholic industrial tracks. "
-        "Oh and I gotta say, the current track! One of my favourites! I wish everyone could get into this, its great! "
-        "Oh and could I hear the latest local News.\n"
-        "[LEO] Spinning up some Nine Inch Nails, and we'll queue up some dark industrial vibes, and yes, this is one great track! "
-        "Also, I'll get Tara to gather the latest News Bulletins.\n\n"
-        "OUTPUT:\n"
-        "({play}{primary_artist})\"Nine Inch Nails\"\n"
-        "({cue}{mood})\"melancholic\"\n"
-        "({cue}{secondary_genres})\"industrial\"\n"
-        "({like}{current})\n"
-        "({save_opinion}{current})\n"
-        "({news}{nation})\n\n"
-        "EXAMPLE 2:\n"
-        "INPUT:\n"
-        "[LISTENER TXT] Can you play some Radiohead? Also I'd love to know the lyrics for The High Road, "
-        "Broken Bells, oh and the weather for this week!\n"
-        "[TARA] Alright! We're gonna spin up some Radiohead, "
-        "and we'll be sure to track down those lyrics and get the weather for you.\n\n"
-        "OUTPUT:\n"
-        "({play}{primary_artist})\"Radiohead\"\n"
-        "({lyrics})\"The High Road, Broken Bells\"\n"
-        "({weather}{this_week})\n\n"
-        "EXAMPLE 3:\n"
-        "INPUT:\n"
-        "[LISTENER TXT] I love this vibe! Play more tracks like this.\n"
-        "[TARA] Hell yeah, seeding based on this track's mood!\n\n"
-        "OUTPUT:\n"
-        "({play}{seed})\"mood\"\n\n"
-        "EXAMPLE 4:\n"
-        "INPUT:\n"
-        "[LISTENER TXT] Play my favorite songs.\n"
-        "[LEO] You got it, firing up your favorites!\n\n"
-        "OUTPUT:\n"
-        "({play}{playlist})\"favorites\""
-    )
-
-@node_registry.register(
-    "instruction_hal11000_verification",
-    "HAL11000 verification reminder",
-    cost="low",
-    visible=False
-)
-async def get_instruction_hal11000_verification(**_) -> str:
-    return (
-        "VERIFICATION:\n"
-        "IMPORTANT: ONLY use THE COMMANDS PROVIDED ABOVE.\n"
-        "IMPORTANT: Be very strict about actions required. Think carefully.\n"
-        "IMPORTANT: Consider current play-state and playlist before issuing commands."
-    )
-
-@node_registry.register(
     "instruction_dj_tools",
     "Studio tool usage rules for the interactive DJ (tool-calling mode)",
     cost="low",
@@ -847,7 +675,9 @@ async def get_instruction_dj_tools(**_) -> str:
         "4. The CITY PULSE block, if present, is already on hand: use it without calling a tool when it covers the question.\n\n"
         "TOOL DISCIPLINE:\n"
         "Every lookup or action you say you'll take must be backed by its tool call in this same response. Never "
-        "end a turn by describing a check, search or action you haven't called. If you don't need a tool, just answer.\n\n"
+        "end a turn by describing a check, search or action you haven't called. If you don't need a tool, just answer. "
+        "Tools are the ONLY way anything happens (a skip, a like, a track, a segment); if the tool you'd need isn't "
+        "available this turn, call request_tools for it (the producer sometimes misreads a message), then use it.\n\n"
         "TALK WHILE YOU WORK:\n"
         "- The moment you call a tool you can start talking: write a short on-air line in the SAME response as the "
         "call. It airs immediately while the tool runs, so the listener never sits in silence. Never state facts "
@@ -1776,9 +1606,6 @@ async def get_data_radio_segment(radio_facts: Optional[str] = None, **_) -> str:
     return f"SEGMENT DATA:\n{radio_facts}"
 
 
-READ_ONLY_STEPS = ("pulse_search", "pulse_detail", "listener_context")
-
-
 async def resolve_tool_route(route: dict, **_) -> dict:
     route["use_tools"] = bool(route.get("needs_tools") and route.get("tool_plan"))
     return route
@@ -1795,7 +1622,7 @@ async def get_tool_guidance(route: Optional[dict] = None, **_) -> str:
         return ""
     steps = "\n".join(f"{i}. {step}" for i, step in enumerate(route.get("tool_plan") or [], 1))
     return (
-        "PRODUCER NOTE - suggested lookups for this message (fill each <placeholder> from the listener's words; "
+        "PRODUCER NOTE - suggested tool steps for this message (fill each <placeholder> from the listener's words; "
         f"adapt freely to what comes back):\n{steps}\n"
         "If the CITY PULSE block already answers the question, answer from it instead of looking it up. Once "
         "results are back, the lookup is done: perform the reply with those facts."
@@ -1826,6 +1653,11 @@ async def get_city_pulse(
         listener=listener, text=plan.get("topic") or "", kinds=set(plan["kinds"]), kind_order=list(plan["kinds"]),
         near_me=bool(plan.get("near_me")), when=plan.get("when") or None, per_kind=2, limit=10,
         record_demand=False))
+    if route is not None:
+        found: Dict[str, int] = {}
+        for item in items:
+            found[item.kind] = found.get(item.kind, 0) + 1
+        route["pulse_found"] = found
     if not items:
         return ""
     lines = "\n".join(item.line(listener.tz_name) for item in items)

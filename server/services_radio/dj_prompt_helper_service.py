@@ -69,27 +69,27 @@ def filter_response_by_role(text: str, role: str) -> str:
     role_rules = {
         'dj_interactive': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE'],
-            'forbidden_tags': ['HAL11000'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS'],
             'description': 'Interactive DJ'
         },
         'dj_onboarding': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE'],
-            'forbidden_tags': ['HAL11000'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS'],
             'description': 'Onboarding DJ'
         },
         'dj_announcements': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
-            'forbidden_tags': ['HAL11000', 'INTERNAL DIALOGUE'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE'],
             'description': 'Announcements DJ'
         },
         'dj_content': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
-            'forbidden_tags': ['HAL11000', 'INTERNAL DIALOGUE'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE'],
             'description': 'Content DJ'
         },
         'command': {
             'allowed_tags': [],
-            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE', 'HAL11000'],
+            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE', 'HAL11000', 'STUDIO TOOLS'],
             'description': 'Command extraction'
         }
     }

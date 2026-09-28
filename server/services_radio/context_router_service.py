@@ -8,6 +8,7 @@ This is the brain that makes the node system efficient - it only requests what's
 """
 
 import asyncio
+import re
 import time
 import os
 import json
@@ -81,6 +82,16 @@ def clean_pulse(topic: str = "", kinds: Optional[List[str]] = None, near_me: boo
             "when": when if when in PULSE_WHEN else ""}
 
 
+FREE_TEXT_ARGS = ("query", "topic", "artist", "song", "item_id", "parent_id")
+_FREE_TEXT_ARG = re.compile(r"\b(" + "|".join(FREE_TEXT_ARGS) + r")\s*=\s*(\"[^\"]*\"|'[^']*'|<[^>]*>|[^,)]*)")
+_LISTENER_ARG = re.compile(r",?\s*\b(when|near_me|max_age_days)\s*=\s*(\[[^\]]*\]|\"[^\"]*\"|'[^']*'|<[^>]*>|[^,)]*)")
+_WHEN_WORDS = [("tonight", r"\btonight\b"), ("tomorrow", r"\btomorrow\b"), ("weekend", r"\bweekend\b"),
+               ("today", r"\btoday\b|\bthis (morning|afternoon|evening)\b"), ("week", r"\bthis week\b|\bweek\b"),
+               ("month", r"\bthis month\b|\bmonth\b"), ("now", r"\bright now\b")]
+_NEAR_ME = re.compile(r"\b(near me|nearby|near here|around here|round here|close by|close to (me|us|here)|local|"
+                      r"locally|in my area|in the area|my neighbou?rhood)\b", re.IGNORECASE)
+
+
 def clean_plan(plan: List[str]) -> List[str]:
     names = tool_names()
     steps = []
@@ -88,8 +99,16 @@ def clean_plan(plan: List[str]) -> List[str]:
         text = str(step).strip().lstrip("0123456789.) ").strip()
         name = text.split("(", 1)[0].strip()
         if name in names:
+            text = _FREE_TEXT_ARG.sub(lambda m: f"{m.group(1)}=<{m.group(1)}>", text)
+            text = _LISTENER_ARG.sub("", text).replace("(, ", "(").replace("(,", "(")
             steps.append(text[:200])
     return steps[:6]
+
+
+def stated_pulse(pulse: Dict, user_input: str) -> Dict:
+    text = (user_input or "").lower()
+    when = next((word for word, pattern in _WHEN_WORDS if re.search(pattern, text)), "")
+    return {**pulse, "when": when, "near_me": bool(_NEAR_ME.search(text))}
 
 
 def tool_menu() -> str:
@@ -192,6 +211,10 @@ class ContextRouterService(SingletonService):
                           "ADD COLUMN IF NOT EXISTS tool_plan TEXT DEFAULT '[]', "
                           "ADD COLUMN IF NOT EXISTS pulse_json TEXT DEFAULT '{}'")
                 log_service.node_producer("  Routing cache reset for tool planning")
+            c.execute("ALTER TABLE context_routing_cache ADD COLUMN IF NOT EXISTS prompt_hash TEXT DEFAULT ''")
+            c.execute("DELETE FROM context_routing_cache WHERE prompt_hash IS DISTINCT FROM %s", (self._prompt_hash(),))
+            if c.rowcount:
+                log_service.node_producer(f"  Producer prompt changed: dropped {c.rowcount} cached routes")
             conn.commit()
         finally:
             conn.close()
@@ -243,6 +266,11 @@ class ContextRouterService(SingletonService):
         except Exception as e:
             log_service.error(f"[PRODUCER] Failed to load cache: {e}")
 
+    def _prompt_hash(self) -> str:
+        if not getattr(self, "_prompt_hash_value", None):
+            self._prompt_hash_value = hashlib.md5(self._build_producer_prompt().encode()).hexdigest()
+        return self._prompt_hash_value
+
     @staticmethod
     def _hash_input(user_input: str) -> str:
         return hashlib.md5(user_input.lower().strip().encode()).hexdigest()
@@ -253,10 +281,10 @@ class ContextRouterService(SingletonService):
 
     @staticmethod
     def _route(nodes: List[str], needs_tools: bool = False, tool_plan: Optional[List[str]] = None,
-               pulse: Optional[Dict] = None) -> Dict:
+               pulse: Optional[Dict] = None, source: str = "default") -> Dict:
         plan = clean_plan(tool_plan or [])
         return {"nodes": nodes, "needs_tools": bool(needs_tools and plan), "tool_plan": plan,
-                "pulse": pulse or clean_pulse()}
+                "pulse": pulse or clean_pulse(), "source": source}
 
     async def determine_route(
         self,
@@ -285,7 +313,7 @@ class ContextRouterService(SingletonService):
             )
 
             return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
-                               cached.get('pulse'))
+                               cached.get("pulse"), "cached plan")
 
         if use_cache and self.vector_db_service:
             input_embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
@@ -310,7 +338,8 @@ class ContextRouterService(SingletonService):
                 )
 
                 return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
-                               cached.get('pulse'))
+                                   stated_pulse(cached.get('pulse') or clean_pulse(), user_input),
+                                   f"cached plan, {best_similarity:.0%} match")
 
         self.llm_calls += 1
         log_service.node_producer("  🤖 CACHE MISS - Calling Producer AI...")
@@ -321,7 +350,7 @@ class ContextRouterService(SingletonService):
             await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
             self._log_cache_performance()
             route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan,
-                                _selection_pulse(selection))
+                                _selection_pulse(selection), "fresh plan")
             log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}"
                                       f" | tools: {route['tool_plan'] if route['needs_tools'] else 'none'}")
             return route
@@ -451,19 +480,25 @@ TOOL PLANNING (needs_tools + tool_plan):
 The hosts can use these studio tools while they reply:
 {tool_menu()}
 
-Set needs_tools=true ONLY when the hosts must find something out before they can reply well:
+Set needs_tools=true when the hosts must find something out or make something happen:
 - anything local, current or factual beyond the context nodes: gigs and events, places nearby, news, weather detail,
   air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what the city is playing or asking about
   (pulse_search, pulse_detail, city_trends, listener_context);
 - a music request where the hosts should know what was found so they can name it (search_and_play);
-- saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_opinion).
-Set needs_tools=false for banter, greetings, opinions, questions the context nodes already answer, and plain commands
-the hosts simply announce (skip, go back, pause, resume, like or ban this track, more like this, a playlist, "give me
-the news/weather bulletin"): the station computer carries those out from what the hosts say.
+- whether the catalog has an artist, song or sound ("do you have any Sneaker Pimps?", "got anything like Portishead?",
+  "can you check if you have X"): pulse_search(query=<artist or sound>, kinds=[track, artist]), plus search_and_play
+  when they also ask to hear it;
+- the listener explicitly asks the hosts to check, look up or search for something;
+- saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_opinion);
+- any command: skip, go back, pause, resume (playback_control), like or ban a track (rate_track), more like this
+  (seed_radio), a playlist (play_playlist), a full bulletin, forecast, gig guide, places rundown, artist story, lyrics
+  breakdown or shoutouts (the segment tools). Nothing happens unless a tool is called, so every action needs its step.
+Set needs_tools=false only for banter, greetings, opinions and questions the context nodes already answer.
 
 tool_plan is a bare numbered list of function-call steps with <placeholders> for values, never invented values.
 GOOD: ["1. pulse_search(query=<kind of music>, kinds=[event], when=weekend)", "2. pulse_detail(item_id=<best match>)"]
 GOOD: ["1. pulse_search(query=<allergy topic>, kinds=[area, weather])"]
+GOOD: ["1. playback_control(action=next)"], ["1. rate_track(rating=like, target=current)", "2. seed_radio(mode=mood)"]
 GOOD: ["1. search_and_play(category=primary_artist, query=<artist>, mode=play)"]
 BAD: ["Look up jazz gigs"] (not a function call), ["pulse_search(query='Blue Note Friday 9pm')"] (invented value)
 Leave tool_plan empty when needs_tools is false.
@@ -561,8 +596,8 @@ Examples:
         try:
             c.execute(
                 """
-                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json, prompt_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (input_hash) DO NOTHING
                 """,
                 (
@@ -577,7 +612,8 @@ Examples:
                     current_time,
                     bool(selection.needs_tools),
                     json.dumps(clean_plan(selection.tool_plan)),
-                    json.dumps(_selection_pulse(selection))
+                    json.dumps(_selection_pulse(selection)),
+                    self._prompt_hash()
                 )
             )
             conn.commit()

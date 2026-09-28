@@ -15,6 +15,7 @@ from config.settings import settings
 
 TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
+RECENT_ACTION_WINDOW_S = 15 * 60
 
 temp_conversations: Dict[str, List[str]] = {}
 _temp_conversation_touched: Dict[str, float] = {}
@@ -211,11 +212,6 @@ def _quote(text: str, limit: int = 160) -> str:
 
 
 
-def hal_summary(commands: Optional[str]) -> str:
-    lines = [line.strip() for line in (commands or "").replace("[HAL11000]", "").splitlines() if line.strip()]
-    readable = [" ".join(re.sub(r"[{}()]", " ", line).split()) for line in lines]
-    return " · ".join(readable[:3])[:120]
-
 class ConversationService:
     def __init__(self):
         self.dj_prompt_service = None
@@ -228,6 +224,7 @@ class ConversationService:
         self.broadcast_all_func: Optional[Callable] = None
         self._active_turns: Dict[str, Set[asyncio.Task]] = {}
         self._turn_started_at: Dict[str, float] = {}
+        self._recent_actions: Dict[str, List[tuple]] = {}
 
     def initialize(self,
                    dj_prompt_service,
@@ -460,7 +457,8 @@ class ConversationService:
                 session_id=session_id
             )
 
-    async def _publish_turn(self, transcription, full_response, commands_for_display, user_id, session_id, is_guest):
+    async def _publish_turn(self, transcription, full_response, commands_for_display, user_id, session_id, is_guest,
+                            turn_id=None):
         if is_guest:
             save_temp_conversation(session_id, transcription, full_response)
 
@@ -471,7 +469,8 @@ class ConversationService:
                     "user_input": transcription,
                     "bot_response": full_response,
                     "commands": commands_for_display,
-                    "message_type": "interactive"
+                    "message_type": "interactive",
+                    "turn_id": turn_id
                 }
             })
 
@@ -500,23 +499,27 @@ class ConversationService:
             await queue.add_clip_request(PrerenderedClip(audio, label=f"filler:{voice}"), user_id or 0,
                                          "interactive", is_guest, session_id)
 
-    async def _computer_pass(self, full_response, transcription, session_dict, session_id):
-        commands = await self.dj_prompt_service.gpt_command_extraction(full_response, transcription, session_dict)
-        if not commands or not commands.strip() or commands.strip() == "{N/A}":
-            return None
-        command_lines = [line.strip() for line in commands.replace('[HAL11000]', '').splitlines() if line.strip()]
-        log_service.commands(f"{log_service.who(session_id)}: DJ commands: {' | '.join(command_lines)}")
-        if self.command_executor:
-            await self.command_executor.process_commands(commands, session_dict)
-        return commands if commands.strip().startswith('[HAL11000]') else f"[HAL11000]{commands}"
+    def _recent_commands(self, session_id: str) -> set:
+        now = time.time()
+        return {command for at, command in self._recent_actions.get(session_id, ())
+                if now - at < RECENT_ACTION_WINDOW_S}
+
+    def _remember_actions(self, session_id: str, commands: List[str]):
+        now = time.time()
+        kept = [(at, command) for at, command in self._recent_actions.pop(session_id, [])
+                if now - at < RECENT_ACTION_WINDOW_S]
+        self._recent_actions[session_id] = (kept + [(now, command) for command in commands])[-12:]
+        while len(self._recent_actions) > TEMP_CONVERSATION_MAX_SESSIONS:
+            self._recent_actions.pop(next(iter(self._recent_actions)))
 
     async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
-        from services_radio.dj_tools import DJToolRuntime, DJTurnContext
+        from services_radio.dj_tools import DJToolRuntime, DJTurnContext, tool_activity
 
         if self.dj_prompt_service is None:
             raise RuntimeError("dj_prompt_service not initialized")
 
-        ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin)
+        ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin,
+                            recent_commands=self._recent_commands(session_id))
         if self.broadcast_func:
             broadcast = self.broadcast_func
 
@@ -526,12 +529,15 @@ class ConversationService:
         runtime = DJToolRuntime(self.command_executor, ctx)
         spoken = []
         impulse_sent = []
+        trace = {"route": ""}
+
+        await ctx.activity("turn", input=transcription, origin=origin)
 
         async def speak_preamble(text, calls=()):
-            from services_radio.dj_tools import tool_activity
             if text:
                 await self._speak_dj_text(text, user_id, session_id, is_guest)
                 spoken.append(text)
+                await ctx.activity("say", text=text)
                 return
             if len(impulse_sent) >= settings.DJ_TOOL_FILLERS_PER_TURN or self.tts_queue_manager is None:
                 return
@@ -554,15 +560,28 @@ class ConversationService:
 
         async def announce_route(route):
             steps = [str(step).split("(", 1)[0].strip() for step in route.get("tool_plan") or []]
-            ctx.planned = {step.split()[-1] for step in steps if step} if route.get("use_tools") else None
-            kinds = ", ".join((route.get("pulse") or {}).get("kinds") or [])
-            if route.get("use_tools"):
-                label, summary = "Producer planned a lookup", " > ".join(dict.fromkeys(s for s in steps if s))
-            else:
-                label, summary = "Producer: straight reply", f"station notes: {kinds}" if kinds else ""
-            await ctx.activity("start", call_id=f"{ctx.turn_id}:route", tool="producer", label=label)
-            await ctx.activity("result", call_id=f"{ctx.turn_id}:route", tool="producer", outcome="done",
-                               summary=summary[:120])
+            steps = list(dict.fromkeys(step.split()[-1] for step in steps if step))
+            ctx.planned = set(steps)
+            found = route.get("pulse_found") or {}
+            notes = ", ".join(f"{count} {kind}" for kind, count in found.items())
+            source = route.get("source") or ""
+            label = ("Plan: " + " > ".join(steps)) if steps else "Plan: just talk"
+            summary = " · ".join(filter(None, [f"station notes: {notes}" if notes else "", source]))
+            trace["route"] = f"{label} [{summary}]"
+            detail = [f"{i}. {step}" for i, step in enumerate(route.get("tool_plan") or [], 1)]
+            pulse = route.get("pulse") or {}
+            if pulse.get("kinds"):
+                detail.append("Station notes: " + ", ".join(pulse["kinds"]) +
+                              (f" on '{pulse['topic']}'" if pulse.get("topic") else "") +
+                              (f", {pulse['when']}" if pulse.get("when") else "") +
+                              (", near the listener" if pulse.get("near_me") else ""))
+            context = [node for node in route.get("context_nodes") or [] if not node.startswith("format_")]
+            if context:
+                detail.append("Context: " + ", ".join(context))
+            await ctx.activity("start", call_id=f"{ctx.turn_id}:route", tool="producer", source="producer",
+                               label=label, command="\n".join(detail))
+            await ctx.activity("result", call_id=f"{ctx.turn_id}:route", tool="producer", source="producer",
+                               outcome="done", summary=summary[:140])
 
         try:
             result = await self.dj_prompt_service.gpt_dj_interactive_tools(transcription, session_dict, runtime,
@@ -580,29 +599,22 @@ class ConversationService:
 
             if main_response and main_response not in spoken:
                 await self._speak_dj_text(main_response, user_id, session_id, is_guest)
+                await ctx.activity("say", text=main_response)
+            if notes:
+                await ctx.activity("say", text=notes)
 
             reply_parts = spoken + [main_response] if main_response and main_response not in spoken else spoken
             full_main = "\n".join(reply_parts)
             full_response = full_main + "\n" + notes if notes else full_main
 
-            for record in ctx.records:
-                log_service.commands(f"{log_service.who(session_id)}: DJ tool {record['status'].upper()} "
-                                     f"{record['name']} {record['args']}"
-                                     f"{' -> ' + record['reason'] if record.get('reason') else ''}")
-
             commands_for_display = runtime.commands_for_display()
-            if not (result or {}).get("tool_calls") and full_main:
-                hal_id = f"{ctx.turn_id}:hal"
-                await ctx.activity("start", call_id=hal_id, tool="hal11000",
-                                   label="HAL 11000 reading the reply for commands")
-                commands_for_display = await self._computer_pass(full_response, transcription, session_dict,
-                                                                 session_id)
-                found = hal_summary(commands_for_display)
-                await ctx.activity("result", call_id=hal_id, tool="hal11000", outcome="found" if found else "empty",
-                                   summary=found or "no commands")
+            self._remember_actions(session_id, runtime.action_commands())
+            log_service.commands(
+                f"{log_service.who(session_id)}: DJ turn | {trace['route']}"
+                f" | tools: {runtime.summary() or 'none'} | {(result or {}).get('rounds') or 0} round(s)")
 
             await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display,
-                                                    user_id, session_id, is_guest))
+                                                    user_id, session_id, is_guest, ctx.turn_id))
         finally:
             ctx.gate.set()
             if ctx.activity_sent:
@@ -616,41 +628,7 @@ class ConversationService:
             if self.dj_prompt_service is None:
                 raise RuntimeError("dj_prompt_service not initialized")
 
-            if settings.DJ_TOOL_USE_ENABLED and self.command_executor is not None:
-                await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin)
-                return
-
-            result = await self.dj_prompt_service.gpt_dj_interactive(transcription, session_dict)
-            if not result:
-                log_service.error(f"{log_service.who(session_id)}: DJ reply generation failed")
-                return
-
-            main_response, notes = result
-
-            await self._speak_dj_text(main_response, user_id, session_id, is_guest)
-
-            full_response = main_response + "\n" + notes if notes else main_response
-
-            if self.dj_prompt_service is None:
-                raise RuntimeError("dj_prompt_service not initialized")
-            commands = await self.dj_prompt_service.gpt_command_extraction(full_response, transcription, session_dict)
-            commands_for_display = None
-
-            if commands and commands.strip() and commands.strip() != "{N/A}":
-                command_lines = [line.strip() for line in commands.replace('[HAL11000]', '').splitlines() if line.strip()]
-                log_service.commands(f"{log_service.who(session_id)}: DJ commands: {' | '.join(command_lines)}")
-                if self.command_executor:
-                    await self.command_executor.process_commands(commands, session_dict)
-
-                if commands.strip().startswith('[HAL11000]'):
-                    commands_for_display = commands
-                else:
-                    commands_for_display = f"[HAL11000]{commands}"
-            else:
-                log_service.detail(f"{log_service.who(session_id)}: no DJ commands extracted", "commands")
-
-            await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display, user_id, session_id,
-                                                    is_guest))
+            await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin)
 
         except Exception as e:
             log_service.error(f"{log_service.who(session_id)}: DJ turn failed: {e}")

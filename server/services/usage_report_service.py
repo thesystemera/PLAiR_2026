@@ -14,7 +14,6 @@ ACTIVE_SUBSCRIPTION_STATUSES = ("active",)
 FEATURE_LABELS = {
     "DJPromptService.gpt_dj_interactive": "DJ reply",
     "DJPromptService.gpt_dj_interactive_tools": "DJ reply (tool mode)",
-    "DJPromptService.gpt_command_extraction": "Command extraction",
     "DJPromptService.gpt_dj_announcements": "Track announcements",
     "DJPromptService.gpt_news_interpretation": "News segment",
     "DJPromptService.gpt_weather_interpretation": "Weather segment",

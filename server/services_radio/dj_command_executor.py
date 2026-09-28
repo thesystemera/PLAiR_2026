@@ -23,6 +23,7 @@ SEARCH_CATEGORY_PREFIXES = {
     "vocal": "Vocal",
     "lyrics": "Lyrics",
 }
+NAME_SEARCH_FIELDS = {"Artist": "artist_name", "Song": "title"}
 
 SEED_MODE_DISPLAY = {
     "mood": "mood",
@@ -51,7 +52,6 @@ TRACK_TARGET_LABELS = {"current": "current track", "previous": "previous track",
 
 INTERPRETATION_GATE_TIMEOUT_S = 90.0
 
-SAVE_COMMAND_PATTERN = re.compile(r'\{(?:save_shoutout|save_shoutout_reply|save_opinion|opinion)[}:]')
 SHOUTOUT_REPLY_INLINE = re.compile(r'\{save_shoutout_reply:([0-9_]+)\}')
 SHOUTOUT_ID = re.compile(r'^\d+_\d+$')
 
@@ -80,32 +80,6 @@ class CommandExecutorService:
         self.user_content_vector_db_service = user_content_vector_db_service
         self.broadcast_content_func = broadcast_content_func
         self.broadcast_playback_state_callback = broadcast_playback_state_callback
-
-    def _extract_value_from_action(self, action, prefix):
-        start_index = action.find(f"{prefix}}}") + len(f"{prefix}}}")
-        if start_index != -1:
-            start_index = action.find('"', start_index)
-            if start_index != -1:
-                end_index = action.find('"', start_index + 1)
-                if end_index != -1:
-                    return action[start_index + 1:end_index].strip()
-        return ""
-
-    def _parse_search_query(self, command):
-        for category, prefix in SEARCH_CATEGORY_PREFIXES.items():
-            if f"{{{category}}}" in command:
-                return f"{prefix}: {self._extract_value_from_action(command, category)}"
-        return ""
-
-    @staticmethod
-    def _brace_target(command):
-        if "{current}" in command:
-            return "current"
-        if "{earlier}" in command:
-            return "previous"
-        if "{later}" in command:
-            return "next"
-        return None
 
     @staticmethod
     def _track_id_of(item):
@@ -158,118 +132,6 @@ class CommandExecutorService:
         except asyncio.TimeoutError:
             log_service.warning("[COMMAND EXECUTOR] Interpretation gate timed out - releasing segment")
 
-    async def process_commands(self, commands, session_dict):
-        session_id = session_dict.get('session_id')
-
-        log_service.detail(f"[COMMAND EXECUTOR] Processing commands for session {session_id}", "commands")
-
-        grouped_commands = {
-            "play": [],
-            "cue": [],
-            "other": []
-        }
-
-        for command in commands.split('\n'):
-            command = command.replace('[HAL11000]', '').strip()
-            if command:
-                log_service.detail(f"[COMMAND EXECUTOR] Parsing: {command}", "commands")
-            if "{play}" in command and "{play_shoutouts}" not in command and "{seed}" not in command and "{playlist}" not in command:
-                grouped_commands["play"].append(command)
-            elif "{cue}" in command:
-                grouped_commands["cue"].append(command)
-            else:
-                grouped_commands["other"].append(command)
-
-        log_service.detail(
-            f"[COMMAND EXECUTOR] Grouped: {len(grouped_commands['play'])} Play, {len(grouped_commands['cue'])} Cue, {len(grouped_commands['other'])} Other", "commands")
-
-        searches = [(self._parse_search_query(command), True) for command in grouped_commands["play"]]
-        searches += [(self._parse_search_query(command), False) for command in grouped_commands["cue"]]
-        if searches:
-            await self.execute_searches(session_dict, searches)
-
-        for command in grouped_commands["other"]:
-            if "{next}" in command and session_id:
-                await self.execute_playback_control(session_dict, "next")
-            elif "{previous}" in command and session_id:
-                await self.execute_playback_control(session_dict, "previous")
-            elif "{mute}" in command and session_id:
-                await self.execute_playback_control(session_dict, "pause")
-            elif "{activate}" in command and session_id:
-                await self.execute_playback_control(session_dict, "resume")
-            elif "{continue}" in command and session_id:
-                await self._continue_playback(session_dict)
-            elif "{seed}" in command and session_id:
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Seed radio - {command}", "commands")
-                spawn(self._handle_seed_radio(command, session_dict), name="_handle_seed_radio")
-            elif "{playlist}" in command and session_id:
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Playlist mode - {command}", "commands")
-                spawn(self._handle_playlist(command, session_dict), name="_handle_playlist")
-            elif "{like}" in command or "{dislike}" in command or "{ban}" in command or "{superstar}" in command:
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Track preference - {command}", "commands")
-                spawn(self._handle_track_preference(command, session_dict), name="_handle_track_preference")
-            elif "{lyrics}" in command:
-                log_service.detail("[COMMAND EXECUTOR] Executing: Fetch lyrics from catalog", "commands")
-                self.spawn_segment(self._trigger_lyrics_interpretation(command, session_dict), session_dict,
-                                   "_trigger_lyrics_interpretation")
-            elif "{biography}" in command:
-                query = self._extract_value_from_action(command, "biography")
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch biography for '{query}'", "commands")
-                self.spawn_segment(self._trigger_biography_interpretation(query, session_dict), session_dict,
-                                   "_trigger_biography_interpretation")
-            elif "{news}" in command:
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch news - {command}", "commands")
-                self.spawn_segment(self._process_news_command(command, session_dict), session_dict,
-                                   "_process_news_command")
-            elif "{events}" in command:
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch events - {command}", "commands")
-                self.spawn_segment(self._process_events_command(command, session_dict), session_dict,
-                                   "_process_events_command")
-            elif "{find_amenities}" in command:
-                query = self._extract_value_from_action(command, "find_amenities")
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Find amenities for '{query}'", "commands")
-                self.spawn_segment(self._trigger_location_search_interpretation(query, session_dict), session_dict,
-                                   "_trigger_location_search_interpretation")
-            elif "{weather}" in command:
-                forecast_type = "current"
-                if "{today}" in command:
-                    forecast_type = "today"
-                elif "{tomorrow}" in command:
-                    forecast_type = "tomorrow"
-                elif "{this_week}" in command:
-                    forecast_type = "week"
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch weather forecast ({forecast_type})", "commands")
-                self.spawn_segment(self._trigger_weather_interpretation(forecast_type, session_dict), session_dict,
-                                   "_trigger_weather_interpretation")
-            elif SAVE_COMMAND_PATTERN.search(command) and not self._voice_turn(session_dict):
-                log_service.warning(f"[COMMAND EXECUTOR] Skipping {command} - saving needs the listener's own voice recording")
-            elif "{save_shoutout}" in command:
-                log_service.detail("[COMMAND EXECUTOR] Executing: Save user shoutout", "commands")
-                spawn(self._process_shoutout("save", session_dict), name="_process_shoutout")
-            elif "{save_shoutout_reply" in command:
-                parent_id = self._shoutout_reply_parent(command)
-                if parent_id:
-                    log_service.detail(f"[COMMAND EXECUTOR] Executing: Save shoutout reply to {parent_id}", "commands")
-                    spawn(self._save_shoutout_reply(session_dict, parent_id), name="_save_shoutout_reply")
-                else:
-                    log_service.error(f"[COMMAND EXECUTOR] save_shoutout_reply missing or invalid parent_id: {command}")
-            elif "{play_shoutouts}" in command:
-                query = self._extract_value_from_action(command, "play_shoutouts")
-                log_service.detail(
-                    f"[COMMAND EXECUTOR] Executing: Play community shoutouts (Query: {query if query else 'Generic'})", "commands")
-                self.spawn_segment(self._trigger_shoutouts_interpretation(session_dict, query), session_dict,
-                                   "_trigger_shoutouts_interpretation")
-            elif "{save_opinion}" in command or "{opinion}" in command:
-                opinion = "opinion"
-                if "{current}" in command:
-                    opinion += " current"
-                elif "{earlier}" in command:
-                    opinion += " previous"
-                elif "{later}" in command:
-                    opinion += " next"
-                log_service.detail(f"[COMMAND EXECUTOR] Executing: Save user opinion ({opinion})", "commands")
-                spawn(self._process_opinion(opinion, session_dict), name="_process_opinion")
-
     @staticmethod
     def spawn_segment(coro, session_dict, name):
         task = spawn(coro, name=name)
@@ -278,22 +140,6 @@ class CommandExecutorService:
             turn_tasks.add(task)
             task.add_done_callback(turn_tasks.discard)
         return task
-
-    @staticmethod
-    def _voice_turn(session_dict):
-        return session_dict.get('origin', 'voice') == 'voice'
-
-    def _shoutout_reply_parent(self, command):
-        match = SHOUTOUT_REPLY_INLINE.search(command)
-        parent_id = match.group(1) if match else self._extract_value_from_action(command, "save_shoutout_reply")
-        return parent_id if SHOUTOUT_ID.match(parent_id or "") else None
-
-    async def _continue_playback(self, session_dict):
-        state = self.playback_service.get_state(session_dict.get('session_id')) or {}
-        if state.get('current_track') and not state.get('is_playing'):
-            await self.execute_playback_control(session_dict, "resume")
-        else:
-            log_service.detail("[COMMAND EXECUTOR] Continue: playback already running - nothing to do", "commands")
 
     async def execute_searches(self, session_dict, searches):
         session_id = session_dict.get('session_id')
@@ -306,6 +152,7 @@ class CommandExecutorService:
         tracks_to_add = []
         play_first = False
         per_query = []
+        missing = []
 
         for query, play in searches:
             if not query:
@@ -317,8 +164,19 @@ class CommandExecutorService:
                 banned_ids=banned_ids if banned_ids else None
             )
             track_ids = [track["id"] for track in results]
+            prefix, _, value = query.partition(": ")
+            entry = {"query": query, "found": len(track_ids)}
+            if prefix in NAME_SEARCH_FIELDS and track_ids:
+                matches = [track_id for track_id in track_ids
+                           if self._name_matches(value, track_id, NAME_SEARCH_FIELDS[prefix])]
+                entry["exact"] = bool(matches)
+                if matches:
+                    track_ids = matches + [track_id for track_id in track_ids if track_id not in matches]
+                else:
+                    missing.append(value)
+                    entry["closest"] = self._track_label(track_ids[0])
             tracks_to_add.extend(track_ids)
-            per_query.append({"query": query, "found": len(track_ids)})
+            per_query.append(entry)
             if play and not play_first:
                 play_first = True
             log_service.detail(f"[COMMAND EXECUTOR] Found {len(track_ids)} tracks for: {query}", "commands")
@@ -385,13 +243,27 @@ class CommandExecutorService:
                 }, room=session_id)
 
         queued = [label for label in (self._track_label(track_id) for track_id in tracks_to_add[:5]) if label]
-        return {
+        result = {
             "status": "ok" if tracks_to_add else "no_results",
             "found": len(tracks_to_add),
             "searches": per_query,
             "queued": queued,
             "now_playing": now_playing
         }
+        if missing:
+            result["not_in_catalog"] = missing
+            result["note"] = (f"The catalog has nothing by or called {', '.join(missing)}. What was found are only the "
+                              "closest matches by sound. Tell the listener plainly that the station doesn't have it, "
+                              "then name what's playing or queued instead.")
+        return result
+
+    def _name_matches(self, value, track_id, field):
+        def norm(text):
+            return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+        track = self.catalog_service.get_track(track_id) if self.catalog_service else None
+        name = norm(((track or {}).get("generation_params") or {}).get(field))
+        wanted = norm(value)
+        return bool(name and wanted) and (f" {wanted} " in f" {name} " or f" {name} " in f" {wanted} ")
 
     async def execute_playback_control(self, session_dict, action):
         session_id = session_dict.get('session_id')
@@ -420,18 +292,6 @@ class CommandExecutorService:
             "action": action,
             "now_playing": self._track_label(self._resolve_track_id(session_id, "current"))
         }
-
-    async def _handle_track_preference(self, command, session_dict):
-        rating = None
-        if "{dislike}" in command:
-            rating = "dislike"
-        elif "{like}" in command:
-            rating = "like"
-        elif "{superstar}" in command:
-            rating = "superstar"
-        elif "{ban}" in command:
-            rating = "ban"
-        await self.execute_track_preference(session_dict, rating, self._brace_target(command))
 
     async def execute_track_preference(self, session_dict, rating, target):
         from database.models import TrackPreference, PreferenceType
@@ -549,16 +409,6 @@ class CommandExecutorService:
             "changed": bool(feedback_msg)
         }
 
-    async def _process_opinion(self, opinion_type, session_dict):
-        target = None
-        if "current" in opinion_type:
-            target = "current"
-        elif "previous" in opinion_type:
-            target = "previous"
-        elif "next" in opinion_type:
-            target = "next"
-        await self.execute_save_opinion(session_dict, target)
-
     async def execute_save_opinion(self, session_dict, target):
         session_id = session_dict.get('session_id')
         if not session_id:
@@ -630,12 +480,6 @@ class CommandExecutorService:
                 'message_type': 'interactive'
             }, room=session_id)
         return {"status": "error", "reason": "No recent voice recording found"}
-
-    async def _process_shoutout(self, shoutout_type, session_dict):
-        if "save" in shoutout_type:
-            await self._save_shoutout(session_dict)
-        else:
-            log_service.error(f"Invalid shoutout type: {shoutout_type}")
 
     async def _save_shoutout(self, session_dict):
         user_id = session_dict.get('user_id')
@@ -750,16 +594,6 @@ class CommandExecutorService:
             }, room=session_id)
         return {"status": "error", "reason": "No recent voice recording found"}
 
-    async def _process_news_command(self, command, session_dict):
-        query = self._extract_value_from_action(command, "news")
-        scope = "world"
-        if "{national}" in command:
-            scope = "national"
-        elif "{local}" in command:
-            scope = "local"
-        categories = [cat for cat in NEWS_CATEGORIES if f"{{{cat}}}" in command]
-        await self.execute_news(session_dict, scope, categories, query)
-
     async def _listener_location(self, session_dict):
         user = None
         if session_dict.get('user_id'):
@@ -780,17 +614,6 @@ class CommandExecutorService:
             query = categories[0].upper()
         await self._trigger_news_interpretation(query or "general news", is_topic, [c.lower() for c in categories],
                                                 location, session_dict, gate=gate)
-
-    async def _process_events_command(self, command, session_dict):
-        query = self._extract_value_from_action(command, "events")
-        when = "month"
-        if "{today}" in command:
-            when = "today"
-        elif "{tomorrow}" in command:
-            when = "tomorrow"
-        elif "{this_week}" in command:
-            when = "week"
-        await self.execute_events(session_dict, when, query)
 
     async def execute_events(self, session_dict, when, query, gate=None):
         _, listener = await self._listener_location(session_dict)
@@ -845,21 +668,6 @@ class CommandExecutorService:
             await save_conversation_to_database(user_id, db, bot_response=script, message_type=message_type)
         await self.sio.emit('conversation_update', {'bot_response': script, 'message_type': message_type},
                             room=session_id)
-
-    async def _trigger_lyrics_interpretation(self, command, session_dict):
-        session_id = session_dict.get('session_id')
-        if not session_id:
-            return
-
-        target = self._brace_target(command)
-        query = "" if target else self._extract_value_from_action(command, "lyrics")
-        track, track_title = await self.resolve_lyrics_track(session_dict, target, query)
-
-        if not track:
-            log_service.error(f"Lyrics: No track found for command: {command}")
-            return
-
-        await self.execute_lyrics_interpretation(track, track_title, session_dict)
 
     async def resolve_lyrics_track(self, session_dict, target, query):
         session_id = session_dict.get('session_id')
@@ -996,46 +804,6 @@ class CommandExecutorService:
             await self.sio.emit('conversation_update', {'bot_response': gpt_response, 'message_type': 'shoutouts'},
                                 room=session_id)
 
-    @staticmethod
-    def _parse_seed_mode(mode_text):
-        if "mood" in mode_text:
-            return "mood"
-        if "style" in mode_text:
-            return "style"
-        if "theme" in mode_text:
-            return "theme"
-        if "lyric" in mode_text:
-            return "lyrics"
-        if "vocal" in mode_text:
-            return "vocal"
-        if "secondary" in mode_text and "genre" in mode_text:
-            return "secondary_genres"
-        if "genre" in mode_text:
-            return "primary_genre"
-        if "similar" in mode_text and "artist" in mode_text:
-            return "similar_artists"
-        if "artist" in mode_text:
-            return "primary_artist"
-        if "all" in re.split(r'[\s_]+', mode_text) or mode_text in ("everything", "balanced", "mix"):
-            return "all"
-        return None
-
-    async def _handle_seed_radio(self, command, session_dict):
-        if not session_dict.get('session_id'):
-            return
-
-        match = re.search(r'"([^"]+)"', command)
-        if not match:
-            log_service.error(f"No quoted mode found in seed command: {command}")
-            return
-
-        mode = self._parse_seed_mode(match.group(1).strip().lower())
-        if not mode:
-            log_service.error(f"Invalid seed mode '{match.group(1)}' in command: {command}")
-            return
-
-        await self.execute_seed_radio(session_dict, mode)
-
     async def execute_seed_radio(self, session_dict, mode):
         session_id = session_dict.get('session_id')
         user_id = session_dict.get('user_id')
@@ -1085,36 +853,6 @@ class CommandExecutorService:
             "seed_track": track_name,
             "up_next": self._upcoming_labels(session_id)
         }
-
-    @staticmethod
-    def _parse_playlist_mode(playlist_text):
-        if "favorite" in playlist_text:
-            return "favorites"
-        if "discover" in playlist_text:
-            return "discovery"
-        if "top" in playlist_text and "all" in playlist_text:
-            return "top_hits_all"
-        if "top" in playlist_text and "week" in playlist_text:
-            return "top_hits_week"
-        if "top" in playlist_text and "day" in playlist_text:
-            return "top_hits_day"
-        return None
-
-    async def _handle_playlist(self, command, session_dict):
-        if not session_dict.get('session_id'):
-            return
-
-        match = re.search(r'"([^"]+)"', command)
-        if not match:
-            log_service.error(f"No quoted playlist found in command: {command}")
-            return
-
-        mode = self._parse_playlist_mode(match.group(1).strip().lower())
-        if not mode:
-            log_service.error(f"Invalid playlist '{match.group(1)}' in command: {command}")
-            return
-
-        await self.execute_playlist(session_dict, mode)
 
     async def execute_playlist(self, session_dict, mode):
         session_id = session_dict.get('session_id')

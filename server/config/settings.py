@@ -266,7 +266,6 @@ class Settings:
     GEMINI_DJ_TEMPERATURE: float = float(os.getenv("GEMINI_DJ_TEMPERATURE", "0.9"))
     GEMINI_DJ_MAX_TOKENS: int = int(os.getenv("GEMINI_DJ_MAX_TOKENS", "1000"))
 
-    DJ_TOOL_USE_ENABLED: bool = os.getenv("DJ_TOOL_USE_ENABLED", "true").lower() == "true"
     DJ_TOOL_MAX_LIVE_FETCHES: int = int(os.getenv("DJ_TOOL_MAX_LIVE_FETCHES", "2"))
     DJ_TOOL_FILLERS_PER_TURN: int = int(os.getenv("DJ_TOOL_FILLERS_PER_TURN", "2"))
     PULSE_ENABLED: bool = os.getenv("PULSE_ENABLED", "true").lower() == "true"

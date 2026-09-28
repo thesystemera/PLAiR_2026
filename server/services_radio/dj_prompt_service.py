@@ -126,9 +126,6 @@ class DJPromptService:
             'dj_model': settings.GEMINI_DJ_MODEL,
             'dj_temperature': settings.GEMINI_DJ_TEMPERATURE,
             'dj_tokens': settings.GEMINI_DJ_MAX_TOKENS,
-            'command_model': settings.GEMINI_COMMAND_MODEL,
-            'command_temperature': settings.GEMINI_COMMAND_TEMPERATURE,
-            'command_tokens': settings.GEMINI_COMMAND_MAX_TOKENS,
             'audio_model': settings.GEMINI_AUDIO_MODEL,
             'audio_temperature': settings.GEMINI_AUDIO_TEMPERATURE,
             'audio_tokens': settings.GEMINI_AUDIO_MAX_TOKENS
@@ -146,20 +143,6 @@ class DJPromptService:
         self.events_service = events_service
 
         self.node_configs = {
-            'interactive': {
-                'required_nodes': [
-                    'core_dj_identity',
-                    'format_channels',
-                    'format_tone',
-                    'format_meta_tags_guide',
-                    'format_roles_detailed',
-                    'format_station_characteristics',
-                    'format_dialogue_examples',
-                    'station_recent_airings',
-                    'city_pulse'
-                ],
-                'use_ai_picker': True
-            },
             'interactive_tools': {
                 'required_nodes': [
                     'core_dj_identity',
@@ -408,19 +391,6 @@ class DJPromptService:
                 'required_nodes': list(RADIO_SEGMENT_BASE_NODES),
                 'use_ai_picker': False
             },
-            'command_extraction': {
-                'required_nodes': [
-                    'instruction_hal11000_identity',
-                    'instruction_hal11000_format_rules',
-                    'instruction_hal11000_commands',
-                    'instruction_hal11000_rules',
-                    'instruction_hal11000_examples',
-                    'instruction_hal11000_verification',
-                    'history_last_track', 'track_title_artist', 'queue_next_track',
-                    'user_favorite_artists', 'user_profile', 'conversation_recent'
-                ],
-                'use_ai_picker': False
-            }
         }
 
     def _select_time_preset(self, time_presets: dict, time_remaining: float) -> dict:
@@ -834,62 +804,6 @@ class DJPromptService:
             return None
         return response_text.strip().strip('"')
 
-    @gpt_error_handler
-    async def gpt_dj_interactive(self, transcription, session_dict):
-        user_id = session_dict.get('user_id')
-        session_id = session_dict.get('session_id')
-
-        log_service.node_performance(f"🎙️ DJ Interactive (Node System) - User {user_id or 'Guest'}")
-
-        start_time = time.perf_counter()
-
-        dependencies = await self._gather_dependencies(user_id, session_id)
-        session_dict['_turn_dependencies'] = dependencies
-
-        context_data, selected_nodes, debug_timestamp = await self._get_nodes_unified(
-            gpt_type='interactive',
-            user_id=user_id,
-            session_id=session_id,
-            user_input=transcription,
-            dependencies=dependencies
-        )
-
-        fetch_time = (time.perf_counter() - start_time) * 1000
-
-        system_prompt = assemble_prompt(context_data, selected_nodes)
-
-        log_service.gpt(f"Interactive: Prompt System: {system_prompt}")
-
-        user_message = f"[LISTENER TXT] {transcription}"
-        log_service.gpt(f"Interactive: Prompt User: {user_message}")
-
-        response_text = await self._execute_gpt_and_save(
-            gpt_type='interactive',
-            debug_timestamp=debug_timestamp or "",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-            clean_role='dj_interactive'
-        )
-
-        log_service.api(f"Interactive: Raw Response: {response_text}")
-
-        if "[N/A]" in response_text:
-            log_service.api("Interactive: Response is not applicable ([N/A])")
-            return None
-
-        parts = response_text.split("[INTERNAL DIALOGUE]", 1)
-        main_response = parts[0].strip()
-        notes_section = f"[INTERNAL DIALOGUE]{parts[1]}" if len(parts) > 1 else ""
-
-        log_service.node_performance(
-            f"✅ Node System: {fetch_time:.1f}ms total | "
-            f"Selected {len(selected_nodes)} nodes"
-        )
-
-        return main_response, notes_section
-
     @staticmethod
     def _split_interactive_response(response_text: str) -> tuple[str, str]:
         parts = response_text.split("[INTERNAL DIALOGUE]", 1)
@@ -901,7 +815,9 @@ class DJPromptService:
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
                                        on_route=None) -> dict:
         from services_radio.dj_tools import (
-            DJ_FUNCTION_DECLARATIONS,
+            declarations_for,
+            PLAN_GATED_TOOLS,
+            SEGMENT_TOOLS,
             READ_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
@@ -924,14 +840,11 @@ class DJPromptService:
         )
 
         fetch_time = (time.perf_counter() - start_time) * 1000
-        use_tools = bool(route.get("use_tools"))
+        route["context_nodes"] = [node for node in selected_nodes if context_data.get(node)]
         if on_route is not None:
             await on_route(route)
 
-        if use_tools:
-            ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
-        else:
-            ordered_nodes = [node for node in selected_nodes if node != 'instruction_dj_tools']
+        ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
 
         system_prompt = assemble_prompt(context_data, ordered_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
 
@@ -955,7 +868,9 @@ class DJPromptService:
         result = await self.gemini_service.run_gemini_tool_turn(
             system_instruction=system_prompt,
             user_message=user_message,
-            function_declarations=DJ_FUNCTION_DECLARATIONS if use_tools else [],
+            function_declarations=declarations_for(tool_runtime.ctx.planned),
+            refresh_tools=lambda: declarations_for(tool_runtime.ctx.planned, tool_runtime.ctx.granted),
+            expected_tools=(tool_runtime.ctx.planned or set()) & (PLAN_GATED_TOOLS | SEGMENT_TOOLS),
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
             max_tokens=self.config['dj_tokens'],
@@ -992,8 +907,7 @@ class DJPromptService:
             "notes": notes_section,
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
-            "rounds": result.get("rounds"),
-            "used_tools": use_tools
+            "rounds": result.get("rounds")
         }
 
     def _save_prompt_debug(
@@ -1188,50 +1102,3 @@ class DJPromptService:
         if not response_text or NA_MARKER in response_text:
             return None
         return response_text.strip().strip('"')
-
-    @gpt_error_handler
-    async def gpt_command_extraction(self, gpt_response, transcription, session_dict):
-        context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
-            gpt_type='command_extraction',
-            user_id=session_dict.get('user_id'),
-            session_id=session_dict.get('session_id'),
-            dependencies=session_dict.pop('_turn_dependencies', None)
-        )
-
-        filtered_gpt_response = filter_meta_tags_for_gpt_prompt_cleaning(gpt_response)
-
-        raw_history = context_data.get('conversation_recent', '')
-        filtered_conversation_history = filter_meta_tags_for_gpt_prompt_cleaning(raw_history)
-
-        context_joined = assemble_prompt(context_data, final_nodes)
-        system_prompt = f"{context_joined}\n\nCONVERSATION HISTORY:\n{filtered_conversation_history}"
-        user_message = (
-            f"[LISTENER TXT] {transcription}\n"
-            f"[DJ RESPONSE] {filtered_gpt_response}"
-        )
-        log_service.detail(f"[HAL11000 PIPELINE] System Prompt:\n{system_prompt}", "commands")
-        log_service.detail(f"[HAL11000 PIPELINE] User Message:\n{user_message}", "commands")
-        commands_text = await self._execute_gpt_stream(
-            model=self.config['command_model'],
-            max_tokens=self.config['command_tokens'],
-            temperature=self.config['command_temperature'],
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
-        )
-        log_service.detail(f"[HAL11000 PIPELINE] Raw GPT Response (BEFORE cleaning):\n{commands_text}", "commands")
-
-        command_pattern = r'\(\{[a-z_]+(?::[0-9_]+)?\}(?:\{[a-z_]+(?::[0-9_]+)?\})*\)(?:"[^"]*")?|\{N/A\}'
-
-        extracted_commands = re.findall(command_pattern, commands_text)
-        log_service.detail("[HAL11000 PIPELINE] Command extraction output for forbidden blocks", "commands")
-
-        if not extracted_commands:
-            log_service.detail("[HAL11000 PIPELINE] No commands extracted (result: )", "commands")
-            return ""
-
-        formatted_commands = '\n'.join(extracted_commands)
-        log_service.detail(f"[HAL11000 PIPELINE] Cleaned GPT Response (AFTER filtering):\n{formatted_commands}", "commands")
-
-        return formatted_commands

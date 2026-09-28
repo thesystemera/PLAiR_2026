@@ -539,7 +539,7 @@ A new Radio Mode feature, `personal` ("For you"), is a segment class like the ot
 ### Where it is today (audit, 28 Sep)
 
 - **Two-pass flow (live default).** The DJ reply is spoken first. The HAL11000 pass then extracts brace commands, which `dj_command_executor` runs. The DJ never sees what the commands did.
-- **Tool mode** (`DJ_TOOL_USE_ENABLED`, **off** in `.env`) runs one Gemini conversation per turn with 15 tools (section 5 of `CLAUDE.md`).
+- **Tool mode** (the only DJ path since 2026-09-29, HAL11000 retired) runs one Gemini conversation per turn with 15 tools (section 5 of `CLAUDE.md`).
   - It has run live once: 27 Sep, a guest end-to-end test. `search_and_play` and `get_news` executed, `rate_track` was correctly blocked for the guest, and the turn took about 6 s.
   - There are no automated tests.
 - **The content tools can't look anything up.** `get_news`, `get_weather`, `get_events`, `find_places`, `get_artist_biography`, `explain_lyrics` and `play_shoutouts` return only `{"status": "scheduled"}`. The facts go to a separate interpretation prompt that airs after the reply. In tool mode the hosts can act but cannot look things up. Only `search_and_play` returns data (the matching titles).
