@@ -13,6 +13,7 @@ from config.settings import settings
 from services import log_service
 from services import usage_tracking
 from services.http_client import fetch
+from services.task_utils import spawn
 
 MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/artist/"
 MUSICBRAINZ_MIN_INTERVAL_S = 1.1
@@ -27,10 +28,11 @@ async def musicbrainz_get(url: str, params: dict):
         if wait > 0:
             await asyncio.sleep(wait)
         try:
-            return await fetch("GET", url, params=params)
+            return await fetch("GET", url, circuit=True, params=params)
         finally:
             _musicbrainz_last = time.monotonic()
 WEATHER_URL = "https://api.openweathermap.org/data/2.5/"
+WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
 BIOGRAPHY_NEGATIVE_CACHE_SECONDS = 600
 BIOGRAPHY_CACHE_MAX = 500
 WEATHER_CACHE_MAX = 5000
@@ -51,6 +53,7 @@ class WebService:
         self.area_store = area_store
         self._session_maker = session_maker
         self._locks: dict[tuple, asyncio.Lock] = {}
+        self._biography_tasks: dict[str, asyncio.Task] = {}
 
     def _sessions(self):
         if self._session_maker is None:
@@ -120,16 +123,23 @@ class WebService:
         cached = self.cached_artist_biography(artist_name)
         if cached is not None:
             return cached
-        async with self._lock(("biography", key)):
-            cached = self.cached_artist_biography(artist_name)
-            if cached is not None:
-                return cached
-            stored = await self._stored_biography(key)
-            if stored is not None:
-                self._remember_biography(key, stored[0], stored[1])
-                usage_tracking.record_api_call("biography", "musicbrainz_wikipedia", cached=True)
-                return stored[0]
-            return await self._lookup_biography(artist_name, key)
+        task = self._biography_tasks.get(key)
+        if task is None:
+            task = spawn(self._resolve_biography(artist_name, key), name="biography_lookup")
+            self._biography_tasks[key] = task
+            task.add_done_callback(lambda _, k=key: self._biography_tasks.pop(k, None))
+        return await asyncio.shield(task)
+
+    async def _resolve_biography(self, artist_name: str, key: str) -> str:
+        cached = self.cached_artist_biography(artist_name)
+        if cached is not None:
+            return cached
+        stored = await self._stored_biography(key)
+        if stored is not None:
+            self._remember_biography(key, stored[0], stored[1])
+            usage_tracking.record_api_call("biography", "musicbrainz_wikipedia", cached=True)
+            return stored[0]
+        return await self._lookup_biography(artist_name, key)
 
     async def _lookup_biography(self, artist_name: str, key: str) -> str:
         failed = False
@@ -175,14 +185,20 @@ class WebService:
             return ""
 
         wikidata_id = wikidata_url.rstrip("/").split("/")[-1]
-        response = await fetch("GET", f"https://www.wikidata.org/wiki/Special:EntityData/{wikidata_id}.json")
+        response = await fetch("GET", WIKIDATA_API_URL, circuit=True, params={
+            "action": "wbgetentities", "ids": wikidata_id, "props": "sitelinks", "sitefilter": "enwiki", "format": "json"
+        })
         response.raise_for_status()
-        entity = response.json().get("entities", {}).get(wikidata_id, {})
+        data = response.json()
+        entity = data.get("entities", {}).get(wikidata_id, {})
+        if "error" in data or "missing" in entity:
+            raise ValueError(f"Wikidata entity {wikidata_id} unavailable")
         title = entity.get("sitelinks", {}).get("enwiki", {}).get("title")
         if not title:
             return ""
 
-        response = await fetch("GET", f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}")
+        response = await fetch("GET", f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}",
+                               circuit=True)
         response.raise_for_status()
         return response.json().get("extract") or ""
 
@@ -277,7 +293,7 @@ class WebService:
         lat, lon, forecast_type = cache_key
         endpoint = "weather" if forecast_type == "current" else "forecast"
         try:
-            response = await fetch("GET", f"{WEATHER_URL}{endpoint}", params={
+            response = await fetch("GET", f"{WEATHER_URL}{endpoint}", circuit=True, params={
                 "lat": lat, "lon": lon, "appid": settings.WEATHER_API_KEY, "units": "metric",
             })
         except httpx.HTTPError as e:

@@ -47,7 +47,7 @@ class LocationService:
             return None
         headers = {"X-Goog-Api-Key": settings.GOOGLE_PLACES_API_KEY, "X-Goog-FieldMask": field_mask}
         try:
-            response = await fetch(method, url, headers=headers, **kwargs)
+            response = await fetch(method, url, circuit=True, headers=headers, **kwargs)
         except httpx.HTTPError as e:
             usage_tracking.record_api_call(api, provider, error=True)
             log_service.error(f"Places: request failed: {type(e).__name__}")
@@ -125,7 +125,7 @@ class LocationService:
         }
         headers = {"X-Goog-Api-Key": settings.GOOGLE_PLACES_API_KEY, "X-Goog-FieldMask": FIELD_MASK}
         try:
-            response = await fetch("POST", PLACES_SEARCH_URL, json=body, headers=headers)
+            response = await fetch("POST", PLACES_SEARCH_URL, circuit=True, json=body, headers=headers)
         except httpx.HTTPError as e:
             usage_tracking.record_api_call("places", "google_places", error=True)
             raise LocationSearchUnavailable(f"request failed: {type(e).__name__}") from e

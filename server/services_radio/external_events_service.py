@@ -79,7 +79,7 @@ class EventsService:
 
     async def _request_events(self, key: tuple, params: dict, location, country_code) -> list[dict]:
         try:
-            response = await fetch("GET", TICKETMASTER_URL, params=params)
+            response = await fetch("GET", TICKETMASTER_URL, circuit=True, params=params)
             response.raise_for_status()
             events = response.json().get("_embedded", {}).get("events", [])
         except Exception as e:
@@ -145,7 +145,7 @@ class EventsService:
             if country_code:
                 params["countryCode"] = country_code
             try:
-                response = await fetch("GET", TICKETMASTER_URL, params=params)
+                response = await fetch("GET", TICKETMASTER_URL, circuit=True, params=params)
                 response.raise_for_status()
                 data = response.json()
             except Exception as e:

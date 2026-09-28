@@ -354,9 +354,9 @@ async def talking_points(context: Optional[AreaContext]) -> list[TalkingPoint]:
 
 async def google_get(url: str, api_key: str, params: Optional[dict] = None, header_key: bool = True) -> httpx.Response:
     if header_key:
-        return await fetch("GET", url, params=params or {}, headers={"X-Goog-Api-Key": api_key})
-    return await fetch("GET", url, params={**(params or {}), "key": api_key})
+        return await fetch("GET", url, circuit=True, params=params or {}, headers={"X-Goog-Api-Key": api_key})
+    return await fetch("GET", url, circuit=True, params={**(params or {}), "key": api_key})
 
 
 async def google_post(url: str, api_key: str, body: dict) -> httpx.Response:
-    return await fetch("POST", url, json=body, headers={"X-Goog-Api-Key": api_key})
+    return await fetch("POST", url, circuit=True, json=body, headers={"X-Goog-Api-Key": api_key})

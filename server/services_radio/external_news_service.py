@@ -138,7 +138,7 @@ class NewsService:
 
     async def _fetch_url(self, url: str, label: str) -> list[dict]:
         try:
-            response = await fetch("GET", url)
+            response = await fetch("GET", url, circuit=True)
             response.raise_for_status()
         except Exception:
             usage_tracking.record_api_call("news", "google_news_rss", error=True)
