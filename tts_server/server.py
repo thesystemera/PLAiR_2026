@@ -405,7 +405,7 @@ app = Flask(__name__)
 def tts():
     data = request.get_json(force=True, silent=True) or {}
     text = (data.get("text") or "").strip()
-    voice = data.get("voice") or config.DEFAULT_VOICE
+    voice = data.get("voice")
     try:
         temperature = float(data.get("temperature", config.TEMPERATURE))
         top_p = float(data.get("top_p", config.TOP_P))
@@ -417,6 +417,8 @@ def tts():
 
     if not text:
         return jsonify({"error": "empty text"}), 400
+    if not voice:
+        return jsonify({"error": "missing voice"}), 400
     if voice not in VOICES:
         return jsonify({"error": f"unknown voice '{voice}'", "voices": VOICES}), 400
     if job_queue.qsize() >= config.MAX_QUEUE_DEPTH:

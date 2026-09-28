@@ -86,55 +86,20 @@ class AIService(SingletonService):
             model: Optional[str] = None,
             temperature: Optional[float] = None,
             system_instruction: Optional[str] = None,
-            role: Optional[str] = None
+            *,
+            role: str
     ) -> Optional[Dict[str, Any]]:
-        if model is None:
-            model = settings.GEMINI_MODEL
         if temperature is None:
             temperature = settings.GEMINI_TEMPERATURE
-
-        if role:
-            return await llm_router.generate_structured(
-                spec=role,
-                prompt=prompt,
-                response_schema=response_schema,
-                system=system_instruction,
-                temperature=temperature,
-                gemini_client=self.client,
-                task=response_schema.__name__
-            )
-
-        log_service.ai(f"Calling Gemini API with structured output: {model}")
-
-        config_params = {
-            "response_mime_type": "application/json",
-            "response_schema": response_schema,
-            "temperature": temperature
-        }
-
-        if system_instruction:
-            config_params["system_instruction"] = system_instruction
-
-        response, _, _ = await llm_router.gemini_generate(
-            spec="LLM_GEMINI_DIRECT",
-            client=self.client,
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(**config_params),
-            timeout=GEMINI_HTTP_TIMEOUT_MS / 1000
+        return await llm_router.generate_structured(
+            spec=role,
+            prompt=prompt,
+            response_schema=response_schema,
+            system=system_instruction,
+            temperature=temperature,
+            gemini_client=self.client,
+            task=response_schema.__name__
         )
-
-        if response.parsed is None:
-            log_service.error("Gemini returned None for structured output")
-            return None
-
-        parsed_data = response.parsed
-        if isinstance(parsed_data, dict):
-            result = parsed_data
-        else:
-            result = parsed_data.model_dump()  # type: ignore
-        log_service.ai("Structured output generated")
-        return result
 
     async def generate(
             self,
@@ -143,7 +108,8 @@ class AIService(SingletonService):
             temperature: Optional[float] = None,
             max_tokens: Optional[int] = None,
             response_schema: Optional[Type[BaseModel]] = None,
-            role: Optional[str] = None
+            *,
+            role: str
     ) -> _GeminiResponse:
         system_instruction = None
         user_content = ""
@@ -156,8 +122,6 @@ class AIService(SingletonService):
             elif msg_role == "user":
                 user_content = msg_content
 
-        if model is None:
-            model = settings.GEMINI_DJ_MODEL
         if temperature is None:
             temperature = settings.GEMINI_DJ_TEMPERATURE
 
@@ -189,50 +153,27 @@ class AIService(SingletonService):
             model: Optional[str] = None,
             temperature: Optional[float] = None,
             max_tokens: Optional[int] = None,
-            role: Optional[str] = None,
+            *,
+            role: str,
             validate: Optional[Callable[[str], bool]] = None,
             provider_notes: Optional[Dict[str, str]] = None
     ) -> str:
-        if model is None:
-            model = settings.GEMINI_MODEL
         if temperature is None:
             temperature = settings.GEMINI_TEMPERATURE
         if max_tokens is None:
             max_tokens = 2048
-
-        if role:
-            result = await llm_router.generate(
-                spec=role,
-                prompt=prompt,
-                system=system_instruction,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                validate=validate,
-                provider_notes=provider_notes,
-                gemini_client=self.client
-            )
-            log_service.ai(f"Text generation completed via {result.get('provider')}:{result.get('model')}")
-            return result.get("text") or ""
-
-        log_service.ai(f"Calling Gemini API for text generation: {model}")
-
-        config = types.GenerateContentConfig(
+        result = await llm_router.generate(
+            spec=role,
+            prompt=prompt,
+            system=system_instruction,
             temperature=temperature,
-            max_output_tokens=max_tokens,
-            system_instruction=system_instruction
+            max_tokens=max_tokens,
+            validate=validate,
+            provider_notes=provider_notes,
+            gemini_client=self.client
         )
-
-        response, _, _ = await llm_router.gemini_generate(
-            spec="LLM_GEMINI_DIRECT",
-            client=self.client,
-            model=model,
-            contents=prompt,
-            config=config,
-            timeout=GEMINI_HTTP_TIMEOUT_MS / 1000
-        )
-
-        log_service.ai("Text generation completed")
-        return llm_router.gemini_visible_text(response)
+        log_service.ai(f"Text generation completed via {result.get('provider')}:{result.get('model')}")
+        return result.get("text") or ""
 
     async def call_gemini_with_tools(
             self,

@@ -291,8 +291,10 @@ async def websocket_endpoint(
             "token_rejected": token_rejected,
         }})
 
-        existing_state = services.playback_service.get_state(session_id) if services.playback_service.has_session(session_id) else None  # type: ignore
-        has_existing_playback = bool(existing_state and existing_state.get('current_track') is not None)
+        has_existing_playback = bool(
+            services.playback_service.has_session(session_id)  # type: ignore
+            and services.playback_service.get_session_state(session_id).current_track  # type: ignore
+        )
 
         if user:
             assert services.device_management_service is not None

@@ -124,7 +124,7 @@ async def stream_opus_track(
 
     opus_path = await services.transcoding_service.get_or_create_opus(
         track_id=track_id,
-        wav_path=wav_path if wav_path.exists() else None,
+        wav_path=wav_path if await asyncio.to_thread(wav_path.exists) else None,
         mp3_path=mp3_path,
         bitrate=bitrate
     )
@@ -166,7 +166,7 @@ async def stream_webm_track(
 
     webm_path = await services.transcoding_service.get_or_create_webm(
         track_id=track_id,
-        wav_path=wav_path if wav_path.exists() else None,
+        wav_path=wav_path if await asyncio.to_thread(wav_path.exists) else None,
         mp3_path=mp3_path,
         bitrate=bitrate
     )

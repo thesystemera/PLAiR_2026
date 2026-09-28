@@ -38,6 +38,7 @@ RANK_UNRANKED_HIGH = (1,)
 RANK_LOW = (2,)
 ENGINE_OPTIONS = ("seed", "max_tokens", "top_p")
 BREATH_LIBRARY_COUNT_TTL_S = 300
+CLIP_RATE_CACHE_MAX = 20000
 CLIP_AUDIO_CACHE_BYTES = max(0, int(os.getenv("TTS_CLIP_AUDIO_CACHE_MB", "96"))) * 1024 * 1024
 
 EMBEDDINGS_BY_CONTENT_TYPE = {
@@ -162,6 +163,7 @@ class TTSGenerationService:
         self._breath_library_counts: Dict[str, Tuple[float, int]] = {}
         self._clip_audio: "OrderedDict[Tuple, AudioSegment]" = OrderedDict()
         self._clip_audio_bytes = 0
+        self._clip_rates: Dict[Tuple, int] = {}
 
         self.metrics = {
             'hits': 0,
@@ -611,11 +613,17 @@ class TTSGenerationService:
             _, evicted = self._clip_audio.popitem(last=False)
             self._clip_audio_bytes -= len(evicted.raw_data)
 
-    @staticmethod
-    async def clip_rate(file_path: str) -> Optional[int]:
+    async def clip_rate(self, file_path: str) -> Optional[int]:
         try:
-            info = await voice_thread(sf.info, file_path)
-            return int(info.samplerate)
+            stat = await aiofiles.os.stat(file_path)
+            key = (file_path, stat.st_mtime_ns, stat.st_size)
+            rate = self._clip_rates.get(key)
+            if rate is None:
+                rate = int((await voice_thread(sf.info, file_path)).samplerate)
+                if len(self._clip_rates) >= CLIP_RATE_CACHE_MAX:
+                    self._clip_rates.pop(next(iter(self._clip_rates)))
+                self._clip_rates[key] = rate
+            return rate
         except Exception:
             return None
 
@@ -656,7 +664,7 @@ class TTSGenerationService:
             return result[1] if result and result[1] != "N/A" else None
         if embeddings_type == 'impulse_embeddings':
             result = await self.ai_service.generate_impulse_gpt_response(tag, content_voice)
-            return result[1] if result and result[1] != "N/A" else tag
+            return result[1] if result and result[1] and result[1] != "N/A" else None
         return tag
 
     async def render_clip(

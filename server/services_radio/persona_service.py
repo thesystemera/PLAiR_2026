@@ -1,5 +1,5 @@
 from typing import Optional, Tuple
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import User, Conversation
 from services import log_service
@@ -152,17 +152,24 @@ INSTRUCTIONS:
         return None, None, None
 
 async def update_user_persona_if_needed(user_id: int, db: AsyncSession, ai_service):
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        return
-
-    user.engagements_since_last_update += 1  # type: ignore
+    from services.user_data_cache_service import user_data_cache
+    result = await db.execute(
+        update(User).where(User.id == user_id)
+        .values(engagements_since_last_update=func.coalesce(User.engagements_since_last_update, 0) + 1)
+        .returning(User.engagements_since_last_update)
+    )
+    engagements = result.scalar_one_or_none()
     await db.commit()
+    if engagements is None:
+        return
+    user_data_cache.drop_user(user_id)
 
-    log_service.persona_profile(f"User {user_id} engagements: {user.engagements_since_last_update}/5")
+    log_service.persona_profile(f"User {user_id} engagements: {engagements}/5")
 
-    if user.engagements_since_last_update >= 5:  # type: ignore
+    if engagements >= 5:
+        user = await db.get(User, user_id)
+        if user is None:
+            return
         log_service.persona_profile(f"Threshold reached, updating persona for user {user_id}")
 
         updated_persona, updated_profile, updated_interests = await generate_user_persona_and_profile(user_id, db, ai_service)
@@ -179,6 +186,10 @@ async def update_user_persona_if_needed(user_id: int, db: AsyncSession, ai_servi
             user.shoutout_interests = updated_interests  # type: ignore
             log_service.persona_profile(f"Updated shoutout interests for user {user_id}")
 
-        user.engagements_since_last_update = 0  # type: ignore
+        await db.execute(
+            update(User).where(User.id == user_id)
+            .values(engagements_since_last_update=func.greatest(User.engagements_since_last_update - engagements, 0))
+        )
         await db.commit()
+        user_data_cache.drop_user(user_id)
         log_service.persona_profile(f"Reset engagement counter for user {user_id}")

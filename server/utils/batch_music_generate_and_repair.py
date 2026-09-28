@@ -8,6 +8,7 @@ import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from services.llm_router import LLM_BACKGROUND
 from services.log_service import start_log_worker, stop_worker
 from services.ai_service import AIService
 from services.suno_service import SunoService
@@ -849,7 +850,7 @@ No additional commentary.{exclusion_prompt}
                     log_service.error("Prompt service is not available")
                     continue
                 result = await background_service.prompt_service.ai_service.call_gemini_structured(
-                    prompt, ArtistList, temperature=0.8
+                    prompt, ArtistList, temperature=0.8, role=LLM_BACKGROUND
                 )
 
                 if not result:

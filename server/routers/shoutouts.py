@@ -16,7 +16,7 @@ from config import settings
 from service_registry import services
 from routers.deps import get_current_user, RateLimit, enforce_rate_limit
 from security_middleware import is_valid_guest_id
-from services_radio.listener_location import guest_locations
+from services_radio import listener_location as location_resolver
 from routers.schemas import ShoutoutSearchRequest, PreferenceRequest, DirectReplyUploadRequest
 
 router = APIRouter()
@@ -102,15 +102,10 @@ async def search_shoutouts(
 
 
     try:
+        guest_id = x_guest_id if current_user is None and x_guest_id and is_valid_guest_id(x_guest_id) else None
         user_location = None
-        if current_user and hasattr(current_user, 'latitude') and hasattr(current_user, 'longitude'):
-            lat = current_user.latitude
-            lon = current_user.longitude
-            if lat is not None and lon is not None:
-                user_location = (float(str(lat)), float(str(lon)))
-        elif current_user is None and x_guest_id and is_valid_guest_id(x_guest_id):
-            guest = guest_locations.get(x_guest_id)
-            user_location = guest.coords if guest is not None else None
+        if current_user is not None or guest_id:
+            user_location = (await location_resolver.resolve(current_user, guest_id, geocode=False)).coords
 
         results = await services.user_content_vector_search_service.search(
             query=request.query,

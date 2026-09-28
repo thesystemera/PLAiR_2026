@@ -424,6 +424,15 @@ class CatalogDatabaseService(SingletonService):
             return new_track_count
 
     def get_all_genres(self) -> List[Dict]:
+        cached = getattr(self, "_genres_cache", None)
+        if cached is not None and cached[0] == self._catalog_version:
+            return cached[1]
+        version = self._catalog_version
+        genres = self._count_genres()
+        self._genres_cache = (version, genres)
+        return genres
+
+    def _count_genres(self) -> List[Dict]:
         counts = Counter()
         sub_genres = {}
         for t in self.tracks.values():
