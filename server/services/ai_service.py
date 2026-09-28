@@ -328,7 +328,8 @@ class AIService(SingletonService):
             max_tokens: Optional[int] = None,
             max_rounds: int = 4,
             call_timeout_s: float = 8.0,
-            on_preamble: Optional[Callable[[str], Awaitable[None]]] = None
+            on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
+            followup_tools: Optional[set] = None
     ) -> Dict[str, Any]:
         if temperature is None:
             temperature = settings.GEMINI_DJ_TEMPERATURE
@@ -385,7 +386,9 @@ class AIService(SingletonService):
 
             if not function_calls:
                 finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
-                recovery = None if text.strip() else self._recovery_message(finish, bool(calls_log))
+                said_enough = bool(preambles) and not any(
+                    call["name"] in (followup_tools or set()) for call in calls_log)
+                recovery = None if text.strip() or said_enough else self._recovery_message(finish, bool(calls_log))
                 if recovery and strikes < settings.LLM_RECOVERY_MAX_STRIKES:
                     strikes += 1
                     log_service.warning(f"DJ tool turn: no reply (finish {finish}) - recovery {strikes}")
@@ -408,7 +411,7 @@ class AIService(SingletonService):
                 preambles.append(text)
             if on_preamble is not None:
                 try:
-                    await on_preamble(text)
+                    await on_preamble(text, [(fc.name, dict(fc.args) if fc.args else {}) for fc in function_calls])
                 except Exception as e:
                     log_service.error(f"DJ preamble handler failed: {e}")
 

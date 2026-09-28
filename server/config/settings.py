@@ -277,6 +277,7 @@ class Settings:
 
     DJ_TOOL_USE_ENABLED: bool = os.getenv("DJ_TOOL_USE_ENABLED", "true").lower() == "true"
     DJ_TOOL_MAX_LIVE_FETCHES: int = int(os.getenv("DJ_TOOL_MAX_LIVE_FETCHES", "2"))
+    DJ_TOOL_FILLERS_PER_TURN: int = int(os.getenv("DJ_TOOL_FILLERS_PER_TURN", "2"))
     PULSE_ENABLED: bool = os.getenv("PULSE_ENABLED", "true").lower() == "true"
     PULSE_NODE_TIMEOUT_S: float = float(os.getenv("PULSE_NODE_TIMEOUT_S", "2.5"))
     PULSE_FETCH_TIMEOUT_S: float = float(os.getenv("PULSE_FETCH_TIMEOUT_S", "7"))

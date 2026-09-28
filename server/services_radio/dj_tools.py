@@ -235,6 +235,38 @@ def _brace(*tokens: str, value: Optional[str] = None) -> str:
     return command
 
 
+ACTIVITY = {
+    "pulse_search": "checking the station's notes on {query}",
+    "pulse_detail": "reading the details",
+    "listener_context": "remembering what this listener's into",
+    "city_trends": "checking what the whole city's been playing",
+    "search_and_play": "digging through the crates for {query}",
+    "seed_radio": "building a station around this track",
+    "play_playlist": "lining up the playlist",
+    "get_news": "pulling the news wire",
+    "get_weather": "checking the sky",
+    "get_events": "flicking through the gig guide",
+    "find_places": "scouting spots nearby",
+    "get_artist_biography": "digging up the artist's story",
+    "explain_lyrics": "reading the lyric sheet",
+    "play_shoutouts": "going through the listener shoutouts",
+}
+
+
+def tool_activity(calls) -> str:
+    phrases = []
+    for name, args in calls or ():
+        template = ACTIVITY.get(name)
+        if not template:
+            continue
+        query = str((args or {}).get("query") or "").strip()[:60]
+        phrase = template.format(query=query) if query or "{query}" not in template else \
+            template.replace(" on {query}", "").replace(" for {query}", "")
+        if phrase not in phrases:
+            phrases.append(phrase)
+    return " and ".join(phrases[:2])
+
+
 def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "pulse_search":
         return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "", value=args.get("query"))

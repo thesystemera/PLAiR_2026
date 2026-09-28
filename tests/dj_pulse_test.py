@@ -25,7 +25,7 @@ async def run_turn(base: str, ws, guest: str, device: str, text: str, timeout: f
         r = await client.post(f"{base}/api/dj/talk", json={"text": text},
                               headers={"X-Guest-ID": guest, "X-Device-ID": device})
     result = {"text": text, "status": r.status_code, "reply": None, "commands": None, "first_audio_s": None,
-              "audio_kb": 0, "streams": 0}
+              "audio_kb": 0, "streams": 0, "stream_starts": []}
     if r.status_code != 200:
         return result
     deadline = t0 + timeout
@@ -47,6 +47,7 @@ async def run_turn(base: str, ws, guest: str, device: str, text: str, timeout: f
             idle_after_reply = time.perf_counter() + 12
         elif kind == "tts_stream_start":
             result["streams"] += 1
+            result["stream_starts"].append(round(time.perf_counter() - t0, 1))
         elif kind == "tts_stream_audio_chunk":
             chunk = data.get("chunk") or data.get("audio") or data.get("data")
             if isinstance(chunk, str):

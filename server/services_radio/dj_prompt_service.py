@@ -901,6 +901,7 @@ class DJPromptService:
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None) -> dict:
         from services_radio.dj_tools import (
             DJ_FUNCTION_DECLARATIONS,
+            READ_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
         )
@@ -938,7 +939,7 @@ class DJPromptService:
 
         spoken_preambles = []
 
-        async def handle_preamble(raw_text):
+        async def handle_preamble(raw_text, calls=()):
             preamble_main = ""
             if raw_text and raw_text.strip() and NA_MARKER not in raw_text:
                 cleaned = clean_gpt_output(raw_text, role='dj_interactive')
@@ -946,7 +947,7 @@ class DJPromptService:
             if preamble_main:
                 spoken_preambles.append(preamble_main)
             if on_preamble is not None:
-                await on_preamble(preamble_main)
+                await on_preamble(preamble_main, calls)
 
         result = await self.gemini_service.run_gemini_tool_turn(
             system_instruction=system_prompt,
@@ -957,7 +958,8 @@ class DJPromptService:
             max_tokens=self.config['dj_tokens'],
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
-            on_preamble=handle_preamble
+            on_preamble=handle_preamble,
+            followup_tools=READ_TOOLS
         )
 
         raw_response = result.get("text") or ""

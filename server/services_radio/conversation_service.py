@@ -1,4 +1,5 @@
 import asyncio
+import random
 import re
 import time
 from typing import Optional, List, Dict, Callable, Set
@@ -473,6 +474,25 @@ class ConversationService:
                 "persist_conversation_turn"
             ), name=f"persist_conversation_turn:{session_id}")
 
+    async def _play_filler(self, description, user_id, is_guest, session_id):
+        from services_radio.tts_queue_manager import PrerenderedClip
+        queue = self.tts_queue_manager
+        generation = queue.tts_generation_service
+        voice = random.choice(sorted(settings.GENERATION_PERMISSIONS.get('impulse', set())) or ['leo'])
+        owner = session_id or f"user:{user_id or 0}"
+        best = await generation.lookup_clip(description, 'impulse_embeddings', voice, float('-inf'), listener=owner)
+        if best is None:
+            best = await generation.lookup_clip(description, 'impulse_embeddings', voice, float('-inf'),
+                                                listener=owner, respect_cooldown=False)
+        if best is None or best[1] < settings.IMPULSE_SIMILARITY_THRESHOLD:
+            generation.schedule_refresh('impulse_embeddings', voice, description)
+        if best is None:
+            return
+        audio = await generation.load_clip(best[0], voice)
+        if audio is not None:
+            await queue.add_clip_request(PrerenderedClip(audio, label=f"filler:{voice}"), user_id or 0,
+                                         "interactive", is_guest, session_id)
+
     async def _computer_pass(self, full_response, transcription, session_dict, session_id):
         commands = await self.dj_prompt_service.gpt_command_extraction(full_response, transcription, session_dict)
         if not commands or not commands.strip() or commands.strip() == "{N/A}":
@@ -494,12 +514,21 @@ class ConversationService:
         spoken = []
         impulse_sent = []
 
-        async def speak_preamble(text):
+        async def speak_preamble(text, calls=()):
+            from services_radio.dj_tools import tool_activity
             if text:
                 await self._speak_dj_text(text, user_id, session_id, is_guest)
                 spoken.append(text)
-            elif origin == "text" and not impulse_sent and not spoken and self.tts_queue_manager is not None:
-                impulse_sent.append(True)
+                return
+            if len(impulse_sent) >= settings.DJ_TOOL_FILLERS_PER_TURN or self.tts_queue_manager is None:
+                return
+            activity = tool_activity(calls)
+            if activity:
+                impulse_sent.append(activity)
+                await self._play_filler(activity, user_id, is_guest, session_id)
+                return
+            if origin == "text" and not spoken and not impulse_sent:
+                impulse_sent.append(transcription)
                 safe_text = transcription.replace("[", "(").replace("]", ")")
                 await self.tts_queue_manager.add_tts_request(
                     text=f"[IMPULSE]{safe_text}[/IMPULSE]",
