@@ -990,8 +990,7 @@ class DJPromptService:
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
             "rounds": result.get("rounds"),
-            "used_tools": use_tools,
-            "covered": bool(route.get("covered"))
+            "used_tools": use_tools
         }
 
     def _save_prompt_debug(

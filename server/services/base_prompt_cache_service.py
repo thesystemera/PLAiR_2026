@@ -88,6 +88,7 @@ class BasePromptCacheService(SingletonService):
 
         self._initialize_database()
         self._load_cache_from_disk()
+        await self._reembed_stale()
 
         abs_json_path = os.path.abspath(self.json_dir)
 
@@ -131,6 +132,32 @@ class BasePromptCacheService(SingletonService):
         getattr(log_service, self.log_channel)(
             f"✓ Loaded {len(self.query_cache)} cached queries ({elapsed:.2f}s)"
         )
+
+    async def _reembed_stale(self) -> None:
+        if not self.vector_db_service:
+            return
+        dim = self.vector_db_service.embedding_dim
+        stale = [(query_hash, cached) for query_hash, cached in self.query_cache.items()
+                 if cached["embedding"] is None or cached["embedding"].shape[0] != dim]
+        if not stale:
+            return
+        for query_hash, cached in stale:
+            cached["embedding"] = await run_on_gpu_executor(self.vector_db_service._generate_embedding,
+                                                            cached["query_text"])
+
+        def _update():
+            conn = self._get_connection()
+            try:
+                c = conn.cursor()
+                for query_hash, cached in stale:
+                    c.execute(f"UPDATE {self.table_name} SET embedding = %s WHERE query_hash = %s",
+                              (cached["embedding"].tobytes(), query_hash))
+                conn.commit()
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(_update)
+        getattr(log_service, self.log_channel)(f"✓ Re-embedded {len(stale)} cached queries for the current encoder")
 
     @staticmethod
     def _hash_query(query: str) -> str:

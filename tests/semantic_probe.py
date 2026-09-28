@@ -24,6 +24,8 @@ from services_radio.external_web_service import WebService  # noqa: E402
 from services_radio.news_store import NewsStore  # noqa: E402
 
 PROBES = [
+    ("Radiohead", None, None),
+    ("Radiohead near me", None, None),
     ("any jazz or soul on this weekend", None, "weekend"),
     ("what's on at the Tuning Fork", None, None),
     ("comedy", None, None),
@@ -70,7 +72,19 @@ async def setup(ai: bool):
     await asyncio.to_thread(vdb.load_initial_data)
     search = SemanticSearch(vdb, local_knowledge.LocalKnowledgePromptCache())
     await search.prompt_cache.initialize(services.ai_service, vdb)
-    local_knowledge.install(vdb, search)
+    news_db = local_knowledge.NewsVectorDatabaseService(source)
+    await asyncio.to_thread(news_db.load_initial_data)
+    news_search = SemanticSearch(news_db, local_knowledge.NewsPromptCache())
+    await news_search.prompt_cache.initialize(services.ai_service, news_db)
+    local_knowledge.install(vdb, search, news_db, news_search)
+    from services.catalog_vector_database_service import CatalogVectorDatabaseService
+    from services.catalog_vector_search_service import CatalogVectorSearchService
+    from services.catalog_vector_search_prompt_cache_service import CatalogVectorSearchPromptCacheService
+    catalog_db = CatalogVectorDatabaseService(services.catalog_service)
+    await asyncio.to_thread(catalog_db.load_initial_data)
+    catalog_cache = CatalogVectorSearchPromptCacheService()
+    await catalog_cache.initialize(services.ai_service, catalog_db)
+    services.vector_search_service = CatalogVectorSearchService(catalog_db, services.catalog_service, catalog_cache)
     area_store = area_signals.AreaCacheStore(AsyncSessionLocal)
     services.web_service = WebService(area_store=area_store, session_maker=AsyncSessionLocal)
     services.news_service = NewsService(services.ai_service, store=NewsStore(AsyncSessionLocal))
@@ -85,7 +99,6 @@ async def setup(ai: bool):
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Semantic City Pulse probe (real T5, no DJ LLM)")
     parser.add_argument("--ai", action="store_true", help="use the query-intent prompt caches (Gemini on miss)")
-    parser.add_argument("--kinds", action="store_true", help="print kind router scores")
     parser.add_argument("--links", action="store_true")
     parser.add_argument("queries", nargs="*")
     args = parser.parse_args()
@@ -97,9 +110,6 @@ async def main() -> None:
     print(f"region={listener.region.key} nuggets={len(local_knowledge.local_vector_db._metadata_cache)}")
     probes = [(q, None, None) for q in args.queries] if args.queries else PROBES
     for text, kinds, when in probes:
-        if args.kinds:
-            scores = await pulse_kb.router.scores(text)
-            print(f"\n## '{text}' kinds: " + ", ".join(f"{k}={v:.3f}" for k, v in sorted(scores.items(), key=lambda kv: -kv[1])))
         items = await pulse.query(pulse_kb.PulseQuery(listener=listener, text=text, kinds=set(kinds) if kinds else None,
                                                       when=when, record_demand=False, use_ai=args.ai))
         print(f"== '{text}': {len(items)}")

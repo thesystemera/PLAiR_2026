@@ -20,7 +20,20 @@ SELECT id AS rowid,
            'expires_at', expires_at, 'url', url, 'attribution', attribution
        )::text AS metadata_json
 FROM regional_items
-WHERE title <> '' AND expires_at > now()
+WHERE title <> '' AND expires_at > now() AND kind <> 'news'
+"""
+
+NEWS_VIEW_SQL = """
+CREATE OR REPLACE VIEW news_nuggets AS
+SELECT id AS rowid,
+       'news:' || id AS nugget_id,
+       json_build_object(
+           'id', 'news:' || id, 'kind', 'news', 'article_id', id, 'title', title, 'text', description,
+           'source', source, 'url', url, 'published_at', published_at, 'country', country,
+           'region_key', region_key, 'tags', tags::json
+       )::text AS metadata_json
+FROM news_items
+WHERE expires_at > now()
 """
 
 KIND_LABELS = {"event": "gig, concert, show or event", "place": "place, venue, shop, bar or cafe",
@@ -68,12 +81,9 @@ class LocalKnowledgeVectorDatabaseService(SemanticVectorDatabaseService):
                  "What sort of thing it is: event, place, news"),
         Category("nugget_when", 0.10, when_phrase, "When it happens: day, time of day, weekend or weeknight"),
     )
-    encoder_name = settings.PULSE_ENCODER
-    embedding_dim = settings.PULSE_ENCODER_DIM
     log_channel = "system"
     service_label = "Local knowledge"
     display_name = "Local Knowledge"
-    tables_setting_name = ""
     index_dir_setting_name = "EMBEDDINGS_DIR"
     index_file_prefix = "local_knowledge"
     source_table = "local_nuggets"
@@ -84,6 +94,26 @@ class LocalKnowledgeVectorDatabaseService(SemanticVectorDatabaseService):
     single_item_noun = "nugget"
 
 
+class NewsVectorDatabaseService(SemanticVectorDatabaseService):
+    category_specs = (
+        Category("news_title", 0.45, field_text("title"), "The headline"),
+        Category("news_tags", 0.25, field_text("tags"), "Topics of the story (rugby, election, music, weather)"),
+        Category("news_details", 0.20, field_text("text"), "The story's summary"),
+        Category("news_outlet", 0.10, field_text("source"), "The publisher"),
+    )
+    log_channel = "system"
+    service_label = "News"
+    display_name = "News"
+    index_dir_setting_name = "EMBEDDINGS_DIR"
+    index_file_prefix = "news"
+    source_table = "news_nuggets"
+    source_id_column = "nugget_id"
+    source_label = "news stories"
+    source_db_label = "ai_radio"
+    item_noun = "stories"
+    single_item_noun = "story"
+
+
 class LocalNuggetSource:
     def _get_connection(self):
         return psycopg2.connect(settings.DATABASE_URL)
@@ -91,7 +121,9 @@ class LocalNuggetSource:
     def initialize(self) -> None:
         conn = self._get_connection()
         try:
-            conn.cursor().execute(VIEW_SQL)
+            c = conn.cursor()
+            c.execute(VIEW_SQL)
+            c.execute(NEWS_VIEW_SQL)
             conn.commit()
         finally:
             conn.close()
@@ -106,15 +138,30 @@ LocalKnowledgePromptCache = make_prompt_cache(
     "- 'late night food near K Road': nugget_tags, nugget_place and nugget_kind high.\n"
     "- 'what's happening with the All Blacks': nugget_title and nugget_people high.")
 
+NewsPromptCache = make_prompt_cache(
+    NewsVectorDatabaseService, "news_query_intent_cache", "news stories",
+    "- 'Radiohead': news_title and news_tags high.\n"
+    "- 'rugby': news_tags high, news_title some.\n"
+    "- 'what's RNZ saying about the election': news_outlet and news_tags high.")
+
 local_vector_db: Optional[LocalKnowledgeVectorDatabaseService] = None
 local_search: Optional[SemanticSearch] = None
+news_vector_db: Optional[NewsVectorDatabaseService] = None
+news_search: Optional[SemanticSearch] = None
 
 
-def install(vector_db: LocalKnowledgeVectorDatabaseService, search: SemanticSearch) -> None:
-    global local_vector_db, local_search
+def install(vector_db: LocalKnowledgeVectorDatabaseService, search: SemanticSearch,
+            news_db: Optional[NewsVectorDatabaseService] = None, news: Optional[SemanticSearch] = None) -> None:
+    global local_vector_db, local_search, news_vector_db, news_search
     local_vector_db, local_search = vector_db, search
+    news_vector_db, news_search = news_db, news
 
 
 def mark_dirty() -> None:
     if local_vector_db is not None:
         local_vector_db.dirty = True
+
+
+def mark_news_dirty() -> None:
+    if news_vector_db is not None:
+        news_vector_db.dirty = True

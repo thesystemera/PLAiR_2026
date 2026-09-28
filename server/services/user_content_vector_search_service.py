@@ -1,10 +1,7 @@
-import asyncio
 import re
-import json
-import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from services import log_service
-from models_global import run_on_gpu_executor
+from services.semantic_source import SemanticSearch
 from math import radians, sin, cos, sqrt, atan2
 
 class UserContentVectorSearchService:
@@ -13,6 +10,7 @@ class UserContentVectorSearchService:
         self.vector_db = vector_db_service
         self.user_content_service = user_content_service
         self.prompt_cache_service = prompt_cache_service
+        self.semantic = SemanticSearch(vector_db_service, prompt_cache_service)
         log_service.user_content("UserContentVectorSearchService initialized")
 
     async def search(
@@ -28,126 +26,28 @@ class UserContentVectorSearchService:
             log_service.warning("No user content indexed for search")
             return []
 
-        current_annoy_index = self.vector_db.current_annoy_index()
-
-        def _safe_search(vector_data, num_items):
-            with self.vector_db.index_lock:
-                if current_annoy_index.get_n_items() == 0:
-                    return []
-                return current_annoy_index.get_nns_by_vector(vector_data, num_items)
-
         try:
             log_service.detail(f"Searching user content: {query}", "user_content")
-
-            if use_ai_analysis and self.prompt_cache_service:
-                ai_analysis = await self.prompt_cache_service.analyze_query(query)
-                if ai_analysis:
-                    intent_category = ai_analysis.intent_category
-                    query_weights = ai_analysis.category_weights.model_dump()
-                    cleaned_query = ai_analysis.cleaned_query
-                    log_service.detail(f"🤖 AI Intent: {intent_category} confidence: {ai_analysis.confidence:.2f}", "user_content")
-                else:
-                    log_service.warning("AI analysis failed, falling back to keyword detection")
-                    intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
-            else:
-                intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
-
+            intent_category, query_weights, cleaned_query = await self._intent(query, use_ai_analysis)
             log_service.detail(f"Category weights: {query_weights}", "user_content")
 
-            query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
+            def keep(item: Dict[str, Any]) -> bool:
+                return not content_type or item.get('content_type', 'shoutout') == content_type
 
-            if cleaned_query != query:
-                log_service.detail(f"Cleaned query: {cleaned_query}", "user_content")
+            def boost(item: Dict[str, Any]) -> float:
+                distance_km = self._distance_to(item, user_location)
+                return 0.1 * (1 - distance_km / 50) if distance_km is not None and distance_km < 50 else 0.0
 
-            nearest_ids = await asyncio.to_thread(_safe_search, query_embedding, n_results * 3)
-
-            if not nearest_ids:
-                if current_annoy_index.get_n_items() == 0:
-                    log_service.error("Annoy index is empty")
-                return []
-
-            log_service.detail(f"Found {len(nearest_ids)} candidates, re-ranking", "user_content")
-
-            results = await asyncio.to_thread(
-                self._rerank_candidates_sync, nearest_ids, query_embedding, query_weights, content_type, user_location
-            )
-
-            results.sort(key=lambda x: x.get('final_score', 0), reverse=True)
-
-            if results:
-                log_service.detail("Top 5 matches:", "user_content")
-                for i, item in enumerate(results[:5], 1):
-                    username = item.get('user_data', {}).get('username', 'Unknown')
-                    transcription = item.get('transcription', '')[:50]
-                    score = item.get('final_score', 0)
-                    log_service.detail(f"  {i}. {score:.3f} {username}: {transcription}...", "user_content")
-
-            results = results[:n_results]
-
-            log_service.detail(f"Returning {len(results)} results for {query} intent: {intent_category}", "user_content")
-            return results
-
-        except Exception as e:
-            log_service.error(f"Vector search error: {str(e)}")
-            import traceback
-            log_service.error(f"Traceback: {traceback.format_exc()}")
-            return []
-
-    def _rerank_candidates_sync(self, nearest_ids, query_embedding, query_weights, content_type,
-                                user_location) -> List[Dict[str, Any]]:
-        results = []
-        conn = self.user_content_service._get_connection()
-        try:
-            c = conn.cursor()
-
-            for annoy_idx in nearest_ids:
-                rowid = annoy_idx + 1
-                content_id, full_data = self.vector_db.lookup_cached_row(rowid)
-
-                if full_data is None:
-                    c.execute("SELECT content_id, metadata_json FROM shoutouts WHERE rowid = %s", (rowid,))
-                    result = c.fetchone()
-                    if not result:
-                        continue
-                    content_id, metadata_json = result
-                    full_data = json.loads(metadata_json)
-
-                if content_type:
-                    item_type = full_data.get('content_type', 'shoutout')
-                    if item_type != content_type:
-                        continue
-
-                category_texts = self.vector_db._extract_category_texts(full_data)
-
-                category_embeddings = self.vector_db.get_category_embeddings(category_texts)
-
-                reweighted_embedding = self.vector_db._create_weighted_embedding(
-                    category_embeddings, query_weights
-                )
-                reranked_similarity = np.dot(query_embedding, reweighted_embedding)
-
-                proximity_boost = 0.0
-                distance_km = None
-
-                if user_location:
-                    user_data = full_data.get('user_data', {})
-                    item_lat = user_data.get('latitude')
-                    item_lon = user_data.get('longitude')
-
-                    if item_lat and item_lon:
-                        distance_km = self._calculate_distance(
-                            user_location[0], user_location[1],
-                            float(item_lat), float(item_lon)
-                        )
-                        if distance_km < 50:
-                            proximity_boost = 0.1 * (1 - (distance_km / 50))
-
-                final_score = float(reranked_similarity) + proximity_boost
-
+            found = await self.semantic.search(cleaned_query, n=n_results, keep=keep, boost=boost,
+                                               weights=query_weights)
+            display_category = max(query_weights.items(), key=lambda x: x[1])[0]
+            results = []
+            for match in found:
+                full_data = match.meta
+                content_id = self.vector_db._rowid_cache.get(match.rowid) or full_data.get('id')
                 user_data = full_data.get('user_data', {})
-                display_category = max(query_weights.items(), key=lambda x: x[1])[0]
-
-                search_result = {
+                distance_km = self._distance_to(full_data, user_location)
+                result = {
                     'id': content_id,
                     'transcription': full_data.get('full_transcription', ''),
                     'word_level_transcription': full_data.get('word_level_transcription', []),
@@ -158,20 +58,44 @@ class UserContentVectorSearchService:
                     'date': full_data.get('date', ''),
                     'has_audio': True,
                     'audio_url': self._construct_audio_url({'id': content_id}),
-                    'similarity_score': float(reranked_similarity),
-                    'final_score': final_score,
+                    'similarity_score': match.similarity,
+                    'final_score': match.score,
                     'intent_category': display_category,
-                    'match_weights': query_weights
+                    'match_weights': query_weights,
                 }
-
                 if distance_km is not None:
-                    search_result['distance_km'] = distance_km
+                    result['distance_km'] = distance_km
+                results.append(result)
+            log_service.detail(f"Returning {len(results)} results for {query} intent: {intent_category}",
+                               "user_content")
+            return results
 
-                results.append(search_result)
+        except Exception as e:
+            log_service.error(f"Vector search error: {str(e)}")
+            import traceback
+            log_service.error(f"Traceback: {traceback.format_exc()}")
+            return []
 
-        finally:
-            conn.close()
-        return results
+    async def _intent(self, query: str, use_ai_analysis: bool) -> Tuple[str, Dict[str, float], str]:
+        if use_ai_analysis and self.prompt_cache_service:
+            ai_analysis = await self.prompt_cache_service.analyze_query(query)
+            if ai_analysis:
+                log_service.detail(f"🤖 AI Intent: {ai_analysis.intent_category} "
+                                   f"confidence: {ai_analysis.confidence:.2f}", "user_content")
+                return ai_analysis.intent_category, ai_analysis.category_weights.model_dump(), ai_analysis.cleaned_query
+            log_service.warning("AI analysis failed, falling back to keyword detection")
+        intent, weights, cleaned = self._detect_query_intent(query)
+        return intent, weights, cleaned if cleaned.strip() else query
+
+    def _distance_to(self, item: Dict[str, Any], user_location) -> Optional[float]:
+        if not user_location:
+            return None
+        user_data = item.get('user_data', {})
+        try:
+            return self._calculate_distance(user_location[0], user_location[1],
+                                            float(user_data.get('latitude')), float(user_data.get('longitude')))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _construct_audio_url(item: Dict[str, Any]) -> str:

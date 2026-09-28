@@ -110,12 +110,6 @@ class Settings:
             "breath_embeddings": self.EMBEDDINGS_DATABASE_URL,
         }
 
-    # Catalog embedding table names (stored in ai_radio_embeddings PostgreSQL database)
-    CATALOG_EMBEDDING_TABLES: list = [
-        "song_title_embeddings", "primary_genre_embeddings", "secondary_genres_embeddings",
-        "mood_embeddings", "primary_artist_embeddings", "similar_artists_embeddings",
-        "style_embeddings", "theme_embeddings", "vocal_embeddings", "lyrics_embeddings"
-    ]
 
     QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "query_cache"
     CONTEXT_ROUTING_CACHE_DIR: Path = BASE_DIR / "data" / "context_routing_cache"
@@ -131,13 +125,10 @@ class Settings:
     PROMPT_DEBUG_ENABLED: bool = os.getenv("PROMPT_DEBUG_ENABLED", "false").lower() == "true"
     PROMPT_DEBUG_DIR: Path = BASE_DIR / "data" / "prompt_debug"
 
-    # User content embedding table names (stored in ai_radio_embeddings PostgreSQL database)
-    USER_CONTENT_EMBEDDING_TABLES: list = [
-        "transcription_embeddings", "category_embeddings", "urgency_embeddings",
-        "importance_embeddings", "tags_embeddings", "username_embeddings",
-        "location_embeddings", "target_audience_embeddings", "sentiment_embeddings",
-        "content_theme_embeddings"
-    ]
+    SEMANTIC_ENCODER: str = os.getenv("SEMANTIC_ENCODER", "sentence-transformers/all-mpnet-base-v2")
+    SEMANTIC_ENCODER_DIM: int = int(os.getenv("SEMANTIC_ENCODER_DIM", "768"))
+    SEMANTIC_ENCODER_SLUG: str = os.getenv("SEMANTIC_ENCODER_SLUG", "mpnet")
+
     USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
     IMPULSE_SIMILARITY_THRESHOLD: float = 0.75
@@ -288,13 +279,6 @@ class Settings:
     PULSE_DEMAND_ENABLED: bool = os.getenv("PULSE_DEMAND_ENABLED", "true").lower() == "true"
     PULSE_TREND_MIN_ASKERS: int = int(os.getenv("PULSE_TREND_MIN_ASKERS", "3"))
     PULSE_DEMAND_ANSWERS: int = int(os.getenv("PULSE_DEMAND_ANSWERS", "5"))
-    PULSE_DEMAND_ANSWER_OVERLAP: float = float(os.getenv("PULSE_DEMAND_ANSWER_OVERLAP", "0.4"))
-    PULSE_REQUEST_SIMILARITY: float = float(os.getenv("PULSE_REQUEST_SIMILARITY", "0.93"))
-    PULSE_ENCODER: str = os.getenv("PULSE_ENCODER", "sentence-transformers/all-mpnet-base-v2")
-    PULSE_ENCODER_DIM: int = int(os.getenv("PULSE_ENCODER_DIM", "768"))
-    PULSE_KIND_MIN: float = float(os.getenv("PULSE_KIND_MIN", "0.5"))
-    PULSE_KIND_MARGIN: float = float(os.getenv("PULSE_KIND_MARGIN", "0.1"))
-    PULSE_SEARCH_MIN_SCORE: float = float(os.getenv("PULSE_SEARCH_MIN_SCORE", "0.36"))
     PULSE_COMMUNITY_RADIUS_KM: float = float(os.getenv("PULSE_COMMUNITY_RADIUS_KM", "60"))
     PULSE_REQUEST_DEDUPE_S: float = float(os.getenv("PULSE_REQUEST_DEDUPE_S", "180"))
     PULSE_REQUEST_REBUILD_S: int = int(os.getenv("PULSE_REQUEST_REBUILD_S", "300"))
@@ -305,10 +289,7 @@ class Settings:
     PULSE_CHART_CACHE_S: float = float(os.getenv("PULSE_CHART_CACHE_S", "900"))
     PULSE_CONTEXT_ITEMS: int = int(os.getenv("PULSE_CONTEXT_ITEMS", "4"))
     PULSE_RECENCY_HALF_LIFE_DAYS: float = float(os.getenv("PULSE_RECENCY_HALF_LIFE_DAYS", "7"))
-    PULSE_LINK_SIMILARITY: float = float(os.getenv("PULSE_LINK_SIMILARITY", "0.6"))
     PULSE_LINK_DISTANCE_M: float = float(os.getenv("PULSE_LINK_DISTANCE_M", "300"))
-    PULSE_COVERAGE_MIN_SCORE: float = float(os.getenv("PULSE_COVERAGE_MIN_SCORE", "0.6"))
-    PULSE_COVERAGE_MIN_ITEMS: int = int(os.getenv("PULSE_COVERAGE_MIN_ITEMS", "2"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))

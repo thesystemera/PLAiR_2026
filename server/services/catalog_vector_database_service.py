@@ -23,7 +23,6 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
     log_channel = "vector_music"
     service_label = "Music"
     display_name = "Catalog"
-    tables_setting_name = "CATALOG_EMBEDDING_TABLES"
     index_dir_setting_name = "CATALOG_EMBEDDINGS_DIR"
     index_file_prefix = "catalog"
     source_table = "tracks"

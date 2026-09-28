@@ -36,27 +36,13 @@ KIND_ARTIST = "artist"
 KIND_COMMUNITY = "community"
 KIND_CHART = "chart"
 KIND_TREND = "trend"
+KIND_TRACK = "track"
 ALL_KINDS = (KIND_EVENT, KIND_PLACE, KIND_NEWS, KIND_WEATHER, KIND_AREA, KIND_ARTIST, KIND_COMMUNITY, KIND_CHART,
-             KIND_TREND)
+             KIND_TREND, KIND_TRACK)
 WHEN_VALUES = ("now", "today", "tonight", "tomorrow", "weekend", "week", "month")
 
-KIND_EXAMPLES = {
-    KIND_EVENT: ("gigs and concerts this weekend", "what's on tonight", "live music", "comedy shows", "festivals",
-                 "is this band playing"),
-    KIND_PLACE: ("good cafes near me", "late night food", "dive bars around here", "where can I get dumplings",
-                 "record stores nearby"),
-    KIND_NEWS: ("latest news", "what's happening with the election", "sports results", "headlines today",
-                "what's going on in the world"),
-    KIND_WEATHER: ("what's the weather doing", "is it going to rain", "how cold is it tonight", "forecast for the weekend"),
-    KIND_AREA: ("is the air okay today", "pollen and hay fever", "air quality", "what neighbourhood am I in"),
-    KIND_COMMUNITY: ("what have people been shouting out about", "listener shoutouts", "messages from the community"),
-    KIND_CHART: ("what is the city listening to", "most played songs this week", "what's popular here"),
-    KIND_TREND: ("what are people asking about", "what's everyone into lately", "what are locals curious about"),
-    KIND_ARTIST: ("tell me about this band", "who is this artist", "the story behind the singer"),
-}
-SEARCHED_KINDS = {KIND_EVENT, KIND_PLACE, KIND_NEWS}
 INTENTS = {KIND_EVENT: "events", KIND_PLACE: "places", KIND_NEWS: "news", KIND_COMMUNITY: "community",
-           KIND_WEATHER: "weather", KIND_AREA: "area", KIND_ARTIST: "artists"}
+           KIND_WEATHER: "weather", KIND_AREA: "area", KIND_ARTIST: "artists", KIND_TRACK: "music"}
 TEXT_MAX = 180
 SHOUTOUT_BROWSE = "recent community messages and shoutouts"
 LISTENER_CACHE_S = 60
@@ -67,7 +53,6 @@ NEAR_RADIUS_M = 3000
 LINK_NAME_MIN_CHARS = 4
 LINK_STOP_NAMES = {"the", "live", "music", "tour", "night", "show", "festival", "auckland", "wellington", "sydney",
                    "melbourne", "london", "new york", "los angeles", "tba", "n/a", "various artists", "concert"}
-PEOPLE_WEIGHTS = {"nugget_people": 0.4, "nugget_title": 0.35, "nugget_tags": 0.15, "nugget_place": 0.1}
 
 
 def _recency(moment: Optional[datetime]) -> float:
@@ -205,7 +190,8 @@ class PulseQuery:
     max_age_days: Optional[float] = None
     sort: str = "relevance"
     use_ai: bool = False
-    kind_scores: Dict[str, float] = field(default_factory=dict)
+    per_kind: int = 3
+    kind_order: list = field(default_factory=list)
 
     def wants(self, kind: str) -> bool:
         return self.kinds is None or kind in self.kinds
@@ -232,39 +218,6 @@ class PulseQuery:
         return now, now + timedelta(days=30)
 
 
-class KindRouter:
-    def __init__(self):
-        self._examples: Optional[Dict[str, np.ndarray]] = None
-
-    def _embedder(self):
-        return local_knowledge.local_vector_db
-
-    async def scores(self, text: str) -> Dict[str, float]:
-        db = self._embedder()
-        if db is None or not text:
-            return {}
-
-        def run():
-            if self._examples is None:
-                self._examples = {kind: np.stack([db._generate_embedding(example) for example in examples])
-                                  for kind, examples in KIND_EXAMPLES.items()}
-            vector = db._generate_embedding(text)
-            return {kind: float(np.max(matrix @ vector)) for kind, matrix in self._examples.items()}
-
-        return await run_on_gpu_executor(run)
-
-    @staticmethod
-    def relevant(scores: Dict[str, float], kind: str) -> bool:
-        if not scores or kind in SEARCHED_KINDS:
-            return True
-        best = max(scores.values())
-        score = scores.get(kind, 0.0)
-        return score >= max(settings.PULSE_KIND_MIN, best - settings.PULSE_KIND_MARGIN)
-
-
-router = KindRouter()
-
-
 class KnowledgeNode:
     name = "node"
     kinds: tuple = ()
@@ -273,9 +226,7 @@ class KnowledgeNode:
     def matches(self, q: PulseQuery) -> bool:
         if q.kinds is not None:
             return any(kind in q.kinds for kind in self.kinds)
-        if q.text:
-            return any(router.relevant(q.kind_scores, kind) for kind in self.kinds)
-        return self.browsable
+        return bool(q.text) or self.browsable
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
         return []
@@ -322,13 +273,12 @@ def taste_boost(meta: Dict[str, Any], taste: regional_kb.Taste) -> float:
 
 class LocalNuggetsNode(KnowledgeNode):
     name = "local"
-    kinds = (KIND_EVENT, KIND_NEWS)
+    kinds = (KIND_EVENT,)
 
     def _keep(self, q: PulseQuery):
         region_key = q.listener.region.key
         start, end = q.window()
-        wanted = {kind for kind in self.kinds if (q.wants(kind) if q.kinds is not None else
-                                                  router.relevant(q.kind_scores, kind))}
+        wanted = {kind for kind in self.kinds if q.wants(kind)}
 
         def keep(meta: Dict[str, Any]) -> bool:
             if meta.get("region_key") != region_key or meta.get("kind") not in wanted:
@@ -347,27 +297,24 @@ class LocalNuggetsNode(KnowledgeNode):
             if regional is None or not q.wants(KIND_EVENT):
                 return []
             scored = await regional.query(q.listener.region, (regional_kb.KIND_EVENT,), q.listener.taste,
-                                          window=q.window(), limit=q.limit * 3)
+                                          window=q.window(), limit=q.per_kind * 3)
             return [from_regional(item, value) for value, item in scored]
         search = local_knowledge.local_search
         if search is None:
             return []
-        results = await search.search(q.text, n=q.limit * 6, keep=self._keep(q),
+        results = await search.search(q.text, n=q.per_kind * 6, keep=self._keep(q),
                                       boost=lambda meta: taste_boost(meta, q.listener.taste), use_ai=q.use_ai)
         items: Dict[str, PulseItem] = {}
-        for score, _, meta in results:
-            if score < settings.PULSE_SEARCH_MIN_SCORE:
-                continue
-            item = from_meta(meta, score)
+        for match in results:
+            item = from_meta(match.meta, match.score)
             key = f"{item.kind}:{item.title.lower()}"
             other = items.get(key)
             if other is None or (item.when and other.when and item.when < other.when and item.score >= other.score - 0.02):
                 items[key] = item
-        return list(items.values())[:q.limit * 3]
+        return list(items.values())[:q.per_kind]
 
     def can_fetch(self, q: PulseQuery) -> bool:
-        return services.events_service is not None and (q.wants(KIND_EVENT) if q.kinds is not None else
-                                                         router.relevant(q.kind_scores, KIND_EVENT)) \
+        return services.events_service is not None and q.wants(KIND_EVENT) \
             and bool(q.listener.location.query_point() or q.listener.location.city)
 
     async def fetch(self, q: PulseQuery) -> list[PulseItem]:
@@ -459,9 +406,34 @@ class NewsNode(KnowledgeNode):
         news = services.news_service
         if news is None or not news.store_enabled:
             return []
-        country = q.listener.location.country_code or None
-        articles = await news.stored_articles(q.text, country, subject=q.listener.session_id, limit=q.limit)
-        return self._items(articles, 0.75 if q.text else 0.5)
+        country = (q.listener.location.country_code or settings.NEWS_DEFAULT_COUNTRY).upper()
+        search = local_knowledge.news_search
+        if not q.text or search is None:
+            articles = await news.stored_articles(q.text, country, subject=q.listener.session_id, limit=q.limit)
+            return self._items(articles, 0.5)
+        local_only = q.near_me and q.listener.region is not None
+        region_key = q.listener.region.key if q.listener.region else None
+        oldest = (q.listener.now - timedelta(days=q.max_age_days or 7)).isoformat()
+
+        def keep(meta: Dict[str, Any]) -> bool:
+            if (meta.get("country") or "").upper() != country:
+                return False
+            if local_only and meta.get("region_key") != region_key:
+                return False
+            return not meta.get("published_at") or meta["published_at"] >= oldest
+
+        results = await search.search(q.text, n=q.per_kind, keep=keep, use_ai=q.use_ai)
+        items = []
+        for match in results[:q.per_kind]:
+            meta = match.meta
+            published = _parse_time(meta.get("published_at"))
+            items.append(PulseItem(
+                id=meta["id"], kind=KIND_NEWS, title=meta.get("title") or "", text=meta.get("source") or "",
+                when=published, source="Google News", url=meta.get("url") or "",
+                score=match.score, published=published,
+                area=region_key and meta.get("region_key") == region_key and q.listener.region.name or "",
+                payload={"article_id": meta.get("article_id")}))
+        return items
 
     def can_fetch(self, q: PulseQuery) -> bool:
         return bool(q.text) and services.news_service is not None
@@ -473,6 +445,36 @@ class NewsNode(KnowledgeNode):
         items = self._items(articles, 0.75)
         for item in items:
             item.live = True
+        return items
+
+
+class MusicNode(KnowledgeNode):
+    name = "music"
+    kinds = (KIND_TRACK, KIND_ARTIST)
+    browsable = False
+
+    async def search(self, q: PulseQuery) -> list[PulseItem]:
+        search = services.vector_search_service
+        if not q.text or search is None:
+            return []
+        from services.user_data_cache_service import user_data_cache
+        banned = await user_data_cache.get_banned_ids(q.listener.user_id) if q.listener.user_id else set()
+        tracks = await search.search(q.text, n_results=q.per_kind, use_ai_analysis=q.use_ai,
+                                     banned_ids=set(banned or ()))
+        items = []
+        for track in tracks:
+            score = float(track.get("similarity_score") or 0.0)
+            params = track.get("generation_params") or {}
+            tags = track.get("derived_tags") or {}
+            title = params.get("title") or "Untitled"
+            artist = params.get("artist_name") or ""
+            details = [tags.get("primary_genre") or ""]
+            if tags.get("inspired_artist"):
+                details.append(f"in the style of {tags['inspired_artist']}")
+            items.append(PulseItem(
+                id=f"track:{track.get('id')}", kind=KIND_TRACK, title=f"{title} by {artist}" if artist else title,
+                text=", ".join(d for d in details if d), source="PLAiR catalog", score=score,
+                payload={"track_id": track.get("id"), "play_hint": "search_and_play with its title to play it"}))
         return items
 
 
@@ -492,7 +494,7 @@ class WeatherNode(KnowledgeNode):
             return []
         return [PulseItem(id=f"weather:{forecast}", kind=KIND_WEATHER, title=f"Weather ({forecast})",
                           text=_clip(report, 400), source="OpenWeatherMap",
-                          score=0.6 + 0.3 * q.kind_scores.get(KIND_WEATHER, 1.0))]
+                          score=0.8)]
 
 
 class AreaNode(KnowledgeNode):
@@ -591,15 +593,13 @@ class CommunityNode(KnowledgeNode):
         search = services.user_content_vector_search_service
         if search is None:
             return []
-        results = await search.search(query=q.text or SHOUTOUT_BROWSE, n_results=q.limit * 3,
+        results = await search.search(query=q.text or SHOUTOUT_BROWSE, n_results=q.per_kind * 4,
                                       user_location=q.listener.location.coords, use_ai_analysis=q.use_ai)
         items = []
         for shoutout in results or []:
-            if not shoutout_in_region(shoutout, q.listener):
-                continue
-            score = float(shoutout.get("final_score") or 0.0)
-            items.append(shoutout_item(shoutout, score, q.listener))
-        return items
+            if shoutout_in_region(shoutout, q.listener):
+                items.append(shoutout_item(shoutout, float(shoutout.get("final_score") or 0.0), q.listener))
+        return items[:q.per_kind]
 
 
 class ChartsNode(KnowledgeNode):
@@ -622,12 +622,12 @@ class TrendsNode(KnowledgeNode):
         region = q.listener.region
         if region is None:
             return []
-        topics = await demand.hot(region.key, days=7, min_askers=settings.PULSE_TREND_MIN_ASKERS, limit=q.limit * 2)
+        topics = await demand.hot(region.key, days=7, min_askers=settings.PULSE_TREND_MIN_ASKERS, limit=q.per_kind * 3)
         if q.text and topics:
-            matched = {meta.get("topic") for _, _, meta in await demand.search(q.listener, q.text, days=7, limit=20)}
+            matched = {match.meta.get("topic") for match in await demand.search(q.listener, q.text, days=7, limit=10)}
             topics = [topic for topic in topics if topic["topics"] & matched] or []
         items = []
-        for topic in topics[:q.limit]:
+        for topic in topics[:q.per_kind]:
             text = f"{topic['askers']} listeners asked this week"
             if topic["top_answers"]:
                 text += f"; what kept coming up: {', '.join(topic['top_answers'])}"
@@ -799,19 +799,12 @@ def _cluster_requests(rows: list[tuple]) -> list[dict]:
             i = parent[i]
         return i
 
-    for i, (a, va) in enumerate(rows):
+    for i, (a, _) in enumerate(rows):
         keys_a = set(a.get("answer_keys") or [])
         for j in range(i + 1, len(rows)):
-            b, vb = rows[j]
-            if a.get("intent") != b.get("intent"):
-                continue
-            keys_b = set(b.get("answer_keys") or [])
-            same = a.get("topic") == b.get("topic")
-            if not same and keys_a and keys_b:
-                same = len(keys_a & keys_b) / len(keys_a | keys_b) >= settings.PULSE_DEMAND_ANSWER_OVERLAP
-            if not same:
-                same = float(np.dot(va, vb)) >= settings.PULSE_REQUEST_SIMILARITY
-            if same:
+            b, _ = rows[j]
+            if a.get("intent") == b.get("intent") and (
+                    a.get("topic") == b.get("topic") or keys_a & set(b.get("answer_keys") or [])):
                 parent[find(j)] = find(i)
     groups: dict[int, dict] = {}
     for i, (meta, _) in enumerate(rows):
@@ -931,19 +924,6 @@ class Pulse:
         while len(self._offered) > OFFERED_MAX:
             self._offered.popitem(last=False)
 
-    async def context_matches(self, listener: PulseListener, text: str) -> list[PulseItem]:
-        key = (listener.asker, text or "")
-        cached = self._context_memo.get(key)
-        if cached and time.monotonic() - cached[0] < CONTEXT_MEMO_S:
-            return await asyncio.shield(cached[1])
-        future = asyncio.ensure_future(self.query(PulseQuery(listener=listener, text=text or "",
-                                                             limit=settings.PULSE_CONTEXT_ITEMS,
-                                                             record_demand=False)))
-        self._context_memo[key] = (time.monotonic(), future)
-        while len(self._context_memo) > 200:
-            self._context_memo.popitem(last=False)
-        return await asyncio.shield(future)
-
     async def _search_node(self, node: KnowledgeNode, q: PulseQuery) -> list[PulseItem]:
         try:
             return await asyncio.wait_for(node.search(q), timeout=settings.PULSE_NODE_TIMEOUT_S)
@@ -957,8 +937,6 @@ class Pulse:
         started = time.perf_counter()
         if q.kinds is not None:
             q.kinds = {k for k in q.kinds if k in ALL_KINDS} or None
-        if q.text and q.kinds is None and not q.kind_scores:
-            q.kind_scores = await router.scores(q.text)
         nodes = [n for n in self.nodes if n.matches(q)]
         results = await asyncio.gather(*(self._search_node(node, q) for node in nodes))
         found = {node.name: items for node, items in zip(nodes, results)}
@@ -966,7 +944,6 @@ class Pulse:
         live_node = None
         if q.allow_fetch and q.text and len(items) < settings.PULSE_FETCH_BELOW:
             fetchable = [n for n in nodes if n.can_fetch(q)]
-            fetchable.sort(key=lambda n: -max((q.kind_scores.get(k, 0.0) for k in n.kinds), default=0.0))
             if fetchable:
                 live_node = fetchable[0]
                 try:
@@ -1001,7 +978,7 @@ class Pulse:
         for item in items:
             if point and item.latitude is not None and item.longitude is not None and item.distance_m is None:
                 item.distance_m = int(_distance_m(point, (item.latitude, item.longitude)))
-            if radius and (item.distance_m is None or item.distance_m > radius):
+            if radius and item.distance_m is not None and item.distance_m > radius:
                 continue
             if q.max_age_days is not None and item.published is not None and \
                     (q.listener.now - item.published).total_seconds() > q.max_age_days * 86400:
@@ -1085,7 +1062,6 @@ class Pulse:
             return []
         index = self._region_index(listener.region.key)
         found: Dict[str, dict] = {}
-        threshold = settings.PULSE_LINK_SIMILARITY
         region_key = listener.region.key
 
         own_base = _base_title((index["by_id"].get(pulse_id) or {}).get("title") or "")
@@ -1106,12 +1082,6 @@ class Pulse:
                 meta = index["by_id"].get(target)
                 if meta:
                     add(target, meta["kind"], meta["title"], f"mentions {name}")
-            if local_knowledge.local_search is not None and text:
-                for score, _, meta in await local_knowledge.local_search.search(
-                        text, n=4, weights=PEOPLE_WEIGHTS,
-                        keep=lambda m: m.get("region_key") == region_key):
-                    if score >= threshold:
-                        add(meta["id"], meta["kind"], meta["title"], "same subject")
             return list(found.values())[:limit]
 
         meta = index["by_id"].get(pulse_id)
@@ -1142,12 +1112,6 @@ class Pulse:
             for distance, other in nearby[:3]:
                 if distance <= settings.PULSE_LINK_DISTANCE_M:
                     add(other["id"], other["kind"], other["title"], f"{int(distance)} m away")
-        if local_knowledge.local_search is not None:
-            for score, _, other in await local_knowledge.local_search.similar_to(
-                    meta, PEOPLE_WEIGHTS, n=4, keep=lambda m: m.get("region_key") == region_key and
-                    m.get("kind") != meta.get("kind")):
-                if score >= threshold:
-                    add(other["id"], other["kind"], other["title"], "same subject")
         return list(found.values())[:limit]
 
     async def annotate_links(self, listener: PulseListener, items: list[PulseItem]) -> None:
@@ -1190,17 +1154,12 @@ class Pulse:
             if item.aired:
                 item.score -= settings.PULSE_AIRED_PENALTY
         unique = self._sort(q, unique)
-        if (q.kinds is not None and len(q.kinds) == 1) or q.sort != "relevance":
-            return unique[:q.limit]
         by_kind: dict[str, list[PulseItem]] = {}
         for item in unique:
             by_kind.setdefault(item.kind, []).append(item)
-        picked = []
-        while len(picked) < q.limit and any(by_kind.values()):
-            for kind in sorted(by_kind, key=lambda k: by_kind[k][0].score if by_kind[k] else -1, reverse=True):
-                if by_kind[kind] and len(picked) < q.limit:
-                    picked.append(by_kind[kind].pop(0))
-        return picked
+        order = [k for k in q.kind_order if k in by_kind] + [k for k in ALL_KINDS if k in by_kind and k not in q.kind_order]
+        picked = [item for kind in order for item in by_kind[kind][:q.per_kind]]
+        return picked[:q.limit]
 
     async def detail(self, listener: PulseListener, item_id: str) -> Optional[dict]:
         kind, _, key = item_id.partition(":")
@@ -1290,5 +1249,5 @@ def get_pulse() -> Optional[Pulse]:
 
 
 def default_nodes() -> list[KnowledgeNode]:
-    return [LocalNuggetsNode(), PlacesNode(), NewsNode(), WeatherNode(), AreaNode(), ArtistNode(), CommunityNode(),
-            ChartsNode(), TrendsNode()]
+    return [LocalNuggetsNode(), PlacesNode(), NewsNode(), MusicNode(), WeatherNode(), AreaNode(), ArtistNode(),
+            CommunityNode(), ChartsNode(), TrendsNode()]

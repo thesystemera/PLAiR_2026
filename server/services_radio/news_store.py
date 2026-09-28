@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import numpy as np
-from sqlalchemy import and_, bindparam, delete, select, update
+from sqlalchemy import and_, bindparam, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import defer
 
@@ -33,6 +33,9 @@ _STOP = {
 }
 _KEEP_S = {"news", "us", "was", "is", "has", "his", "this", "gas", "bus", "plus", "yes", "series", "species"}
 
+
+
+EMBEDDING_BYTES = settings.SEMANTIC_ENCODER_DIM * 4
 
 def fold(text: Optional[str]) -> str:
     text = (text or "").replace("’", "'").replace("‘", "'")
@@ -249,6 +252,11 @@ class NewsStore:
             row = await db.get(NewsPull, pull_id)
         return _pull(row) if row is not None else None
 
+    @staticmethod
+    def _mark_dirty() -> None:
+        from services_radio import local_knowledge
+        local_knowledge.mark_news_dirty()
+
     async def save_items(self, articles: list[dict], country: str, region_key: Optional[str],
                          tags: Iterable[str]) -> list[int]:
         now = datetime.now(timezone.utc)
@@ -291,6 +299,7 @@ class NewsStore:
             }).returning(NewsItem.id, NewsItem.item_key)
             ids = {key: item_id for item_id, key in (await db.execute(stmt)).all()}
             await db.commit()
+        self._mark_dirty()
         return [ids[r["item_key"]] for r in rows if r["item_key"] in ids]
 
     async def add_pull(self, kind: str, country: str, region_key: Optional[str], query: str, query_norm: str,
@@ -339,7 +348,8 @@ class NewsStore:
             return []
         async with self._sessions()() as db:
             rows = (await db.execute(select(NewsItem.id, NewsItem.title, NewsItem.description).where(
-                NewsItem.id.in_(ids), NewsItem.embedding.is_(None)))).all()
+                NewsItem.id.in_(ids), (NewsItem.embedding.is_(None)) |
+                (func.octet_length(NewsItem.embedding) != EMBEDDING_BYTES)))).all()
         return [(item_id, _embed_text(title, description)) for item_id, title, description in rows]
 
     async def set_embeddings(self, vectors: dict) -> None:

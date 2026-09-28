@@ -574,6 +574,13 @@ The first passes built their own matching next to the existing vector architectu
 - **Shoutouts**: searched by the existing shoutout search service.
 - **Encoder:** City Pulse sources use a sentence encoder (all-mpnet-base-v2). Mean-pooled flan-T5 scored "Comedy" against "Family" at 0.81. On the same data mpnet returns the four real comedy shows for "comedy", the three Tuning Fork gigs for "what's on at the Tuning Fork" and The Wiggles for "family show for the kids". Tracks and shoutouts stay on T5 for now; moving them is a per-source setting.
 
+### Built 29 Sep 2026 (fourth pass): one encoder, search then judge
+
+- All semantic search (music, shoutouts, events, news, listener requests) runs on one encoder (all-mpnet-base-v2) and the shared `SemanticSearch`. Music and shoutout search keep their own intent presets, filters and boosts.
+- Search only brings candidates from every source. Relevance is judged by the LLMs that already run: the Producer picks the topic, the sources, "near me" and a time window, and the DJ reads the grouped candidates and uses only what fits. Fixed thresholds and statistical cut-offs were tried and dropped; two reranker models (ms-marco MiniLM, bge-reranker-base) were tested and rejected, because they could not say yes or no reliably for short topical asks.
+- "Radiohead near me" searches gigs, shoutouts, news, bios and catalog tracks at once. Tested live: no Radiohead gigs said honestly, a Radiohead-style catalog track offered; "any comedy on?" named the two real comedy shows with dates.
+- The data is still thin (few shoutouts, few place searches, one events sweep per city). The design is meant to grow with it; tune only once real data exists.
+
 ### What to add (on top; nothing removed)
 
 The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.

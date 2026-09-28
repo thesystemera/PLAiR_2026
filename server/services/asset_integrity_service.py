@@ -710,11 +710,13 @@ class AssetIntegrityService:
         best = None
         try:
             from annoy import AnnoyIndex
-            for name in ("catalog_1.ann", "catalog_2.ann"):
-                path = settings.CATALOG_EMBEDDINGS_DIR / name
+            from pathlib import Path
+            from services.base_vector_database_service import EMBEDDING_DIM, index_paths
+            for name in index_paths(settings.CATALOG_EMBEDDINGS_DIR, "catalog"):
+                path = Path(name)
                 if not path.exists():
                     continue
-                index = AnnoyIndex(1024, "angular")
+                index = AnnoyIndex(EMBEDDING_DIM, "angular")
                 index.load(str(path), prefault=False)
                 items = index.get_n_items()
                 index.unload()

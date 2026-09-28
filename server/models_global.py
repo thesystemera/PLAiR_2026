@@ -68,6 +68,17 @@ def get_vector_model():
         raise RuntimeError("TTS models not initialized. Call initialize_tts_models() first.")
     return vector_matching_model
 
+_sentence_encoders = {}
+
+
+def get_sentence_encoder(name: str):
+    encoder = _sentence_encoders.get(name)
+    if encoder is None:
+        from sentence_transformers import SentenceTransformer
+        encoder = _sentence_encoders[name] = SentenceTransformer(name, device=str(device or "cpu"))
+    return encoder
+
+
 _gpu_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu-embed")
 
 def get_gpu_executor() -> ThreadPoolExecutor:

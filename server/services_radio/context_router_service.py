@@ -51,11 +51,34 @@ class NodeSelection(BaseModel):
         default_factory=list,
         description="Numbered function-call steps with <placeholders>, e.g. 'pulse_search(query=<topic>, kinds=[event])'"
     )
+    pulse_topic: str = Field(
+        default="",
+        description="What the listener's message is about, as a short search phrase for the station's knowledge "
+                    "(e.g. 'Radiohead', 'late night food', 'rugby'), or empty"
+    )
+    pulse_kinds: List[str] = Field(
+        default_factory=list,
+        description="Which kinds of station knowledge could help with this message (event, place, news, weather, "
+                    "area, artist, track, community, chart, trend); empty when none"
+    )
+    pulse_near_me: bool = Field(default=False, description="True when the listener wants things near them or local")
+    pulse_when: str = Field(default="", description="Time window if the message has one: now, today, tonight, "
+                                                    "tomorrow, weekend, week, month; else empty")
 
 
 def tool_names() -> set:
     from services_radio.dj_tools import TOOL_NAMES
     return TOOL_NAMES
+
+
+PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
+PULSE_WHEN = ["now", "today", "tonight", "tomorrow", "weekend", "week", "month"]
+
+
+def clean_pulse(topic: str = "", kinds: Optional[List[str]] = None, near_me: bool = False, when: str = "") -> Dict:
+    kinds = [k for k in dict.fromkeys(str(k).strip().lower() for k in (kinds or [])) if k in PULSE_KINDS]
+    return {"topic": (topic or "").strip()[:120], "kinds": kinds, "near_me": bool(near_me),
+            "when": when if when in PULSE_WHEN else ""}
 
 
 def clean_plan(plan: List[str]) -> List[str]:
@@ -77,6 +100,10 @@ def tool_menu() -> str:
         params = ", ".join((schema.get("properties") or {}).keys())
         lines.append(f"- {declaration.name}({params}): {declaration.description}")
     return "\n".join(lines)
+
+def _selection_pulse(selection) -> Dict:
+    return clean_pulse(selection.pulse_topic, selection.pulse_kinds, selection.pulse_near_me, selection.pulse_when)
+
 
 DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide"]
 
@@ -108,10 +135,37 @@ class ContextRouterService(SingletonService):
 
         self._initialize_database()
         self._load_cache_from_disk()
+        await self._reembed_stale()
 
         log_service.node_producer("✓ Context Router Service (Producer AI) initialized")
         log_service.node_producer("  📂 Database:   PostgreSQL (ai_radio_embeddings)")
         log_service.node_producer(f"  📂 JSON Cache: {self.json_dir}")
+
+    async def _reembed_stale(self) -> None:
+        if not self.vector_db_service:
+            return
+        dim = self.vector_db_service.embedding_dim
+        stale = [(input_hash, cached) for input_hash, cached in self.route_cache.items()
+                 if cached["embedding"] is None or cached["embedding"].shape[0] != dim]
+        if not stale:
+            return
+        for _, cached in stale:
+            cached["embedding"] = await run_on_gpu_executor(self.vector_db_service._generate_embedding,
+                                                            cached["user_input"])
+
+        def _update():
+            conn = self._get_connection()
+            try:
+                c = conn.cursor()
+                for input_hash, cached in stale:
+                    c.execute("UPDATE context_routing_cache SET embedding = %s WHERE input_hash = %s",
+                              (cached["embedding"].tobytes(), input_hash))
+                conn.commit()
+            finally:
+                conn.close()
+
+        await asyncio.to_thread(_update)
+        log_service.node_producer(f"  Re-embedded {len(stale)} cached routes for the current encoder")
 
     def _initialize_database(self):
         conn = self._get_connection()
@@ -131,11 +185,12 @@ class ContextRouterService(SingletonService):
                 )
             ''')
             c.execute("SELECT 1 FROM information_schema.columns WHERE table_name = 'context_routing_cache' "
-                      "AND column_name = 'tool_plan'")
+                      "AND column_name = 'pulse_json'")
             if c.fetchone() is None:
                 c.execute("DELETE FROM context_routing_cache")
-                c.execute("ALTER TABLE context_routing_cache ADD COLUMN needs_tools BOOLEAN DEFAULT FALSE, "
-                          "ADD COLUMN tool_plan TEXT DEFAULT '[]'")
+                c.execute("ALTER TABLE context_routing_cache ADD COLUMN IF NOT EXISTS needs_tools BOOLEAN DEFAULT FALSE, "
+                          "ADD COLUMN IF NOT EXISTS tool_plan TEXT DEFAULT '[]', "
+                          "ADD COLUMN IF NOT EXISTS pulse_json TEXT DEFAULT '{}'")
                 log_service.node_producer("  Routing cache reset for tool planning")
             conn.commit()
         finally:
@@ -149,7 +204,7 @@ class ContextRouterService(SingletonService):
             try:
                 c = conn.cursor()
                 c.execute("SELECT input_hash, user_input, embedding, selected_nodes, reasoning, "
-                          "confidence, created_at, times_reused, last_used, needs_tools, tool_plan "
+                          "confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json "
                           "FROM context_routing_cache")
 
                 rows = c.fetchall()
@@ -158,7 +213,7 @@ class ContextRouterService(SingletonService):
 
             for row in rows:
                 input_hash, user_input, embedding_blob, selected_nodes_json, reasoning, \
-                    confidence, created_at, times_reused, last_used, needs_tools, tool_plan_json = row
+                    confidence, created_at, times_reused, last_used, needs_tools, tool_plan_json, pulse_json = row
 
                 if embedding_blob:
                     embedding = np.frombuffer(bytes(embedding_blob), dtype=np.float32)
@@ -178,6 +233,7 @@ class ContextRouterService(SingletonService):
                     "last_used": last_used,
                     "needs_tools": bool(needs_tools),
                     "tool_plan": json.loads(tool_plan_json or "[]"),
+                    "pulse": clean_pulse(**json.loads(pulse_json or "{}")),
                 }
 
             elapsed = time.perf_counter() - start_time
@@ -196,9 +252,11 @@ class ContextRouterService(SingletonService):
         return (await self.determine_route(user_input, use_cache, similarity_threshold))["nodes"]
 
     @staticmethod
-    def _route(nodes: List[str], needs_tools: bool = False, tool_plan: Optional[List[str]] = None) -> Dict:
+    def _route(nodes: List[str], needs_tools: bool = False, tool_plan: Optional[List[str]] = None,
+               pulse: Optional[Dict] = None) -> Dict:
         plan = clean_plan(tool_plan or [])
-        return {"nodes": nodes, "needs_tools": bool(needs_tools and plan), "tool_plan": plan}
+        return {"nodes": nodes, "needs_tools": bool(needs_tools and plan), "tool_plan": plan,
+                "pulse": pulse or clean_pulse()}
 
     async def determine_route(
         self,
@@ -226,7 +284,8 @@ class ContextRouterService(SingletonService):
                 f"  ✅ CACHE HIT (Exact) - Reused {cached['times_reused']}x → {cached['selected_nodes']}"
             )
 
-            return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'))
+            return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
+                               cached.get('pulse'))
 
         if use_cache and self.vector_db_service:
             input_embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
@@ -250,7 +309,8 @@ class ContextRouterService(SingletonService):
                     f"  ✅ CACHE HIT (Semantic {best_similarity:.3f}) → {cached['selected_nodes']}"
                 )
 
-                return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'))
+                return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
+                               cached.get('pulse'))
 
         self.llm_calls += 1
         log_service.node_producer("  🤖 CACHE MISS - Calling Producer AI...")
@@ -260,7 +320,8 @@ class ContextRouterService(SingletonService):
         if selection:
             await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
             self._log_cache_performance()
-            route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan)
+            route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan,
+                                _selection_pulse(selection))
             log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}"
                                       f" | tools: {route['tool_plan'] if route['needs_tools'] else 'none'}")
             return route
@@ -405,7 +466,27 @@ GOOD: ["1. pulse_search(query=<kind of music>, kinds=[event], when=weekend)", "2
 GOOD: ["1. pulse_search(query=<allergy topic>, kinds=[area, weather])"]
 GOOD: ["1. search_and_play(category=primary_artist, query=<artist>, mode=play)"]
 BAD: ["Look up jazz gigs"] (not a function call), ["pulse_search(query='Blue Note Friday 9pm')"] (invented value)
-Leave tool_plan empty when needs_tools is false."""
+Leave tool_plan empty when needs_tools is false.
+
+STATION KNOWLEDGE (pulse_topic, pulse_kinds, pulse_near_me, pulse_when):
+Decide what the station's own knowledge could add to the reply, whether or not tools are needed.
+- pulse_kinds: the kinds that could genuinely help, from ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
+  (event = gigs and shows, place = venues, cafes, bars, shops, news = news stories, weather, area = air quality, pollen,
+  neighbourhood, artist = artist biographies, track = songs in the station's catalog, community = listener shoutouts,
+  chart = what the city is playing, trend = what locals have been asking about). Empty for greetings, banter and
+  plain commands.
+- pulse_topic: the subject as a short search phrase, without filler ("any good cafes near me?" -> "good cafes").
+- pulse_near_me: true ONLY when the listener says it (near me, nearby, around here, local, in my area, close to us).
+- pulse_when: ONLY a time window the listener actually states ("tonight", "this weekend"). Never guess one:
+  "any comedy on?" has no time window. The same goes for tool_plan arguments: never add a when or near_me the
+  listener didn't ask for.
+Examples:
+"Radiohead near me" -> topic "Radiohead", kinds [event, community, news, artist, track], near_me true
+"any gigs this weekend?" -> topic "gigs", kinds [event], when "weekend"
+"any comedy on?" -> topic "comedy", kinds [event], near_me false, when ""
+"what's the latest with the All Blacks?" -> topic "All Blacks", kinds [news, event]
+"is it going to rain tonight" -> topic "rain", kinds [weather], when "tonight"
+"hey how's it going" -> topic "", kinds []"""
 
     def _update_cache_stats(self, input_hash: str):
         usage_tracking.record_cache_hit("context_router")
@@ -455,6 +536,7 @@ Leave tool_plan empty when needs_tools is false."""
             "last_used": current_time,
             "needs_tools": selection.needs_tools,
             "tool_plan": clean_plan(selection.tool_plan),
+            "pulse": _selection_pulse(selection),
         }
 
         await asyncio.to_thread(
@@ -479,8 +561,8 @@ Leave tool_plan empty when needs_tools is false."""
         try:
             c.execute(
                 """
-                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (input_hash) DO NOTHING
                 """,
                 (
@@ -494,7 +576,8 @@ Leave tool_plan empty when needs_tools is false."""
                     0,
                     current_time,
                     bool(selection.needs_tools),
-                    json.dumps(clean_plan(selection.tool_plan))
+                    json.dumps(clean_plan(selection.tool_plan)),
+                    json.dumps(_selection_pulse(selection))
                 )
             )
             conn.commit()

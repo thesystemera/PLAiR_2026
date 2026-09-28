@@ -23,7 +23,6 @@ class UserContentVectorDatabaseService(BaseVectorDatabaseService):
     log_channel = "user_content"
     service_label = "User content"
     display_name = "User Content"
-    tables_setting_name = "USER_CONTENT_EMBEDDING_TABLES"
     index_dir_setting_name = "USER_CONTENT_EMBEDDINGS_DIR"
     index_file_prefix = "user_content"
     source_table = "shoutouts"

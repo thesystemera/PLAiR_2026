@@ -66,12 +66,9 @@ class ListenerRequestVectorDatabaseService(SemanticVectorDatabaseService):
         Category("request_daypart", 0.05, lambda item: f"{item.get('weekday') or ''} {item.get('daypart') or ''}".strip(),
                  "When they asked: day and time of day"),
     )
-    encoder_name = settings.PULSE_ENCODER
-    embedding_dim = settings.PULSE_ENCODER_DIM
     log_channel = "system"
     service_label = "Listener requests"
     display_name = "Listener Requests"
-    tables_setting_name = ""
     index_dir_setting_name = "EMBEDDINGS_DIR"
     index_file_prefix = "listener_requests"
     source_table = "listener_requests"

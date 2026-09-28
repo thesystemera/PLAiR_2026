@@ -3,7 +3,7 @@ import re
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from services import log_service
-from models_global import run_on_gpu_executor
+from services.semantic_source import SemanticSearch
 
 class CatalogVectorSearchService:
 
@@ -11,6 +11,7 @@ class CatalogVectorSearchService:
         self.vector_db = vector_db_service
         self.catalog = catalog_service
         self.prompt_cache_service = prompt_cache_service
+        self.semantic = SemanticSearch(vector_db_service, prompt_cache_service)
         log_service.vector_music("✓ CatalogVectorSearchService initialized")
 
     async def search(
@@ -42,60 +43,37 @@ class CatalogVectorSearchService:
 
         try:
             log_service.detail(f"🔍 Searching: '{query}'", "vector_music")
-
-            if use_ai_analysis and self.prompt_cache_service:
-                ai_analysis = await self.prompt_cache_service.analyze_query(query)
-                if ai_analysis:
-                    intent_category = ai_analysis.intent_category
-                    query_weights = ai_analysis.category_weights.model_dump()
-                    cleaned_query = ai_analysis.cleaned_query
-                    log_service.detail(f"🤖 AI Intent: {intent_category} (confidence: {ai_analysis.confidence:.2f})", "vector_music")
-                else:
-                    log_service.warning("AI analysis failed, falling back to keyword detection")
-                    intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
-            else:
-                intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
-
+            intent_category, query_weights, cleaned_query = await self._intent(query, use_ai_analysis)
             log_service.detail(f"  📊 Category weights: {query_weights}", "vector_music")
 
-            query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
+            def keep(track: Dict[str, Any]) -> bool:
+                if banned_ids and track.get("id") in banned_ids:
+                    return False
+                params = track.get("generation_params", {})
+                if instrumental is not None and params.get("instrumental", False) != instrumental:
+                    return False
+                if vocal_gender is not None and vocal_gender != "none" and params.get("vocal_gender") != vocal_gender:
+                    return False
+                return True
 
-            if cleaned_query != query:
-                log_service.detail(f"  Cleaned query: '{cleaned_query}'", "vector_music")
-
-            nearest_ids = await asyncio.to_thread(_safe_search, query_embedding, n_results * 2)
-
-            if not nearest_ids:
-                if current_annoy_index.get_n_items() == 0:
-                    log_service.error("Annoy index is still empty after rebuild!")
-                return []
-
-            log_service.detail(
-                f"  Found {len(nearest_ids)} candidates, re-ranking with intent weights...", "vector_music"
-            )
-
-            track_results = await asyncio.to_thread(
-                self._rerank_candidates_sync, nearest_ids, query_embedding, query_weights, intent_category,
-                instrumental, vocal_gender, banned_ids
-            )
-
-            track_results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+            found = await self.semantic.search(cleaned_query, n=n_results, keep=keep, weights=query_weights)
+            track_results = []
+            for match in found:
+                result = match.meta.copy()
+                result['similarity_score'] = match.similarity
+                result['intent_category'] = intent_category
+                result['match_weights'] = query_weights
+                track_results.append(result)
 
             if track_results:
                 log_service.detail("  🎯 Top 5 matches:", "vector_music")
                 for i, track in enumerate(track_results[:5], 1):
                     params = track.get('generation_params', {})
                     derived = track.get('derived_tags', {})
-                    title = params.get('title', 'Unknown')
-                    artist = derived.get('inspired_artist', params.get('artist_name', 'Unknown'))
-                    genre = derived.get('primary_genre', 'Unknown')
-                    score = track.get('similarity_score', 0)
                     log_service.detail(
-                        f"    {i}. [{score:.3f}] {title} - {artist} ({genre})", "vector_music"
-                    )
-
-            track_results = track_results[:n_results]
-
+                        f"    {i}. [{track['similarity_score']:.3f}] {params.get('title', 'Unknown')} - "
+                        f"{derived.get('inspired_artist', params.get('artist_name', 'Unknown'))} "
+                        f"({derived.get('primary_genre', 'Unknown')})", "vector_music")
             log_service.detail(
                 f"✓ Returning {len(track_results)} results for '{query}' (intent: {intent_category})", "vector_music"
             )
@@ -106,6 +84,17 @@ class CatalogVectorSearchService:
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
             return []
+
+    async def _intent(self, query: str, use_ai_analysis: bool) -> Tuple[str, Dict[str, float], str]:
+        if use_ai_analysis and self.prompt_cache_service:
+            ai_analysis = await self.prompt_cache_service.analyze_query(query)
+            if ai_analysis:
+                log_service.detail(f"🤖 AI Intent: {ai_analysis.intent_category} "
+                                   f"(confidence: {ai_analysis.confidence:.2f})", "vector_music")
+                return ai_analysis.intent_category, ai_analysis.category_weights.model_dump(), ai_analysis.cleaned_query
+            log_service.warning("AI analysis failed, falling back to keyword detection")
+        intent, weights, cleaned = self._detect_query_intent(query)
+        return intent, weights, cleaned if cleaned.strip() else query
 
     def _search_by_track_ids_sync(self, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
         conn = self.catalog._get_connection()
@@ -174,56 +163,6 @@ class CatalogVectorSearchService:
                 break
 
         return results
-
-    def _rerank_candidates_sync(self, nearest_ids, query_embedding, query_weights, intent_category,
-                                instrumental, vocal_gender, banned_ids) -> List[Dict[str, Any]]:
-        import json
-        track_results = []
-        conn = self.catalog._get_connection()
-        try:
-            c = conn.cursor()
-
-            for annoy_idx in nearest_ids:
-                rowid = annoy_idx + 1
-                track_id, track = self.vector_db.lookup_cached_row(rowid)
-
-                if track is None:
-                    c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
-                    result = c.fetchone()
-                    if not result:
-                        continue
-                    track_id, metadata_json = result
-                    track = json.loads(metadata_json)
-
-                if banned_ids and track_id in banned_ids:
-                    continue
-
-                params = track.get("generation_params", {})
-                if instrumental is not None and params.get("instrumental", False) != instrumental:
-                    continue
-                if vocal_gender is not None and vocal_gender != "none":
-                    if params.get("vocal_gender") != vocal_gender:
-                        continue
-
-                category_texts = self.vector_db._extract_category_texts(track)
-
-                category_embeddings = self.vector_db.get_category_embeddings(category_texts)
-
-                reweighted_embedding = self.vector_db._create_weighted_embedding(
-                    category_embeddings, query_weights
-                )
-                reranked_similarity = np.dot(query_embedding, reweighted_embedding)
-
-                track_result = track.copy()
-                track_result['similarity_score'] = float(reranked_similarity)
-                track_result['intent_category'] = intent_category
-                track_result['match_weights'] = query_weights
-
-                track_results.append(track_result)
-
-        finally:
-            conn.close()
-        return track_results
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()

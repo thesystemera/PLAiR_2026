@@ -566,7 +566,7 @@ class ConversationService:
                                      f"{' -> ' + record['reason'] if record.get('reason') else ''}")
 
             commands_for_display = runtime.commands_for_display()
-            if not (result or {}).get("used_tools") and not (result or {}).get("covered") and full_main:
+            if not (result or {}).get("used_tools") and full_main:
                 commands_for_display = await self._computer_pass(full_response, transcription, session_dict,
                                                                  session_id)
 

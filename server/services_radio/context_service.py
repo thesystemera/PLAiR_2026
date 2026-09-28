@@ -620,7 +620,7 @@ async def get_regional_events_data(
             pulse_listener = await pulse.listener(user_id, session_id, user)
             window = "week" if (end_date - start_date).days <= 7 else None
             items = await pulse.query(PulseQuery(listener=pulse_listener, text=needle, kinds={PULSE_EVENT},
-                                                 when=window, limit=12, record_demand=False))
+                                                 when=window, limit=12, per_kind=12, record_demand=False))
             pooled = [(item.score, item) for item in items]
         else:
             taste = await listener_taste(user, user_id, session_id, async_session_maker, catalog_service)

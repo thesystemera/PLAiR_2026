@@ -31,36 +31,8 @@ def field_text(key: str, limit: int = 400) -> Callable[[Dict[str, Any]], str]:
     return extract
 
 
-_encoders: Dict[str, Any] = {}
-
-
-def sentence_encoder(name: str):
-    encoder = _encoders.get(name)
-    if encoder is None:
-        from sentence_transformers import SentenceTransformer
-        from models_global import get_device
-        encoder = _encoders[name] = SentenceTransformer(name, device=str(get_device()))
-    return encoder
-
-
 class SemanticVectorDatabaseService(BaseVectorDatabaseService):
     category_specs: Tuple[Category, ...] = ()
-    encoder_name: Optional[str] = None
-
-    def _generate_embedding(self, text: str) -> np.ndarray:
-        if not self.encoder_name:
-            return super()._generate_embedding(text)
-        if not text or not text.strip():
-            return np.zeros(self.embedding_dim, dtype=np.float32)
-        return sentence_encoder(self.encoder_name).encode(text, normalize_embeddings=True).astype(np.float32)
-
-    def _generate_embeddings_batch(self, texts: List[str], batch_size: int = 32) -> List[np.ndarray]:
-        if not self.encoder_name:
-            return super()._generate_embeddings_batch(texts, batch_size)
-        if not texts:
-            return []
-        vectors = sentence_encoder(self.encoder_name).encode(texts, batch_size=batch_size, normalize_embeddings=True)
-        return [np.asarray(vector, dtype=np.float32) for vector in vectors]
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -69,44 +41,11 @@ class SemanticVectorDatabaseService(BaseVectorDatabaseService):
             total = sum(spec.weight for spec in cls.category_specs) or 1.0
             cls.default_weights = {spec.name: spec.weight / total for spec in cls.category_specs}
 
-    def __init__(self, source_service=None):
-        super().__init__(source_service)
-        self.dirty = False
-
-    @classmethod
-    def table_names(cls) -> List[str]:
-        return [f"{name}_embeddings" for name in cls.categories]
-
     def _extract_category_texts(self, item: Dict[str, Any]) -> Dict[str, str]:
         return {spec.name: spec.extract(item) or "" for spec in self.category_specs}
 
     def _trigger_rebuild(self):
         self.rebuild()
-
-    def load_initial_data(self):
-        super().load_initial_data()
-        if not self._metadata_cache:
-            self.load_metadata()
-
-    def load_metadata(self) -> None:
-        conn = self.source_service._get_connection()
-        try:
-            c = conn.cursor()
-            c.execute(f"SELECT rowid, {self.source_id_column}, metadata_json FROM {self.source_table}")
-            rows = c.fetchall()
-        finally:
-            conn.close()
-        self._rowid_cache = {rowid: item_id for rowid, item_id, _ in rows}
-        self._metadata_cache = {rowid: json.loads(metadata_json) for rowid, _, metadata_json in rows}
-
-    def rebuild(self) -> None:
-        self._log_rebuild_header()
-        self._rebuild_from_source(self.source_service)
-        self.dirty = False
-
-    def weighted(self, item: Dict[str, Any], weights: Optional[Dict[str, float]] = None) -> np.ndarray:
-        return self._create_weighted_embedding(
-            self.get_category_embeddings(self._extract_category_texts(item)), weights)
 
 
 def normalize_weights(weights: Dict[str, float], categories: Iterable[str]) -> Dict[str, float]:
@@ -162,8 +101,16 @@ def make_prompt_cache(vector_cls, table_name: str, domain: str, examples: str, l
     return PromptCache
 
 
+@dataclass
+class Match:
+    score: float
+    similarity: float
+    rowid: int
+    meta: Dict[str, Any]
+
+
 class SemanticSearch:
-    def __init__(self, vector_db: SemanticVectorDatabaseService, prompt_cache=None):
+    def __init__(self, vector_db: BaseVectorDatabaseService, prompt_cache=None):
         self.vector_db = vector_db
         self.prompt_cache = prompt_cache
 
@@ -180,54 +127,41 @@ class SemanticSearch:
                     return weights, analysis.cleaned_query or query
         return dict(self.vector_db.default_weights), query
 
+    def _rank(self, vector: np.ndarray, weights: Dict[str, float], n: int,
+              keep: Optional[Callable[[Dict[str, Any]], bool]], boost: Optional[Callable[[Dict[str, Any]], float]],
+              exclude: Optional[Dict[str, Any]] = None) -> List[Match]:
+        db = self.vector_db
+        matches = []
+        for rowid, meta in list(db._metadata_cache.items()):
+            if meta is exclude or (keep is not None and not keep(meta)):
+                continue
+            similarity = float(np.dot(vector, db.weighted(meta, weights)))
+            matches.append(Match(similarity + (boost(meta) if boost else 0.0), similarity, rowid, meta))
+        matches.sort(key=lambda match: match.score, reverse=True)
+        return matches[:n]
+
     async def search(self, query: str, n: int = 8, keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
                      boost: Optional[Callable[[Dict[str, Any]], float]] = None, use_ai: bool = False,
-                     weights: Optional[Dict[str, float]] = None, pool: int = 200) -> List[Tuple[float, int, Dict]]:
+                     weights: Optional[Dict[str, float]] = None) -> List[Match]:
         db = self.vector_db
-        index = db.current_annoy_index()
-        if index.get_n_items() == 0:
+        if not db._metadata_cache:
             return []
         if weights is None:
             weights, query = await self.weights_for(query, use_ai)
-        query_vector = await run_on_gpu_executor(db._generate_embedding, query) if query else None
-
-        def run():
-            if query_vector is not None:
-                with db.index_lock:
-                    ids = index.get_nns_by_vector(query_vector, max(pool, n * 6))
-                rowids = [i + 1 for i in ids]
-            else:
-                rowids = list(db._metadata_cache.keys())
-            scored = []
-            for rowid in rowids:
-                meta = db._metadata_cache.get(rowid)
-                if meta is None or (keep is not None and not keep(meta)):
-                    continue
-                similarity = float(np.dot(query_vector, db.weighted(meta, weights))) if query_vector is not None else 0.0
-                scored.append((similarity + (boost(meta) if boost else 0.0), rowid, meta))
-            scored.sort(key=lambda entry: entry[0], reverse=True)
-            return scored[:n]
-
-        return await run_on_gpu_executor(run)
+        if not query:
+            return [Match(boost(meta) if boost else 0.0, 0.0, rowid, meta)
+                    for rowid, meta in list(db._metadata_cache.items()) if keep is None or keep(meta)][:n]
+        query_vector = await run_on_gpu_executor(db._generate_embedding, query)
+        return await run_on_gpu_executor(self._rank, query_vector, weights, n, keep, boost)
 
     async def similar_to(self, item: Dict[str, Any], weights: Dict[str, float], n: int = 6,
-                         keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Tuple[float, int, Dict]]:
+                         keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Match]:
         db = self.vector_db
-        index = db.current_annoy_index()
-        if index.get_n_items() == 0:
+        if not db._metadata_cache:
             return []
 
         def run():
-            vector = db.weighted(item, weights)
-            with db.index_lock:
-                ids, distances = index.get_nns_by_vector(vector, max(40, n * 6), include_distances=True)
-            found = []
-            for i, distance in zip(ids, distances):
-                meta = db._metadata_cache.get(i + 1)
-                if meta is None or (keep is not None and not keep(meta)):
-                    continue
-                found.append((1.0 - distance ** 2 / 2.0, i + 1, meta))
-            return found[:n]
+            return self._rank(db.weighted(item, weights), weights, n, keep, None, exclude=item)
 
         return await run_on_gpu_executor(run)
 

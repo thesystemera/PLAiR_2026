@@ -159,6 +159,7 @@ class BackgroundTasksService:
             try:
                 await asyncio.sleep(settings.PULSE_REQUEST_REBUILD_S)
                 await rebuild_if_dirty(local_knowledge.local_vector_db)
+                await rebuild_if_dirty(local_knowledge.news_vector_db)
                 await rebuild_if_dirty(services.request_vector_db_service)
                 if time.monotonic() - last_prune > 86400:
                     await demand.prune()

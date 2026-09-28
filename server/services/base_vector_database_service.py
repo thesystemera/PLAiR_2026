@@ -2,26 +2,34 @@ import os
 import json
 import time
 import numpy as np
-import torch
 from annoy import AnnoyIndex
 from threading import Lock
 from typing import List, Dict, Any, Optional, Tuple
-from models_global import get_tokenizer, get_vector_model, get_device
+from models_global import get_device, get_sentence_encoder
 from config.settings import settings
 from database.pg_pool import get_pooled_connection
 from services import log_service
 
-EMBEDDING_DIM = 1024
+EMBEDDING_DIM = settings.SEMANTIC_ENCODER_DIM
+
+
+def embeddings_table(category: str) -> str:
+    return f"{category}_{settings.SEMANTIC_ENCODER_SLUG}_embeddings"
+
+
+def index_paths(index_dir, prefix: str) -> Tuple[str, str]:
+    stem = f"{prefix}_{settings.SEMANTIC_ENCODER_SLUG}"
+    return os.path.join(str(index_dir), f"{stem}_1.ann"), os.path.join(str(index_dir), f"{stem}_2.ann")
 
 
 class BaseVectorDatabaseService:
     embedding_dim: int = EMBEDDING_DIM
+    encoder_name: str = settings.SEMANTIC_ENCODER
     categories: Tuple[str, ...] = ()
     default_weights: Dict[str, float] = {}
     log_channel: str = ""
     service_label: str = ""
     display_name: str = ""
-    tables_setting_name: str = ""
     index_dir_setting_name: str = ""
     index_file_prefix: str = ""
     source_table: str = ""
@@ -36,8 +44,6 @@ class BaseVectorDatabaseService:
 
         self.source_service = source_service
 
-        self.tokenizer = get_tokenizer()
-        self.vector_model = get_vector_model()
         self.device = get_device()
 
         if self.device.type != 'cuda':
@@ -46,12 +52,10 @@ class BaseVectorDatabaseService:
                 f"GPU acceleration is recommended for better performance."
             )
         else:
-            gpu_name = torch.cuda.get_device_name(0)
-            self._log(f"✓ GPU Device: {gpu_name}")
-            self._log("✓ T5 Embedding Model: google/flan-t5-large (1024-dim)")
+            self._log(f"✓ GPU device: {self.device}")
+            self._log(f"✓ Embedding model: {self.encoder_name} ({self.embedding_dim}-dim)")
 
-        self.embedding_tables = getattr(settings, self.tables_setting_name) if self.tables_setting_name else \
-            [f"{category}_embeddings" for category in self.categories]
+        self.embedding_tables = [embeddings_table(category) for category in self.categories]
 
         self.caches: Dict[str, Dict[str, np.ndarray]] = {}
         for category in self.categories:
@@ -67,6 +71,7 @@ class BaseVectorDatabaseService:
 
         self._rowid_cache: Dict[int, str] = {}
         self._metadata_cache: Dict[int, Dict] = {}
+        self.dirty = False
 
     def _log(self, message: str):
         getattr(log_service, self.log_channel)(message)
@@ -75,11 +80,7 @@ class BaseVectorDatabaseService:
         return get_pooled_connection(settings.EMBEDDINGS_DATABASE_URL)
 
     def _index_files(self) -> Tuple[str, str]:
-        index_dir = str(getattr(settings, self.index_dir_setting_name))
-        return (
-            os.path.join(index_dir, f"{self.index_file_prefix}_1.ann"),
-            os.path.join(index_dir, f"{self.index_file_prefix}_2.ann"),
-        )
+        return index_paths(getattr(settings, self.index_dir_setting_name), self.index_file_prefix)
 
     def current_annoy_index(self) -> AnnoyIndex:
         return self.annoy_index_1 if self.current_index == 1 else self.annoy_index_2
@@ -104,9 +105,9 @@ class BaseVectorDatabaseService:
         conn.commit()
 
         for category, cache in self.caches.items():
-            db_type = f"{category}_embeddings"
+            db_type = embeddings_table(category)
             if db_type not in self.embedding_tables:
-                log_service.warning(f"⚠️  Missing {db_type} in settings.{self.tables_setting_name}")
+                log_service.warning(f"⚠️  Missing embedding table {db_type}")
                 continue
 
             try:
@@ -130,6 +131,11 @@ class BaseVectorDatabaseService:
 
         self._log("\nLoading Annoy indexes from disk...")
         self._load_annoy_indexes()
+        if not self._metadata_cache and self.source_service is not None:
+            try:
+                self.load_metadata()
+            except Exception as e:
+                log_service.warning(f"{self.display_name}: could not load metadata: {e}")
 
         end_time = time.perf_counter()
         self._log(f"✓ load_initial_data completed in {end_time - start_time:.2f}s")
@@ -198,85 +204,44 @@ class BaseVectorDatabaseService:
         finally:
             conn.close()
 
-    def _mean_pool(self, inputs) -> np.ndarray:
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = self.vector_model(**inputs)
-
-        hidden_state = outputs.last_hidden_state
-        attention_mask = inputs['attention_mask']
-
-        mask = attention_mask.unsqueeze(-1).expand(hidden_state.shape)
-        masked_hidden_state = hidden_state * mask
-
-        sum_hidden_state = masked_hidden_state.sum(dim=1)
-        sum_mask = mask.sum(dim=1)
-        sum_mask = torch.clamp(sum_mask, min=1e-9)
-
-        return (sum_hidden_state / sum_mask).cpu().numpy()
+    def _encoder(self):
+        return get_sentence_encoder(self.encoder_name)
 
     def _generate_embedding(self, text: str) -> np.ndarray:
         if not text or not text.strip():
             return np.zeros(self.embedding_dim, dtype=np.float32)
-
-        inputs = self.tokenizer.encode_plus(
-            text,
-            return_tensors='pt',
-            max_length=512,
-            truncation=True,
-            padding=True
-        )
-        embedding = self._mean_pool(inputs)[0]
-
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-
-        return embedding.astype(np.float32)
+        return self._encoder().encode(text, normalize_embeddings=True).astype(np.float32)
 
     def _generate_embeddings_batch(self, texts: List[str], batch_size: int = 32) -> List[np.ndarray]:
         if not texts:
             return []
+        self._log(f"    Generating {len(texts)} embeddings...")
+        vectors = self._encoder().encode([text if text and text.strip() else " " for text in texts],
+                                         batch_size=batch_size, normalize_embeddings=True)
+        embeddings = [np.zeros(self.embedding_dim, dtype=np.float32) if not (text and text.strip())
+                      else np.asarray(vector, dtype=np.float32) for text, vector in zip(texts, vectors)]
+        self._log(f"    ✓ Generated {len(texts)} embeddings")
+        return embeddings
 
-        total = len(texts)
-        self._log(f"    Generating {total} embeddings in batches of {batch_size}...")
+    def rebuild(self) -> None:
+        self._log_rebuild_header()
+        self._rebuild_from_source(self.source_service)
+        self.dirty = False
 
-        all_embeddings = []
-        for i in range(0, total, batch_size):
-            batch = texts[i:i + batch_size]
-            batch_num = (i // batch_size) + 1
-            total_batches = (total + batch_size - 1) // batch_size
+    def weighted(self, item: Dict[str, Any], weights: Optional[Dict[str, float]] = None) -> np.ndarray:
+        return self._create_weighted_embedding(
+            self.get_category_embeddings(self._extract_category_texts(item)), weights)
 
-            if batch_num % 5 == 1 or batch_num == total_batches:
-                progress_pct = int((i / total) * 100)
-                self._log(
-                    f"      Batch {batch_num}/{total_batches}: "
-                    f"{i}/{total} embeddings ({progress_pct}%)"
-                )
-
-            processed_texts = [text if text and text.strip() else " " for text in batch]
-
-            inputs = self.tokenizer.batch_encode_plus(
-                processed_texts,
-                return_tensors='pt',
-                max_length=512,
-                truncation=True,
-                padding=True
-            )
-            embeddings = self._mean_pool(inputs)
-
-            for j, embedding in enumerate(embeddings):
-                if not batch[j] or not batch[j].strip():
-                    all_embeddings.append(np.zeros(self.embedding_dim, dtype=np.float32))
-                else:
-                    norm = np.linalg.norm(embedding)
-                    if norm > 0:
-                        embedding = embedding / norm
-                    all_embeddings.append(embedding.astype(np.float32))
-
-        self._log(f"    ✓ Generated {total} embeddings")
-        return all_embeddings
+    def load_metadata(self) -> None:
+        conn = self.source_service._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(f"SELECT rowid, {self.source_id_column}, metadata_json FROM {self.source_table}")
+            rows = c.fetchall()
+        finally:
+            conn.close()
+        self._rowid_cache = {rowid: item_id for rowid, item_id, _ in rows}
+        self._metadata_cache = {rowid: json.loads(metadata_json) for rowid, _, metadata_json in rows}
 
     def get_or_create_embedding(self, text: str, db_type: str, cache: Dict[str, np.ndarray]) -> np.ndarray:
         if not text or not text.strip():
@@ -312,7 +277,7 @@ class BaseVectorDatabaseService:
 
     def get_category_embeddings(self, category_texts: Dict[str, str]) -> Dict[str, np.ndarray]:
         return {
-            category: self.get_or_create_embedding(category_texts[category], f"{category}_embeddings", cache)
+            category: self.get_or_create_embedding(category_texts[category], embeddings_table(category), cache)
             for category, cache in self.caches.items()
         }
 
@@ -327,7 +292,7 @@ class BaseVectorDatabaseService:
                 for category, text in category_texts.items():
                     if text and text.strip() and category in self.caches:
                         cache = self.caches[category]
-                        db_type = f"{category}_embeddings"
+                        db_type = embeddings_table(category)
                         if db_type in self.embedding_tables and text.strip() not in cache:
                             embedding = self._generate_embedding(text.strip())
                             cache[text.strip()] = embedding
@@ -407,7 +372,7 @@ class BaseVectorDatabaseService:
         c = conn.cursor()
 
         for category, cache in self.caches.items():
-            db_type = f"{category}_embeddings"
+            db_type = embeddings_table(category)
             if db_type not in self.embedding_tables:
                 continue
 

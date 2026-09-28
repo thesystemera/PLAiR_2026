@@ -310,7 +310,11 @@ async def lifespan(_app: FastAPI):
         await asyncio.to_thread(local_vector_db.load_initial_data)
         local_search = SemanticSearch(local_vector_db, local_knowledge.LocalKnowledgePromptCache())
         await local_search.prompt_cache.initialize(ai_service, local_vector_db)
-        local_knowledge.install(local_vector_db, local_search)
+        news_vector_db = local_knowledge.NewsVectorDatabaseService(nugget_source)
+        await asyncio.to_thread(news_vector_db.load_initial_data)
+        news_search = SemanticSearch(news_vector_db, local_knowledge.NewsPromptCache())
+        await news_search.prompt_cache.initialize(ai_service, news_vector_db)
+        local_knowledge.install(local_vector_db, local_search, news_vector_db, news_search)
         log_service.success("✓ Local knowledge vectors initialized")
     except Exception as e:
         log_service.warning(f"⚠️  Local knowledge vectors unavailable: {e}")
@@ -454,7 +458,7 @@ async def lifespan(_app: FastAPI):
     if settings.PULSE_ENABLED:
         pulse_kb.install(pulse_kb.Pulse(pulse_kb.default_nodes()))
         if local_knowledge.local_vector_db is not None:
-            await pulse_kb.router.scores("warm up")
+            await models_global.run_on_gpu_executor(local_knowledge.local_vector_db._generate_embedding, "warm up")
     area_signals.install([ReverseGeocodeSignal(area_store), AirQualitySignal(area_store), PollenSignal(area_store)])
     log_service.success("✓ External services initialized")
 
