@@ -56,7 +56,6 @@ class DeviceManagementService:
             db.add(device)
 
         await db.commit()
-        await db.refresh(device)
         return device
 
     async def cleanup_duplicate_devices(self, user_id: int, db: AsyncSession) -> int:

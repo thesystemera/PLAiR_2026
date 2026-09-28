@@ -3,7 +3,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { safeStorage } from '../lib/safeStorage'
 import { WebSocketContext } from '../contexts/WebSocketContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 
 const DENIED_STORAGE_KEY = 'geolocationDenied'
 const GUEST_PROMPT_DELAY_MS = 2500
@@ -45,9 +45,8 @@ function currentPosition(options) {
 export function useGeolocation(isAuthenticated, options = {}) {
   const { periodicCheck = false, checkInterval = 30 * 60 * 1000 } = options
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
-  const { engineState } = useUIState()
-  const engaged = Boolean(engineState?.isMusicPlaying || engineState?.isAIProcessing ||
-    engineState?.isMicRecording || engineState?.isDJSpeaking)
+  const engaged = useUISelector(state => Boolean(state.engineState?.isMusicPlaying || state.engineState?.isAIProcessing ||
+    state.engineState?.isMicRecording || state.engineState?.isDJSpeaking))
 
   const [location, setLocation] = useState(null)
   const [loading, setLoading] = useState(false)

@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import time
 import aiofiles
@@ -75,7 +76,12 @@ class YouTubeClipService:
 
         self.ytdlp_path = shutil.which("yt-dlp") or str(Path(sys.executable).parent / "yt-dlp.exe")
         self.runtime_args = ["--encoding", "utf-8"] + (["--js-runtimes", "node"] if shutil.which("node") else [])
-        self.failed_searches: dict[str, float] = {}
+        self.process_kwargs = {"creationflags": subprocess.IDLE_PRIORITY_CLASS} if sys.platform == "win32" else {}
+        self.failed_searches: dict[str, float] = dict(self.index.setdefault("failed", {}))
+        self.priority_keywords: dict[str, None] = {}
+        self.work_event = asyncio.Event()
+        self.consecutive_failures = 0
+        self.backoff_until = 0.0
 
         self.default_clip_duration = 30
         self.max_cache_bytes = int(settings.YOUTUBE_CLIPS_MAX_CACHE_GB * 1024 ** 3)
@@ -100,6 +106,50 @@ class YouTubeClipService:
         normalized = keyword.lower().strip()
         return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
+    def _note_attempt(self, ok: bool):
+        if ok:
+            self.consecutive_failures = 0
+            return
+        self.consecutive_failures += 1
+        if self.consecutive_failures >= settings.YOUTUBE_CLIPS_FAILURES_BEFORE_BACKOFF and not self.backing_off():
+            self.backoff_until = time.time() + settings.YOUTUBE_CLIPS_BACKOFF_S
+            log_service.warning(
+                f"[YOUTUBE] {self.consecutive_failures} downloads failed in a row; pausing clip downloads for "
+                f"{settings.YOUTUBE_CLIPS_BACKOFF_S // 60} min"
+            )
+
+    def backing_off(self) -> bool:
+        return time.time() < self.backoff_until
+
+    def _mark_failed(self, cache_key: str):
+        now = time.time()
+        self.failed_searches[cache_key] = now
+        self.index.setdefault("failed", {})[cache_key] = now
+
+    def queue_keywords(self, keywords: list[str]):
+        added = False
+        for keyword in keywords:
+            if keyword not in self.priority_keywords:
+                self.priority_keywords[keyword] = None
+                added = True
+        if added:
+            self.work_event.set()
+
+    def take_priority_keywords(self, limit: int) -> list[str]:
+        taken = list(self.priority_keywords)[:limit]
+        for keyword in taken:
+            self.priority_keywords.pop(keyword, None)
+        return taken
+
+    async def wait_for_work(self, timeout: float):
+        self.work_event.clear()
+        if self.priority_keywords:
+            return
+        try:
+            await asyncio.wait_for(self.work_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+
     def _cached_entry(self, cache_key: str) -> Optional[dict]:
         entry = self.index["clips"].get(cache_key)
         if entry and Path(entry["path"]).exists():
@@ -110,7 +160,7 @@ class YouTubeClipService:
         self,
         keyword: str,
         max_results: int = 5
-    ) -> list[dict]:
+    ) -> Optional[list[dict]]:
 
         cmd = [
             self.ytdlp_path,
@@ -126,13 +176,14 @@ class YouTubeClipService:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                **self.process_kwargs
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] Search failed for '{keyword}': {stderr.decode('utf-8', 'replace')[:200]}")
-                return []
+                log_service.error(f"[YOUTUBE] Search failed for '{keyword}': {_one_line(stderr)}")
+                return None
 
             results = []
             for line in stdout.decode('utf-8', 'replace').strip().split("\n"):
@@ -155,10 +206,10 @@ class YouTubeClipService:
 
         except asyncio.TimeoutError:
             log_service.error(f"[YOUTUBE] Search timed out for '{keyword}'")
-            return []
+            return None
         except Exception as e:
             log_service.error(f"[YOUTUBE] Search error for '{keyword}': {e}")
-            return []
+            return None
 
     async def download_clip(
         self,
@@ -189,17 +240,19 @@ class YouTubeClipService:
                 "-o", str(temp_path),
                 "--no-warnings",
                 "--no-playlist",
+                "--limit-rate", settings.YOUTUBE_CLIPS_RATE_LIMIT,
             ]
 
             proc = await asyncio.create_subprocess_exec(
                 *dl_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                **self.process_kwargs
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] Download failed for {video_id}: {stderr.decode('utf-8', 'replace')[:200]}")
+                log_service.error(f"[YOUTUBE] Download failed for {video_id}: {_one_line(stderr)}")
                 return None
 
             possible_temps = list(self.cache_dir.glob(f"temp_{video_id}*"))
@@ -214,6 +267,7 @@ class YouTubeClipService:
                 "-i", str(actual_temp),
                 "-t", str(duration),
                 "-an",
+                "-threads", "1",
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "28",
@@ -223,7 +277,8 @@ class YouTubeClipService:
             proc = await asyncio.create_subprocess_exec(
                 *ffmpeg_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                **self.process_kwargs
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
 
@@ -231,7 +286,7 @@ class YouTubeClipService:
                 actual_temp.unlink()
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] FFmpeg failed for {video_id}: {stderr.decode('utf-8', 'replace')[-300:]}")
+                log_service.error(f"[YOUTUBE] FFmpeg failed for {video_id}: {_one_line(stderr, tail=True)}")
                 return None
 
             if output_path.exists():
@@ -283,13 +338,19 @@ class YouTubeClipService:
             }
 
         failed_at = self.failed_searches.get(cache_key)
-        if failed_at is not None and time.monotonic() - failed_at < FAILED_SEARCH_RETRY_S:
+        if failed_at is not None and time.time() - failed_at < FAILED_SEARCH_RETRY_S:
+            return None
+        if self.backing_off():
             return None
 
         videos = await self.search_videos(keyword, max_results=3)
+        if videos is None:
+            self._note_attempt(False)
+            return None
         if not videos:
             log_service.detail(f"[YOUTUBE] No videos found for '{keyword}'", "external")
-            self.failed_searches[cache_key] = time.monotonic()
+            self._mark_failed(cache_key)
+            await self._save_index()
             return None
 
         for video in videos:
@@ -298,6 +359,8 @@ class YouTubeClipService:
             max_start = max(0, video_duration - clip_duration - 5)
             actual_start = min(start_offset, max_start)
 
+            if self.backing_off():
+                return None
             clip_path = await self.download_clip(
                 video_url=video["url"],
                 video_id=video["id"],
@@ -305,6 +368,7 @@ class YouTubeClipService:
                 duration=clip_duration,
                 keyword_hash=kw_hash
             )
+            self._note_attempt(clip_path is not None)
 
             if clip_path:
                 self.index["clips"][cache_key] = {
@@ -325,8 +389,21 @@ class YouTubeClipService:
                     "duration": clip_duration
                 }
 
-        self.failed_searches[cache_key] = time.monotonic()
+        self._mark_failed(cache_key)
+        await self._save_index()
         return None
+
+    def cached_clip_for_keyword(self, keyword: str, clip_duration: float = 30) -> Optional[dict]:
+        entry = self._cached_entry(f"{self._keyword_hash(keyword)}_{int(clip_duration)}")
+        if not entry:
+            return None
+        return {
+            "path": Path(entry["path"]),
+            "keyword": keyword,
+            "source_title": entry.get("source_title"),
+            "source_url": entry.get("source_url"),
+            "duration": clip_duration
+        }
 
     async def get_clips_for_theme(
         self,
@@ -377,13 +454,12 @@ class YouTubeClipService:
         clips_needed = int(duration_seconds / 15)
         max_clips = max(4, min(15, clips_needed))
 
-        log_service.info(f"[YOUTUBE] Track {track_id}: {duration_seconds:.0f}s -> requesting {max_clips} clips from {len(keywords)} keywords")
-
-        clips = await self.get_clips_for_theme(
-            keywords=keywords,
-            max_clips=max_clips,
-            clip_duration=30
-        )
+        wanted = keywords[:max_clips]
+        clips = [clip for clip in (self.cached_clip_for_keyword(keyword) for keyword in wanted) if clip]
+        missing = [keyword for keyword in wanted if not self.cached_clip_for_keyword(keyword)]
+        if missing:
+            self.queue_keywords(missing)
+        log_service.detail(f"[YOUTUBE] Track {track_id}: {len(clips)}/{max_clips} clips cached, {len(missing)} queued for background download", "external")
 
         def get_clip_filename(clip_path):
             if hasattr(clip_path, 'name'):
@@ -455,6 +531,11 @@ class YouTubeClipService:
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "cache_dir": str(self.cache_dir)
         }
+
+def _one_line(stderr: bytes, tail: bool = False, limit: int = 240) -> str:
+    text = " ".join(stderr.decode("utf-8", "replace").split())
+    return text[-limit:] if tail else text[:limit]
+
 
 _youtube_service: Optional[YouTubeClipService] = None
 

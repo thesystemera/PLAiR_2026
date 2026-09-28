@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
 import { logger } from '../lib/logger'
 import { pauseSceneRendering } from '../lib/renderPause'
@@ -8,8 +8,8 @@ import { setMotionPolicy } from '../lib/microMotion'
 export const QUALITY_TIERS = [
   { name: 'minimal', sceneDpr: 0.7, fpsCap: 30, glassTaps: 1, parallaxDpr: 1, parallaxFpsCap: 30, parallaxStepPx: 2 },
   { name: 'low', sceneDpr: 0.85, fpsCap: 30, glassTaps: 1, parallaxDpr: 1.5, parallaxFpsCap: 30, parallaxStepPx: 1.5 },
-  { name: 'balanced', sceneDpr: 1.0, fpsCap: 60, glassTaps: 3, parallaxDpr: 2, parallaxFpsCap: 60, parallaxStepPx: 1 },
-  { name: 'sharp', sceneDpr: 1.25, fpsCap: 60, glassTaps: 3, parallaxDpr: 2.5, parallaxFpsCap: 60, parallaxStepPx: 1 },
+  { name: 'balanced', sceneDpr: 1.0, fpsCap: 0, glassTaps: 3, parallaxDpr: 2, parallaxFpsCap: 0, parallaxStepPx: 1 },
+  { name: 'sharp', sceneDpr: 1.25, fpsCap: 0, glassTaps: 3, parallaxDpr: 2.5, parallaxFpsCap: 0, parallaxStepPx: 1 },
   { name: 'high', sceneDpr: 1.5, fpsCap: 0, glassTaps: 3, parallaxDpr: Infinity, parallaxFpsCap: 0, parallaxStepPx: 0 },
 ]
 
@@ -93,7 +93,7 @@ function useSaveData() {
 }
 
 export function QualityProvider({ children }) {
-  const { settingsState } = useUIState()
+  const { settingsState } = useUISelector(state => ({ settingsState: state.settingsState }))
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const saveData = useSaveData()
   const [forcedTier] = useState(readForcedTier)

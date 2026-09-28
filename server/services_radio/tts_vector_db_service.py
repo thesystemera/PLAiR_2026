@@ -1,17 +1,21 @@
 import os
 import time
-import datetime
 import numpy as np
 import torch
 import random
+from collections import OrderedDict
 from annoy import AnnoyIndex
 from threading import Lock
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from models_global import get_tokenizer, get_vector_model, get_device
 from config.settings import settings
 from database.pg_pool import get_pooled_connection
 from services import log_service
+
+SHOTGUN_PRUNE_AT = 20000
+EMBEDDING_CACHE_MAX = 4096
+
 
 class VectorDBService:
     def __init__(self):
@@ -23,11 +27,6 @@ class VectorDBService:
 
         self.db_pools = settings.TTS_DB_POOLS
 
-        self.tts_db_data = None
-        self.meta_db_data = None
-        self.impulse_db_data = None
-        self.audio_db_data = None
-        self.breath_db_data = None
 
         self.annoy_index_tts_1 = AnnoyIndex(1024, 'angular')
         self.annoy_index_tts_2 = AnnoyIndex(1024, 'angular')
@@ -50,11 +49,14 @@ class VectorDBService:
         self.current_slots = {db_name: 1 for db_name in self.index_pairs}
         self.new_embeddings_log = []
         self.shotgun_cache = {}
-        self.last_rebuild_time = None
 
         self.log_lock = Lock()
         self.index_lock = Lock()
         self.shotgun_lock = Lock()
+        self.rows_lock = Lock()
+        self.embedding_lock = Lock()
+        self._rows: dict = {db_name: {} for db_name in self.index_pairs}
+        self._embedding_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
 
         self._initialize_databases()
 
@@ -136,32 +138,23 @@ class VectorDBService:
             self.new_embeddings_log[:] = [
                 item for item in self.new_embeddings_log if not (item[2] == filename and item[5] == db_type)
             ]
+        with self.rows_lock:
+            rows = self._rows.get(db_type)
+            if rows is not None:
+                for row_id in [row_id for row_id, row in rows.items() if row[0] == filename]:
+                    del rows[row_id]
         log_service.tts_vector_db(f"Vector Cache: Removed stale {db_type} embedding: {filename}")
 
     def load_initial_data(self):
         start_time = time.perf_counter()
         self.purge_missing_files()
-        self.tts_db_data = {}
-        self.meta_db_data = {}
-        self.impulse_db_data = {}
-        self.audio_db_data = {}
-        self.breath_db_data = {}
 
         db_data_results = {}
         for table_name in settings.TTS_EMBEDDING_TABLES:
             data, voice_counts = self._preload_database(table_name)
             db_data_results[table_name] = (data, voice_counts)
-
-            if table_name == "tts_embeddings":
-                self.tts_db_data = data
-            elif table_name == "meta_embeddings":
-                self.meta_db_data = data
-            elif table_name == "impulse_embeddings":
-                self.impulse_db_data = data
-            elif table_name == "audio_embeddings":
-                self.audio_db_data = data
-            elif table_name == "breath_embeddings":
-                self.breath_db_data = data
+            self._set_rows(table_name, ((row_id, row['filename'], row['title'], row['embedding'], row['voice'])
+                                        for row_id, row in data.items()))
 
         self._load_annoy_indexes()
 
@@ -283,6 +276,34 @@ class VectorDBService:
 
         return data, voice_counts
 
+    @staticmethod
+    def _normalized(embedding: np.ndarray) -> np.ndarray:
+        return embedding / np.linalg.norm(embedding)
+
+    def titles(self, db_type: str) -> List[str]:
+        with self.rows_lock:
+            return list({row[1] for row in self._rows.get(db_type, {}).values()})
+
+    def _set_rows(self, db_type: str, rows):
+        fresh = {row_id: (filename, title, self._normalized(embedding), voice)
+                 for row_id, filename, title, embedding, voice in rows}
+        with self.rows_lock:
+            self._rows[db_type] = fresh
+
+    def _embedding_for(self, text: str) -> np.ndarray:
+        with self.embedding_lock:
+            cached = self._embedding_cache.get(text)
+            if cached is not None:
+                self._embedding_cache.move_to_end(text)
+                return cached
+        embedding = self._generate_embedding(text)
+        embedding.setflags(write=False)
+        with self.embedding_lock:
+            self._embedding_cache[text] = embedding
+            while len(self._embedding_cache) > EMBEDDING_CACHE_MAX:
+                self._embedding_cache.popitem(last=False)
+        return embedding
+
     def _generate_embedding(self, text: str) -> np.ndarray:
         token_count = len(self.tokenizer.encode_plus(text, max_length=512, truncation=True)["input_ids"])
         inputs = self.tokenizer.encode_plus(
@@ -303,7 +324,7 @@ class VectorDBService:
         return embedding
 
     def save_embedding(self, audio_path: str, text: str, voice_name: str, db_type: str):
-        embedding = self._generate_embedding(text)
+        embedding = self._embedding_for(text)
 
         conn = self._get_connection()
         c = conn.cursor()
@@ -335,6 +356,11 @@ class VectorDBService:
             conn.close()
 
         if new_id:
+            with self.rows_lock:
+                rows = self._rows.setdefault(db_type, {})
+                for row_id in [row_id for row_id, row in rows.items() if row[0] == os.path.basename(audio_path)]:
+                    del rows[row_id]
+                rows[new_id] = (os.path.basename(audio_path), text, self._normalized(embedding), voice_name)
             with self.log_lock:
                 self.new_embeddings_log.append((
                     new_id,
@@ -347,16 +373,31 @@ class VectorDBService:
 
             log_service.detail(f"Vector Cache: Saved new {db_type} embedding: {os.path.basename(audio_path)}", "tts_vector_db")
 
+    def _cooled_down(self, listener: Optional[str], filename: str, now: float, respect_cooldown: bool) -> bool:
+        if not respect_cooldown:
+            return True
+        with self.shotgun_lock:
+            used_at = self.shotgun_cache.get((listener, filename))
+        return used_at is None or now - used_at >= settings.VECTOR_DB_SHOTGUN_COOLDOWN
+
+    def _note_used(self, listener: Optional[str], filename: str, now: float):
+        with self.shotgun_lock:
+            self.shotgun_cache[(listener, filename)] = now
+            if len(self.shotgun_cache) > SHOTGUN_PRUNE_AT:
+                cutoff = now - settings.VECTOR_DB_SHOTGUN_COOLDOWN
+                self.shotgun_cache = {key: used_at for key, used_at in self.shotgun_cache.items() if used_at >= cutoff}
+
     def query_embeddings(
             self,
             response_str: str,
             voice_name: str,
             db_type: str,
-            top_n: int = 5
+            top_n: int = 5,
+            listener: Optional[str] = None,
+            respect_cooldown: bool = True
     ) -> List[Tuple[str, str, float]]:
         query_start_time = time.perf_counter()
-        query_embedding = self._generate_embedding(response_str)
-        query_embedding = query_embedding / np.linalg.norm(query_embedding)
+        query_embedding = self._normalized(self._embedding_for(response_str))
 
         current_time = time.time()
 
@@ -378,33 +419,20 @@ class VectorDBService:
             else:
                 nearest_ids = current_annoy_index.get_nns_by_vector(query_embedding, top_n * 10)
 
-        conn = self._get_connection()
-        c = conn.cursor()
         all_matches = []
-
-        rows_by_id = {}
-        if nearest_ids:
-            c.execute(
-                f"SELECT id, filename, title, embedding, voice FROM {db_type} WHERE id = ANY(%s)",
-                ([item_id + 1 for item_id in nearest_ids],)
-            )
-            rows_by_id = {row[0]: row[1:] for row in c.fetchall()}
+        rows_by_id = self._rows.get(db_type, {})
 
         for item_id in nearest_ids:
             result = rows_by_id.get(item_id + 1)
             if result:
-                filename, title, embedding_bytes, db_voice = result
+                filename, title, embedding, db_voice = result
                 if db_voice == voice_name:
-                    embedding = np.frombuffer(bytes(embedding_bytes), dtype=np.float32)
-                    embedding = embedding / np.linalg.norm(embedding)
                     similarity = np.dot(query_embedding, embedding)
 
-                    with self.shotgun_lock:
-                        if filename not in self.shotgun_cache or (
-                                current_time - self.shotgun_cache[filename]) >= settings.VECTOR_DB_SHOTGUN_COOLDOWN:
-                            all_matches.append((filename, title, similarity))
-                        else:
-                            skipped_count += 1
+                    if self._cooled_down(listener, filename, current_time, respect_cooldown):
+                        all_matches.append((filename, title, similarity))
+                    else:
+                        skipped_count += 1
 
         with self.log_lock:
             indexed_filenames = {m[0] for m in all_matches}
@@ -412,14 +440,10 @@ class VectorDBService:
                 if item_voice == voice_name and item_db_type == db_type and filename not in indexed_filenames:
                     embedding = embedding / np.linalg.norm(embedding)
                     similarity = np.dot(query_embedding, embedding)
-                    with self.shotgun_lock:
-                        if filename not in self.shotgun_cache or (
-                                current_time - self.shotgun_cache[filename]) >= settings.VECTOR_DB_SHOTGUN_COOLDOWN:
-                            all_matches.append((filename, title, similarity))
-                        else:
-                            skipped_count += 1
-
-        conn.close()
+                    if self._cooled_down(listener, filename, current_time, respect_cooldown):
+                        all_matches.append((filename, title, similarity))
+                    else:
+                        skipped_count += 1
 
         all_matches.sort(key=lambda x: x[2], reverse=True)
 
@@ -436,9 +460,7 @@ class VectorDBService:
             all_matches = [m for m in all_matches if abs(m[2] - current_similarity) >= 1e-10]
 
         if results:
-            top_filename = results[0][0]
-            with self.shotgun_lock:
-                self.shotgun_cache[top_filename] = current_time
+            self._note_used(listener, results[0][0], current_time)
 
         best = f"best {results[0][2]:.3f}" if results else "no match"
         log_service.detail(
@@ -473,15 +495,17 @@ class VectorDBService:
                 conn = self._get_connection()
                 try:
                     c = conn.cursor()
-                    c.execute(f"SELECT id, embedding FROM {db_name}")
-                    rows = c.fetchall()
+                    c.execute(f"SELECT id, filename, title, embedding, voice FROM {db_name}")
+                    rows = [(row_id, filename, title, np.frombuffer(bytes(embedding_bytes), dtype=np.float32), voice)
+                            for row_id, filename, title, embedding_bytes, voice in c.fetchall()]
                 finally:
                     conn.close()
 
+                self._set_rows(db_name, rows)
                 items_added = 0
                 max_row_id = 0
-                for row_id, embedding_bytes in rows:
-                    new_index.add_item(row_id - 1, np.frombuffer(bytes(embedding_bytes), dtype=np.float32))
+                for row_id, _filename, _title, embedding, _voice in rows:
+                    new_index.add_item(row_id - 1, embedding)
                     max_row_id = max(max_row_id, row_id)
                     items_added += 1
 
@@ -528,7 +552,6 @@ class VectorDBService:
                 if new_index is not None:
                     new_index.unload()
 
-        self.last_rebuild_time = datetime.datetime.now()
         log_service.tts_vector_db(
             f"Vector Database: Rebuilt {len(rebuilt)}/{len(self.index_pairs)} clip indexes in "
             f"{time.perf_counter() - rebuild_start_time:.2f}s ({', '.join(sizes)} clips)")

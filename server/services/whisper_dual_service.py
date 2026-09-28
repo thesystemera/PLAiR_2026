@@ -1,6 +1,6 @@
 import asyncio
-import os
-import tempfile
+import io
+import threading
 import time
 
 import numpy as np
@@ -18,6 +18,8 @@ class WhisperDualService(SingletonService):
 
         self.fast_model = None
         self.quality_model = None
+        self._decoded_lock = threading.Lock()
+        self._decoded = (None, None)
         self.models_loaded = False
         self._initialized = True
 
@@ -103,13 +105,24 @@ class WhisperDualService(SingletonService):
             if model:
                 list(model.transcribe(silence, language="en")[0])
 
-    def _transcribe_fast_sync(self, audio_path: str, language: str) -> str:
-        segments, _ = self.fast_model.transcribe(audio_path, language=language)
+    def _decode(self, audio_data: bytes) -> np.ndarray:
+        with self._decoded_lock:
+            source, samples = self._decoded
+            if source is audio_data:
+                return samples
+        from faster_whisper.audio import decode_audio
+        samples = decode_audio(io.BytesIO(audio_data), sampling_rate=16000)
+        with self._decoded_lock:
+            self._decoded = (audio_data, samples)
+        return samples
+
+    def _transcribe_fast_sync(self, audio_data: bytes, language: str) -> str:
+        segments, _ = self.fast_model.transcribe(self._decode(audio_data), language=language)
         return "".join(segment.text for segment in segments).strip()
 
-    def _transcribe_quality_sync(self, audio_path: str, language: str):
+    def _transcribe_quality_sync(self, audio_data: bytes, language: str):
         segments, info = self.quality_model.transcribe(
-            audio_path,
+            self._decode(audio_data),
             language=language,
             word_timestamps=True
         )
@@ -129,19 +142,14 @@ class WhisperDualService(SingletonService):
         if timeout_seconds is None:
             timeout_seconds = settings.WHISPER_TIMEOUT
 
-        temp_file_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
-                temp_file.write(audio_data)
-                temp_file_path = temp_file.name
-
             log_service.detail(f"Fast transcribing ({len(audio_data)} bytes)...", "system")
 
             started = time.perf_counter()
             transcription = await asyncio.wait_for(
                 asyncio.to_thread(
                     self._transcribe_fast_sync,
-                    temp_file_path,
+                    audio_data,
                     language
                 ),
                 timeout=timeout_seconds
@@ -162,13 +170,6 @@ class WhisperDualService(SingletonService):
             log_service.error(f"Fast transcription failed: {str(e)}")
             return None
 
-        finally:
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception as e:
-                    log_service.error(f"Failed to delete temp file: {str(e)}")
-
     async def transcribe_quality(
         self,
         audio_data: bytes,
@@ -188,19 +189,14 @@ class WhisperDualService(SingletonService):
             log_service.error(f"Audio file too large: {len(audio_data)} bytes (max {max_file_size})")
             return None
 
-        temp_file_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
-                temp_file.write(audio_data)
-                temp_file_path = temp_file.name
-
             log_service.detail(f"Quality transcribing ({len(audio_data)} bytes)...", "system")
 
             started = time.perf_counter()
             segments, info = await asyncio.wait_for(
                 asyncio.to_thread(
                     self._transcribe_quality_sync,
-                    temp_file_path,
+                    audio_data,
                     language
                 ),
                 timeout=timeout_seconds
@@ -256,12 +252,5 @@ class WhisperDualService(SingletonService):
         except Exception as e:
             log_service.error(f"Quality transcription failed: {str(e)}")
             return None
-
-        finally:
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.unlink(temp_file_path)
-                except Exception as e:
-                    log_service.error(f"Failed to delete temp file: {str(e)}")
 
 whisper_dual_service = WhisperDualService()

@@ -1,12 +1,12 @@
 import { memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CloudOff } from 'lucide-react'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { PRESETS } from '../lib/motion'
 
 export const OfflinePill = memo(function OfflinePill() {
-  const { audioState, interfaceState } = useUIState()
+  const { audioState, interfaceState } = useUISelector(state => ({ audioState: state.audioState, interfaceState: state.interfaceState }))
   const { storageInfo } = useStorage()
   const count = storageInfo?.offlineTrackCount ?? storageInfo?.trackCount ?? 0
   const visible = !!audioState.offlineMode && !interfaceState.isFullscreenVisuals

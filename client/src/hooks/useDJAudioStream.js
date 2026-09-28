@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useCallback, useState } from 'react'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
-import { useUIState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useFFTProcessor } from './useFFTProcessor'
 import { DJBroadcastChain } from '../lib/djBroadcastChain'
 import { DJStreamPlayer, decodeBase64Chunk } from '../lib/djStreamPlayer'
@@ -49,10 +49,22 @@ function createVoiceElement() {
 }
 
 export function useDJAudioStream() {
-  const { reportEngineStatus, speakerColorRef, engineState, settingsState, toastInfo } = useUIState()
+  const {
+    reportEngineStatus,
+    speakerColorRef,
+    engineState,
+    settingsState,
+    toastInfo,
+  } = useUISelector(state => ({
+    reportEngineStatus: state.reportEngineStatus,
+    speakerColorRef: state.speakerColorRef,
+    engineState: state.engineState,
+    settingsState: state.settingsState,
+    toastInfo: state.toastInfo,
+  }))
   const toastInfoRef = useRef(toastInfo)
   useEffect(() => { toastInfoRef.current = toastInfo }, [toastInfo])
-  const { audio, talkBreak } = usePlayback()
+  const { audio, talkBreak } = usePlaybackActions()
   const isActiveDevice = engineState.isActiveDevice
   const isMicRecording = engineState.isMicRecording
   const ttsMuted = settingsState.ttsMuted

@@ -3,8 +3,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
-import { useRadioUI, useUIState, uiState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useRadioUI, uiState, useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
 import { api } from '../lib/api'
 import { useWebSocketEmit } from '../contexts/WebSocketContext'
@@ -55,12 +55,12 @@ function useRadioAnchor(scrollerRef, anchorRef) {
 }
 
 export function Radio() {
-  const playback = usePlayback()
+  const playback = usePlaybackActions()
   const { isMobile, isPhoneLandscape } = useViewport()
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
   const { reportEngineStatus, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
-  const { interfaceState } = useUIState()
+  const { interfaceState } = useUISelector(state => ({ interfaceState: state.interfaceState }))
   const mobilePanel = interfaceState.currentMobilePanel
   const playerHeight = interfaceState.playerHeight
 
@@ -79,7 +79,7 @@ export function Radio() {
   const anchorRef = useRef(null)
   const { offset: maskOffset, scale: anchorScale } = useRadioAnchor(scrollerRef, anchorRef)
 
-  const { toastError, toastInfo } = useUIState()
+  const { toastError, toastInfo } = useUISelector(state => ({ toastError: state.toastError, toastInfo: state.toastInfo }))
   const errorToast = toastError
   const uiSound = useUISound(window.audioEngine)
   const emitWebSocketEvent = useWebSocketEmit()

@@ -207,11 +207,10 @@ class StingService:
         if now - entry.location_at < LOCATION_TTL_S and entry.location_at:
             return entry.tz_name, entry.city
         user = None
-        if user_id and self.async_session_maker is not None:
+        if user_id:
             try:
-                from database.models import User
-                async with self.async_session_maker() as db:
-                    user = await db.get(User, user_id)
+                from services.user_data_cache_service import user_data_cache
+                user = await user_data_cache.get_user(user_id)
             except Exception as e:
                 log_service.warning(f"[STINGS] Loading listener {user_id} failed: {type(e).__name__}: {e}")
         try:

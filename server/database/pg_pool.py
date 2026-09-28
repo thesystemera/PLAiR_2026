@@ -8,20 +8,60 @@ from psycopg2 import pool as psycopg2_pool
 from services import log_service
 
 POOL_MIN_CONN = 1
-POOL_MAX_CONN = 10
+POOL_MAX_CONN = 16
+POOL_ACQUIRE_TIMEOUT_S = 30.0
 
 _pools = {}
 _pools_lock = threading.Lock()
 
 
-def _get_pool(dsn: str) -> psycopg2_pool.ThreadedConnectionPool:
+class BoundedPool:
+    __slots__ = ("pool", "slots", "max_conn")
+
+    def __init__(self, dsn: str, min_conn: int, max_conn: int):
+        self.pool = psycopg2_pool.ThreadedConnectionPool(min_conn, max_conn, dsn)
+        self.slots = threading.BoundedSemaphore(max_conn)
+        self.max_conn = max_conn
+
+    def acquire(self, timeout: float = POOL_ACQUIRE_TIMEOUT_S):
+        if not self.slots.acquire(timeout=timeout):
+            log_service.error(f"[PG_POOL] No free connection after {timeout:.0f}s (pool of {self.max_conn} exhausted)")
+            raise psycopg2_pool.PoolError(f"connection pool exhausted: no free connection within {timeout:.0f}s")
+        try:
+            for _ in range(3):
+                conn = self.pool.getconn()
+                if not conn.closed:
+                    return conn
+                self.pool.putconn(conn, close=True)
+            return self.pool.getconn()
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def release(self, conn, discard: bool):
+        try:
+            self.pool.putconn(conn, close=discard)
+        except Exception as e:
+            log_service.error(f"[PG_POOL] Failed to return connection: {e}")
+            try:
+                conn.close()
+            except Exception:
+                pass
+        finally:
+            self.slots.release()
+
+    def closeall(self):
+        self.pool.closeall()
+
+
+def _get_pool(dsn: str) -> BoundedPool:
     pool = _pools.get(dsn)
     if pool is not None:
         return pool
     with _pools_lock:
         pool = _pools.get(dsn)
         if pool is None:
-            pool = psycopg2_pool.ThreadedConnectionPool(POOL_MIN_CONN, POOL_MAX_CONN, dsn)
+            pool = BoundedPool(dsn, POOL_MIN_CONN, POOL_MAX_CONN)
             _pools[dsn] = pool
         return pool
 
@@ -60,6 +100,12 @@ class PooledConnection:
             self.close()
         return False
 
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def close(self):
         if self._released:
             return
@@ -67,7 +113,7 @@ class PooledConnection:
         _release(self._conn, self._pool)
 
 
-def _release(conn, pool):
+def _release(conn, pool: BoundedPool):
     discard = bool(conn.closed)
     if not discard:
         try:
@@ -80,36 +126,12 @@ def _release(conn, pool):
                 conn.autocommit = False
         except Exception:
             discard = True
-
-    if pool is None:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return
-
-    try:
-        pool.putconn(conn, close=discard)
-    except Exception as e:
-        log_service.error(f"[PG_POOL] Failed to return connection: {e}")
-        try:
-            conn.close()
-        except Exception:
-            pass
+    pool.release(conn, discard)
 
 
 def get_pooled_connection(dsn: str) -> PooledConnection:
     pool = _get_pool(dsn)
-    for _ in range(3):
-        try:
-            conn = pool.getconn()
-        except psycopg2_pool.PoolError:
-            return PooledConnection(psycopg2.connect(dsn), None)
-        if conn.closed:
-            pool.putconn(conn, close=True)
-            continue
-        return PooledConnection(conn, pool)
-    return PooledConnection(psycopg2.connect(dsn), None)
+    return PooledConnection(pool.acquire(), pool)
 
 
 @contextmanager

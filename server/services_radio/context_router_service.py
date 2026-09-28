@@ -381,8 +381,6 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
             self._insert_cache_row, input_hash, user_input, embedding, selected_nodes_json, selection, current_time
         )
 
-        await self._save_json_backup(user_input, selection, input_hash, system_prompt, user_prompt)
-
         if system_prompt and user_prompt:
             await self._save_prompt_debug(user_input, selection, system_prompt, user_prompt)
 
@@ -425,28 +423,6 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
             conn.rollback()
         finally:
             conn.close()
-
-    async def _save_json_backup(self, user_input: str, selection: NodeSelection, input_hash: str, _system_prompt: Optional[str] = None, _user_prompt: Optional[str] = None):
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{timestamp}_{input_hash[:8]}.json"
-        filepath = os.path.join(self.json_dir, filename)
-
-        data = {
-            "timestamp": timestamp,
-            "user_input": user_input,
-            "input_hash": input_hash,
-            "selection": {
-                "selected_nodes": selection.selected_nodes,
-                "reasoning": selection.reasoning,
-                "confidence": selection.confidence
-            }
-        }
-
-        try:
-            async with aiofiles.open(filepath, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(data, indent=2, ensure_ascii=False))
-        except Exception as e:
-            log_service.warning(f"[PRODUCER] Failed to save JSON backup: {e}")
 
     async def _save_prompt_debug(self, user_input: str, selection: NodeSelection, system_prompt: str, user_prompt: str):
         try:

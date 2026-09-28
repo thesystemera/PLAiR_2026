@@ -199,6 +199,7 @@ async def get_db_weather(user_id: int, db: AsyncSession) -> str:
             select(WeatherData)
             .where(WeatherData.user_id == user_id)
             .order_by(WeatherData.timestamp.desc())
+            .limit(1)
         )
         weather_data = result.scalars().first()
 

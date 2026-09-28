@@ -44,7 +44,8 @@ _TOPIC_TAGS = {
 
 _COUNTRY_ALIASES = {"usa": "US", "united states of america": "US", "uk": "GB", "england": "GB",
                     "scotland": "GB", "wales": "GB", "aotearoa": "NZ"}
-_COUNTRY_BY_NAME = {name.lower(): code for code, name in Locale("en").territories.items() if code.isalpha()}
+_TERRITORIES = dict(Locale("en").territories)
+_COUNTRY_BY_NAME = {name.lower(): code for code, name in _TERRITORIES.items() if code.isalpha()}
 
 
 def resolve_country(location: Optional[str]) -> Optional[str]:
@@ -67,7 +68,7 @@ def resolve_city(location: Optional[str]) -> Optional[str]:
 
 
 def country_name(code: str) -> str:
-    return Locale("en").territories.get(code, "") if code else ""
+    return _TERRITORIES.get(code, "") if code else ""
 
 
 class NewsService:
@@ -106,10 +107,12 @@ class NewsService:
         return f"{GOOGLE_NEWS_RSS}/headlines/section/geo/{quote(place.strip(), safe='')}?{NewsService._edition(country)}"
 
     @staticmethod
-    def _parse_feed(xml_text: str) -> list[dict]:
+    def _parse_feed(xml_text: str, limit: Optional[int] = None) -> list[dict]:
         articles = []
         root = ET.fromstring(xml_text)
         for item in root.iter("item"):
+            if limit is not None and len(articles) >= limit:
+                break
             source_el = item.find("source")
             source = (source_el.text or "").strip() if source_el is not None else ""
             title = (item.findtext("title") or "").strip()
@@ -141,7 +144,7 @@ class NewsService:
             usage_tracking.record_api_call("news", "google_news_rss", error=True)
             raise
         usage_tracking.record_api_call("news", "google_news_rss")
-        articles = (await asyncio.to_thread(self._parse_feed, response.text))[:FEED_ITEMS]
+        articles = await asyncio.to_thread(self._parse_feed, response.text, FEED_ITEMS)
         log_service.external(f"News: {len(articles)} items for {label}")
         return articles
 

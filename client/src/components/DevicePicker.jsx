@@ -2,8 +2,8 @@ import { logger } from '../lib/logger'
 import { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react'
 import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
-import { usePlayback } from '../contexts/PlaybackContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useNetwork } from '../contexts/NetworkContext'
@@ -27,8 +27,15 @@ const BANNER_MOTION = {
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
-  const { engineState, toastSuccess, toastError } = useUIState()
-  const { transferPlayback, connected } = usePlayback()
+  const { activeDeviceId, isActiveDevice, isPlaying, toastSuccess, toastError } = useUISelector(state => ({
+    activeDeviceId: state.engineState.activeDeviceId,
+    isActiveDevice: state.engineState.isActiveDevice,
+    isPlaying: state.engineState.is_playing,
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+  }))
+  const { transferPlayback } = usePlaybackActions()
+  const connected = usePlaybackConnected()
   const { storageInfo } = useStorage()
   const { connectionMode, isOnline } = useNetwork()
   const [deviceList, setDeviceList] = useState([])
@@ -38,7 +45,6 @@ export function useDevicePicker() {
   const [editingDeviceId, setEditingDeviceId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [bannerDismissed, setBannerDismissed] = useState(false)
-  const activeDeviceId = engineState.activeDeviceId
   const loadingDevicesRef = useRef(false)
 
   const canUseServerFeatures = isOnline && connectionMode === 'full'
@@ -170,7 +176,7 @@ export function useDevicePicker() {
     devices,
     isOpen,
     setIsOpen,
-    showInactive: !engineState.isActiveDevice && !!activeDeviceId,
+    showInactive: !isActiveDevice && !!activeDeviceId,
     bannerDismissed,
     handleDismissBanner,
     loading,
@@ -188,7 +194,7 @@ export function useDevicePicker() {
     handleSaveEdit,
     connectionMode,
     storageInfo,
-    isPlaying: engineState.is_playing
+    isPlaying
   }
 }
 
@@ -252,8 +258,8 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
 })
 
 export const DevicePickerBanner = memo(function DevicePickerBanner({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
-  const { engineState } = useUIState()
-  const message = engineState.activeDeviceOnline ? '▶️ Playing on another device' : '📴 Your other device is offline'
+  const activeDeviceOnline = useUISelector(state => state.engineState.activeDeviceOnline)
+  const message = activeDeviceOnline ? '▶️ Playing on another device' : '📴 Your other device is offline'
   return (
     <AnimatePresence>
       {showInactive && !bannerDismissed && (

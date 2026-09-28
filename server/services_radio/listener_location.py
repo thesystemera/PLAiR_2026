@@ -2,6 +2,7 @@ import math
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional
 
 from config import settings
@@ -70,6 +71,7 @@ def timezone_city(tz_name: Optional[str]) -> tuple:
     return tz_name.rsplit("/", 1)[-1].replace("_", " "), entry[1]
 
 
+@lru_cache(maxsize=4096)
 def nearest_timezone(latitude: float, longitude: float, country_code: Optional[str] = None) -> Optional[str]:
     best, best_km = None, float("inf")
     wanted = (country_code or "").upper()

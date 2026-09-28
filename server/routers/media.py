@@ -1,8 +1,12 @@
 import aiofiles
+import asyncio
 import json
+import os
 import re
+import threading
+from collections import OrderedDict
 from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional
 
 from services.youtube_clip_service import get_youtube_clip_service
@@ -11,7 +15,7 @@ from services import log_service
 from database import User
 from config import settings
 from service_registry import services
-from routers.deps import get_current_user, require_admin
+from routers.deps import get_cached_current_user, require_admin
 
 ALLOWED_STREAM_BITRATES = {"128k", "192k", "256k"}
 
@@ -22,6 +26,34 @@ router = APIRouter()
 
 STREAM_PURPOSES = {"play": "playing", "download": "downloading for offline"}
 RANGE_START = re.compile(r"bytes=(\d+)-")
+JSON_FILE_CACHE_MAX = 32
+_json_file_lock = threading.Lock()
+_json_file_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+
+
+def _render_json_file(path) -> bytes:
+    stat = os.stat(path)
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _json_file_lock:
+        body = _json_file_cache.get(key)
+        if body is not None:
+            _json_file_cache.move_to_end(key)
+            return body
+    with open(path, 'r', encoding='utf-8') as f:
+        body = JSONResponse(json.load(f)).body
+    with _json_file_lock:
+        _json_file_cache[key] = body
+        while len(_json_file_cache) > JSON_FILE_CACHE_MAX:
+            _json_file_cache.popitem(last=False)
+    return body
+
+
+async def _json_file_response(path, missing_detail: str) -> Response:
+    try:
+        body = await asyncio.to_thread(_render_json_file, path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=missing_detail)
+    return Response(content=body, media_type="application/json")
 
 
 def _listener_label(request: Request, current_user: Optional[User]) -> str:
@@ -72,7 +104,7 @@ async def stream_opus_track(
         track_id: str,
         range_header: Optional[str] = Header(None, alias="range"),
         bitrate: Optional[str] = None,
-        current_user: Optional[User] = Depends(get_current_user),
+        current_user: Optional[User] = Depends(get_cached_current_user),
 ):
     assert services.media_streaming_service is not None
     if bitrate not in ALLOWED_STREAM_BITRATES:
@@ -117,7 +149,7 @@ async def stream_webm_track(
         track_id: str,
         range_header: Optional[str] = Header(None, alias="range"),
         bitrate: Optional[str] = None,
-        current_user: Optional[User] = Depends(get_current_user),
+        current_user: Optional[User] = Depends(get_cached_current_user),
 ):
     assert services.media_streaming_service is not None
     if bitrate not in ALLOWED_STREAM_BITRATES:
@@ -227,19 +259,16 @@ async def get_enriched_artwork(track_id: str):
 
 @router.get("/api/audio-features/{track_id}")
 async def get_audio_features(track_id: str):
-    features_path = settings.AUDIOFEATURES_DIR / f"{track_id}.json"
-
-    if not features_path.exists():
+    if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Audio features not found")
-
-    async with aiofiles.open(features_path, 'r', encoding='utf-8') as f:
-        content = await f.read()
-        features = json.loads(content)
-
-    return features
+    return await _json_file_response(settings.AUDIOFEATURES_DIR / f"{track_id}.json", "Audio features not found")
 
 @router.get("/api/video-clips/{track_id}")
-async def get_video_clips(track_id: str):
+async def get_video_clips(track_id: str, current_user: Optional[User] = Depends(get_cached_current_user)):
+    if not SAFE_ID.fullmatch(track_id):
+        raise HTTPException(status_code=400, detail="Invalid track id")
+    if not current_user or not current_user.video_clips_enabled:
+        return {"clips": [], "keywords": [], "reason": "video_clips_disabled"}
     youtube_service = get_youtube_clip_service()
     return await youtube_service.get_clips_for_track(track_id)  # type: ignore
 
@@ -258,16 +287,7 @@ async def get_video_clip_file(filename: str):
 async def get_lyric_timestamps(track_id: str):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Lyric timestamps not found")
-    timestamps_path = settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json"
-
-    if not timestamps_path.exists():
-        raise HTTPException(status_code=404, detail="Lyric timestamps not found")
-
-    async with aiofiles.open(timestamps_path, 'r', encoding='utf-8') as f:
-        content = await f.read()
-        timestamps = json.loads(content)
-
-    return timestamps
+    return await _json_file_response(settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found")
 
 @router.post("/api/lyric-timestamps/{track_id}/generate")
 async def generate_lyric_timestamps(track_id: str, _admin: User = Depends(require_admin)):

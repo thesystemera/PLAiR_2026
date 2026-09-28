@@ -129,6 +129,9 @@ class Settings:
     NEWS_DEFAULT_COUNTRY: str = os.getenv("NEWS_DEFAULT_COUNTRY", "US")
     YOUTUBE_CLIPS_MAX_CACHE_GB: float = float(os.getenv("YOUTUBE_CLIPS_MAX_CACHE_GB", "5"))
     YOUTUBE_CLIPS_PREFETCH_PER_CYCLE: int = int(os.getenv("YOUTUBE_CLIPS_PREFETCH_PER_CYCLE", "12"))
+    YOUTUBE_CLIPS_RATE_LIMIT: str = os.getenv("YOUTUBE_CLIPS_RATE_LIMIT", "2M")
+    YOUTUBE_CLIPS_FAILURES_BEFORE_BACKOFF: int = int(os.getenv("YOUTUBE_CLIPS_FAILURES_BEFORE_BACKOFF", "3"))
+    YOUTUBE_CLIPS_BACKOFF_S: int = int(os.getenv("YOUTUBE_CLIPS_BACKOFF_S", "3600"))
     PROMPT_DEBUG_ENABLED: bool = os.getenv("PROMPT_DEBUG_ENABLED", "false").lower() == "true"
     PROMPT_DEBUG_DIR: Path = BASE_DIR / "data" / "prompt_debug"
 
@@ -425,7 +428,7 @@ class Settings:
     STRIPE_FEE_FIXED_USD: float = float(os.getenv("STRIPE_FEE_FIXED_USD", "0.30"))
 
     WHISPER_FAST_MODEL: str = os.getenv("WHISPER_FAST_MODEL", "base.en")
-    WHISPER_QUALITY_MODEL: str = os.getenv("WHISPER_QUALITY_MODEL", "large-v3")
+    WHISPER_QUALITY_MODEL: str = os.getenv("WHISPER_QUALITY_MODEL", "large-v3-turbo")
     WHISPER_DEVICE: str = os.getenv("WHISPER_DEVICE", "cuda")
     WHISPER_COMPUTE_TYPE: str = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
     WHISPER_TIMEOUT: int = int(os.getenv("WHISPER_TIMEOUT", "30"))

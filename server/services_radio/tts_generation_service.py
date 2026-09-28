@@ -3,7 +3,6 @@ import aiofiles
 import aiofiles.os
 import uuid
 import json
-import random
 import os
 import io
 from pydub import AudioSegment
@@ -18,6 +17,7 @@ import soundfile as sf
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Hashable, List, Optional, Set, Tuple
 import traceback
+from collections import OrderedDict
 
 from config.settings import settings
 from services import log_service
@@ -37,6 +37,7 @@ RANK_UNRANKED_HIGH = (1,)
 RANK_LOW = (2,)
 ENGINE_OPTIONS = ("seed", "max_tokens", "top_p")
 BREATH_LIBRARY_COUNT_TTL_S = 300
+CLIP_AUDIO_CACHE_BYTES = max(0, int(os.getenv("TTS_CLIP_AUDIO_CACHE_MB", "96"))) * 1024 * 1024
 
 EMBEDDINGS_BY_CONTENT_TYPE = {
     'meta': 'meta_embeddings',
@@ -158,6 +159,8 @@ class TTSGenerationService:
         self._breath_refresh_times: Dict[str, List[float]] = {}
         self._exact_refresh_times: Dict[str, List[float]] = {}
         self._breath_library_counts: Dict[str, Tuple[float, int]] = {}
+        self._clip_audio: "OrderedDict[Tuple, AudioSegment]" = OrderedDict()
+        self._clip_audio_bytes = 0
 
         self.metrics = {
             'hits': 0,
@@ -432,15 +435,18 @@ class TTSGenerationService:
         }.get(embeddings_type, settings.TTS_SIMILARITY_THRESHOLD)
 
     async def resolve_breath_clip(self, context: str, content_voice: str,
-                                  rank: Tuple = RANK_UNRANKED_HIGH) -> Optional[str]:
-        cached = await self.lookup_clip(context, 'breath_embeddings', content_voice, float('-inf'), rank)
+                                  rank: Tuple = RANK_UNRANKED_HIGH, listener: Optional[str] = None) -> Optional[str]:
+        cached = await self.lookup_clip(context, 'breath_embeddings', content_voice, float('-inf'), rank,
+                                        listener=listener)
+        if cached is None:
+            cached = await self.lookup_clip(context, 'breath_embeddings', content_voice, float('-inf'), rank,
+                                            listener=listener, respect_cooldown=False)
         if cached is None:
             self.schedule_refresh('breath_embeddings', content_voice, context)
-            fallback = await self.find_random_breath_sound(content_voice)
             log_service.detail(
-                f"Breath: no eligible cached breath for {content_voice} - random fallback "
-                f"{os.path.basename(fallback) if fallback else 'none'}", "tts_generation")
-            return fallback
+                f"Breath: no {content_voice} breath clips cached yet - skipping this breath, rendering one in the background",
+                "tts_generation")
+            return None
 
         cached_file_path, similarity = cached
         if similarity < settings.BREATH_SIMILARITY_THRESHOLD:
@@ -448,30 +454,6 @@ class TTSGenerationService:
         log_service.detail(
             f"Breath: '{context[:40]}' -> {os.path.basename(cached_file_path)} (sim={similarity:.2f})", "tts_generation")
         return cached_file_path
-
-    async def find_random_breath_sound(self, voice_name: str) -> Optional[str]:
-        voice_breath_directory = self.get_voice_directory(str(self.breath_directory), voice_name)
-
-        if not await aiofiles.os.path.exists(voice_breath_directory):
-            return None
-
-        cache_file = os.path.join(voice_breath_directory, f'{voice_name}_breath_sounds_cache.json')
-
-        if await aiofiles.os.path.exists(cache_file):
-            async with aiofiles.open(cache_file, 'r') as f:
-                content = await f.read()
-                breath_files = json.loads(content)
-        else:
-            breath_files = [f for f in await asyncio.to_thread(os.listdir, voice_breath_directory) if
-                            f.endswith('.mp3')]
-            async with aiofiles.open(cache_file, 'w') as f:
-                await f.write(json.dumps(breath_files))
-
-        if not breath_files:
-            return None
-
-        chosen_file = random.choice(breath_files)
-        return os.path.join(voice_breath_directory, chosen_file)
 
     def schedule_refresh(self, embeddings_type: str, content_voice: str, tag: str):
         permission_key = FILLER_TYPES.get(embeddings_type)
@@ -597,16 +579,36 @@ class TTSGenerationService:
             rank: Tuple = RANK_UNRANKED_HIGH
     ) -> Optional[AudioSegment]:
         try:
-            async with aiofiles.open(file_path, 'rb') as f:
-                audio_data = await f.read()
+            stat = await aiofiles.os.stat(file_path)
+            key = (file_path, stat.st_mtime_ns, stat.st_size)
+            audio = self._clip_audio.get(key)
+            if audio is not None:
+                self._clip_audio.move_to_end(key)
+            else:
+                async with aiofiles.open(file_path, 'rb') as f:
+                    audio_data = await f.read()
+                audio = await asyncio.to_thread(decode_mp3, audio_data)
+                self._remember_clip_audio(key, audio)
         except OSError as e:
             log_service.error(f"Failed to read cached clip {file_path}: {e}")
             return None
         if not process:
-            return await asyncio.to_thread(decode_mp3, audio_data)
+            return audio
         return await self.process_clip(
-            audio_data, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
+            audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
         )
+
+    def _remember_clip_audio(self, key: Tuple, audio: Optional[AudioSegment]):
+        if audio is None or key in self._clip_audio:
+            return
+        size = len(audio.raw_data)
+        if size > CLIP_AUDIO_CACHE_BYTES // 8:
+            return
+        self._clip_audio[key] = audio
+        self._clip_audio_bytes += size
+        while self._clip_audio_bytes > CLIP_AUDIO_CACHE_BYTES and self._clip_audio:
+            _, evicted = self._clip_audio.popitem(last=False)
+            self._clip_audio_bytes -= len(evicted.raw_data)
 
     @staticmethod
     async def clip_rate(file_path: str) -> Optional[int]:
@@ -622,7 +624,9 @@ class TTSGenerationService:
             embeddings_type: str,
             content_voice: str,
             threshold: float,
-            rank: Tuple = RANK_UNRANKED_HIGH
+            rank: Tuple = RANK_UNRANKED_HIGH,
+            listener: Optional[str] = None,
+            respect_cooldown: bool = True
     ) -> Optional[Tuple[str, float]]:
         directory = self.clip_directory(embeddings_type, content_voice)
         if directory is None:
@@ -631,7 +635,7 @@ class TTSGenerationService:
         async with self.lookup_slots.slot(rank):
             matches = await asyncio.to_thread(
                 self.vector_db_service.query_embeddings,
-                tag, content_voice, embeddings_type, 5
+                tag, content_voice, embeddings_type, 5, listener, respect_cooldown
             )
 
         for filename, _title, similarity in matches:

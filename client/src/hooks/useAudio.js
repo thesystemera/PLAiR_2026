@@ -3,12 +3,12 @@ import { AudioEngine } from '../lib/audioEngine'
 import { AudioMixer } from '../lib/audioMixer'
 import { cacheManager } from '../lib/cacheManager'
 import { useStorage } from '../contexts/StorageContext'
-import { useUIState, uiState } from '../contexts/UIStateContext'
+import { uiState, useUISelector } from '../contexts/UIStateContext'
 import { logger } from '../lib/logger'
 
 export function useAudio() {
   const { refreshStorageInfo, refreshDataUsage } = useStorage()
-  const { publishAudioState } = useUIState()
+  const { publishAudioState } = useUISelector(state => ({ publishAudioState: state.publishAudioState }))
   const [initialEngine] = useState(() => (typeof window !== 'undefined' ? new AudioEngine() : null))
   const engineRef = useRef(initialEngine)
   const mixerRef = useRef(null)

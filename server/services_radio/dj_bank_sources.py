@@ -1,3 +1,4 @@
+import asyncio
 import math
 import re
 import time
@@ -44,6 +45,7 @@ _CATEGORY_CUES = {
 }
 
 _stats_cache: dict[str, tuple[float, object]] = {}
+_stats_locks: dict[str, asyncio.Lock] = {}
 STATS_CACHE_MAX = 2000
 
 
@@ -167,6 +169,13 @@ def _cached(key: str):
     return None
 
 
+def _lock(key: str) -> asyncio.Lock:
+    global _stats_locks
+    if len(_stats_locks) > STATS_CACHE_MAX:
+        _stats_locks = {k: lock for k, lock in _stats_locks.items() if lock.locked()}
+    return _stats_locks.setdefault(key, asyncio.Lock())
+
+
 def _store(key: str, points):
     now = time.monotonic()
     _stats_cache.pop(key, None)
@@ -202,6 +211,16 @@ async def listener_stat_points(user_id: Optional[int], session_id: Optional[str]
     cached = _cached(cache_key)
     if cached is not None:
         return cached
+    async with _lock(cache_key):
+        cached = _cached(cache_key)
+        if cached is not None:
+            return cached
+        return await _listener_stat_points(cache_key, user_id, session_id, async_session_maker, catalog_service,
+                                           tz_name)
+
+
+async def _listener_stat_points(cache_key: str, user_id: Optional[int], session_id: Optional[str],
+                                async_session_maker, catalog_service, tz_name: Optional[str]) -> list[TalkingPoint]:
     owner = PlayEvent.user_id == user_id if user_id else PlayEvent.session_id == session_id
     now = datetime.now(timezone.utc)
     try:
@@ -254,7 +273,15 @@ async def station_stat_points(async_session_maker, catalog_service) -> list[Talk
     cached = _cached("station")
     if cached is not None:
         return cached
-    since = datetime.now(timezone.utc) - timedelta(days=7)
+    async with _lock("station"):
+        cached = _cached("station")
+        if cached is not None:
+            return cached
+        return await _station_stat_points(async_session_maker, catalog_service)
+
+
+async def _station_stat_points(async_session_maker, catalog_service) -> list[TalkingPoint]:
+    since =datetime.now(timezone.utc) - timedelta(days=7)
     listener = func.coalesce(cast(PlayEvent.user_id, String), PlayEvent.session_id)
     try:
         async with async_session_maker() as db:
@@ -308,6 +335,15 @@ async def listener_taste(user, user_id: Optional[int], session_id: Optional[str]
     cached = _cached(cache_key)
     if cached is not None:
         return cached
+    async with _lock(cache_key):
+        cached = _cached(cache_key)
+        if cached is not None:
+            return cached
+        return await _listener_taste(cache_key, interests, user_id, session_id, async_session_maker, catalog_service)
+
+
+async def _listener_taste(cache_key: str, interests: set, user_id: Optional[int], session_id: Optional[str],
+                          async_session_maker, catalog_service) -> Taste:
     owner = PlayEvent.user_id == user_id if user_id else PlayEvent.session_id == session_id
     weights: dict[str, float] = {}
     try:

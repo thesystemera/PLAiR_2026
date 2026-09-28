@@ -2,14 +2,13 @@ import asyncio
 import json
 import re
 import time
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Optional
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from services import log_service
 from services import auth_service
 from security_middleware import is_valid_guest_id
-from database import get_db
+from database import AsyncSessionLocal
 from service_registry import services
 from services.task_utils import spawn
 from services import usage_tracking
@@ -226,8 +225,7 @@ async def websocket_endpoint(
         device_id: Optional[str] = None,
         device_name: Optional[str] = None,
         device_type: Optional[str] = None,
-        tz: Optional[str] = None,
-        db: AsyncSession = Depends(get_db)
+        tz: Optional[str] = None
 ):
     assert services.websocket_service is not None
     assert services.playback_service is not None
@@ -241,7 +239,7 @@ async def websocket_endpoint(
         if payload:
             user_id = payload.get("sub")
             if user_id:
-                user = await auth_service.get_user_by_id(db, int(user_id))
+                user = await auth_service.get_cached_user(int(user_id))
     token_rejected = bool(token) and user is None
 
     if not user and not (guest_id and is_valid_guest_id(guest_id)):
@@ -298,14 +296,15 @@ async def websocket_endpoint(
 
         if user:
             assert services.device_management_service is not None
-            await services.device_management_service.register_or_update_device(
-                db=db,
-                user_id=int(user.id),
-                device_id=session_device_id,
-                device_name=session_device_name,
-                device_type=session_device_type,
-                set_active=False
-            )
+            async with AsyncSessionLocal() as db:
+                await services.device_management_service.register_or_update_device(
+                    db=db,
+                    user_id=int(user.id),
+                    device_id=session_device_id,
+                    device_name=session_device_name,
+                    device_type=session_device_type,
+                    set_active=False
+                )
 
         if not has_existing_playback:
             await services.playback_service.initialize_new_session(session_id, user_id=session_user_id)

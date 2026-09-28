@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 
@@ -9,6 +10,7 @@ from services.http_client import fetch
 TICKETMASTER_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 CACHE_TTL_SECONDS = 3600
 CACHE_MAX_ENTRIES = 200
+FAILURE_BACKOFF_S = 120
 MAX_EVENTS = 25
 SEARCH_RADIUS_KM = 50
 POOL_PAGE_SIZE = 200
@@ -21,6 +23,21 @@ _LATLONG = re.compile(r"^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$")
 class EventsService:
     def __init__(self):
         self._cache: dict[tuple, tuple[float, list]] = {}
+        self._failed: dict[tuple, float] = {}
+        self._locks: dict[tuple, asyncio.Lock] = {}
+
+    def _lock(self, key: tuple) -> asyncio.Lock:
+        if len(self._locks) > 500:
+            self._locks = {k: lock for k, lock in self._locks.items() if lock.locked()}
+        return self._locks.setdefault(key, asyncio.Lock())
+
+    def _cached(self, key: tuple):
+        cached = self._cache.get(key)
+        if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
+            return cached[1]
+        if time.monotonic() < self._failed.get(key, 0.0):
+            return []
+        return None
 
     async def get_ticketmaster_events(self, location, country_code, start_date, end_date, keyword=None) -> list[dict]:
         keyword = (keyword or "").strip()
@@ -51,10 +68,16 @@ class EventsService:
             params["keyword"] = keyword
 
         key = (location, country_code, params["startDateTime"][:13], params["endDateTime"][:13], keyword.lower())
-        cached = self._cache.get(key)
-        if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
-            return cached[1]
+        cached = self._cached(key)
+        if cached is not None:
+            return cached
+        async with self._lock(key):
+            cached = self._cached(key)
+            if cached is not None:
+                return cached
+            return await self._request_events(key, params, location, country_code)
 
+    async def _request_events(self, key: tuple, params: dict, location, country_code) -> list[dict]:
         try:
             response = await fetch("GET", TICKETMASTER_URL, params=params)
             response.raise_for_status()
@@ -62,6 +85,9 @@ class EventsService:
         except Exception as e:
             usage_tracking.record_api_call("events", "ticketmaster", error=True)
             log_service.error(f"Events: Ticketmaster request failed: {type(e).__name__}")
+            now = time.monotonic()
+            self._failed = {k: until for k, until in self._failed.items() if until > now}
+            self._failed[key] = now + FAILURE_BACKOFF_S
             return []
         usage_tracking.record_api_call("events", "ticketmaster")
 
@@ -77,6 +103,7 @@ class EventsService:
         now = time.monotonic()
         self._cache = {k: v for k, v in self._cache.items() if now - v[0] < CACHE_TTL_SECONDS}
         self._cache[key] = (now, formatted)
+        self._failed.pop(key, None)
         while len(self._cache) > CACHE_MAX_ENTRIES:
             self._cache.pop(next(iter(self._cache)))
         return formatted

@@ -49,6 +49,9 @@ async def update_radio_mode(
         await services.radio_mode_service.set_user_prefs(
             int(current_user.id), prefs, getattr(current_user, "timezone", None),
             bool(getattr(current_user, "tts_muted", False)))
+    if services.websocket_service is not None:
+        await services.websocket_service.broadcast_to_session(
+            str(current_user.id), {"type": "radio_mode_updated", "data": {"settings": prefs}})
     return {"settings": prefs, "persisted": True, "options": _options()}
 
 

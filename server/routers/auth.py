@@ -94,6 +94,8 @@ async def get_me(
         "is_admin": is_admin_user(user),
         "usage_stats_visible": usage_stats_visible(user),
         "tts_muted": getattr(user, "tts_muted", False),
+        "notifications_muted": getattr(user, "notifications_muted", False),
+        "dark_mode": getattr(user, "dark_mode", False),
         "fps_enabled": getattr(user, "fps_enabled", False),
         "video_clips_enabled": getattr(user, "video_clips_enabled", False),
         "visual_quality": getattr(user, "visual_quality", "high"),

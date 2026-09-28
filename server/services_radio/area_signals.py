@@ -20,6 +20,8 @@ from services_radio.dj_content_bank import TalkingPoint
 
 METERS_PER_DEGREE = 111320.0
 MEMORY_CELLS = 5000
+STORE_RECHECK_S = 300
+PURGE_INTERVAL_S = 600
 BLOCKED_STATUSES = {"PERMISSION_DENIED", "API_KEY_SERVICE_BLOCKED", "REQUEST_DENIED", "UNAUTHENTICATED"}
 RATE_STATUSES = {"RESOURCE_EXHAUSTED", "OVER_QUERY_LIMIT", "OVER_DAILY_LIMIT"}
 
@@ -88,6 +90,7 @@ def raise_for_google(response: httpx.Response) -> None:
 class AreaCacheStore:
     def __init__(self, session_maker=None):
         self._session_maker = session_maker
+        self._last_purge = -PURGE_INTERVAL_S
 
     def _sessions(self):
         if self._session_maker is None:
@@ -112,11 +115,15 @@ class AreaCacheStore:
         stmt = stmt.on_conflict_do_update(index_elements=["namespace", "cell"], set_={
             "payload": stmt.excluded.payload, "status": stmt.excluded.status,
             "fetched_at": stmt.excluded.fetched_at, "expires_at": stmt.excluded.expires_at})
+        purge = time.monotonic() - self._last_purge >= PURGE_INTERVAL_S
         async with self._sessions()() as db:
             await db.execute(stmt)
-            await db.execute(delete(AreaCache).where(
-                AreaCache.expires_at < now - timedelta(days=settings.AREA_CACHE_RETENTION_DAYS)))
+            if purge:
+                await db.execute(delete(AreaCache).where(
+                    AreaCache.expires_at < now - timedelta(days=settings.AREA_CACHE_RETENTION_DAYS)))
             await db.commit()
+        if purge:
+            self._last_purge = time.monotonic()
 
     async def cells(self, namespace: str) -> list[str]:
         from database.models import AreaCache
@@ -139,6 +146,7 @@ class AreaSignal:
     def __init__(self, store: Optional[AreaCacheStore] = None):
         self.store = store or AreaCacheStore()
         self._memory: "OrderedDict[str, dict]" = OrderedDict()
+        self._store_checked: "OrderedDict[str, float]" = OrderedDict()
         self._inflight: dict[str, asyncio.Task] = {}
         self._failed: dict[str, float] = {}
         self._blocked_until = 0.0
@@ -179,7 +187,8 @@ class AreaSignal:
         self._memory.pop(cell_key, None)
         self._memory[cell_key] = entry
         while len(self._memory) > MEMORY_CELLS:
-            self._memory.popitem(last=False)
+            evicted, _ = self._memory.popitem(last=False)
+            self._store_checked.pop(evicted, None)
 
     @staticmethod
     def _fresh(entry: Optional[dict], now: datetime) -> bool:
@@ -194,16 +203,27 @@ class AreaSignal:
             self._calls_day, self._calls = today, 0
         return not self.daily_cap or self._calls < self.daily_cap
 
+    async def _stored(self, cell_key: str) -> Optional[dict]:
+        checked = self._store_checked.get(cell_key)
+        if checked is not None and time.monotonic() - checked < STORE_RECHECK_S:
+            return None
+        try:
+            stored = await self.store.get(self.name, cell_key)
+        except Exception as e:
+            log_service.warning(f"[AREA] {self.name} cache read failed: {type(e).__name__}: {e}")
+            return None
+        self._store_checked.pop(cell_key, None)
+        self._store_checked[cell_key] = time.monotonic()
+        while len(self._store_checked) > MEMORY_CELLS:
+            self._store_checked.popitem(last=False)
+        return stored
+
     async def cached(self, latitude: float, longitude: float) -> Optional[dict]:
         cell = self.cell(latitude, longitude)
         now = datetime.now(timezone.utc)
         entry = self._memory.get(cell.key)
         if not self._fresh(entry, now):
-            try:
-                stored = await self.store.get(self.name, cell.key)
-            except Exception as e:
-                log_service.warning(f"[AREA] {self.name} cache read failed: {type(e).__name__}: {e}")
-                stored = None
+            stored = await self._stored(cell.key)
             if stored:
                 entry = stored
                 self._remember(cell.key, stored)
@@ -216,11 +236,7 @@ class AreaSignal:
         now = datetime.now(timezone.utc)
         entry = self._memory.get(cell.key)
         if not self._fresh(entry, now):
-            try:
-                stored = await self.store.get(self.name, cell.key)
-            except Exception as e:
-                log_service.warning(f"[AREA] {self.name} cache read failed: {type(e).__name__}: {e}")
-                stored = None
+            stored = await self._stored(cell.key)
             if stored and (entry is None or stored["fetched_at"] >= entry["fetched_at"]):
                 entry = stored
                 self._remember(cell.key, stored)
@@ -310,17 +326,6 @@ def get_signal(name: str) -> Optional[AreaSignal]:
 
 def signals() -> list[AreaSignal]:
     return list(_signals.values())
-
-
-def listener_context(user, tz_name: Optional[str], subject: Optional[str]) -> Optional[AreaContext]:
-    try:
-        latitude, longitude = float(user.latitude), float(user.longitude)
-    except (AttributeError, TypeError, ValueError):
-        return None
-    if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0) or (latitude == 0.0 and longitude == 0.0):
-        return None
-    return AreaContext(latitude=latitude, longitude=longitude, tz_name=tz_name or getattr(user, "timezone", None),
-                       subject=str(subject or getattr(user, "id", "") or ""))
 
 
 def location_context(location, tz_name: Optional[str] = None, subject=None) -> Optional[AreaContext]:

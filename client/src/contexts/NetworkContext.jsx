@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 import { logger } from '../lib/logger'
 import { api } from '../lib/api'
 import { reportClientEvent } from '../lib/errorReporter'
@@ -45,7 +45,7 @@ const SERVER_HEALTH = {
 }
 
 export function NetworkProvider({ children }) {
-  const { publishAudioState } = useUIState()
+  const { publishAudioState } = useUISelector(state => ({ publishAudioState: state.publishAudioState }))
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [isServerAvailable, setIsServerAvailable] = useState(navigator.onLine)
   const [networkQuality, setNetworkQuality] = useState('good')

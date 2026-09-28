@@ -20,8 +20,8 @@ import {
     WebGLRenderTarget,
 } from 'three'
 import {TextRenderer} from '../lib/textRenderer'
-import {useUIState, useVideoClips} from '../contexts/UIStateContext'
-import {PANEL, useDynamicTheme} from '../contexts/DynamicThemeContext'
+import { useVideoClips, useUISelector } from '../contexts/UIStateContext'
+import {PANEL, useDynamicTheme, useThemeArtwork} from '../contexts/DynamicThemeContext'
 import {VisualErrorBoundary} from './VisualErrorBoundary'
 import {isWebGL2Available} from '../lib/utils'
 import {logger} from '../lib/logger'
@@ -81,6 +81,7 @@ const BACKGROUND_FRAGMENT_BODY = `
   uniform sampler2D u_texture_prev;
   uniform sampler2D u_depth_map;
   uniform sampler2D u_text_texture;
+  uniform float u_text_empty;
   uniform sampler2D u_video_clip;
   uniform float u_video_clip_blend;
   uniform float u_transition;
@@ -208,9 +209,11 @@ const BACKGROUND_FRAGMENT_MAIN = `  void main() {
     }
     finalColor.rgb *= u_flicker;
 
-    vec4 lyricsSample = texture2D(u_text_texture, vTextUv);
-    if(lyricsSample.a > 0.01) {
-      finalColor.rgb = mix(finalColor.rgb, lyricsSample.rgb, lyricsSample.a);
+    if (u_text_empty < 0.5) {
+      vec4 lyricsSample = texture2D(u_text_texture, vTextUv);
+      if(lyricsSample.a > 0.01) {
+        finalColor.rgb = mix(finalColor.rgb, lyricsSample.rgb, lyricsSample.a);
+      }
     }
     gl_FragColor = finalColor;
   }
@@ -245,10 +248,7 @@ const GLASS_FRAGMENT_BODY = `
 
   uniform vec3 u_player_gradient_color;
   uniform float u_player_gradient_intensity;
-  uniform vec3 u_voice_color;
-  uniform float u_voice_level;
-  uniform vec3 u_on_air_color;
-  uniform float u_on_air;
+  uniform vec3 u_panel_glow;
 
   struct PanelData {
     float mask;
@@ -304,9 +304,11 @@ const GLASS_FRAGMENT_BODY = `
     vec2 radialDir = normalize(p + vec2(0.0001));
     vec2 normalizedP = p / size;
     float distFromCenter = max(abs(normalizedP.x), abs(normalizedP.y));
-    float centralBulge = pow(1.0 - distFromCenter, 2.0);
+    float bulgeBase = 1.0 - distFromCenter;
+    float centralBulge = bulgeBase * bulgeBase;
     vec2 bulgeOffset = radialDir * centralBulge * 0.02;
-    float edgeKick = pow(distFromCenter, 6.0);
+    float distSq = distFromCenter * distFromCenter;
+    float edgeKick = distSq * distSq * distSq;
     vec2 edgeOffset = -radialDir * edgeKick * 0.1;
     float noiseScale = 0.75;  
     float noiseStrength = 0.05;
@@ -321,8 +323,7 @@ const GLASS_FRAGMENT_BODY = `
     vec3 darkenedColor = color * mix(0.3, 0.2, headerFactor);
     vec3 edgeColor = color * 1.2;
     vec3 resultColor = mix(darkenedColor, edgeColor, totalEdgeGlow);
-    vec3 glowColor = mix(vec3(0.6, 0.7, 0.9), u_on_air_color, clamp(u_on_air, 0.0, 1.0) * 0.85);
-    resultColor += glowColor * totalEdgeGlow * (0.2 + 0.3 * u_on_air);
+    resultColor += u_panel_glow * totalEdgeGlow;
 
     if (panelIndex == 5 && u_player_gradient_intensity > 0.001) {
       vec2 center = region.xy;
@@ -332,7 +333,8 @@ const GLASS_FRAGMENT_BODY = `
       float normalizedY = (p.y + size.y) / (size.y * 2.0);
       normalizedY = clamp(normalizedY, 0.0, 1.0);
 
-      float gradientShape = pow(1.0 - normalizedY, 1.5);
+      float gradientBase = 1.0 - normalizedY;
+      float gradientShape = gradientBase * sqrt(gradientBase);
 
       vec3 gradientColor = u_player_gradient_color * 0.8;
       float pulseMult = 0.7 + u_audio_pulse * 0.5;
@@ -506,7 +508,7 @@ const GLASS_FRAGMENT_BODY = `
       
       vec2 buttonRefraction = radialDir * refractionStrength;
       
-      float fresnel = pow(edgeStrength, 2.0);
+      float fresnel = edgeStrength * edgeStrength;
       vec2 refractedUV = screenUV + buttonRefraction;
 
       float blurMultiplier = 1.0 - (u_radio_button_hover * 0.5) + (u_radio_button_pressed * 1.2);
@@ -540,19 +542,21 @@ const GLASS_FRAGMENT_BODY = `
 
     return finalColor;
   }
+`
+
+const AMBIENT_GLOW_FUNCTION = `
+  uniform vec2 u_glow_center;
+  uniform vec2 u_glow_scale;
+  uniform vec3 u_voice_glow;
+  uniform vec3 u_on_air_glow;
+  uniform float u_glow_active;
 
   vec3 applyAmbientGlow(vec3 color, vec2 screenUV, float glassAlpha) {
-    if (u_voice_level < 0.001 && u_on_air < 0.001) return color;
-    float aspect = u_canvas_resolution.x / max(u_canvas_resolution.y, 1.0);
-    vec2 anchor = clamp(u_radio_button_pos, vec2(0.0), vec2(1.0));
-    vec2 center = mix(vec2(0.5, 0.55), anchor, clamp(u_radio_button_state, 0.0, 1.0));
-    vec2 d = (screenUV - center) * vec2(aspect, 1.0);
-    float voiceFalloff = exp(-dot(d, d) * 6.0);
-    vec2 e = abs(screenUV - 0.5) * 2.0;
-    float edge = smoothstep(0.45, 1.0, max(e.x, e.y));
-    vec3 onAirGlow = u_on_air_color * u_on_air * (0.06 + 0.2 * edge);
-    vec3 voiceGlow = u_voice_color * u_voice_level * voiceFalloff * 0.45;
-    vec3 glow = (onAirGlow + voiceGlow) * mix(1.0, 0.7, glassAlpha);
+    if (u_glow_active < 0.5) return color;
+    vec2 d = (screenUV - u_glow_center) * u_glow_scale;
+    vec2 e = abs(screenUV - 0.5);
+    float edge = smoothstep(0.225, 0.5, max(e.x, e.y));
+    vec3 glow = (u_on_air_glow * (0.06 + 0.2 * edge) + u_voice_glow * exp2(-dot(d, d))) * (1.0 - 0.3 * glassAlpha);
     return color + glow * (1.0 - color);
   }
 `
@@ -562,14 +566,14 @@ const BACKGROUND_FUNCTION = `
 
 ` + BACKGROUND_FRAGMENT_MAIN.replace('void main() {', 'vec4 computeBackground() {').replace('gl_FragColor = finalColor;', 'return finalColor;')
 
-const backdropFragmentShader = BACKGROUND_FRAGMENT_BODY + BACKGROUND_FUNCTION + `
+const backdropFragmentShader = BACKGROUND_FRAGMENT_BODY + BACKGROUND_FUNCTION + AMBIENT_GLOW_FUNCTION + `
   void main() {
     vec4 background = clamp(computeBackground(), 0.0, 1.0);
-    gl_FragColor = vec4(background.rgb + (1.0 - background.a) * u_underlay, 1.0);
+    gl_FragColor = vec4(applyAmbientGlow(background.rgb + (1.0 - background.a) * u_underlay, vUv, 0.0), 1.0);
   }
 `
 
-const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BACKGROUND_FUNCTION + `
+const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BACKGROUND_FUNCTION + AMBIENT_GLOW_FUNCTION + `
   void main() {
     vec4 glass = clamp(computeGlass(), 0.0, 1.0);
     vec3 color;
@@ -614,7 +618,7 @@ function pushEnergySample(history, sorted, value) {
 const BG_SIGNATURE_UNIFORMS = [
   'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
   'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_brightness', 'u_contrast', 'u_saturation',
-  'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution',
+  'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution', 'u_text_empty',
 ]
 
 const FG_SIGNATURE_UNIFORMS = [
@@ -622,8 +626,12 @@ const FG_SIGNATURE_UNIFORMS = [
   'u_radio_button_pos', 'u_radio_button_radius', 'u_radio_button_state', 'u_radio_button_hover',
   'u_radio_button_pressed', 'u_radio_progress', 'u_radio_state_int', 'u_visual_state_color',
   'u_glass_blur_factor', 'u_enable_refraction', 'u_audio_pulse', 'u_player_gradient_color',
-  'u_player_gradient_intensity', 'u_glass_taps', 'u_voice_color', 'u_voice_level', 'u_on_air_color', 'u_on_air',
+  'u_player_gradient_intensity', 'u_glass_taps',
+  'u_glow_center', 'u_glow_scale', 'u_voice_glow', 'u_on_air_glow', 'u_panel_glow', 'u_glow_active',
 ]
+
+const GLOW_FALLOFF_SCALE = Math.sqrt(6 / Math.LN2)
+const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
 
 const VOICE_ATTACK = 18
 const VOICE_RELEASE = 5
@@ -753,6 +761,7 @@ function createLyricResources() {
   const ctx = canvas.getContext('2d', { alpha: true })
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   const texture = new CanvasTexture(canvas)
+  texture.userData.empty = true
   texture.needsUpdate = true
   return { canvas, texture }
 }
@@ -801,9 +810,9 @@ function MultiPassPlane({
   })
 
   const {
-    shaderPanelRegions: panelRegionsRef,
-    shaderPanelOpacities: panelOpacitiesRef,
-    shaderRadioButtonPos: radioButtonPosRef,
+    panelRegionsRef,
+    panelOpacitiesRef,
+    radioButtonPosRef,
     radioButtonRef,
     radioProgressData,
     speakerColorRef,
@@ -817,7 +826,24 @@ function MultiPassPlane({
     radioState,
     interfaceState,
     settingsState,
-  } = useUIState()
+  } = useUISelector(state => ({
+    panelRegionsRef: state.shaderPanelRegions,
+    panelOpacitiesRef: state.shaderPanelOpacities,
+    radioButtonPosRef: state.shaderRadioButtonPos,
+    radioButtonRef: state.radioButtonRef,
+    radioProgressData: state.radioProgressData,
+    speakerColorRef: state.speakerColorRef,
+    djFftDataRef: state.djFftDataRef,
+    gyroscopeRef: state.gyroscopeRef,
+    mouseRef: state.mouseRef,
+    interfaceRef: state.interfaceRef,
+    engineRef: state.engineRef,
+    engineState: state.engineState,
+    isOfflineRendering: state.isOfflineRendering,
+    radioState: state.radioState,
+    interfaceState: state.interfaceState,
+    settingsState: state.settingsState,
+  }))
 
   const isFullscreen = interfaceState?.isFullscreenVisuals ?? false
 
@@ -866,6 +892,9 @@ function MultiPassPlane({
     textVersion: -1,
     fgVisible: false,
     force: true,
+    captureStale: true,
+    captureLength: 0,
+    captured: new Float64Array(SIGNATURE_SIZE),
   })
   const lastDrawAtRef = useRef(0)
   const visualCueMapRef = useRef(new Map())
@@ -904,6 +933,7 @@ function MultiPassPlane({
         u_texture_prev: { value: transparentPixel },
         u_depth_map: { value: transparentPixel },
         u_text_texture: { value: transparentPixel },
+        u_text_empty: { value: 0.0 },
         u_video_clip: { value: transparentPixel },
         u_video_clip_blend: { value: 0.0 },
         u_transition: { value: 1.0 },
@@ -963,7 +993,13 @@ function MultiPassPlane({
         u_voice_color: { value: new Vector3(0.58, 0.2, 0.92) },
         u_voice_level: { value: 0.0 },
         u_on_air_color: { value: new Vector3(0.96, 0.62, 0.04) },
-        u_on_air: { value: 0.0 }
+        u_on_air: { value: 0.0 },
+        u_glow_center: { value: new Vector2(0.5, 0.55) },
+        u_glow_scale: { value: new Vector2(GLOW_FALLOFF_SCALE, GLOW_FALLOFF_SCALE) },
+        u_voice_glow: { value: new Vector3(0, 0, 0) },
+        u_on_air_glow: { value: new Vector3(0, 0, 0) },
+        u_panel_glow: { value: new Vector3(0.12, 0.14, 0.18) },
+        u_glow_active: { value: 0.0 }
       }
   }), [bgMaterial, captureRenderTarget])
 
@@ -973,6 +1009,11 @@ function MultiPassPlane({
       uniforms: {
         ...bgMaterial.uniforms,
         u_underlay: fgMaterial.uniforms.u_underlay,
+        u_glow_center: fgMaterial.uniforms.u_glow_center,
+        u_glow_scale: fgMaterial.uniforms.u_glow_scale,
+        u_voice_glow: fgMaterial.uniforms.u_voice_glow,
+        u_on_air_glow: fgMaterial.uniforms.u_on_air_glow,
+        u_glow_active: fgMaterial.uniforms.u_glow_active,
       }
   }), [bgMaterial, fgMaterial])
 
@@ -1490,8 +1531,8 @@ function MultiPassPlane({
       effects.blur += scrollVelocity * 50.0
     }
 
-    const gyro = gyroscopeRef?.current || { parallaxX: 0, parallaxY: 0 }
-    const mouse = mouseRef?.current || { parallaxX: 0, parallaxY: 0 }
+    const gyro = gyroscopeRef?.current || NO_PARALLAX
+    const mouse = mouseRef?.current || NO_PARALLAX
     const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
     const pX = hasGyro ? gyro.parallaxX * 40 : mouse.parallaxX * 40
     const pY = hasGyro ? gyro.parallaxY * 40 : mouse.parallaxY * 40
@@ -1545,7 +1586,6 @@ function MultiPassPlane({
 
       const currentTexture = clipState.textures[clipState.currentIndex]
       if (currentTexture) {
-        currentTexture.needsUpdate = true
         bgMaterial.uniforms.u_video_clip.value = currentTexture
         bgMaterial.uniforms.u_video_clip_blend.value = clipState.blend
       }
@@ -1560,22 +1600,46 @@ function MultiPassPlane({
     const rtWidth = Math.floor(rtHeight * rtAspect)
     if (Math.abs(captureRenderTarget.width - rtWidth) > 1 || Math.abs(captureRenderTarget.height - rtHeight) > 1) {
         captureRenderTarget.setSize(rtWidth, rtHeight)
+        renderSignatureRef.current.captureStale = true
     }
 
     if (textTexture) bgMaterial.uniforms.u_text_texture.value = textTexture
+    bgMaterial.uniforms.u_text_empty.value = textTexture?.userData?.empty ? 1.0 : 0.0
     bgMaterial.uniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
+
+    const glowUniforms = fgMaterial.uniforms
+    const voiceLevel = glowUniforms.u_voice_level.value
+    const onAirLevel = glowUniforms.u_on_air.value
+    glowUniforms.u_glow_active.value = voiceLevel >= 0.001 || onAirLevel >= 0.001 ? 1.0 : 0.0
+    const glowAnchorMix = Math.min(1, Math.max(0, glowUniforms.u_radio_button_state.value))
+    const glowAnchor = glowUniforms.u_radio_button_pos.value
+    glowUniforms.u_glow_center.value.set(
+      0.5 + (Math.min(1, Math.max(0, glowAnchor.x)) - 0.5) * glowAnchorMix,
+      0.55 + (Math.min(1, Math.max(0, glowAnchor.y)) - 0.55) * glowAnchorMix
+    )
+    glowUniforms.u_glow_scale.value.set(logicalWidth / Math.max(logicalHeight, 1) * GLOW_FALLOFF_SCALE, GLOW_FALLOFF_SCALE)
+    glowUniforms.u_voice_glow.value.copy(glowUniforms.u_voice_color.value).multiplyScalar(voiceLevel * 0.45)
+    glowUniforms.u_on_air_glow.value.copy(glowUniforms.u_on_air_color.value).multiplyScalar(onAirLevel)
+    const panelGlowMix = Math.min(1, Math.max(0, onAirLevel)) * 0.85
+    const onAirTint = glowUniforms.u_on_air_color.value
+    glowUniforms.u_panel_glow.value.set(
+      0.6 + (onAirTint.x - 0.6) * panelGlowMix,
+      0.7 + (onAirTint.y - 0.7) * panelGlowMix,
+      0.9 + (onAirTint.z - 0.9) * panelGlowMix
+    ).multiplyScalar(0.2 + 0.3 * onAirLevel)
 
     const bgUniforms = bgMaterial.uniforms
     const fgUniforms = fgMaterial.uniforms
     const signature = renderSignatureRef.current
     let sigLength = writeUniformSignature(signature.current, 0, bgUniforms, BG_SIGNATURE_UNIFORMS)
-    sigLength = writeUniformSignature(signature.current, sigLength, fgUniforms, FG_SIGNATURE_UNIFORMS)
     signature.current[sigLength++] = Math.abs(effects.glitchX) > 20 ? bgUniforms.u_time.value : 0
-    signature.current[sigLength++] = fgUniforms.u_radio_state_int.value === 4 ? fgUniforms.u_radio_time.value : 0
     signature.current[sigLength++] = bgUniforms.u_parallax.value.x * PARALLAX_SIGNATURE_SCALE
     signature.current[sigLength++] = bgUniforms.u_parallax.value.y * PARALLAX_SIGNATURE_SCALE
     signature.current[sigLength++] = w
     signature.current[sigLength++] = h
+    const captureLength = sigLength
+    sigLength = writeUniformSignature(signature.current, sigLength, fgUniforms, FG_SIGNATURE_UNIFORMS)
+    signature.current[sigLength++] = fgUniforms.u_radio_state_int.value === 4 ? fgUniforms.u_radio_time.value : 0
 
     const textures = signature.textures
     const textVersion = textTexture ? textTexture.version : -1
@@ -1590,6 +1654,14 @@ function MultiPassPlane({
       textVersion !== signature.textVersion ||
       sigLength !== signature.length ||
       signatureChanged(signature.current, signature.previous, sigLength)
+
+    const captureDirty = signature.force || signature.captureStale || videoActive ||
+      textures[0] !== bgUniforms.u_texture.value ||
+      textures[1] !== bgUniforms.u_texture_prev.value ||
+      textures[2] !== bgUniforms.u_text_texture.value ||
+      textVersion !== signature.textVersion ||
+      captureLength !== signature.captureLength ||
+      signatureChanged(signature.current, signature.captured, captureLength)
 
     const paused = !signature.force && isSceneRenderingPaused(frameStart)
     reportFrame(delta, wantsRender && !paused)
@@ -1611,7 +1683,7 @@ function MultiPassPlane({
       signature.previous = signature.current
       signature.current = swap
 
-      if (hasVisiblePanels) {
+      if (hasVisiblePanels && captureDirty) {
         bgUniforms.u_canvas_resolution.value.set(rtWidth, rtHeight)
         bgUniforms.u_is_capture.value = 1.0
         gl.setRenderTarget(captureRenderTarget)
@@ -1619,6 +1691,11 @@ function MultiPassPlane({
         gl.setRenderTarget(null)
         bgUniforms.u_is_capture.value = 0.0
         bgUniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
+        signature.captureStale = false
+        signature.captureLength = captureLength
+        signature.captured.set(signature.previous.subarray(0, captureLength))
+      } else if (!hasVisiblePanels) {
+        signature.captureStale = true
       }
 
       if (glassMeshRef.current) glassMeshRef.current.visible = hasVisiblePanels
@@ -1635,25 +1712,25 @@ function MultiPassPlane({
 
     if (now - frameTimingRef.current.lastLog > 1000) {
       const avgFrameTime = frameTimingRef.current.total / frameTimingRef.current.count
-      const debugInfo = {
-        avgFrameTimeMs: avgFrameTime.toFixed(2),
-        framesInSecond: frameTimingRef.current.count,
-        framesRendered: frameTimingRef.current.rendered || 0,
-        hasVisiblePanels,
-        radioBtn: fgMaterial.uniforms.u_radio_button_state.value.toFixed(3),
-        panelOpacities: panelOpacitiesLerpRef.current.map(o => o.toFixed(2)).join(','),
-        captureRan: hasVisiblePanels ? 'YES' : 'no',
-        videoClipsActive: clipState.textures.length > 0 && visualQuality === 'high',
-        videoBlend: clipState.blend.toFixed(2),
-        gyroActive: Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001,
-        gyroValues: `${gyro.parallaxX?.toFixed(3)},${gyro.parallaxY?.toFixed(3)}`,
-        mouseValues: `${mouse.parallaxX?.toFixed(3)},${mouse.parallaxY?.toFixed(3)}`,
-        visualQuality,
-        dpr: gl.getPixelRatio().toFixed(2),
-        fpsCap,
-        glassTaps,
-      }
       if (settingsState.fpsEnabled) {
+        const debugInfo = {
+          avgFrameTimeMs: avgFrameTime.toFixed(2),
+          framesInSecond: frameTimingRef.current.count,
+          framesRendered: frameTimingRef.current.rendered || 0,
+          hasVisiblePanels,
+          radioBtn: fgMaterial.uniforms.u_radio_button_state.value.toFixed(3),
+          panelOpacities: panelOpacitiesLerpRef.current.map(o => o.toFixed(2)).join(','),
+          captureRan: hasVisiblePanels && captureDirty ? 'YES' : 'no',
+          videoClipsActive: clipState.textures.length > 0 && visualQuality === 'high',
+          videoBlend: clipState.blend.toFixed(2),
+          gyroActive: Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001,
+          gyroValues: `${gyro.parallaxX?.toFixed(3)},${gyro.parallaxY?.toFixed(3)}`,
+          mouseValues: `${mouse.parallaxX?.toFixed(3)},${mouse.parallaxY?.toFixed(3)}`,
+          visualQuality,
+          dpr: gl.getPixelRatio().toFixed(2),
+          fpsCap,
+          glassTaps,
+        }
         console.log('[SHADER PERF]', debugInfo)
       }
       frameTimingRef.current.total = 0
@@ -1702,7 +1779,17 @@ const LyricsRenderer = memo(function LyricsRenderer({
   lyricTextureRef,
   lastWordRef,
 }) {
-  const { engineRef, engineState, isOfflineRendering, isScreenVisible } = useUIState()
+  const {
+    engineRef,
+    engineState,
+    isOfflineRendering,
+    isScreenVisible,
+  } = useUISelector(state => ({
+    engineRef: state.engineRef,
+    engineState: state.engineState,
+    isOfflineRendering: state.isOfflineRendering,
+    isScreenVisible: state.isScreenVisible,
+  }))
   const intervalRef = useRef(null)
   const lastWordIndexRef = useRef(-1)
 
@@ -1733,6 +1820,7 @@ const LyricsRenderer = memo(function LyricsRenderer({
         const textToDraw = currentIndex >= 0 ? lyricData[currentIndex].text : null
 
         renderLyricToCanvas(ctx, textToDraw, canvas.width, canvas.height)
+        texture.userData.empty = !textToDraw
         texture.needsUpdate = true
         lastWordRef.current = textToDraw
       }
@@ -1757,8 +1845,22 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   glassBlurFactor = 1.0,
   onContextLostChange,
 }) {
-  const { currentArtwork } = useDynamicTheme()
-  const { audioFeatures, lyricTimestamps, engineState, isOfflineRendering, settingsState, isScreenVisible } = useUIState()
+  const currentArtwork = useThemeArtwork()
+  const {
+    audioFeatures,
+    lyricTimestamps,
+    engineState,
+    isOfflineRendering,
+    settingsState,
+    isScreenVisible,
+  } = useUISelector(state => ({
+    audioFeatures: state.audioFeatures,
+    lyricTimestamps: state.lyricTimestamps,
+    engineState: state.engineState,
+    isOfflineRendering: state.isOfflineRendering,
+    settingsState: state.settingsState,
+    isScreenVisible: state.isScreenVisible,
+  }))
   const { sceneDpr } = useQuality()
   const visualQuality = settingsState.visualQuality || 'high'
   const deviceDpr = window.devicePixelRatio || 1
@@ -1796,7 +1898,10 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     if (canvas) {
       const ctx = canvas.getContext('2d')
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      if (lyricTextureRef.current) lyricTextureRef.current.needsUpdate = true
+      if (lyricTextureRef.current) {
+        lyricTextureRef.current.userData.empty = true
+        lyricTextureRef.current.needsUpdate = true
+      }
     }
     if (!lyricTimestamps || lyricTimestamps.instrumental) {
       processedLyricDataRef.current = null; return
@@ -1851,7 +1956,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
 })
 
 const VisualFallback = memo(function VisualFallback() {
-  const { currentArtwork } = useDynamicTheme()
+  const currentArtwork = useThemeArtwork()
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">

@@ -49,7 +49,9 @@
  * - publishToast() - Toast notifications (success, error, info, warning)
  *
  * SUBSCRIBERS (How to read state):
- * - useUIState() - Access full context (both fast and slow lane)
+ * - useUISelector(state => slice) - Subscribe to ONE slice; re-renders only when that slice changes
+ *   (shallow compare). Prefer this in anything that renders often or renders a big subtree.
+ * - useUIState() - Access full context (both fast and slow lane); re-renders on ANY UIState change
  * - useRadioUI() - Convenience hook for radio-specific state
  * - useArtwork() - Artwork URL management
  *
@@ -60,7 +62,7 @@
  * See: docs/ARCHITECTURE_SSOT_PATTERN.md for detailed documentation
  */
 
-import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useSyncExternalStore } from 'react'
+import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react'
 import { artworkCache, artworkThumbCache, enrichedArtworkCache } from '../lib/mediaCache'
 import { artworkPrefetcher } from '../lib/artworkPrefetcher'
 import { AudioInteractionManager } from '../lib/audioInteractionManager'
@@ -122,8 +124,35 @@ const ArtworkStoreContext = createContext(null)
 const RadioButtonContext = createContext(null)
 const UIActionsContext = createContext(null)
 const RadioStateContext = createContext(null)
+const UIStoreContext = createContext(null)
 const EMPTY_CLIPS = []
 const noopUnsubscribe = () => {}
+const NO_SELECTION = Symbol('no-selection')
+
+function createUIStore() {
+  const listeners = new Set()
+  const store = {
+    value: null,
+    get: () => store.value,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    notify: () => listeners.forEach(listener => listener()),
+  }
+  return store
+}
+
+export function shallowEqual(a, b) {
+  if (Object.is(a, b)) return true
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key) || !Object.is(a[key], b[key])) return false
+  }
+  return true
+}
 
 const GRADIENT_COLORS = FALLBACK_GRADIENT_HEX
 
@@ -1236,6 +1265,15 @@ export function UIStateProvider({ children }) {
     isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
   ])
 
+  const storeRef = useRef(null)
+  if (!storeRef.current) storeRef.current = createUIStore()
+  const store = storeRef.current
+  store.value = value
+
+  useLayoutEffect(() => {
+    store.notify()
+  }, [store, value])
+
   const radioButtonValue = useMemo(() => ({
     radioButtonInteraction,
     radioButtonOpacity,
@@ -1252,6 +1290,7 @@ export function UIStateProvider({ children }) {
   }), [publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning])
 
   return (
+    <UIStoreContext.Provider value={store}>
     <UIStateContext.Provider value={value}>
       <UIActionsContext.Provider value={actionsValue}>
         <RadioStateContext.Provider value={radioState}>
@@ -1263,6 +1302,7 @@ export function UIStateProvider({ children }) {
         </RadioStateContext.Provider>
       </UIActionsContext.Provider>
     </UIStateContext.Provider>
+    </UIStoreContext.Provider>
   )
 }
 
@@ -1270,6 +1310,28 @@ export function useUIState() {
   const context = useContext(UIStateContext)
   if (!context) throw new Error('useUIState must be used within UIStateProvider')
   return context
+}
+
+export function useUISelector(selector, isEqual = shallowEqual) {
+  const store = useContext(UIStoreContext)
+  if (!store) throw new Error('useUISelector must be used within UIStateProvider')
+  const selectionRef = useRef(NO_SELECTION)
+
+  const getSnapshot = () => {
+    const next = selector(store.get())
+    const previous = selectionRef.current
+    if (previous !== NO_SELECTION && isEqual(previous, next)) return previous
+    selectionRef.current = next
+    return next
+  }
+
+  return useSyncExternalStore(store.subscribe, getSnapshot)
+}
+
+export function useUIStateGetter() {
+  const store = useContext(UIStoreContext)
+  if (!store) throw new Error('useUIStateGetter must be used within UIStateProvider')
+  return store.get
 }
 
 export function useUIActions() {
@@ -1328,7 +1390,15 @@ export function useEnrichedArtwork(trackId, hasArtwork = true) {
 }
 
 export function useVideoClips(trackId) {
-  const { videoClipsByTrack, fetchVideoClips, settingsState } = useUIState()
+  const {
+    videoClipsByTrack,
+    fetchVideoClips,
+    settingsState,
+  } = useUISelector(state => ({
+    videoClipsByTrack: state.videoClipsByTrack,
+    fetchVideoClips: state.fetchVideoClips,
+    settingsState: state.settingsState,
+  }))
   const enabled = settingsState.videoClipsEnabled
   const clips = enabled && trackId ? videoClipsByTrack[trackId] : EMPTY_CLIPS
 
@@ -1359,8 +1429,25 @@ export function useRadioUI() {
     micFftDataRef,
     shoutoutFftDataRef,
     speakerColorRef,
-    interfaceRef
-  } = useUIState()
+    interfaceRef,
+  } = useUISelector(state => ({
+    reportEngineStatus: state.reportEngineStatus,
+    visualState: state.visualState,
+    radioProgressData: state.radioProgressData,
+    visualColorData: state.visualColorData,
+    updateRadioButtonOpacity: state.updateRadioButtonOpacity,
+    updateRadioButtonForegroundOpacity: state.updateRadioButtonForegroundOpacity,
+    updateRadioButtonInteraction: state.updateRadioButtonInteraction,
+    reportInterfaceState: state.reportInterfaceState,
+    engineState: state.engineState,
+    engineRef: state.engineRef,
+    lastProgressUpdateTimeRef: state.lastProgressUpdateTimeRef,
+    djFftDataRef: state.djFftDataRef,
+    micFftDataRef: state.micFftDataRef,
+    shoutoutFftDataRef: state.shoutoutFftDataRef,
+    speakerColorRef: state.speakerColorRef,
+    interfaceRef: state.interfaceRef,
+  }))
 
   return {
     reportEngineStatus,

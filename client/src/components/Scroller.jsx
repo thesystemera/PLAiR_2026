@@ -3,7 +3,7 @@ import { motion, AnimatePresence, useMotionValue } from 'framer-motion'
 import { useDynamicTheme, PANEL, PANEL_SCROLL } from '../contexts/DynamicThemeContext'
 import { EDGE_FADE_MASK } from '../lib/themeManager'
 import { MOTION } from '../lib/motion'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 
 const { maskFadeTop, maskFadeBottom, maskFadeSide } = PANEL_SCROLL
 
@@ -36,7 +36,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
   }, [])
 
   const { getAccentColor, triggerEffect } = useDynamicTheme()
-  const { reportInterfaceState, interfaceRef } = useUIState()
+  const { reportInterfaceState, interfaceRef } = useUISelector(state => ({ reportInterfaceState: state.reportInterfaceState, interfaceRef: state.interfaceRef }))
 
   const reportScrollState = useCallback((isScrolling, scrollVelocity, scrollPosition) => {
     const current = interfaceRef.current

@@ -42,10 +42,47 @@ class API {
     this._notifyConnectivity({ type: 'lost' })
   }
 
+  async _replayProfileWrites(entry) {
+    const currentUser = (() => {
+      try {
+        return JSON.parse(safeStorage.get('cached_user') || 'null')
+      } catch {
+        return null
+      }
+    })()
+    if (!this.token || currentUser?.id !== entry.userId) return 0
+    const { audio_quality: audioQuality, ...profileUpdates } = entry.updates
+    try {
+      if (audioQuality !== undefined) {
+        const res = await this._fetch(`${API_BASE}/auth/audio-quality`, {
+          method: 'PUT',
+          headers: this.getHeaders(),
+          body: JSON.stringify({ audio_quality: audioQuality }),
+        })
+        if (!res.ok) throw new Error(`audio quality sync failed (${res.status})`)
+      }
+      if (Object.keys(profileUpdates).length) {
+        const res = await this._fetch(`${API_BASE}/user/profile`, {
+          method: 'PUT',
+          headers: this.getHeaders(),
+          body: JSON.stringify(profileUpdates),
+        })
+        if (!res.ok) throw new Error(`profile sync failed (${res.status})`)
+      }
+      logger.info('[API] Synced offline settings changes:', Object.keys(entry.updates).join(', '))
+      return 1
+    } catch (err) {
+      logger.warn('[API] Offline settings sync failed, will retry:', err.message)
+      offlineBackend.restorePendingProfileWrites(entry)
+      return 0
+    }
+  }
+
   async syncOfflineWrites() {
     if (this.syncingOfflineWrites) return this.syncingOfflineWrites
     const pending = offlineBackend.takePendingPreferenceWrites()
-    if (!pending.length) return 0
+    const pendingProfile = offlineBackend.takePendingProfileWrites()
+    if (!pending.length && !pendingProfile) return 0
     this.syncingOfflineWrites = (async () => {
       const failed = []
       for (const op of pending) {
@@ -60,8 +97,9 @@ class API {
         }
       }
       if (failed.length) offlineBackend.restorePendingPreferenceWrites(failed)
-      logger.info(`[API] Synced ${pending.length - failed.length}/${pending.length} offline preference change(s)`)
-      return pending.length - failed.length
+      if (pending.length) logger.info(`[API] Synced ${pending.length - failed.length}/${pending.length} offline preference change(s)`)
+      const profileSynced = pendingProfile ? await this._replayProfileWrites(pendingProfile) : 0
+      return pending.length - failed.length + profileSynced
     })().finally(() => {
       this.syncingOfflineWrites = null
     })
@@ -221,15 +259,7 @@ class API {
         throw error
       }
 
-      const userData = await res.json()
-
-      try {
-        safeStorage.set('cached_user', JSON.stringify(userData))
-      } catch (err) {
-        logger.error('[API] Failed to cache user data:', err)
-      }
-
-      return userData
+      return res.json()
     })
   }
 
@@ -632,7 +662,7 @@ class API {
   async getVideoClips(trackId) {
     return this._routeRequest('getVideoClips', [trackId], async () => {
       const res = await this._fetch(`${API_BASE}/video-clips/${trackId}`, {
-        headers: this.getHeaders(false),
+        headers: this.getHeaders(),
       })
       if (!res.ok) {
         return { clips: [], reason: 'not_found' }

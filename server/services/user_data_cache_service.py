@@ -1,19 +1,23 @@
 import asyncio
 from typing import Optional, Dict, Set
 from datetime import datetime, timedelta
-from sqlalchemy import select
+from sqlalchemy import select, event, inspect as sa_inspect
+from sqlalchemy.orm import Session
 from database import AsyncSessionLocal, User, TrackPreference, PreferenceType
 from services import log_service
 from services.base_service import SingletonService
+
+_WRITTEN_USERS_KEY = "user_data_cache_written_users"
 
 class UserDataCacheService(SingletonService):
 
     def __init__(self):
         if getattr(self, '_initialized', False):
             return
-        
+
         self._user_cache: Dict[int, User] = {}
         self._user_cache_timestamps: Dict[int, datetime] = {}
+        self._user_versions: Dict[int, int] = {}
         self._user_ttl = timedelta(hours=1)
         
         self._prefs_cache: Dict[int, Dict[str, Set[str]]] = {}
@@ -52,16 +56,23 @@ class UserDataCacheService(SingletonService):
                         self._user_hits += 1
                         return self._user_cache[user_id]
                 self._remove_user_from_cache(user_id)
+            version = self._user_versions.get(user_id, 0)
 
         user = await self._fetch_user_from_db(user_id)
         if user:
-            await self._add_user_to_cache(user)
+            async with self._lock:
+                if self._user_versions.get(user_id, 0) == version:
+                    self._store_user(user)
             self._user_misses += 1
         return user
-    
+
+    def drop_user(self, user_id: int) -> None:
+        self._user_versions[user_id] = self._user_versions.get(user_id, 0) + 1
+        self._remove_user_from_cache(user_id)
+
     async def invalidate_user(self, user_id: int) -> None:
         async with self._lock:
-            self._remove_user_from_cache(user_id)
+            self.drop_user(user_id)
             if user_id in self._prefs_cache:
                 del self._prefs_cache[user_id]
             if user_id in self._prefs_cache_timestamps:
@@ -148,13 +159,12 @@ class UserDataCacheService(SingletonService):
             )
             return result.scalar_one_or_none()
     
-    async def _add_user_to_cache(self, user: User) -> None:
-        async with self._lock:
-            user_id = int(user.id)  # type: ignore
-            self._user_cache[user_id] = user
-            self._user_cache_timestamps[user_id] = datetime.now()
-            log_service.remember_user(user_id, user.username)
-    
+    def _store_user(self, user: User) -> None:
+        user_id = int(user.id)  # type: ignore
+        self._user_cache[user_id] = user
+        self._user_cache_timestamps[user_id] = datetime.now()
+        log_service.remember_user(user_id, user.username)
+
     def _remove_user_from_cache(self, user_id: int) -> None:
         if user_id in self._user_cache:
             del self._user_cache[user_id]
@@ -185,5 +195,27 @@ class UserDataCacheService(SingletonService):
         except Exception as e:
             log_service.error(f"Error fetching preferences for user {user_id}: {e}")
             return {"likes": set(), "super_likes": set(), "bans": set()}
-    
+
 user_data_cache = UserDataCacheService()
+
+
+@event.listens_for(Session, "after_flush")
+def _drop_flushed_users(session, _flush_context):
+    written = session.info.setdefault(_WRITTEN_USERS_KEY, set())
+    for obj in list(session.dirty) + list(session.deleted):
+        if isinstance(obj, User):
+            identity = sa_inspect(obj).identity
+            if identity:
+                written.add(int(identity[0]))
+                user_data_cache.drop_user(int(identity[0]))
+
+
+@event.listens_for(Session, "after_commit")
+def _drop_committed_users(session):
+    for user_id in session.info.pop(_WRITTEN_USERS_KEY, ()):
+        user_data_cache.drop_user(user_id)
+
+
+@event.listens_for(Session, "after_rollback")
+def _forget_rolled_back_users(session):
+    session.info.pop(_WRITTEN_USERS_KEY, None)

@@ -58,6 +58,7 @@ class UserProfileUpdate(BaseModel):
     longitude: Optional[str] = None
     timezone: Optional[str] = None
     tts_muted: Optional[bool] = None
+    notifications_muted: Optional[bool] = None
     dark_mode: Optional[bool] = None
     fps_enabled: Optional[bool] = None
     video_clips_enabled: Optional[bool] = None

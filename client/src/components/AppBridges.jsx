@@ -1,0 +1,178 @@
+import { useEffect, useRef } from 'react'
+import { api } from '../lib/api'
+import { cacheManager } from '../lib/cacheManager'
+import { logger } from '../lib/logger'
+import { useArtwork, useUISelector, uiState } from '../contexts/UIStateContext'
+import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
+
+const DISCONNECT_NOTICE_GRACE_MS = 4000
+const MEDIA_POSITION_REFRESH_MS = 10000
+
+export function TrackDataLoader() {
+  const { trackId, hasArtwork, setTrackData } = useUISelector(state => ({
+    trackId: state.engineState.currentTrack?.id,
+    hasArtwork: state.engineState.currentTrack?.has_artwork,
+    setTrackData: state.setTrackData,
+  }))
+  const currentTrackArtwork = useArtwork(trackId, hasArtwork)
+
+  useEffect(() => {
+    if (!currentTrackArtwork || currentTrackArtwork.startsWith('data:')) return
+    let cancelled = false
+    const warmModalArtwork = () => {
+      import('./modals/Modal')
+        .then(module => { if (!cancelled) return module.prewarmModalAssets(currentTrackArtwork) })
+        .catch(err => logger.warn('[App] Failed to prewarm modal artwork:', err))
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(warmModalArtwork, { timeout: 6000 })
+      return () => { cancelled = true; window.cancelIdleCallback(idleId) }
+    }
+    const timeoutId = setTimeout(warmModalArtwork, 3000)
+    return () => { cancelled = true; clearTimeout(timeoutId) }
+  }, [currentTrackArtwork])
+
+  useEffect(() => {
+    let cancelled = false
+    if (trackId) {
+      const loadFeatures = async () => {
+        try {
+          const cached = await cacheManager.getCachedTrack(trackId)
+          let features = null
+          let lyrics = null
+
+          if (cached?.audioFeatures) {
+            features = cached.audioFeatures
+          } else {
+            try {
+              features = await api.getAudioFeatures(trackId)
+            } catch (err) {
+              logger.error(`[App] Failed to fetch audio features for ${trackId}:`, err)
+            }
+          }
+
+          if (cached?.lyricTimestamps) {
+            lyrics = cached.lyricTimestamps
+          } else {
+            try {
+              lyrics = await api.getLyricTimestamps(trackId)
+            } catch (err) {
+              logger.warn(`[App] Failed to fetch lyric timestamps for ${trackId}:`, err)
+            }
+          }
+
+          if (!cancelled) setTrackData(features, lyrics)
+
+        } catch (err) {
+          logger.warn(`[App] Cache lookup failed for ${trackId}:`, err)
+          if (!cancelled) setTrackData(null, null)
+        }
+      }
+      void loadFeatures()
+    } else {
+      setTrackData(null, null)
+    }
+    return () => { cancelled = true }
+  }, [trackId, setTrackData])
+
+  return null
+}
+
+export function MediaSessionBridge() {
+  const { currentTrack, isPlaying, isCrossfading } = useUISelector(state => ({
+    currentTrack: state.engineState.currentTrack,
+    isPlaying: state.engineState.is_playing,
+    isCrossfading: state.engineState.isCrossfading,
+  }))
+  const { resumePlayback, pausePlayback, previous, next, seek, audio } = usePlaybackActions()
+
+  useEffect(() => {
+    if ('mediaSession' in navigator && currentTrack) {
+      const params = currentTrack?.generation_params || {}
+      const derivedTags = currentTrack?.derived_tags || {}
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: params.title || currentTrack.title || 'Unknown Track',
+        artist: params.artist_name || currentTrack.artist_name || derivedTags?.inspired_artist || 'PLAiR Radio',
+        album: 'PLAiR',
+        artwork: currentTrack.has_artwork ? [
+          { src: `${window.location.origin}/api/artwork/${currentTrack.id}/thumb/512`, sizes: '512x512', type: 'image/jpeg' }
+        ] : [
+          { src: `${window.location.origin}/images/plair_icon_512.png`, sizes: '512x512', type: 'image/png' }
+        ]
+      })
+    }
+  }, [currentTrack])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const handlers = {
+      play: () => void resumePlayback(),
+      pause: () => void pausePlayback(),
+      previoustrack: () => void previous(),
+      nexttrack: () => void next(),
+      seekto: (details) => {
+        if (Number.isFinite(details?.seekTime)) void seek(Math.max(0, details.seekTime * 1000))
+      },
+    }
+    Object.entries(handlers).forEach(([action, handler]) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler)
+      } catch (error) {
+        logger.warn(`[MediaSession] ${action} not supported:`, error)
+      }
+    })
+  }, [resumePlayback, pausePlayback, previous, next, seek])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = currentTrack ? (isPlaying ? 'playing' : 'paused') : 'none'
+    const durationSec = (currentTrack?.duration_ms || 0) / 1000
+    if (!durationSec || typeof navigator.mediaSession.setPositionState !== 'function') return
+    const publishPosition = () => {
+      const element = audio?.getCurrentElement?.()
+      const positionSec = Math.min(Math.max(element?.currentTime || 0, 0), durationSec)
+      try {
+        navigator.mediaSession.setPositionState({ duration: durationSec, position: positionSec, playbackRate: 1 })
+      } catch (error) {
+        logger.warn('[MediaSession] setPositionState failed:', error)
+      }
+    }
+    publishPosition()
+    if (!isPlaying) return
+    const timer = setInterval(publishPosition, MEDIA_POSITION_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [currentTrack, isPlaying, isCrossfading, audio])
+
+  return null
+}
+
+export function ConnectionNotice() {
+  const connected = usePlaybackConnected()
+  const { success, errorToast } = useUISelector(state => ({
+    success: state.toastSuccess,
+    errorToast: state.toastError,
+  }))
+  const wasConnectedRef = useRef(false)
+  const disconnectNoticeRef = useRef(false)
+
+  useEffect(() => {
+    if (!connected && wasConnectedRef.current) {
+      wasConnectedRef.current = false
+      const timer = setTimeout(() => {
+        if (uiState.audioState.offlineMode) return
+        disconnectNoticeRef.current = true
+        errorToast('Disconnected from server. Attempting to reconnect...', 8000, 'top', 'connection')
+      }, DISCONNECT_NOTICE_GRACE_MS)
+      return () => clearTimeout(timer)
+    } else if (connected && !wasConnectedRef.current) {
+      if (disconnectNoticeRef.current) {
+        success('Connected to server', 4000, 'top', 'connection')
+      }
+      disconnectNoticeRef.current = false
+      wasConnectedRef.current = true
+    }
+  }, [connected, errorToast, success])
+
+  return null
+}

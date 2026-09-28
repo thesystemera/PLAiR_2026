@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react'
-import { useUIState, useEnrichedArtwork } from '../contexts/UIStateContext'
+import { useEnrichedArtwork, useUISelector } from '../contexts/UIStateContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { useQuality } from '../contexts/QualityContext'
 import { isSceneRenderingPaused } from '../lib/renderPause'
@@ -253,7 +253,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const [contextLost, setContextLost] = useState(false)
   const [isVisible, setIsVisible] = useState(true)
 
-  const { gyroscopeRef, mouseRef } = useUIState()
+  const { gyroscopeRef, mouseRef } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef }))
   const { isMobile } = useViewport()
   const { parallaxDpr, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
 

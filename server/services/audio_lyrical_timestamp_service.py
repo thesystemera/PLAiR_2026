@@ -606,13 +606,16 @@ class LyricalTimestampService(SingletonService):
             log_service.error(f"Whisper: Save failed: {e}")
             raise
 
+    @staticmethod
+    def _read_json(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
     async def load_timestamps(self, track_id: str) -> Optional[Dict[str, Any]]:
         filepath = self.lyric_timestamps_dir / f"{track_id}.json"
 
         try:
-            async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                return json.loads(content)
+            return await asyncio.to_thread(self._read_json, filepath)
 
         except FileNotFoundError:
             return None

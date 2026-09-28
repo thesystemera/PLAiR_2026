@@ -19,8 +19,8 @@ const OFFLINE_MESSAGES = {
 const STORAGE_KEYS = {
   TRACK_PREFERENCES: 'offline_track_preferences',
   SHOUTOUT_PREFERENCES: 'offline_shoutout_preferences',
-  AUDIO_QUALITY: 'offline_audio_quality',
   PENDING_PREFERENCES: 'offline_pending_preferences',
+  PENDING_PROFILE: 'offline_pending_profile',
   LAST_SEED_MODE: 'lastSeedMode',
 }
 
@@ -59,6 +59,15 @@ function readJson(key, fallback) {
   } catch (err) {
     logger.error(`[OfflineBackend] Failed to read ${key}:`, err)
     return fallback
+  }
+}
+
+function cachedUserId() {
+  try {
+    const cached = safeStorage.get('cached_user')
+    return cached ? JSON.parse(cached)?.id ?? null : null
+  } catch {
+    return null
   }
 }
 
@@ -916,29 +925,40 @@ class OfflineBackend {
     throw new Error('Uploading music requires an internet connection')
   }
 
-  async updateAudioQuality(audioQuality) {
-    try {
-      safeStorage.set(STORAGE_KEYS.AUDIO_QUALITY, audioQuality)
-      logger.info(`[OfflineBackend] Audio quality set to ${audioQuality} (will sync when online)`)
-
-      return {
-        status: 'ok',
-        audio_quality: audioQuality,
-        offline: true,
-      }
-    } catch (err) {
-      logger.error('[OfflineBackend] updateAudioQuality failed:', err)
-      throw err
-    }
+  queueProfileUpdate(updates) {
+    const userId = cachedUserId()
+    if (userId === null) throw new Error('Sign in to save settings')
+    const pending = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
+    const base = pending && pending.userId === userId ? pending.updates : {}
+    writeJson(STORAGE_KEYS.PENDING_PROFILE, { userId, updates: { ...base, ...updates } })
+    logger.info('[OfflineBackend] Settings change queued, will sync when the server is back:', Object.keys(updates).join(', '))
   }
 
-  async updateUserProfile(_updates) {
-    logger.warn('[OfflineBackend] Profile updates require an internet connection')
-    return {
-      status: 'error',
-      error: 'Profile updates require an internet connection',
-      offline: true
-    }
+  pendingProfileUpdates(userId) {
+    const pending = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
+    return pending && pending.userId === userId ? pending.updates : null
+  }
+
+  takePendingProfileWrites() {
+    const pending = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
+    if (pending) safeStorage.remove(STORAGE_KEYS.PENDING_PROFILE)
+    return pending
+  }
+
+  restorePendingProfileWrites(entry) {
+    const current = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
+    if (current && current.userId !== entry.userId) return
+    writeJson(STORAGE_KEYS.PENDING_PROFILE, { userId: entry.userId, updates: { ...entry.updates, ...(current?.updates || {}) } })
+  }
+
+  async updateAudioQuality(audioQuality) {
+    this.queueProfileUpdate({ audio_quality: audioQuality })
+    return { status: 'queued', audio_quality: audioQuality, offline: true }
+  }
+
+  async updateUserProfile(updates) {
+    this.queueProfileUpdate(updates)
+    return { status: 'queued', offline: true }
   }
 
   async updateUsername(_username) {

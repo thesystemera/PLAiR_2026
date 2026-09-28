@@ -1,6 +1,6 @@
 import {logger} from '../lib/logger'
 import {memo, useEffect, useRef, useState} from 'react'
-import {useArtwork, useUIState} from '../contexts/UIStateContext'
+import { useArtwork, useUISelector } from '../contexts/UIStateContext'
 import MediaActions from './MediaActions'
 import {PanelHeader} from './Panel'
 import {useGenerationQueue} from '../contexts/GenerationQueueContext'
@@ -21,7 +21,15 @@ const LYRIC_STATE_CLASSES = [
 ]
 
 const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
-  const { engineState, engineRef, isScreenVisible } = useUIState()
+  const {
+    engineState,
+    engineRef,
+    isScreenVisible,
+  } = useUISelector(state => ({
+    engineState: state.engineState,
+    engineRef: state.engineRef,
+    isScreenVisible: state.isScreenVisible,
+  }))
   const isPlaying = engineState.is_playing
 
   const lyrics = lyricTimestamps?.lyrics || []
@@ -191,7 +199,19 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   useEffect(() => () => clearTimeout(layerSwapTimeoutRef.current), [])
 
   const { togglePanel: toggleQueuePanel } = useGenerationQueue()
-  const { audioFeatures, lyricTimestamps, queueState, interfaceState, engineState } = useUIState()
+  const {
+    audioFeatures,
+    lyricTimestamps,
+    queueState,
+    interfaceState,
+    engineState,
+  } = useUISelector(state => ({
+    audioFeatures: state.audioFeatures,
+    lyricTimestamps: state.lyricTimestamps,
+    queueState: state.queueState,
+    interfaceState: state.interfaceState,
+    engineState: state.engineState,
+  }))
   const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
   const isSplit = isMobile && isLandscape
   const splitOffset = interfaceState.playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32

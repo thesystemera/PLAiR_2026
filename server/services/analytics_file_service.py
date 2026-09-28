@@ -41,4 +41,23 @@ class AnalyticsFileService(SingletonService):
             log_service.error(f"Failed to append event to daily log: {e}")
             return False
 
+    async def append_daily_events(self, events) -> bool:
+        lines = []
+        for event in events:
+            try:
+                lines.append(json.dumps(event) + '\n')
+            except Exception as e:
+                log_service.error(f"Failed to append event to daily log: {e}")
+        if not lines:
+            return False
+        try:
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            file_path = self.events_dir / f"{date_str}.jsonl"
+            async with aiofiles.open(file_path, 'a') as f:
+                await f.write(''.join(lines))
+            return True
+        except Exception as e:
+            log_service.error(f"Failed to append event to daily log: {e}")
+            return False
+
 analytics_file_service = AnalyticsFileService()

@@ -1,3 +1,4 @@
+import asyncio
 import re
 import time
 from typing import Optional
@@ -34,6 +35,7 @@ class LocationSearchUnavailable(Exception):
 class LocationService:
     def __init__(self):
         self._cache: dict[tuple, tuple[float, list]] = {}
+        self._locks: dict[tuple, asyncio.Lock] = {}
         self._unavailable_until = 0.0
         log_service.system("Location Service initialized (Places API New)")
 
@@ -89,11 +91,28 @@ class LocationService:
 
         lat, lon = round(float(location[0]), 3), round(float(location[1]), 3)
         key = (query.lower(), lat, lon, radius, max_results)
+        cached = self._cached(key)
+        if cached is not None:
+            return cached
+        async with self._lock(key):
+            cached = self._cached(key)
+            if cached is not None:
+                return cached
+            return await self._search_nearby(query, location, lat, lon, radius, max_results, key)
+
+    def _cached(self, key: tuple) -> Optional[list]:
         cached = self._cache.get(key)
         if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
             usage_tracking.record_api_call("places", "google_places", cached=True)
             return cached[1]
+        return None
 
+    def _lock(self, key: tuple) -> asyncio.Lock:
+        if len(self._locks) > 500:
+            self._locks = {k: lock for k, lock in self._locks.items() if lock.locked()}
+        return self._locks.setdefault(key, asyncio.Lock())
+
+    async def _search_nearby(self, query, location, lat, lon, radius, max_results, key) -> list[dict]:
         remembered = await place_memory.lookup(query, float(location[0]), float(location[1]), radius, max_results)
         if remembered:
             self._remember_in_process(key, remembered)

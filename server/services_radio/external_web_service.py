@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import time
 import unicodedata
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from typing import Optional
 from urllib.parse import quote
 
@@ -34,6 +34,7 @@ WEATHER_URL = "https://api.openweathermap.org/data/2.5/"
 BIOGRAPHY_NEGATIVE_CACHE_SECONDS = 600
 BIOGRAPHY_CACHE_MAX = 500
 WEATHER_CACHE_MAX = 5000
+FORECAST_CACHE_MAX = 500
 MIN_MUSICBRAINZ_SCORE = 90
 
 
@@ -45,6 +46,7 @@ def _normalize_name(name: str) -> str:
 class WebService:
     def __init__(self, area_store=None, session_maker=None):
         self.weather_cache: dict[tuple, tuple[float, str]] = {}
+        self.forecast_cache: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
         self.biography_cache: dict[str, tuple[float, str, float]] = {}
         self.area_store = area_store
         self._session_maker = session_maker
@@ -201,14 +203,40 @@ class WebService:
         if cached is not None:
             usage_tracking.record_api_call("weather", "openweathermap", cached=True)
             return cached
-        async with self._lock(("weather",) + cache_key):
+        endpoint = "weather" if forecast_type == "current" else "forecast"
+        async with self._lock(("weather", lat, lon, endpoint)):
             cached = self._cached_weather(cache_key)
             if cached is None:
                 cached = await self._stored_weather(cache_key)
+            if cached is None and endpoint == "forecast":
+                cached = self._format_cached_forecast(cache_key, formatter)
             if cached is not None:
                 usage_tracking.record_api_call("weather", "openweathermap", cached=True)
                 return cached
             return await self._fetch_weather(cache_key, formatter)
+
+    def _format_cached_forecast(self, cache_key: tuple, formatter) -> Optional[str]:
+        entry = self.forecast_cache.get(cache_key[:2])
+        if not entry:
+            return None
+        age = time.monotonic() - entry[0]
+        if age >= settings.WEATHER_CACHE_S:
+            self.forecast_cache.pop(cache_key[:2], None)
+            return None
+        formatted = formatter(entry[1])
+        if formatted:
+            self._remember_weather(cache_key, formatted, age)
+        return formatted
+
+    def _remember_forecast(self, cell: tuple, data: dict) -> None:
+        now = time.monotonic()
+        self.forecast_cache.pop(cell, None)
+        self.forecast_cache[cell] = (now, data)
+        while self.forecast_cache:
+            oldest = next(iter(self.forecast_cache.values()))
+            if len(self.forecast_cache) <= FORECAST_CACHE_MAX and now - oldest[0] < settings.WEATHER_CACHE_S:
+                break
+            self.forecast_cache.popitem(last=False)
 
     def _cached_weather(self, cache_key: tuple) -> Optional[str]:
         cached = self.weather_cache.get(cache_key)
@@ -261,7 +289,10 @@ class WebService:
             log_service.error(f"Weather: OpenWeatherMap returned {response.status_code}")
             return None
 
-        formatted = formatter(response.json())
+        data = response.json()
+        if endpoint == "forecast":
+            self._remember_forecast((lat, lon), data)
+        formatted = formatter(data)
         if formatted:
             self._remember_weather(cache_key, formatted)
             if self.area_store is not None and settings.WEATHER_PERSIST_ENABLED:

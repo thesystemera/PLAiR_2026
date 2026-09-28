@@ -2,16 +2,17 @@ import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef
 import {AnimatePresence, motion} from 'framer-motion'
 import {api} from './lib/api'
 import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
-import {cacheManager} from './lib/cacheManager'
 import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
+import {offlineBackend} from './lib/offlineAPI'
+import {ACCOUNT_SETTING_DEFAULTS, loadGuestSettings, settingsFromAccount} from './lib/accountSettings'
 import {MOTION, PRESETS} from './lib/motion'
 import {VERTICAL_EDGE_FADE_MASK} from './lib/themeManager'
-import {useArtwork, useUIState, uiState} from './contexts/UIStateContext'
+import {useUISelector, useUIStateGetter} from './contexts/UIStateContext'
 import {useProfilePicture} from './hooks/useProfilePicture'
-import {usePlayback} from './contexts/PlaybackContext'
+import {usePlaybackActions} from './contexts/PlaybackContext'
 import {useAuth} from './contexts/AuthContext'
-import {TRANSITIONS, UI_FULLSCREEN, useDynamicTheme} from './contexts/DynamicThemeContext'
+import {TRANSITIONS, UI_FULLSCREEN, getCategoryMetadata} from './contexts/DynamicThemeContext'
 import {useWebSocketSubscribe} from './contexts/WebSocketContext'
 import {VoiceRecordingProvider} from './contexts/VoiceRecordingContext'
 import {DJVoiceEngine} from './hooks/useDJAudioStream'
@@ -41,6 +42,7 @@ import {OfflinePill} from './components/OfflinePill'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
+import {ConnectionNotice, MediaSessionBridge, TrackDataLoader} from './components/AppBridges'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -137,8 +139,6 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && !window.__rafDebug) 
   }
 }
 
-const DISCONNECT_NOTICE_GRACE_MS = 4000
-const MEDIA_POSITION_REFRESH_MS = 10000
 
 function App() {
   const [showLogin, setShowLogin] = useState(false)
@@ -161,54 +161,76 @@ function App() {
     user: true
   })
 
-  const { playTrack, seek, seedRadio, addToQueue, resumePlayback, pausePlayback, previous, next, reloadCurrentTrackQuality, connected, audio } = usePlayback()
+  const { playTrack, seek, seedRadio, addToQueue, reloadCurrentTrackQuality, audio } = usePlaybackActions()
   const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
-  const { getAccentColor } = useDynamicTheme()
-  const { setTrackData, updateShaderRegions, updateShaderRadioButtonPos, engineState, publishSettings, settingsState, toastSuccess, toastInfo, toastError, interfaceState, interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, queueState, uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, setMobilePanel } = useUIState()
+  const {
+    updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
+    toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
+    interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, hasActiveJobs,
+    uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, setMobilePanel,
+    tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
+  } = useUISelector(state => ({
+    updateShaderRegions: state.updateShaderRegions,
+    updateShaderRadioButtonPos: state.updateShaderRadioButtonPos,
+    publishSettings: state.publishSettings,
+    fpsEnabled: state.settingsState.fpsEnabled,
+    costTickerEnabled: state.costTickerEnabled,
+    toastSuccess: state.toastSuccess,
+    toastInfo: state.toastInfo,
+    toastError: state.toastError,
+    catalogView: state.interfaceState.catalogView,
+    mobilePanel: state.interfaceState.currentMobilePanel,
+    playerHeight: state.interfaceState.playerHeight,
+    isFullscreenVisuals: state.interfaceState.isFullscreenVisuals,
+    showUIControls: state.interfaceState.showUIControls,
+    interfaceRef: state.interfaceRef,
+    reportInterfaceState: state.reportInterfaceState,
+    shoutoutModalState: state.shoutoutModalState,
+    closeShoutoutModal: state.closeShoutoutModal,
+    hasActiveJobs: state.hasActiveJobs,
+    uploadModalOpen: state.uploadModalOpen,
+    closeUploadModal: state.closeUploadModal,
+    usageModalOpen: state.usageModalOpen,
+    closeUsageModal: state.closeUsageModal,
+    toggleCatalogView: state.toggleCatalogView,
+    setMobilePanel: state.setMobilePanel,
+    tracksUpdateCount: state.contentUpdates.tracks,
+    shoutoutsUpdateCount: state.contentUpdates.shoutouts,
+    publishContentUpdate: state.publishContentUpdate,
+  }))
+  const getUIState = useUIStateGetter()
   const { addJob, setIsOpen: setQueueOpen } = useGenerationQueue()
 
-  const catalogView = interfaceState.catalogView
-  const mobilePanel = interfaceState.currentMobilePanel
-  const playerHeight = interfaceState.playerHeight
 
   const success = toastSuccess
   const info = toastInfo
   const errorToast = toastError
 
-  const isFullscreenVisuals = interfaceState.isFullscreenVisuals
-  const showUIControls = interfaceState.showUIControls
-  const wasConnectedRef = useRef(false)
-  const disconnectNoticeRef = useRef(false)
-
-  const currentTrack = engineState.currentTrack
-  const currentTrackArtwork = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
-
   useGeolocation(isAuthenticated, { periodicCheck: true })
 
-  useEffect(() => {
-    if (!sessionExpiredCount) return
-    setShowRegister(false)
-    setShowLogin(true)
-  }, [sessionExpiredCount])
+  const [handledSessionExpiredCount, setHandledSessionExpiredCount] = useState(sessionExpiredCount)
+  if (sessionExpiredCount !== handledSessionExpiredCount) {
+    setHandledSessionExpiredCount(sessionExpiredCount)
+    if (sessionExpiredCount) {
+      setShowRegister(false)
+      setShowLogin(true)
+    }
+  }
 
   useEffect(() => {
-    if (user) {
-      publishSettings({
-        ttsMuted: user.tts_muted ?? false,
-        notificationsMuted: user.notifications_muted ?? false,
-        audioQuality: user.audio_quality ?? 'auto',
-        fpsEnabled: user.fps_enabled ?? false,
-        videoClipsEnabled: user.video_clips_enabled ?? false,
-        visualQuality: user.visual_quality ?? 'high'
-      })
+    if (!user) {
+      publishSettings({ ...ACCOUNT_SETTING_DEFAULTS, ...loadGuestSettings() })
+      return
     }
-  }, [user?.tts_muted, user?.notifications_muted, user?.audio_quality, user?.fps_enabled, user?.video_clips_enabled, user?.visual_quality, publishSettings])
+    const settings = { ...settingsFromAccount(user), ...settingsFromAccount(offlineBackend.pendingProfileUpdates(user.id)) }
+    if (Object.keys(settings).length) publishSettings(settings)
+  }, [user, publishSettings])
 
   useEffect(() => {
     if (window.__rafDebug) {
-      window.__rafDebug.enabled = settingsState.fpsEnabled
+      window.__rafDebug.enabled = fpsEnabled
     }
-  }, [settingsState.fpsEnabled])
+  }, [fpsEnabled])
 
   useEffect(() => {
     const warmLazyModules = () => {
@@ -223,22 +245,6 @@ function App() {
     const timeoutId = setTimeout(warmLazyModules, 5000)
     return () => clearTimeout(timeoutId)
   }, [])
-
-  useEffect(() => {
-    if (!currentTrackArtwork || currentTrackArtwork.startsWith('data:')) return
-    let cancelled = false
-    const warmModalArtwork = () => {
-      import('./components/modals/Modal')
-        .then(module => { if (!cancelled) return module.prewarmModalAssets(currentTrackArtwork) })
-        .catch(err => logger.warn('[App] Failed to prewarm modal artwork:', err))
-    }
-    if ('requestIdleCallback' in window) {
-      const idleId = window.requestIdleCallback(warmModalArtwork, { timeout: 6000 })
-      return () => { cancelled = true; window.cancelIdleCallback(idleId) }
-    }
-    const timeoutId = setTimeout(warmModalArtwork, 3000)
-    return () => { cancelled = true; clearTimeout(timeoutId) }
-  }, [currentTrackArtwork])
 
   const sharedTrackHandled = useRef(false)
   useEffect(() => {
@@ -312,69 +318,6 @@ function App() {
 
   const showCompatibilityWarning = !isCompatible && !compatibilityWarningDismissed
   const showDemoModal = !authLoading && !user && !demoModalDismissed
-
-  useEffect(() => {
-    if (!connected && wasConnectedRef.current) {
-      wasConnectedRef.current = false
-      const timer = setTimeout(() => {
-        if (uiState.audioState.offlineMode) return
-        disconnectNoticeRef.current = true
-        errorToast('Disconnected from server. Attempting to reconnect...', 8000, 'top', 'connection')
-      }, DISCONNECT_NOTICE_GRACE_MS)
-      return () => clearTimeout(timer)
-    } else if (connected && !wasConnectedRef.current) {
-      if (disconnectNoticeRef.current) {
-        success('Connected to server', 4000, 'top', 'connection')
-      }
-      disconnectNoticeRef.current = false
-      wasConnectedRef.current = true
-    }
-  }, [connected, errorToast, success])
-
-  useEffect(() => {
-    let cancelled = false
-    if (engineState.currentTrack?.id) {
-      const trackId = engineState.currentTrack.id
-
-      const loadFeatures = async () => {
-        try {
-          const cached = await cacheManager.getCachedTrack(trackId)
-          let features = null
-          let lyrics = null
-
-          if (cached?.audioFeatures) {
-            features = cached.audioFeatures
-          } else {
-            try {
-              features = await api.getAudioFeatures(trackId)
-            } catch (err) {
-              logger.error(`[App] Failed to fetch audio features for ${trackId}:`, err)
-            }
-          }
-
-          if (cached?.lyricTimestamps) {
-            lyrics = cached.lyricTimestamps
-          } else {
-            try {
-              lyrics = await api.getLyricTimestamps(trackId)
-            } catch (err) {
-              logger.warn(`[App] Failed to fetch lyric timestamps for ${trackId}:`, err)
-            }
-          }
-
-          if (!cancelled) setTrackData(features, lyrics)
-
-        } catch (err) {
-          logger.warn(`[App] Cache lookup failed for ${trackId}:`, err)
-          if (!cancelled) setTrackData(null, null)
-        }
-      }
-      void loadFeatures()
-    } else {
-      setTrackData(null, null)
-    }
-    return () => { cancelled = true }
-  }, [engineState.currentTrack?.id, setTrackData])
 
   const calculatePanelRegion = useCallback((panelId, windowWidth, windowHeight) => {
     if (isMobile && panelId !== 'player') {
@@ -525,19 +468,17 @@ function App() {
     }
   }, [panelStates, playerHeight, isFullscreenVisuals, showUIControls, isMobile, isPhoneLandscape, mobilePanel, calculatePanelRegion, updateShaderRegions, updateShaderRadioButtonPos])
 
-  const { contentUpdates, publishContentUpdate } = useUIState()
-
   useEffect(() => {
-    if (contentUpdates.tracks > 0) {
+    if (tracksUpdateCount > 0) {
       success('New tracks added!', 5000)
     }
-  }, [contentUpdates.tracks, success])
+  }, [tracksUpdateCount, success])
 
   useEffect(() => {
-    if (contentUpdates.shoutouts > 0) {
+    if (shoutoutsUpdateCount > 0) {
       success('New shoutout added!', 5000)
     }
-  }, [contentUpdates.shoutouts, success])
+  }, [shoutoutsUpdateCount, success])
 
   const handleLogout = useCallback(() => {
     logout()
@@ -545,12 +486,12 @@ function App() {
   }, [logout, info])
 
   const handleToggleFullscreenVisuals = useCallback(() => {
-    const newValue = !interfaceState.isFullscreenVisuals
+    const newValue = !isFullscreenVisuals
     reportInterfaceState({
       isFullscreenVisuals: newValue,
       showUIControls: newValue
     })
-  }, [interfaceState, reportInterfaceState])
+  }, [isFullscreenVisuals, reportInterfaceState])
 
   const uiHideTimeoutRef = useRef(null)
 
@@ -579,15 +520,15 @@ function App() {
   }, [])
 
   const handleFullscreenClick = useCallback(() => {
-    if (interfaceState.isFullscreenVisuals) {
+    if (isFullscreenVisuals) {
       if (uiHideTimeoutRef.current) {
         clearTimeout(uiHideTimeoutRef.current)
         uiHideTimeoutRef.current = null
       }
 
-      reportInterfaceState({ showUIControls: !interfaceState.showUIControls })
+      reportInterfaceState({ showUIControls: !showUIControls })
     }
-  }, [interfaceState, reportInterfaceState])
+  }, [isFullscreenVisuals, showUIControls, reportInterfaceState])
 
   const handlePlayNow = useCallback(async (trackId) => {
     await playTrack(trackId)
@@ -597,73 +538,13 @@ function App() {
     await seek(positionMs)
   }, [seek])
 
-  const { getCategoryMetadata } = useDynamicTheme()
-
   const handleSeedFromTrack = useCallback(async (trackId, seedMode) => {
     const metadata = getCategoryMetadata(seedMode)
     const modeLabel = metadata?.label || 'All Categories'
 
     await seedRadio(seedMode, trackId)
     success(`Seeded ${modeLabel} playlist from track`)
-  }, [seedRadio, success, getCategoryMetadata])
-
-  useEffect(() => {
-    if ('mediaSession' in navigator && currentTrack) {
-      const params = currentTrack?.generation_params || {}
-      const derivedTags = currentTrack?.derived_tags || {}
-
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: params.title || currentTrack.title || 'Unknown Track',
-        artist: params.artist_name || currentTrack.artist_name || derivedTags?.inspired_artist || 'PLAiR Radio',
-        album: 'PLAiR',
-        artwork: currentTrack.has_artwork ? [
-          { src: `${window.location.origin}/api/artwork/${currentTrack.id}/thumb/512`, sizes: '512x512', type: 'image/jpeg' }
-        ] : [
-          { src: `${window.location.origin}/images/plair_icon_512.png`, sizes: '512x512', type: 'image/png' }
-        ]
-      })
-    }
-  }, [currentTrack])
-
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-    const handlers = {
-      play: () => void resumePlayback(),
-      pause: () => void pausePlayback(),
-      previoustrack: () => void previous(),
-      nexttrack: () => void next(),
-      seekto: (details) => {
-        if (Number.isFinite(details?.seekTime)) void seek(Math.max(0, details.seekTime * 1000))
-      },
-    }
-    Object.entries(handlers).forEach(([action, handler]) => {
-      try {
-        navigator.mediaSession.setActionHandler(action, handler)
-      } catch (error) {
-        logger.warn(`[MediaSession] ${action} not supported:`, error)
-      }
-    })
-  }, [resumePlayback, pausePlayback, previous, next, seek])
-
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return
-    navigator.mediaSession.playbackState = currentTrack ? (engineState.is_playing ? 'playing' : 'paused') : 'none'
-    const durationSec = (currentTrack?.duration_ms || 0) / 1000
-    if (!durationSec || typeof navigator.mediaSession.setPositionState !== 'function') return
-    const publishPosition = () => {
-      const element = audio?.getCurrentElement?.()
-      const positionSec = Math.min(Math.max(element?.currentTime || 0, 0), durationSec)
-      try {
-        navigator.mediaSession.setPositionState({ duration: durationSec, position: positionSec, playbackRate: 1 })
-      } catch (error) {
-        logger.warn('[MediaSession] setPositionState failed:', error)
-      }
-    }
-    publishPosition()
-    if (!engineState.is_playing) return
-    const timer = setInterval(publishPosition, MEDIA_POSITION_REFRESH_MS)
-    return () => clearInterval(timer)
-  }, [currentTrack, engineState.is_playing, engineState.isCrossfading, audio])
+  }, [seedRadio, success])
 
   const handleGenerationBatchCompleted = useCallback(async (data) => {
     const trackCount = (data?.tracks) ? data.tracks.length : 0
@@ -710,13 +591,14 @@ function App() {
   }, [])
 
   const handleOpenSeedModal = useCallback(() => {
+    const { engineState } = getUIState()
     const currentTrack = engineState.queue.find(t => t.id === engineState.currentTrack?.id)
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
     startTransition(() => {
       setSeedModalTrack(currentTrack)
       setShowSeedModal(true)
     })
-  }, [engineState.queue, engineState.currentTrack])
+  }, [getUIState])
 
   const handleOpenAnalyticsModal = useCallback(() => {
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
@@ -750,7 +632,7 @@ function App() {
   }, [seedRadio, handleCloseAnalyticsModal])
 
   const handleGenerateJobs = useCallback(async (jobs) => {
-    if (!generationModalTrack || queueState.hasActiveJobs || jobs.length === 0) {
+    if (!generationModalTrack || hasActiveJobs || jobs.length === 0) {
       handleCloseGenerationModal()
       return
     }
@@ -823,7 +705,7 @@ function App() {
     }
 
     handleCloseGenerationModal()
-  }, [generationModalTrack, queueState.hasActiveJobs, addJob, setQueueOpen, success, errorToast, handleCloseGenerationModal])
+  }, [generationModalTrack, hasActiveJobs, addJob, setQueueOpen, success, errorToast, handleCloseGenerationModal])
 
   useWebSocketSubscribe('generation_batch_completed', handleGenerationBatchCompleted)
   useWebSocketSubscribe('generation_retrying', handleGenerationRetrying)
@@ -901,6 +783,9 @@ function App() {
     <DialogProvider>
       <VoiceRecordingProvider mixerRef={audio?.mixerRef}>
         <DJVoiceEngine />
+        <TrackDataLoader />
+        <MediaSessionBridge />
+        <ConnectionNotice />
         <KeyboardControls
         showLogin={showLogin}
         showRegister={showRegister}
@@ -1040,8 +925,8 @@ function App() {
                       aria-current={isActive ? 'page' : undefined}
                       className={`ui-tap relative flex flex-col items-center justify-center flex-1 min-h-0 transition-colors ${isPhoneLandscape ? 'w-full' : 'h-full'}`}
                       style={{
-                        color: isActive ? 'white' : getAccentColor(0.85),
-                        textShadow: isActive ? 'none' : `0 0 8px ${getAccentColor(0.6)}`,
+                        color: isActive ? 'white' : 'var(--theme-accent-85)',
+                        textShadow: isActive ? 'none' : '0 0 8px var(--theme-accent-60)',
                         filter: isActive ? 'none' : 'brightness(1.3)'
                       }}
                     >
@@ -1200,9 +1085,9 @@ function App() {
           />
         </LazyMount>
 
-        {settingsState.fpsEnabled && <FPSCounter />}
-        <LazyMount when={settingsState.costTickerEnabled && Boolean(user?.is_admin)}>
-          {settingsState.costTickerEnabled && user?.is_admin && <CostTicker />}
+        {fpsEnabled && <FPSCounter />}
+        <LazyMount when={costTickerEnabled && Boolean(user?.is_admin)}>
+          {costTickerEnabled && user?.is_admin && <CostTicker />}
         </LazyMount>
       </div>
       </VoiceRecordingProvider>

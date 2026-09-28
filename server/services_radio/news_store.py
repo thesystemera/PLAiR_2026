@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import numpy as np
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, bindparam, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import defer
 
 from config import settings
 from database.models import NewsAired, NewsItem, NewsPull
@@ -104,6 +105,10 @@ def cosine(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> float:
     return float(np.dot(a, b))
 
 
+def _embed_text(title: str, description: Optional[str]) -> str:
+    return title if not description else f"{title}. {description[:200]}"
+
+
 def _iso(value: Optional[datetime]) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if value else ""
 
@@ -137,7 +142,7 @@ class StoredItem:
 
     @property
     def embed_text(self) -> str:
-        return self.title if not self.description else f"{self.title}. {self.description[:200]}"
+        return _embed_text(self.title, self.description)
 
     def as_article(self, aired: bool = False) -> dict:
         return {
@@ -189,6 +194,15 @@ def _item(row: NewsItem, with_embedding: bool) -> StoredItem:
         description=row.description or "", published_at=row.published_at, tags=json.loads(row.tags or "[]"),
         first_seen_at=row.first_seen_at, embedding=unpack(row.embedding) if with_embedding else None,
     )
+
+
+async def _update_many(db, column: str, values: list[tuple]) -> None:
+    if not values:
+        return
+    table = NewsItem.__table__
+    stmt = update(table).where(table.c.id == bindparam("row_id")).values({column: bindparam("row_value")})
+    connection = await db.connection()
+    await connection.execute(stmt, [{"row_id": row_id, "row_value": value} for row_id, value in values])
 
 
 class NewsStore:
@@ -304,17 +318,19 @@ class NewsStore:
         async with self._sessions()() as db:
             rows = (await db.execute(select(NewsItem.id, NewsItem.tags).where(
                 NewsItem.id.in_(list(tags_by_id))))).all()
-            for item_id, current in rows:
-                merged = list(dict.fromkeys(json.loads(current or "[]") + list(tags_by_id[item_id])))
-                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(tags=json.dumps(merged[:24])))
+            await _update_many(db, "tags", [(item_id, json.dumps(list(dict.fromkeys(
+                json.loads(current or "[]") + list(tags_by_id[item_id])))[:24])) for item_id, current in rows])
             await db.commit()
 
     async def items(self, ids: Iterable[int], with_embeddings: bool = False) -> dict:
         ids = list(dict.fromkeys(ids))
         if not ids:
             return {}
+        query = select(NewsItem).where(NewsItem.id.in_(ids))
+        if not with_embeddings:
+            query = query.options(defer(NewsItem.embedding, raiseload=True))
         async with self._sessions()() as db:
-            rows = (await db.execute(select(NewsItem).where(NewsItem.id.in_(ids)))).scalars().all()
+            rows = (await db.execute(query)).scalars().all()
         return {row.id: _item(row, with_embeddings) for row in rows}
 
     async def missing_embeddings(self, ids: Iterable[int]) -> list[tuple]:
@@ -322,16 +338,15 @@ class NewsStore:
         if not ids:
             return []
         async with self._sessions()() as db:
-            rows = (await db.execute(select(NewsItem).where(
-                NewsItem.id.in_(ids), NewsItem.embedding.is_(None)))).scalars().all()
-        return [(row.id, _item(row, False).embed_text) for row in rows]
+            rows = (await db.execute(select(NewsItem.id, NewsItem.title, NewsItem.description).where(
+                NewsItem.id.in_(ids), NewsItem.embedding.is_(None)))).all()
+        return [(item_id, _embed_text(title, description)) for item_id, title, description in rows]
 
     async def set_embeddings(self, vectors: dict) -> None:
         if not vectors:
             return
         async with self._sessions()() as db:
-            for item_id, vector in vectors.items():
-                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(embedding=pack(vector)))
+            await _update_many(db, "embedding", [(item_id, pack(vector)) for item_id, vector in vectors.items()])
             await db.commit()
 
     async def set_pull_embedding(self, pull_id: int, vector) -> None:

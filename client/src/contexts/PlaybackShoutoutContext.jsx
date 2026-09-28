@@ -2,8 +2,8 @@ import { logger } from '../lib/logger'
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useFFTProcessor } from '../hooks/useFFTProcessor'
 import { useAuth } from './AuthContext'
-import { useUIState } from './UIStateContext'
-import { usePlayback } from './PlaybackContext'
+import { useUISelector } from './UIStateContext'
+import { usePlaybackActions } from './PlaybackContext'
 import { api } from '../lib/api'
 import { AudioInteractionManager } from '../lib/audioInteractionManager'
 
@@ -23,10 +23,16 @@ const PROGRESS_INTERVAL_MS = 50
 export function PlaybackShoutoutProvider({ children }) {
   const [playingShoutout, setPlayingShoutout] = useState(null)
   const [progress, setProgress] = useState(0)
-  const { audio } = usePlayback()
+  const { audio } = usePlaybackActions()
   const { user } = useAuth()
   const userId = user?.id || null
-  const { reportEngineStatus, openShoutoutModal } = useUIState()
+  const {
+    reportEngineStatus,
+    openShoutoutModal,
+  } = useUISelector(state => ({
+    reportEngineStatus: state.reportEngineStatus,
+    openShoutoutModal: state.openShoutoutModal,
+  }))
 
   const playStartTimeRef = useRef(null)
   const currentShoutoutRef = useRef(null)

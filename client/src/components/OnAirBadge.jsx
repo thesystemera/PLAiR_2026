@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { PRESETS } from '../lib/motion'
 import { ON_AIR_LAMP, getOnAirSegment } from '../lib/themeManager'
 
@@ -24,7 +24,7 @@ export const OnAirLamp = memo(function OnAirLamp({ paused = false, large = false
 })
 
 export const OnAirBadge = memo(function OnAirBadge(props) {
-  const { engineState } = useUIState()
+  const { engineState } = useUISelector(state => ({ engineState: state.engineState }))
   return <OnAirBadgeView talkBreak={engineState.talkBreak} {...props} />
 })
 
@@ -66,7 +66,7 @@ const EDGE_LEFT = 'linear-gradient(to right, var(--on-air-accent), transparent)'
 const EDGE_RIGHT = 'linear-gradient(to left, var(--on-air-accent), transparent)'
 
 export const OnAirFrame = memo(function OnAirFrame() {
-  const { engineState, interfaceState } = useUIState()
+  const { engineState, interfaceState } = useUISelector(state => ({ engineState: state.engineState, interfaceState: state.interfaceState }))
   return <OnAirFrameView talkBreak={engineState.talkBreak} bottom={interfaceState.playerHeight || 0} />
 })
 

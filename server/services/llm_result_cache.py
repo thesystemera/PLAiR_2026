@@ -27,8 +27,14 @@ class LLMResultCache:
         self._entries: dict[str, tuple[float, Any]] = {}
         self._loaded = not persist
         self._flush_task: Optional[asyncio.Task] = None
+        self._locks: dict[str, asyncio.Lock] = {}
         self.hits = 0
         self.misses = 0
+
+    def lock(self, key: str) -> asyncio.Lock:
+        if len(self._locks) > 256:
+            self._locks = {k: lock for k, lock in self._locks.items() if lock.locked()}
+        return self._locks.setdefault(key, asyncio.Lock())
 
     @property
     def path(self) -> Path:

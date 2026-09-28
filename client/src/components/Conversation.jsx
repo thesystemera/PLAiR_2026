@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { api } from '../lib/api'
 import { messageMotion } from '../lib/motion'
@@ -215,7 +215,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
   const loadingRef = useRef(false)
   const uiSound = useUISound(window.audioEngine)
   const { token } = useAuth()
-  const { toastError } = useUIState()
+  const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
   const { playShoutout } = usePlaybackShoutout()
 
   const formatTimestamp = (ts) => {

@@ -9,7 +9,7 @@ import MediaActions from './MediaActions'
 import { useDynamicTheme, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useAuth } from '../contexts/AuthContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { useDialog } from '../contexts/DialogContext'
@@ -216,7 +216,17 @@ export function Shoutouts() {
   const { user } = useAuth()
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const scrollContainerRef = useRef(null)
-  const { contentUpdates, toastError, toastSuccess, audioState } = useUIState()
+  const {
+    contentUpdates,
+    toastError,
+    toastSuccess,
+    audioState,
+  } = useUISelector(state => ({
+    contentUpdates: state.contentUpdates,
+    toastError: state.toastError,
+    toastSuccess: state.toastSuccess,
+    audioState: state.audioState,
+  }))
   const { showConfirm } = useDialog()
 
   const errorToast = toastError

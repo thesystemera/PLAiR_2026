@@ -1,13 +1,13 @@
 import { memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Volume2 } from 'lucide-react'
-import { useUIState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { PRESETS } from '../lib/motion'
 
 export const AudioUnlockPrompt = memo(function AudioUnlockPrompt() {
-  const { engineState, interfaceState } = useUIState()
-  const { togglePlay } = usePlayback()
+  const { engineState, interfaceState } = useUISelector(state => ({ engineState: state.engineState, interfaceState: state.interfaceState }))
+  const { togglePlay } = usePlaybackActions()
   const visible = !!engineState.audioNeedsTap && !!engineState.isActiveDevice && !interfaceState.isFullscreenVisuals
 
   return (

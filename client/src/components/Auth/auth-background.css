@@ -1,0 +1,17 @@
+.auth-backdrop {
+  background-image: linear-gradient(rgba(10, 7, 5, 0.22), rgba(10, 7, 5, 0.32)), url('/images/auth-bg-desktop.webp');
+  background-position: center;
+  background-size: cover;
+}
+
+.auth-dialog {
+  background-color: rgba(19, 14, 11, 0.94);
+  border-color: rgba(245, 158, 11, 0.24);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62), 0 0 40px rgba(245, 158, 11, 0.08);
+}
+
+@media (max-width: 639px) {
+  .auth-backdrop {
+    background-image: linear-gradient(rgba(10, 7, 5, 0.26), rgba(10, 7, 5, 0.38)), url('/images/auth-bg-mobile.webp');
+  }
+}

@@ -5,6 +5,7 @@ from functools import lru_cache
 from jose import JWTError, jwt
 import bcrypt
 from sqlalchemy import select
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import User
 from config import settings
@@ -119,8 +120,15 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
     log_service.info(f"User authenticated: {username} (ID: {user.id})")
     return user
 
+async def get_cached_user(user_id: int) -> Optional[User]:
+    return await user_data_cache.get_user(user_id)
+
 async def get_user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
     cached_user = await user_data_cache.get_user(user_id)
-    if cached_user:
-        return await db.merge(cached_user)
-    return None
+    if not cached_user:
+        return None
+    try:
+        return await db.merge(cached_user, load=False)
+    except InvalidRequestError:
+        user_data_cache.drop_user(user_id)
+        return await db.get(User, user_id)

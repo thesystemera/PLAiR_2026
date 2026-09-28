@@ -2,7 +2,7 @@ import { logger } from '../lib/logger'
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useNetwork, BITRATE_OPTIONS } from '../contexts/NetworkContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { X, Loader2, Activity } from 'lucide-react'
@@ -12,7 +12,17 @@ import { Expandable } from './Motion'
 
 export function useBitratePicker(onReloadTrackQuality) {
   const { isAuthenticated, refreshUser } = useAuth()
-  const { toastError, audioState, settingsState, publishSettings } = useUIState()
+  const {
+    toastError,
+    audioState,
+    settingsState,
+    publishSettings,
+  } = useUISelector(state => ({
+    toastError: state.toastError,
+    audioState: state.audioState,
+    settingsState: state.settingsState,
+    publishSettings: state.publishSettings,
+  }))
   const {
     detectNetworkQuality: networkDetectQuality,
     getEffectiveBitrate,

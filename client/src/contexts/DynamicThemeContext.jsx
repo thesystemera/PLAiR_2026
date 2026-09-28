@@ -35,7 +35,7 @@ import {
 } from '../lib/themeManager'
 import { logger } from '../lib/logger'
 
-import { useUIState, useArtwork } from './UIStateContext'
+import { useUISelector, useArtwork } from './UIStateContext'
 
 export {
   SPACING,
@@ -91,6 +91,7 @@ export function GenreIcon({ className = "w-6 h-6", ...props }) {
 }
 
 const DynamicThemeContext = createContext(null)
+const ThemeArtworkContext = createContext(null)
 
 const CATEGORY_IDENTITY = {
   favorites: { icon: Heart, color: '#ec4899', label: 'My Favorites' },
@@ -137,13 +138,61 @@ export function useDynamicTheme() {
   return context
 }
 
+export function useThemeArtwork() {
+  return useContext(ThemeArtworkContext)
+}
+
+export function getCategoryMetadata(key) {
+  const k = key?.toLowerCase() || 'general'
+
+  if (k === 'favorites') return { ...CATEGORY_IDENTITY.favorites, id: key }
+  if (k === 'discovery') return { ...CATEGORY_IDENTITY.discovery, id: key }
+
+  if (k === 'top_hits_all') return { ...CATEGORY_IDENTITY.top_hits_all, id: key }
+  if (k === 'top_hits_week') return { ...CATEGORY_IDENTITY.top_hits_week, id: key }
+  if (k === 'top_hits_day') return { ...CATEGORY_IDENTITY.top_hits_day, id: key }
+
+  if (k === 'song_title') return { ...CATEGORY_IDENTITY.song_title, id: key }
+  if (k === 'primary_genre') return { ...CATEGORY_IDENTITY.primary_genre, id: key }
+  if (k === 'primary_artist') return { ...CATEGORY_IDENTITY.primary_artist, id: key }
+  if (k === 'secondary_genres') return { ...CATEGORY_IDENTITY.secondary_genres, id: key }
+  if (k === 'similar_artists') return { ...CATEGORY_IDENTITY.similar_artists, id: key }
+
+  if (k === 'transcription') return { ...CATEGORY_IDENTITY.transcription, id: key }
+  if (k === 'category') return { ...CATEGORY_IDENTITY.category, id: key }
+  if (k === 'tags') return { ...CATEGORY_IDENTITY.tags, id: key }
+  if (k === 'username') return { ...CATEGORY_IDENTITY.username, id: key }
+  if (k === 'location') return { ...CATEGORY_IDENTITY.location, id: key }
+  if (k === 'urgency') return { ...CATEGORY_IDENTITY.urgency, id: key }
+  if (k === 'importance') return { ...CATEGORY_IDENTITY.importance, id: key }
+  if (k === 'target_audience') return { ...CATEGORY_IDENTITY.target_audience, id: key }
+  if (k === 'sentiment') return { ...CATEGORY_IDENTITY.sentiment, id: key }
+  if (k === 'content_theme') return { ...CATEGORY_IDENTITY.content_theme, id: key }
+
+  if (k.includes('secondary') || k.includes('sub')) {
+    return { ...CATEGORY_IDENTITY.secondary_genres, id: key }
+  }
+  if (k.includes('similar_artist')) {
+    return { ...CATEGORY_IDENTITY.similar_artists, id: key }
+  }
+
+  if (k.includes('genre')) return { ...CATEGORY_IDENTITY.genre, id: key }
+  if (k.includes('mood')) return { ...CATEGORY_IDENTITY.mood, id: key }
+  if (k.includes('artist')) return { ...CATEGORY_IDENTITY.artist, id: key }
+  if (k.includes('style')) return { ...CATEGORY_IDENTITY.style, id: key }
+  if (k.includes('theme')) return { ...CATEGORY_IDENTITY.theme, id: key }
+  if (k.includes('lyric')) return { ...CATEGORY_IDENTITY.lyrics, id: key }
+  if (k.includes('vocal')) return { ...CATEGORY_IDENTITY.vocal, id: key }
+  if (k === 'all') return { ...CATEGORY_IDENTITY.general, label: 'All Categories', description: 'Balanced mix', id: key }
+
+  return null
+}
+
 export function DynamicThemeProvider({ children }) {
-  const { engineState } = useUIState()
-  const currentTrack = engineState?.currentTrack
+  const currentTrack = useUISelector(state => state.engineState?.currentTrack)
 
   const [colors, setColors] = useState(null)
   const [currentArtwork, setCurrentArtwork] = useState(null)
-  const [isTransitioning, setIsTransitioning] = useState(false)
   const processedArtworkUrl = useRef(null)
 
   const interactionEffectsRef = useRef({
@@ -164,8 +213,6 @@ export function DynamicThemeProvider({ children }) {
     const updateTheme = async () => {
       if (currentTrack.has_artwork && artworkUrl) {
         processedArtworkUrl.current = artworkUrl
-        setIsTransitioning(true)
-
         try {
           const extractedColors = await extractColorsFromImage(artworkUrl)
           setColors(extractedColors)
@@ -174,18 +221,11 @@ export function DynamicThemeProvider({ children }) {
           logger.error('Failed to extract colors:', error)
           setCurrentArtwork(artworkUrl)
         }
-
-        setTimeout(() => setIsTransitioning(false), 700)
-
       }
       else if (!currentTrack.has_artwork) {
         processedArtworkUrl.current = null
-        setIsTransitioning(true)
-
         setCurrentArtwork(null)
         setColors(null)
-
-        setTimeout(() => setIsTransitioning(false), 700)
       }
     }
 
@@ -227,51 +267,17 @@ export function DynamicThemeProvider({ children }) {
     }
   }, [])
 
-  const getCategoryMetadata = useMemo(() => (key) => {
-    const k = key?.toLowerCase() || 'general'
-
-    if (k === 'favorites') return { ...CATEGORY_IDENTITY.favorites, id: key }
-    if (k === 'discovery') return { ...CATEGORY_IDENTITY.discovery, id: key }
-
-    if (k === 'top_hits_all') return { ...CATEGORY_IDENTITY.top_hits_all, id: key }
-    if (k === 'top_hits_week') return { ...CATEGORY_IDENTITY.top_hits_week, id: key }
-    if (k === 'top_hits_day') return { ...CATEGORY_IDENTITY.top_hits_day, id: key }
-
-    if (k === 'song_title') return { ...CATEGORY_IDENTITY.song_title, id: key }
-    if (k === 'primary_genre') return { ...CATEGORY_IDENTITY.primary_genre, id: key }
-    if (k === 'primary_artist') return { ...CATEGORY_IDENTITY.primary_artist, id: key }
-    if (k === 'secondary_genres') return { ...CATEGORY_IDENTITY.secondary_genres, id: key }
-    if (k === 'similar_artists') return { ...CATEGORY_IDENTITY.similar_artists, id: key }
-
-    if (k === 'transcription') return { ...CATEGORY_IDENTITY.transcription, id: key }
-    if (k === 'category') return { ...CATEGORY_IDENTITY.category, id: key }
-    if (k === 'tags') return { ...CATEGORY_IDENTITY.tags, id: key }
-    if (k === 'username') return { ...CATEGORY_IDENTITY.username, id: key }
-    if (k === 'location') return { ...CATEGORY_IDENTITY.location, id: key }
-    if (k === 'urgency') return { ...CATEGORY_IDENTITY.urgency, id: key }
-    if (k === 'importance') return { ...CATEGORY_IDENTITY.importance, id: key }
-    if (k === 'target_audience') return { ...CATEGORY_IDENTITY.target_audience, id: key }
-    if (k === 'sentiment') return { ...CATEGORY_IDENTITY.sentiment, id: key }
-    if (k === 'content_theme') return { ...CATEGORY_IDENTITY.content_theme, id: key }
-
-    if (k.includes('secondary') || k.includes('sub')) {
-      return { ...CATEGORY_IDENTITY.secondary_genres, id: key }
+  useEffect(() => {
+    const root = document.documentElement
+    const accent = colors?.accent
+    if (accent) {
+      root.style.setProperty('--theme-accent-85', accent.replace('1)', '0.85)'))
+      root.style.setProperty('--theme-accent-60', accent.replace('1)', '0.6)'))
+    } else {
+      root.style.removeProperty('--theme-accent-85')
+      root.style.removeProperty('--theme-accent-60')
     }
-    if (k.includes('similar_artist')) {
-      return { ...CATEGORY_IDENTITY.similar_artists, id: key }
-    }
-
-    if (k.includes('genre')) return { ...CATEGORY_IDENTITY.genre, id: key }
-    if (k.includes('mood')) return { ...CATEGORY_IDENTITY.mood, id: key }
-    if (k.includes('artist')) return { ...CATEGORY_IDENTITY.artist, id: key }
-    if (k.includes('style')) return { ...CATEGORY_IDENTITY.style, id: key }
-    if (k.includes('theme')) return { ...CATEGORY_IDENTITY.theme, id: key }
-    if (k.includes('lyric')) return { ...CATEGORY_IDENTITY.lyrics, id: key }
-    if (k.includes('vocal')) return { ...CATEGORY_IDENTITY.vocal, id: key }
-    if (k === 'all') return { ...CATEGORY_IDENTITY.general, label: 'All Categories', description: 'Balanced mix', id: key }
-
-    return null
-  }, [])
+  }, [colors])
 
   const getters = useMemo(() => ({
     getCategoryMetadata,
@@ -350,20 +356,20 @@ export function DynamicThemeProvider({ children }) {
 
     getUserAvatarGradient: () => colors?.userAvatarGradient,
     getPremiumGradient: () => colors?.premiumGradient
-  }), [colors, getCategoryMetadata])
+  }), [colors])
 
   const value = useMemo(() => ({
-    currentArtwork,
     colors,
-    isTransitioning,
     interactionEffectsRef,
     triggerEffect,
     ...getters
-  }), [currentArtwork, colors, isTransitioning, getters, triggerEffect])
+  }), [colors, getters, triggerEffect])
 
   return (
-    <DynamicThemeContext.Provider value={value}>
-      {children}
-    </DynamicThemeContext.Provider>
+    <ThemeArtworkContext.Provider value={currentArtwork}>
+      <DynamicThemeContext.Provider value={value}>
+        {children}
+      </DynamicThemeContext.Provider>
+    </ThemeArtworkContext.Provider>
   )
 }

@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 
 const FFT_REPORT_INTERVAL = 50
 const FREQUENCY_BANDS = [
@@ -23,7 +23,7 @@ export function useFFTProcessor(isActive, analyser, reportKey, options = {}) {
   const dataArrayRef = useRef(null)
   const bandAmplitudesRef = useRef(new Float32Array(FREQUENCY_BANDS.length))
   const animationFrameRef = useRef(null)
-  const { reportEngineStatus } = useUIState()
+  const { reportEngineStatus } = useUISelector(state => ({ reportEngineStatus: state.reportEngineStatus }))
 
   useEffect(() => {
     window.registerRAFSource?.('FFTProcessor')

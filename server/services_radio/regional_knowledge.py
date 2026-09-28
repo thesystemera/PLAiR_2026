@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 import re
@@ -190,13 +191,14 @@ def resolve_region(user=None, tz_name: Optional[str] = None, location=None) -> O
                   center=(round(coords[0], 1), round(coords[1], 1)))
 
 
-def _tag_tokens(tag: str) -> set:
+@lru_cache(maxsize=8192)
+def _tag_tokens(tag: str) -> frozenset:
     tokens = set()
     for token in _TOKEN.findall(tag.lower().replace("hip-hop", "hiphop")):
         tokens.add(token)
         if token in _TAG_ALIASES:
             tokens.add(_TAG_ALIASES[token])
-    return tokens
+    return frozenset(tokens)
 
 
 def lexical_similarity(a: str, b: str) -> float:
@@ -338,6 +340,8 @@ class RegionalKnowledgeStore:
     def __init__(self, async_session_maker):
         self.async_session_maker = async_session_maker
         self._read_cache: dict = {}
+        self._read_locks: dict[tuple, asyncio.Lock] = {}
+        self._generations: dict[str, int] = {}
 
     async def touch_region(self, region: Region) -> None:
         stmt = pg_insert(RegionalRegion).values(key=region.key, name=region.name, country=region.country,
@@ -387,14 +391,29 @@ class RegionalKnowledgeStore:
                     "item_count": refresh.excluded.item_count})
                 await db.execute(refresh)
             await db.commit()
+        self._generations[region.key] = self._generations.get(region.key, 0) + 1
         self._read_cache = {k: v for k, v in self._read_cache.items() if k[0] != region.key}
+
+    def _cached_items(self, cache_key: tuple) -> Optional[list[KnowledgeItem]]:
+        cached = self._read_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < READ_CACHE_S:
+            return cached[1]
+        return None
 
     async def items(self, region_key: str, kinds: Iterable[str]) -> list[KnowledgeItem]:
         kinds = tuple(sorted(kinds))
         cache_key = (region_key, kinds)
-        cached = self._read_cache.get(cache_key)
-        if cached and time.monotonic() - cached[0] < READ_CACHE_S:
-            return cached[1]
+        cached = self._cached_items(cache_key)
+        if cached is not None:
+            return cached
+        async with self._read_locks.setdefault(cache_key, asyncio.Lock()):
+            cached = self._cached_items(cache_key)
+            if cached is not None:
+                return cached
+            return await self._load_items(cache_key, region_key, kinds)
+
+    async def _load_items(self, cache_key: tuple, region_key: str, kinds: tuple) -> list[KnowledgeItem]:
+        generation = self._generations.get(region_key, 0)
         now = datetime.now(timezone.utc)
         async with self.async_session_maker() as db:
             rows = (await db.execute(
@@ -409,7 +428,10 @@ class RegionalKnowledgeStore:
             title=row.title or "", text=row.text or "", tags=json.loads(row.tags or "[]"), starts_at=row.starts_at,
             expires_at=row.expires_at, url=row.url or "", attribution=row.attribution or "",
         ) for row in rows]
-        self._read_cache[cache_key] = (time.monotonic(), items)
+        if self._generations.get(region_key, 0) == generation:
+            now_s = time.monotonic()
+            self._read_cache = {k: v for k, v in self._read_cache.items() if now_s - v[0] < READ_CACHE_S}
+            self._read_cache[cache_key] = (now_s, items)
         return items
 
     async def region_count(self) -> int:

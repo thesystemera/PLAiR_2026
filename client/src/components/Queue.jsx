@@ -1,11 +1,11 @@
 import { X, Radio, Heart, Star, Ban, TrendingUp } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { flushSync } from 'react-dom'
-import { useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
+import { forwardRef, useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
-import { useUIState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { getFallbackGradientClass } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
@@ -151,14 +151,114 @@ const TrackArtwork = memo(function TrackArtwork({ track }) {
   )
 })
 
+const QueueRow = memo(forwardRef(function QueueRow({
+  track,
+  uniqueKey,
+  layoutKey,
+  exitMode,
+  isPlaying,
+  isLoading,
+  isReselectFlashing,
+  playing,
+  showPreference,
+  preference,
+  colors,
+  onPlay,
+  onRemove,
+  onPlayPointerDown,
+  onPlayPointerMove,
+  onRemovePointerDown,
+  onRemovePointerMove,
+}, ref) {
+  return (
+    <motion.div
+      ref={ref}
+      data-queue-key={uniqueKey}
+      layout="position"
+      layoutDependency={layoutKey}
+      initial={QUEUE_ROW.initial}
+      animate={isReselectFlashing ? {
+        opacity: 1,
+        x: 0,
+        scale: [1, 1.03, 1]
+      } : QUEUE_ROW.animate}
+      variants={QUEUE_ITEM_VARIANTS}
+      custom={exitMode}
+      exit="exit"
+      transition={isReselectFlashing ? QUEUE_ROW_FLASH_TRANSITION : QUEUE_ROW.transition}
+      className="relative p-4 transition-colors cursor-pointer rounded-md"
+      style={{
+        borderBottom: `1px solid ${colors.panelBorder}`,
+        ...(isPlaying ? { backgroundColor: 'transparent' } : {})
+      }}
+      onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = colors.buttonHoverBg)}
+      onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
+      onPointerDown={onPlayPointerDown}
+      onPointerMove={onPlayPointerMove}
+      onPointerUp={(e) => onPlay(e, track.id)}
+    >
+      <div className="flex items-center gap-3">
+        <TrackArtwork track={track} />
+
+        <div className="flex-1 min-w-0">
+          <div className="font-medium truncate transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
+          {track.artist_name && (
+            <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{track.artist_name}</div>
+          )}
+          <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey400 }}>{track.style || 'No style'}</div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {isLoading && (
+            <div className="ui-pop w-5 h-5">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={MOTION.spin}
+                className="w-5 h-5 rounded-full"
+                style={{
+                  border: `2px solid ${colors.loadingSpinner}`,
+                  borderTopColor: 'transparent'
+                }}
+              />
+            </div>
+          )}
+          <PlayingBadge
+            active={isPlaying}
+            playing={playing}
+            background={colors.loadingSpinner}
+            color={colors.white}
+          />
+
+          {showPreference && <PreferenceBadge preference={preference} />}
+
+          <button
+            onPointerDown={onRemovePointerDown}
+            onPointerMove={onRemovePointerMove}
+            onPointerUp={(e) => onRemove(e, track.id)}
+            className="ui-tap p-1 transition-colors"
+            style={{ color: colors.grey400 }}
+            onMouseEnter={(e) => e.currentTarget.style.color = colors.dangerActionText}
+            onMouseLeave={(e) => e.currentTarget.style.color = colors.grey400}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  )
+}))
+
 function QueueComponent({ onSeedRadio, onAnalytics }) {
-  const playback = usePlayback()
+  const playback = usePlaybackActions()
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
-  const { radioState, engineState } = useUIState()
-  const { queue, currentTrack, currentIndex, is_playing: isPlayingNow } = engineState
-  const currentTrackId = currentTrack?.id
-  const activeSeedMode = radioState.activeSeedMode
+  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode } = useUISelector(state => ({
+    queue: state.engineState.queue,
+    currentTrackId: state.engineState.currentTrack?.id,
+    currentIndex: state.engineState.currentIndex,
+    isPlayingNow: state.engineState.is_playing,
+    activeSeedMode: state.radioState.activeSeedMode,
+  }))
   const {
     getWhite,
     getGrey400,
@@ -177,16 +277,26 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   const [loadingTrackId, setLoadingTrackId] = useState(null)
   const [removingTrackIds, setRemovingTrackIds] = useState(new Set())
   const [reselectFlash, setReselectFlash] = useState(null)
-  const playInteraction = usePointerInteraction()
-  const removeInteraction = usePointerInteraction()
+  const {
+    onPointerDown: onPlayPointerDown,
+    onPointerMove: onPlayPointerMove,
+    shouldTrigger: shouldTriggerPlay,
+  } = usePointerInteraction()
+  const {
+    onPointerDown: onRemovePointerDown,
+    onPointerMove: onRemovePointerMove,
+    shouldTrigger: shouldTriggerRemove,
+  } = usePointerInteraction()
+  const currentTrackIdRef = useRef(currentTrackId)
+  useEffect(() => { currentTrackIdRef.current = currentTrackId }, [currentTrackId])
   const seedInteraction = usePointerInteraction()
   const analyticsInteraction = usePointerInteraction()
 
   const handlePlay = useCallback((e, trackId) => {
     e?.preventDefault()
-    if (!playInteraction.shouldTrigger()) return
+    if (!shouldTriggerPlay()) return
 
-    const isReselect = currentTrackId === trackId
+    const isReselect = currentTrackIdRef.current === trackId
 
     if (e.clientX !== undefined && e.clientY !== undefined) {
       triggerEffect('click', {
@@ -208,12 +318,12 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
     triggerHaptic(isReselect ? 'strong' : 'medium')
     setLoadingTrackId(trackId)
     void playback.playTrack(trackId)
-  }, [playback, playInteraction, currentTrackId, triggerEffect, getPlayingRingColor])
+  }, [playback, shouldTriggerPlay, triggerEffect, getPlayingRingColor])
 
   const handleRemove = useCallback((e, trackId) => {
     e?.preventDefault()
     e?.stopPropagation()
-    if (!removeInteraction.shouldTrigger()) return
+    if (!shouldTriggerRemove()) return
     triggerHaptic('medium')
     setRemovingTrackIds(prev => new Set(prev).add(trackId))
     playback.removeFromQueue(trackId).catch(() => {
@@ -223,7 +333,7 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
         return next
       })
     })
-  }, [playback, removeInteraction])
+  }, [playback, shouldTriggerRemove])
 
   const handleSeedButtonClick = useCallback((e) => {
     e?.preventDefault()
@@ -238,6 +348,16 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
     triggerHaptic('medium')
     onAnalytics()
   }, [analyticsInteraction, onAnalytics])
+
+  const rowColors = useMemo(() => ({
+    panelBorder: getPanelBorder(),
+    buttonHoverBg: getButtonHoverBg(),
+    white: getWhite(),
+    grey300: getGrey300(),
+    grey400: getGrey400(),
+    loadingSpinner: getLoadingSpinner(),
+    dangerActionText: getDangerActionText(),
+  }), [getPanelBorder, getButtonHoverBg, getWhite, getGrey300, getGrey400, getLoadingSpinner, getDangerActionText])
 
   const visibleQueue = useMemo(() => {
     const occurrences = new Map()
@@ -473,85 +593,27 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
             <AnimatePresence initial={false} custom={exitMode} mode="popLayout">
               {visibleQueue.map(({ track, key: uniqueKey }) => {
                 const isPlaying = track.id === currentTrackId
-                const isLoading = loadingTrackId === track.id && !isPlaying
-
-                const isReselectFlashing = reselectFlash === track.id
-
                 return (
-                  <motion.div
+                  <QueueRow
                     key={uniqueKey}
-                    data-queue-key={uniqueKey}
-                    layout="position"
-                    layoutDependency={layoutKey}
-                    initial={QUEUE_ROW.initial}
-                    animate={isReselectFlashing ? {
-                      opacity: 1,
-                      x: 0,
-                      scale: [1, 1.03, 1]
-                    } : QUEUE_ROW.animate}
-                    variants={QUEUE_ITEM_VARIANTS}
-                    custom={exitMode}
-                    exit="exit"
-                    transition={isReselectFlashing ? QUEUE_ROW_FLASH_TRANSITION : QUEUE_ROW.transition}
-                    className="relative p-4 transition-colors cursor-pointer rounded-md"
-                    style={{
-                      borderBottom: `1px solid ${getPanelBorder()}`,
-                      ...(isPlaying ? { backgroundColor: 'transparent' } : {})
-                    }}
-                    onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = getButtonHoverBg())}
-                    onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
-                    onPointerDown={playInteraction.onPointerDown}
-                    onPointerMove={playInteraction.onPointerMove}
-                    onPointerUp={(e) => handlePlay(e, track.id)}
-                  >
-                    <div className="flex items-center gap-3">
-                      <TrackArtwork track={track} />
-
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate transition-colors duration-theme" style={{ color: getWhite() }}>{track.title || 'Untitled'}</div>
-                        {track.artist_name && (
-                          <div className="text-sm truncate transition-colors duration-theme" style={{ color: getGrey300() }}>{track.artist_name}</div>
-                        )}
-                        <div className="text-sm truncate transition-colors duration-theme" style={{ color: getGrey400() }}>{track.style || 'No style'}</div>
-                      </div>
-
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {isLoading && (
-                          <div className="ui-pop w-5 h-5">
-                            <motion.div
-                              animate={{ rotate: 360 }}
-                              transition={MOTION.spin}
-                              className="w-5 h-5 rounded-full"
-                              style={{
-                                border: `2px solid ${getLoadingSpinner()}`,
-                                borderTopColor: 'transparent'
-                              }}
-                            />
-                          </div>
-                        )}
-                        <PlayingBadge
-                          active={isPlaying}
-                          playing={isPlayingNow}
-                          background={getLoadingSpinner()}
-                          color={getWhite()}
-                        />
-
-                        {isAuthenticated && <PreferenceBadge preference={getPreference('track', track.id)} />}
-
-                        <button
-                          onPointerDown={removeInteraction.onPointerDown}
-                          onPointerMove={removeInteraction.onPointerMove}
-                          onPointerUp={(e) => handleRemove(e, track.id)}
-                          className="ui-tap p-1 transition-colors"
-                          style={{ color: getGrey400() }}
-                          onMouseEnter={(e) => e.currentTarget.style.color = getDangerActionText()}
-                          onMouseLeave={(e) => e.currentTarget.style.color = getGrey400()}
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
+                    track={track}
+                    uniqueKey={uniqueKey}
+                    layoutKey={layoutKey}
+                    exitMode={exitMode}
+                    isPlaying={isPlaying}
+                    isLoading={loadingTrackId === track.id && !isPlaying}
+                    isReselectFlashing={reselectFlash === track.id}
+                    playing={isPlaying && isPlayingNow}
+                    showPreference={isAuthenticated}
+                    preference={isAuthenticated ? getPreference('track', track.id) : null}
+                    colors={rowColors}
+                    onPlay={handlePlay}
+                    onRemove={handleRemove}
+                    onPlayPointerDown={onPlayPointerDown}
+                    onPlayPointerMove={onPlayPointerMove}
+                    onRemovePointerDown={onRemovePointerDown}
+                    onRemovePointerMove={onRemovePointerMove}
+                  />
                 )
               })}
             </AnimatePresence>

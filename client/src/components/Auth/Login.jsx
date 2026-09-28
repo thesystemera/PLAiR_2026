@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
-import { useUIState } from '../../contexts/UIStateContext'
+import { useUISelector } from '../../contexts/UIStateContext'
 import { X, Eye, EyeOff } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { GLASS } from '../../lib/themeManager'
 import { PRESETS } from '../../lib/motion'
+import './auth-background.css'
 
 const AUTH_OVERLAY_SAFE_STYLE = { paddingTop: 'max(0.75rem, var(--safe-top))', paddingBottom: 'max(0.75rem, var(--safe-bottom))', paddingLeft: 'max(0.75rem, var(--safe-left))', paddingRight: 'max(0.75rem, var(--safe-right))' }
 
@@ -15,7 +16,7 @@ export default function Login({ onClose, onSwitchToRegister }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
-  const { toastSuccess, toastError } = useUIState()
+  const { toastSuccess, toastError } = useUISelector(state => ({ toastSuccess: state.toastSuccess, toastError: state.toastError }))
   const success = toastSuccess
   const errorToast = toastError
 
@@ -38,8 +39,8 @@ export default function Login({ onClose, onSwitchToRegister }) {
   }
 
   return (
-    <motion.div {...PRESETS.modalBackdrop} className={`${GLASS.overlay} flex items-center justify-center z-[60] p-3`} style={AUTH_OVERLAY_SAFE_STYLE}>
-      <motion.div {...PRESETS.modalDialog} className={`${GLASS.dialog} rounded-lg p-6 sm:p-8 w-full max-w-md max-h-full overflow-y-auto overscroll-contain relative`}>
+    <motion.div {...PRESETS.modalBackdrop} className={`${GLASS.overlay} auth-backdrop flex items-center justify-center z-[60] p-3`} style={AUTH_OVERLAY_SAFE_STYLE}>
+      <motion.div {...PRESETS.modalDialog} className={`${GLASS.dialog} auth-dialog rounded-lg p-6 sm:p-8 w-full max-w-md max-h-full overflow-y-auto overscroll-contain relative`}>
         <button
           onClick={onClose}
           className="ui-press absolute top-4 right-4 text-zinc-400 hover:text-white"
@@ -47,7 +48,10 @@ export default function Login({ onClose, onSwitchToRegister }) {
           <X size={24} />
         </button>
 
-        <h2 className="text-2xl font-bold mb-6">Login</h2>
+        <div className="flex items-center gap-3 mb-6">
+          <img src="/images/plair_icon_192.png" alt="" className="w-12 h-12 rounded-xl" />
+          <h2 className="text-2xl font-bold">Login</h2>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -56,7 +60,7 @@ export default function Login({ onClose, onSwitchToRegister }) {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-4 py-2 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
               required
               autoComplete="username"
             />
@@ -69,7 +73,7 @@ export default function Login({ onClose, onSwitchToRegister }) {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
                 required
                 autoComplete="current-password"
               />
@@ -91,7 +95,7 @@ export default function Login({ onClose, onSwitchToRegister }) {
           <button
             type="submit"
             disabled={loading}
-            className="ui-press-soft w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+            className="ui-press-soft w-full py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg disabled:opacity-50"
           >
             {loading ? 'Logging in...' : 'Login'}
           </button>
@@ -101,7 +105,7 @@ export default function Login({ onClose, onSwitchToRegister }) {
           Don&apos;t have an account?{' '}
           <button
             onClick={onSwitchToRegister}
-            className="ui-press text-blue-500 hover:underline"
+            className="ui-press text-amber-400 hover:underline"
           >
             Register
           </button>

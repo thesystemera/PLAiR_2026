@@ -14,7 +14,6 @@ from services_radio.dj_prompt_helper_service import (
     assemble_prompt,
     UnavailableSegment
 )
-from database.models import User
 from services_radio.context_node_registry import node_registry
 from services_radio.context_service import gather_raw_dependencies
 from services_radio import listener_location as location_resolver
@@ -515,8 +514,8 @@ class DJPromptService:
     async def _listener_has_location(self, user_id, needs_coordinates: bool, session_id=None) -> bool:
         user = None
         if user_id:
-            async with self.async_session_maker() as db:
-                user = await db.get(User, user_id)
+            from services.user_data_cache_service import user_data_cache
+            user = await user_data_cache.get_user(user_id)
             if user is None:
                 return False
         location = await location_resolver.resolve(user, session_id, geocode=False)
@@ -541,11 +540,11 @@ class DJPromptService:
 
     @lru_cache(maxsize=1)
     def get_all_paralanguage_meta_tags(self):
-        return list(set(item['title'] for item in self.vector_db_service.meta_db_data.values()))
+        return self.vector_db_service.titles('meta_embeddings')
 
     @lru_cache(maxsize=1)
     def get_all_audio_meta_tags(self):
-        return list(set(item['title'] for item in self.vector_db_service.audio_db_data.values()))
+        return self.vector_db_service.titles('audio_embeddings')
 
     @lru_cache(maxsize=1)
     def get_all_correlated_tags(self):
@@ -668,7 +667,19 @@ class DJPromptService:
             if cached:
                 logger(f"Cached Response: {prompt_name} served from result cache")
                 return cached
+            async with result_cache.lock(result_key):
+                cached = result_cache.get(result_key)
+                if cached:
+                    logger(f"Cached Response: {prompt_name} served from result cache")
+                    return cached
+                return await self._generate_broadcast(prompt_name, system_prompt, logger, clean_role, gpt_type,
+                                                      debug_timestamp, result_key, result_cache)
+        return await self._generate_broadcast(prompt_name, system_prompt, logger, clean_role, gpt_type,
+                                              debug_timestamp, result_key, result_cache)
 
+    async def _generate_broadcast(self, prompt_name: str, system_prompt: str, logger, clean_role: str,
+                                  gpt_type: str | None, debug_timestamp: str | None, result_key: str | None,
+                                  result_cache):
         response_text = await self._execute_gpt_and_save(
             gpt_type=gpt_type or 'broadcast',
             debug_timestamp=debug_timestamp,

@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo } 
 import { api } from '../lib/api'
 import { useAuth } from './AuthContext'
 import { useWebSocketSubscribe } from './WebSocketContext'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 
 const GenerationQueueContext = createContext(null)
 
@@ -31,7 +31,15 @@ const refundNote = (count) => {
 
 export function GenerationQueueProvider({ children }) {
   const { isAuthenticated } = useAuth()
-  const { publishQueueState, toastError, toastInfo } = useUIState()
+  const {
+    publishQueueState,
+    toastError,
+    toastInfo,
+  } = useUISelector(state => ({
+    publishQueueState: state.publishQueueState,
+    toastError: state.toastError,
+    toastInfo: state.toastInfo,
+  }))
   const [jobs, setJobs] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [hasLoadedInitialJobs, setHasLoadedInitialJobs] = useState(false)

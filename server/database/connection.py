@@ -1,23 +1,27 @@
 from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from database.models import Base
 from config import settings
 
-# PostgreSQL sync engine
+ASYNC_POOL_SIZE = 20
+ASYNC_MAX_OVERFLOW = 10
+ASYNC_POOL_TIMEOUT_S = 30
+IDLE_IN_TRANSACTION_TIMEOUT_MS = 120000
+
 _sync_engine = create_engine(
     settings.DATABASE_URL,
-    pool_size=20,
-    max_overflow=30,
-    pool_pre_ping=True
+    poolclass=NullPool
 )
 
-# PostgreSQL async engine
 engine = create_async_engine(
     settings.DATABASE_URL.replace('postgresql://', 'postgresql+asyncpg://'),
-    pool_size=20,
-    max_overflow=30,
+    pool_size=ASYNC_POOL_SIZE,
+    max_overflow=ASYNC_MAX_OVERFLOW,
+    pool_timeout=ASYNC_POOL_TIMEOUT_S,
     pool_pre_ping=True,
-    echo=False
+    echo=False,
+    connect_args={"server_settings": {"idle_in_transaction_session_timeout": str(IDLE_IN_TRANSACTION_TIMEOUT_MS)}}
 )
 
 AsyncSessionLocal = async_sessionmaker(

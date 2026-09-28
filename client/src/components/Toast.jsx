@@ -1,7 +1,7 @@
 import { forwardRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, XCircle, AlertCircle, X } from 'lucide-react'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { SPRING, toastMotion } from '../lib/motion'
 
@@ -35,7 +35,7 @@ const toastConfig = {
 }
 
 const Toast = forwardRef(({ id, message, type, duration: _duration, position }, ref) => {
-  const { removeToast } = useUIState()
+  const { removeToast } = useUISelector(state => ({ removeToast: state.removeToast }))
   const config = toastConfig[type] || toastConfig.info
   const Icon = config.icon
 
@@ -69,7 +69,15 @@ const Toast = forwardRef(({ id, message, type, duration: _duration, position }, 
 Toast.displayName = 'Toast'
 
 export default function ToastContainer() {
-  const { toasts, interfaceState, audioState } = useUIState()
+  const {
+    toasts,
+    interfaceState,
+    audioState,
+  } = useUISelector(state => ({
+    toasts: state.toasts,
+    interfaceState: state.interfaceState,
+    audioState: state.audioState,
+  }))
   const { isMobile, isPhoneLandscape } = useViewport()
   const bottomOffset = interfaceState.playerHeight + (isMobile && !isPhoneLandscape ? 64 : 0) + 12
 

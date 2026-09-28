@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { PANEL, TRANSITIONS, useDynamicTheme, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
-import { useUIState, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
+import { useUISelector, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
 import { EDGE_FADE_MASK } from '../lib/themeManager'
 import { PRESETS } from '../lib/motion'
 
@@ -144,14 +144,14 @@ export const PANEL_CONFIG = {
 }
 
 export function PanelHeader({ title, children, className = '' }) {
-  const { interfaceState } = useUIState()
+  const isScrolling = useUISelector(state => state.interfaceState.isScrolling)
 
   return (
     <motion.div
       className={`absolute top-0 left-0 right-0 z-10 ${className}`}
       style={{ height: `${PANEL.headerHeight}px` }}
       animate={{
-        opacity: interfaceState.isScrolling ? 0.15 : 1
+        opacity: isScrolling ? 0.15 : 1
       }}
       transition={TRANSITIONS.fade}
     >

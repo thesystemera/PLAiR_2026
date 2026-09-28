@@ -14,6 +14,10 @@ const PRECACHE_PUBLIC_FILES = [
   'images/plair_icon_maskable.png',
   'images/plair_icon_maskable_192.png',
   'images/apple-touch-icon.png',
+  'images/badge-mono-96.png',
+  'images/og-image.jpg',
+  'images/auth-bg-desktop.webp',
+  'images/auth-bg-mobile.webp',
   'images/default_background.webp',
   'images/default_profile_pic.png',
 ]

@@ -9,6 +9,26 @@ from database import get_db, User
 from config import settings
 
 
+def _token_user_id(authorization: Optional[str], token: Optional[str]) -> Optional[int]:
+    jwt_token: Optional[str] = None
+    if authorization and authorization.startswith("Bearer "):
+        jwt_token = authorization.replace("Bearer ", "")
+    elif token:
+        jwt_token = token
+
+    if not jwt_token:
+        return None
+
+    payload = auth_service.decode_token(jwt_token)
+    if not payload:
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    return int(user_id)
+
+
 async def get_session_info(
         x_guest_id: Optional[str] = Header(None),
         x_device_id: Optional[str] = Header(None),
@@ -27,19 +47,10 @@ async def get_session_info(
     session_device_name = x_device_name or "Unknown Device"
     session_device_type = x_device_type or "desktop"
 
-    jwt_token: Optional[str] = None
-    if authorization and authorization.startswith("Bearer "):
-        jwt_token = authorization.replace("Bearer ", "")
-    elif token:
-        jwt_token = token
-
     user: Optional[User] = None
-    if jwt_token:
-        payload = auth_service.decode_token(jwt_token)
-        if payload:
-            user_id = payload.get("sub")
-            if user_id:
-                user = await auth_service.get_user_by_id(db, int(user_id))
+    user_id = _token_user_id(authorization, token)
+    if user_id is not None:
+        user = await auth_service.get_user_by_id(db, user_id)
 
     session_id = str(user.id) if user else session_guest_id
 
@@ -70,25 +81,20 @@ async def get_current_user(
         token: Optional[str] = None,
         db: AsyncSession = Depends(get_db)
 ) -> Optional[User]:
-    jwt_token = None
-    if authorization and authorization.startswith("Bearer "):
-        jwt_token = authorization.replace("Bearer ", "")
-    elif token:
-        jwt_token = token
-
-    if not jwt_token:
+    user_id = _token_user_id(authorization, token)
+    if user_id is None:
         return None
+    return await auth_service.get_user_by_id(db, user_id)
 
-    payload = auth_service.decode_token(jwt_token)
 
-    if not payload:
+async def get_cached_current_user(
+        authorization: Optional[str] = Header(None),
+        token: Optional[str] = None
+) -> Optional[User]:
+    user_id = _token_user_id(authorization, token)
+    if user_id is None:
         return None
-
-    user_id = payload.get("sub")
-    if not user_id:
-        return None
-
-    return await auth_service.get_user_by_id(db, int(user_id))  # type: ignore
+    return await auth_service.get_cached_user(user_id)
 
 
 def _peer_ip(request: Request) -> Optional[str]:

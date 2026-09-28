@@ -109,12 +109,10 @@ class AnalyticsService(SingletonService):
             return
 
         try:
-            await asyncio.gather(*[
-                analytics_file_service.append_daily_event(
-                    {k: v for k, v in event.items() if k != "_flush_attempts"}
-                )
+            await analytics_file_service.append_daily_events(
+                {k: v for k, v in event.items() if k != "_flush_attempts"}
                 for event in events_to_flush
-            ])
+            )
         except Exception as e:
             log_service.error(f"Failed to append flushed events to daily file: {e}")
 

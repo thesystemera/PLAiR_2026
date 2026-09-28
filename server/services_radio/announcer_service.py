@@ -155,21 +155,6 @@ class AnnouncerService:
                         log_service.announcer(
                             f"🎙️ [{session_id[:8]}] ⏱️ Waiting for trigger... ({time_until_trigger / 1000:.1f}s)")
                         self.last_countdown_log[session_id] = time.time()
-
-                    if sched.get('pending') and 0 < time_until_trigger <= self.PENDING_THRESHOLD_MS:
-                        next_track_id = None
-                        if current_index < len(queue) - 1:
-                            next_track = queue[current_index + 1]
-                            next_track_id = next_track.get('id')
-
-                        if next_track_id:
-                            del self.scheduled_announcements[session_id]
-                            await self._schedule_announcement_for_transition(
-                                session_id,
-                                current_track_id,
-                                sched['window'],
-                                state
-                            )
                 elif scheduled_track_id != current_track_id:
                     if last_skip_reason == 'auto_crossfade':
                         log_service.announcer(
@@ -586,11 +571,10 @@ class AnnouncerService:
             if not session_state:
                 log_service.announcer(f"🎙️ [{session_id[:8]}] ❌ Session state is None, cancelling")
                 return False
-            current_state = session_state.get_state()
-            current_progress = current_state.get('progress_ms', 0)
-            current_track = current_state.get('current_track', {}).get('id')
-            is_playing = current_state.get('is_playing', False)
-            last_skip_reason = current_state.get('last_skip_reason')
+            current_progress = session_state.get_simulated_progress()
+            current_track = (session_state.current_track or None).get('id')
+            is_playing = session_state.is_playing
+            last_skip_reason = session_state.last_skip_reason
 
             if current_track != current_track_id:
                 if last_skip_reason == 'auto_crossfade' and follow_crossfade:

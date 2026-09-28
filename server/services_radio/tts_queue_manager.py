@@ -20,6 +20,8 @@ SHOUTOUT_AUDIO_ID = re.compile(r'^(\d+)_([A-Za-z0-9_-]+)$')
 SESSION_WORKER_IDLE_TIMEOUT_S = 60.0
 RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
+SPOKEN_CHARS_PER_S = 16.0
+FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 GENERATED_EMBEDDINGS = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings')
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 TTS_TYPE_LABELS = {
@@ -69,15 +71,23 @@ class _SegmentRender:
             self.rate = rate
             self.resolved.set()
 
+def _spoken_seconds(segment: Dict) -> float:
+    if segment.get('type') == 'sentence':
+        return len(segment.get('content') or '') / SPOKEN_CHARS_PER_S
+    return FILLER_SECONDS.get(segment.get('type'), 1.0)
+
+
 class _Turn:
     def __init__(self, seq: int, owner: str, renders: List[_SegmentRender]):
         self.seq = seq
         self.group = (owner, seq)
         self.renders = renders
         self.audible = False
+        self.deadlines = list(itertools.accumulate(
+            (_spoken_seconds(render.segment) for render in renders[:-1]), initial=time.monotonic()))
 
     def rank(self, index: int) -> Tuple:
-        return 0, self.seq, index
+        return 0, self.deadlines[index], self.seq, index
 
     async def wait_resolved_before(self, index: int):
         for render in self.renders[:index]:
@@ -257,13 +267,12 @@ class TTSQueueManager:
 
     async def _tts_allowed(self, user_id: int, is_broadcast: bool, is_temp_user: bool) -> bool:
         if is_broadcast and not is_temp_user and user_id:
-            from database import AsyncSessionLocal, User
-            async with AsyncSessionLocal() as db:
-                user = await db.get(User, user_id)
-                if user and getattr(user, 'tts_muted', False):
-                    log_service.tts_queue_manager(
-                        f"DJ voice: skipped for {log_service.who(user_id=user_id)} (DJ voice muted)")
-                    return False
+            from services.user_data_cache_service import user_data_cache
+            user = await user_data_cache.get_user(user_id)
+            if user and getattr(user, 'tts_muted', False):
+                log_service.tts_queue_manager(
+                    f"DJ voice: skipped for {log_service.who(user_id=user_id)} (DJ voice muted)")
+                return False
         return True
 
     async def add_tts_request(
@@ -566,7 +575,8 @@ class TTSQueueManager:
                 tag = segment['content'].strip()
 
                 cached = await generation.lookup_clip(
-                    tag, embeddings_type, clip_voice, generation.similarity_threshold(embeddings_type), rank
+                    tag, embeddings_type, clip_voice, generation.similarity_threshold(embeddings_type), rank,
+                    listener=owner
                 )
                 cached_file_path = cached[0] if cached else None
                 if cached and can_generate:
@@ -587,11 +597,14 @@ class TTSQueueManager:
 
             elif content_type == 'breath':
                 file_path = await generation.resolve_breath_clip(
-                    (segment.get('context') or segment['content']).strip(), content_voice, rank
+                    (segment.get('context') or segment['content']).strip(), content_voice, rank, listener=owner
                 )
                 render.resolve(await generation.clip_rate(file_path) if file_path else NO_AUDIO)
                 if file_path:
-                    audio_segment = await generation.load_clip(file_path, content_voice, process=False)
+                    audio_segment = await generation.load_clip(
+                        file_path, content_voice, audio_process_mix, previous_segment_end_mix,
+                        next_segment_start_mix, process=audio_process_mix > 0, rank=rank
+                    )
 
             elif content_type == 'user_content':
                 file_path = self._resolve_user_content(segment['content'])
@@ -604,7 +617,7 @@ class TTSQueueManager:
                     log_service.error(f"TTS: User content file not found for input: {segment['content']}")
 
             if audio_segment and file_path:
-                if audio_process_mix > 0 and content_type in ('breath', 'user_content'):
+                if audio_process_mix > 0 and content_type == 'user_content':
                     audio_segment = await generation.process_clip(
                         audio_segment, content_voice, audio_process_mix,
                         previous_segment_end_mix, next_segment_start_mix, rank

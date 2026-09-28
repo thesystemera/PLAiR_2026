@@ -2,14 +2,24 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Modal, ModalProgress, ModalErrorState } from './Modal'
 import { FadeSwap } from '../Motion'
 import { PRESETS } from '../../lib/motion'
-import { useUIState } from '../../contexts/UIStateContext'
+import { useUISelector } from '../../contexts/UIStateContext'
 import { triggerHaptic } from '../../lib/haptics'
 import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
 import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
-  const { engineState, settingsState, setIsOfflineRendering, setVideoPreviewPlaying } = useUIState()
+  const {
+    engineState,
+    settingsState,
+    setIsOfflineRendering,
+    setVideoPreviewPlaying,
+  } = useUISelector(state => ({
+    engineState: state.engineState,
+    settingsState: state.settingsState,
+    setIsOfflineRendering: state.setIsOfflineRendering,
+    setVideoPreviewPlaying: state.setVideoPreviewPlaying,
+  }))
   const currentTrack = track || engineState.currentTrack
 
   const [status, setStatus] = useState('idle')

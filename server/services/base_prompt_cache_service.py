@@ -4,8 +4,6 @@ import os
 import json
 import hashlib
 import numpy as np
-import aiofiles
-from datetime import datetime
 from typing import Any, Dict, Optional, Tuple, Type
 from pydantic import BaseModel
 from services.base_service import SingletonService
@@ -277,36 +275,9 @@ class BasePromptCacheService(SingletonService):
 
         await asyncio.to_thread(_insert)
 
-        await self._save_json_backup(query, analysis, query_hash)
-
         self._log(
             f"  💾 Cached new analysis for '{query}' (Category: {analysis.intent_category})"
         )
-
-    async def _save_json_backup(self, query: str, analysis, query_hash: str):
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"{timestamp}_{query_hash[:8]}.json"
-        filepath = os.path.join(self.json_dir, filename)
-
-        data = {
-            "timestamp": timestamp,
-            "query": query,
-            "query_hash": query_hash,
-            "analysis": {
-                "intent_category": analysis.intent_category,
-                "category_weights": analysis.category_weights.model_dump(),
-                "cleaned_query": analysis.cleaned_query,
-                "confidence": analysis.confidence,
-                "reasoning": analysis.reasoning
-            }
-        }
-
-        try:
-            async with aiofiles.open(filepath, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(data, indent=2, ensure_ascii=False))
-            self._log(f"  📄 Saved JSON backup: {filepath}")
-        except Exception as e:
-            log_service.warning(f"Failed to save JSON cache backup: {e}")
 
     def _log_cache_performance(self):
         total = self.exact_hits + self.semantic_hits + self.gemini_calls

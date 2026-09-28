@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
+import queue
 import sys
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -81,9 +83,8 @@ LOG_CATEGORIES = {
     'audio_features': {'color_fg': 'YELLOW', 'color_bg': 'BG_BLUE', 'enabled': False},
 }
 
-_log_queue: Optional[asyncio.Queue] = None
-_log_task: Optional[asyncio.Task] = None
-_log_loop: Optional[asyncio.AbstractEventLoop] = None
+_log_queue: "queue.SimpleQueue" = queue.SimpleQueue()
+_log_thread: Optional[threading.Thread] = None
 _print_lock = Lock()
 _file_logger: Optional[logging.Logger] = None
 _file_handler: Optional[RotatingFileHandler] = None
@@ -172,20 +173,17 @@ def close_file_logger():
         _file_logger = None
 
 async def start_log_worker():
-    global _log_task, _log_queue, _file_logger, _log_loop
-    _log_loop = asyncio.get_running_loop()
-    if _log_queue is None:
-        _log_queue = asyncio.Queue()
+    global _log_thread
     if _file_logger is None:
         _setup_file_logger()
-    if _log_task is None:
-        _log_task = asyncio.create_task(_log_worker())
+    if _log_thread is None:
+        _log_thread = threading.Thread(target=_log_worker, name="log_worker", daemon=True)
+        _log_thread.start()
 
-async def _log_worker():
-    global _file_logger
+def _log_worker():
     while True:
         try:
-            log_entry = await _log_queue.get()
+            log_entry = _log_queue.get()
             if log_entry is None:
                 break
 
@@ -224,34 +222,10 @@ async def _log_worker():
         except Exception as e:
             print(f"Error in log worker: {e}")
 
-def _enqueue_log(entry):
-    try:
-        _log_queue.put_nowait(entry)
-    except asyncio.QueueFull:
-        pass
-
 def log(message: str, category: str = "info"):
-    global _log_queue
     if not LOG_CATEGORIES.get(category, LOG_CATEGORIES['info'])['enabled']:
         return
-    if _log_queue is None:
-        _log_queue = asyncio.Queue()
-
-    entry = (category, message)
-    loop = _log_loop
-    if loop is not None and not loop.is_closed():
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if running is not loop:
-            try:
-                loop.call_soon_threadsafe(_enqueue_log, entry)
-            except RuntimeError:
-                pass
-            return
-
-    _enqueue_log(entry)
+    _log_queue.put((category, message))
 
 def verbose_enabled(category: str) -> bool:
     global _verbose_categories
@@ -375,12 +349,9 @@ def upscaling(msg): log(msg, "upscaling")
 def audio_features(msg): log(msg, "audio_features")
 
 async def stop_worker():
-    global _log_task, _log_queue
-    if _log_task and _log_queue:
-        await _log_queue.put(None)
-        try:
-            await _log_task
-        except asyncio.CancelledError:
-            pass
-        _log_task = None
+    global _log_thread
+    if _log_thread is not None:
+        _log_queue.put(None)
+        await asyncio.to_thread(_log_thread.join, 5.0)
+        _log_thread = None
     close_file_logger()

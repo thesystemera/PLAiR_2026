@@ -6,7 +6,7 @@ import { triggerHaptic } from '../lib/haptics'
 import { useUISound } from '../hooks/useUISound'
 import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
 import { MOTION } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
@@ -20,7 +20,23 @@ export const MediaSearch = memo(function MediaSearch({
   onToggleQueue,
   audio
 }) {
-  const { queueState, toastError, toastInfo, interfaceState, openUploadModal, toggleCatalogView, audioState } = useUIState()
+  const {
+    queueState,
+    toastError,
+    toastInfo,
+    interfaceState,
+    openUploadModal,
+    toggleCatalogView,
+    audioState,
+  } = useUISelector(state => ({
+    queueState: state.queueState,
+    toastError: state.toastError,
+    toastInfo: state.toastInfo,
+    interfaceState: state.interfaceState,
+    openUploadModal: state.openUploadModal,
+    toggleCatalogView: state.toggleCatalogView,
+    audioState: state.audioState,
+  }))
   const { isLG } = useViewport()
   const compact = isLG
   const currentView = interfaceState.catalogView

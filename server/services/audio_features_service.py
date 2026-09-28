@@ -1,3 +1,4 @@
+import asyncio
 import json
 import librosa
 import numpy as np
@@ -492,13 +493,16 @@ class AudioFeaturesService(SingletonService):
             log_service.error(f"[AudioFeatures] Save failed: {str(e)}")
             raise
 
+    @staticmethod
+    def _read_json(filepath):
+        with open(filepath, 'r') as f:
+            return json.load(f)
+
     async def load_features(self, track_id: str) -> Optional[Dict[str, Any]]:
         filepath = self.audiofeatures_dir / f"{track_id}.json"
 
         try:
-            async with aiofiles.open(filepath, 'r') as f:
-                content = await f.read()
-                return json.loads(content)
+            return await asyncio.to_thread(self._read_json, filepath)
 
         except FileNotFoundError:
             log_service.warning(f"[AudioFeatures] Not found: {track_id}")

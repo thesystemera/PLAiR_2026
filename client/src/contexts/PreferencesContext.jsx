@@ -5,7 +5,7 @@ import { safeStorage } from '../lib/safeStorage'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useAuth } from './AuthContext'
 import { useWebSocketSubscribe, WebSocketContext } from './WebSocketContext'
-import { useUIActions, useUIState, uiState } from './UIStateContext'
+import { useUIActions, uiState, useUISelector } from './UIStateContext'
 
 const PreferencesContext = createContext(null)
 
@@ -46,19 +46,42 @@ function loadGuestRadioMode() {
   }
 }
 
+const accountRadioModeKey = (userId) => `${RADIO_MODE_STORAGE_KEY}:user:${userId}`
+
+function loadAccountRadioMode(userId) {
+  try {
+    const cached = safeStorage.get(accountRadioModeKey(userId))
+    return cached ? normalizeRadioMode(JSON.parse(cached)) : { ...DEFAULT_RADIO_MODE }
+  } catch {
+    return { ...DEFAULT_RADIO_MODE }
+  }
+}
+
+function saveAccountRadioMode(userId, settings) {
+  if (userId != null) safeStorage.set(accountRadioModeKey(userId), JSON.stringify(settings))
+}
+
+function loadRadioModeFor(user) {
+  return user?.id != null ? loadAccountRadioMode(user.id) : loadGuestRadioMode()
+}
+
 export function PreferencesProvider({ children }) {
   const { isAuthenticated, user } = useAuth()
   const { toastSuccess, toastError } = useUIActions()
-  const { settingsState } = useUIState()
+  const { settingsState } = useUISelector(state => ({ settingsState: state.settingsState }))
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
   const success = toastSuccess
   const error = toastError
 
-  const [radioMode, setRadioModeState] = useState(() => loadGuestRadioMode())
+  const [radioMode, setRadioModeState] = useState(() => loadRadioModeFor(user))
   const [radioOptions, setRadioOptions] = useState(DEFAULT_RADIO_OPTIONS)
   const [radioModeSaving, setRadioModeSaving] = useState(false)
   const radioModeRef = useRef(radioMode)
+  const radioModeRequestRef = useRef(0)
+  const radioModeInflightRef = useRef(0)
+  const userIdRef = useRef(user?.id ?? null)
   useEffect(() => { radioModeRef.current = radioMode }, [radioMode])
+  useEffect(() => { userIdRef.current = user?.id ?? null }, [user?.id])
   const ttsMuted = !!settingsState.ttsMuted
 
   const [preferencesByType, setPreferencesByType] = useState({
@@ -160,6 +183,9 @@ export function PreferencesProvider({ children }) {
       setRadioModeState(loadGuestRadioMode())
       return
     }
+    const userId = user?.id
+    setRadioModeState(loadAccountRadioMode(userId))
+    const requestAtStart = radioModeRequestRef.current
     api.getRadioMode()
       .then(data => {
         if (cancelled || !data?.settings) return
@@ -168,11 +194,21 @@ export function PreferencesProvider({ children }) {
           feature_intervals_min: intervals,
           stings_outside_radio_mode: data.options?.stings_outside_radio_mode !== false
         })
-        setRadioModeState(normalizeRadioMode(data.settings, intervals))
+        if (radioModeRequestRef.current !== requestAtStart) return
+        const saved = normalizeRadioMode(data.settings, intervals)
+        saveAccountRadioMode(userId, saved)
+        setRadioModeState(saved)
       })
       .catch(err => logger.warn('[Preferences] Radio Mode settings unavailable:', err))
     return () => { cancelled = true }
   }, [isAuthenticated, user?.id])
+
+  useWebSocketSubscribe('radio_mode_updated', useCallback((data) => {
+    if (!data?.settings || radioModeInflightRef.current > 0) return
+    const saved = normalizeRadioMode(data.settings, radioOptions.feature_intervals_min)
+    saveAccountRadioMode(userIdRef.current, saved)
+    setRadioModeState(saved)
+  }, [radioOptions]))
 
   useEffect(() => {
     if (isAuthenticated || !wsConnected || !wsSend) return
@@ -190,19 +226,25 @@ export function PreferencesProvider({ children }) {
       safeStorage.set(RADIO_MODE_STORAGE_KEY, JSON.stringify(next))
       return next
     }
+    const requestId = ++radioModeRequestRef.current
+    radioModeInflightRef.current += 1
     setRadioModeSaving(true)
     try {
       const data = await api.updateRadioMode(patch)
       const saved = normalizeRadioMode(data?.settings || next, radioOptions.feature_intervals_min)
-      setRadioModeState(saved)
+      if (requestId === radioModeRequestRef.current) {
+        saveAccountRadioMode(userIdRef.current, saved)
+        setRadioModeState(saved)
+      }
       return saved
     } catch (err) {
       logger.error('[Preferences] Failed to save Radio Mode settings:', err)
-      setRadioModeState(previous)
+      if (requestId === radioModeRequestRef.current) setRadioModeState(previous)
       error(uiState.audioState.offlineMode ? err.message : 'Could not save Radio Mode settings')
       return previous
     } finally {
-      setRadioModeSaving(false)
+      radioModeInflightRef.current -= 1
+      if (radioModeInflightRef.current === 0) setRadioModeSaving(false)
     }
   }, [isAuthenticated, radioOptions, error])
 

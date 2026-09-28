@@ -1,7 +1,7 @@
 import { memo, useState, useEffect, useCallback } from 'react'
 import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock } from 'lucide-react'
 import { usePreferences } from '../contexts/PreferencesContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
 import { ExpandSection, Expandable } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
@@ -16,7 +16,15 @@ const SEGMENTS = [
 
 export const RadioModeSettings = memo(function RadioModeSettings({ className = '' }) {
   const { radioMode, radioOptions, radioModeSaving, updateRadioMode } = usePreferences()
-  const { settingsState, toastSuccess, audioState } = useUIState()
+  const {
+    settingsState,
+    toastSuccess,
+    audioState,
+  } = useUISelector(state => ({
+    settingsState: state.settingsState,
+    toastSuccess: state.toastSuccess,
+    audioState: state.audioState,
+  }))
   const [open, setOpen] = useState(() => safeStorage.get('userPanel_radioMode') === 'true')
 
   useEffect(() => {

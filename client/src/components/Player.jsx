@@ -8,11 +8,12 @@ import { useDevicePicker, DevicePickerButton, DevicePickerBanner, DevicePickerPa
 import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './BitratePicker'
 import { GenerationQueuePanel } from './GenerationQueuePanel'
 import { OnAirBadge } from './OnAirBadge'
-import { useArtwork, useUIState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useArtwork, useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { api } from '../lib/api'
+import { saveGuestSettings } from '../lib/accountSettings'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
 
@@ -218,10 +219,26 @@ const StaticWaveformLayer = memo(function StaticWaveformLayer({ bars, variant })
 })
 
 export const Player = memo(function Player({ onSeek, onArtworkClick }) {
-  const playback = usePlayback()
+  const playback = usePlaybackActions()
   const { togglePlay, next, previous, audio } = playback
-  const { audioFeatures, audioState, engineState, engineRef, settingsState, publishSettings, toastSuccess, toastError, isScreenVisible, reportInterfaceState } = useUIState()
-  const { currentTrack, is_playing, isCrossfading } = engineState
+  const {
+    audioFeatures, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess, toastError,
+    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading,
+  } = useUISelector(state => ({
+    audioFeatures: state.audioFeatures,
+    isCached: state.isCached,
+    engineRef: state.engineRef,
+    notificationsMuted: state.notificationsMuted,
+    ttsMuted: state.ttsMuted,
+    publishSettings: state.publishSettings,
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+    isScreenVisible: state.isScreenVisible,
+    reportInterfaceState: state.reportInterfaceState,
+    currentTrack: state.engineState.currentTrack,
+    is_playing: state.engineState.is_playing,
+    isCrossfading: state.engineState.isCrossfading,
+  }))
   const { user, refreshUser } = useAuth()
   const { isPhoneLandscape } = useViewport()
   const compact = isPhoneLandscape
@@ -397,9 +414,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     e?.preventDefault()
     triggerHaptic('medium')
     try {
-      const ttsMuted = settingsState.ttsMuted
-      const notificationsMuted = settingsState.notificationsMuted
-
       let newTtsMuted, newNotificationsMuted, message
 
       if (!ttsMuted && !notificationsMuted) {
@@ -418,6 +432,12 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
 
       publishSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
 
+      if (!user) {
+        saveGuestSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
+        toastSuccess(message)
+        return
+      }
+
       await api.updateUserProfile({
         tts_muted: newTtsMuted,
         notifications_muted: newNotificationsMuted
@@ -428,12 +448,9 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       publishSettings({ ttsMuted: user?.tts_muted ?? false, notificationsMuted: user?.notifications_muted ?? false })
       toastError('Failed to toggle sounds')
     }
-  }, [settingsState, publishSettings, user, refreshUser, toastSuccess, toastError])
+  }, [ttsMuted, notificationsMuted, publishSettings, user, refreshUser, toastSuccess, toastError])
 
   const soundState = useMemo(() => {
-    const ttsMuted = settingsState.ttsMuted
-    const notificationsMuted = settingsState.notificationsMuted
-
     if (!ttsMuted && !notificationsMuted) {
       return { icon: 'volume', title: 'DJ + PING (click for PING only)', color: false }
     } else if (ttsMuted && !notificationsMuted) {
@@ -441,7 +458,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     } else {
       return { icon: 'muted', title: 'OFF (click for DJ + PING)', color: 'error' }
     }
-  }, [settingsState])
+  }, [ttsMuted, notificationsMuted])
 
   const handleMouseEnterButton = useCallback((e) => {
     e.currentTarget.style.backgroundColor = getGrey800()
@@ -767,7 +784,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           isOpen={bitratePicker.isOpen}
           setIsOpen={bitratePicker.setIsOpen}
         />
-        {audioState.isCached && (
+        {isCached && (
           <div
             className="absolute -top-1 -right-1 cursor-help z-10 pointer-events-none"
             title="Playing from local cache"

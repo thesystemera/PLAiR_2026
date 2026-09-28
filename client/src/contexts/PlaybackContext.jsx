@@ -5,7 +5,7 @@ import { useAudio } from '../hooks/useAudio'
 import { useWebSocketSubscribe, WebSocketContext } from './WebSocketContext'
 import { cacheManager } from '../lib/cacheManager'
 import { useAuth } from './AuthContext'
-import { useUIState, uiState } from './UIStateContext'
+import { useUISelector, uiState } from './UIStateContext'
 import { useNetwork } from './NetworkContext'
 import { getDeviceId } from '../lib/session'
 import { offlineBackend } from '../lib/offlineAPI'
@@ -30,6 +30,8 @@ import {
 } from '../lib/playbackSync'
 
 const PlaybackContext = createContext(null)
+const PlaybackActionsContext = createContext(null)
+const PlaybackConnectionContext = createContext(false)
 
 const INITIAL_STATE = {
   current_track: null,
@@ -115,7 +117,18 @@ export function PlaybackProvider({ children }) {
   const [state, setState] = useState(INITIAL_STATE)
   const progressMsRef = useRef(0)
   const { user } = useAuth()
-  const { reportEngineStatus, publishAudioState, publishRadioState, audioState, settingsState, engineState, toastInfo } = useUIState()
+  const {
+    reportEngineStatus, publishAudioState, publishRadioState, settingsState, toastInfo, offlineMode, buffering, isActiveDevice,
+  } = useUISelector(state => ({
+    reportEngineStatus: state.reportEngineStatus,
+    publishAudioState: state.publishAudioState,
+    publishRadioState: state.publishRadioState,
+    settingsState: state.settingsState,
+    toastInfo: state.toastInfo,
+    offlineMode: state.audioState.offlineMode,
+    buffering: state.audioState.buffering,
+    isActiveDevice: state.engineState.isActiveDevice,
+  }))
   const settingsStateRef = useRef(settingsState)
   const { getEffectiveBitrate } = useNetwork()
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
@@ -1059,7 +1072,6 @@ export function PlaybackProvider({ children }) {
 
   useEffect(() => { pauseFromOutsideRef.current = pauseFromOutside }, [pauseFromOutside])
 
-  const offlineMode = audioState.offlineMode
   useEffect(() => {
     if (offlineMode) {
       if (localRef.current) localRef.current.yielding = false
@@ -1073,7 +1085,6 @@ export function PlaybackProvider({ children }) {
     if (!wsConnected) serverStashRef.current = null
   }, [wsConnected])
 
-  const buffering = audioState.buffering
   useEffect(() => {
     clearStarvedTimer()
     if (!buffering || !offlineMode) return
@@ -1089,7 +1100,6 @@ export function PlaybackProvider({ children }) {
     return clearStarvedTimer
   }, [buffering, offlineMode, audio, clearStarvedTimer, localSkip])
 
-  const isActiveDevice = engineState.isActiveDevice
   const currentTrackId = state.current_track?.id
   const currentDurationMs = state.current_track?.duration_ms
 
@@ -1464,9 +1474,7 @@ export function PlaybackProvider({ children }) {
     }
   }, [audio, getTrackSource])
 
-  const value = useMemo(() => ({
-    state,
-    connected,
+  const actions = useMemo(() => ({
     playTrack,
     togglePlay,
     resumePlayback,
@@ -1482,15 +1490,21 @@ export function PlaybackProvider({ children }) {
     audio,
     talkBreak,
   }), [
-    state, connected, playTrack, togglePlay, resumePlayback, pausePlayback, next, previous,
+    playTrack, togglePlay, resumePlayback, pausePlayback, next, previous,
     seek, addToQueue, removeFromQueue, seedRadio,
     reloadCurrentTrackQuality, transferPlayback, audio, talkBreak
   ])
 
+  const value = useMemo(() => ({ state, connected, ...actions }), [state, connected, actions])
+
   return (
-    <PlaybackContext.Provider value={value}>
-      {children}
-    </PlaybackContext.Provider>
+    <PlaybackActionsContext.Provider value={actions}>
+      <PlaybackConnectionContext.Provider value={connected}>
+        <PlaybackContext.Provider value={value}>
+          {children}
+        </PlaybackContext.Provider>
+      </PlaybackConnectionContext.Provider>
+    </PlaybackActionsContext.Provider>
   )
 }
 
@@ -1498,4 +1512,14 @@ export function usePlayback() {
   const context = useContext(PlaybackContext)
   if (!context) throw new Error('usePlayback must be used within PlaybackProvider')
   return context
+}
+
+export function usePlaybackActions() {
+  const context = useContext(PlaybackActionsContext)
+  if (!context) throw new Error('usePlaybackActions must be used within PlaybackProvider')
+  return context
+}
+
+export function usePlaybackConnected() {
+  return useContext(PlaybackConnectionContext)
 }

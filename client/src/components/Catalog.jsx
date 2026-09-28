@@ -11,8 +11,8 @@ import { useDynamicTheme, GenreIcon, CatalogIcon } from '../contexts/DynamicThem
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { MediaSearchMatchBadge } from './MediaSearchMatchBadge'
-import { useRadioState, useUIState, uiState } from '../contexts/UIStateContext'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { useRadioState, useUISelector, uiState } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { MediaSearch } from './MediaSearch'
 import { Scroller } from './Scroller'
 import { api } from '../lib/api'
@@ -264,11 +264,22 @@ const GenreCard = memo(function GenreCard({ genre, count, subGenres, onSelectGen
 const getTrackArtworkId = (track) => (track.has_artwork === false ? null : track.id)
 
 function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
-  const playback = usePlayback()
-  const { engineState, contentUpdates } = useUIState()
-  const contentUpdateCounter = contentUpdates.tracks
-  const currentTrackId = engineState.currentTrack?.id
-  const queuedTrackIds = useMemo(() => engineState.queue.map(t => t.id), [engineState.queue])
+  const playback = usePlaybackActions()
+  const {
+    currentTrackId, queue, contentUpdateCounter, toastInfo, toastError,
+    connectionMode, isOnline, offlineMode, hasActiveJobs,
+  } = useUISelector(state => ({
+    currentTrackId: state.engineState.currentTrack?.id,
+    queue: state.engineState.queue,
+    contentUpdateCounter: state.contentUpdates.tracks,
+    toastInfo: state.toastInfo,
+    toastError: state.toastError,
+    connectionMode: state.connectionMode,
+    isOnline: state.isOnline,
+    offlineMode: state.audioState.offlineMode,
+    hasActiveJobs: state.queueState.hasActiveJobs,
+  }))
+  const queuedTrackIds = useMemo(() => queue.map(t => t.id), [queue])
 
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -299,13 +310,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     }
   }, [itemsPerRow, measuredRowHeight])
 
-  const { toastInfo, toastError, audioState } = useUIState()
   const { togglePanel: toggleQueuePanel, addJob } = useGenerationQueue()
-  const { queueState } = useUIState()
 
   const info = toastInfo
   const errorToast = toastError
-  const hasActiveJobs = queueState.hasActiveJobs
 
   const {
     isSearchMode,
@@ -358,11 +366,11 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     pageSize: 60
   })
 
-  const serverReachable = audioState.connectionMode !== 'degraded' && audioState.connectionMode !== 'offline'
+  const serverReachable = connectionMode !== 'degraded' && connectionMode !== 'offline'
 
   useEffect(() => {
     const loadData = async () => {
-      logger.info(`[Catalog] loadData triggered - sortMode: ${sortMode}, isOnline: ${audioState.isOnline}, selectedGenre: ${selectedGenre}`)
+      logger.info(`[Catalog] loadData triggered - sortMode: ${sortMode}, isOnline: ${isOnline}, selectedGenre: ${selectedGenre}`)
       setLoading(true)
       try {
         if (sortMode === 'genre' && !selectedGenre) {
@@ -394,7 +402,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       }
     }
     void loadData()
-  }, [sortMode, selectedGenre, audioState.isOnline, serverReachable])
+  }, [sortMode, selectedGenre, isOnline, serverReachable])
 
   const sortModeRef = useRef(sortMode)
   const selectedGenreRef = useRef(selectedGenre)
@@ -676,7 +684,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
                 onBackToGenres={handleBackToGenres}
                 contentType="catalog"
               />
-              {audioState.offlineMode && !isSearchMode ? (
+              {offlineMode && !isSearchMode ? (
                 <MediaEmptyState
                   icon={CatalogIcon}
                   title="No downloads yet"
@@ -685,8 +693,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
               ) : (
                 <MediaEmptyState
                   icon={CatalogIcon}
-                  title={audioState.offlineMode ? 'No downloaded tracks match' : 'No tracks found'}
-                  subtitle={audioState.offlineMode ? 'Offline search only looks through your downloads' : 'Try adjusting your search or browse the catalog'}
+                  title={offlineMode ? 'No downloaded tracks match' : 'No tracks found'}
+                  subtitle={offlineMode ? 'Offline search only looks through your downloads' : 'Try adjusting your search or browse the catalog'}
                 />
               )}
             </div>

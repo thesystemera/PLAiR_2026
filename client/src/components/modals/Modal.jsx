@@ -4,7 +4,7 @@ import { startTransition, useDeferredValue, useEffect, useState, useRef, memo, u
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../../hooks/usePointerInteraction'
-import { useUIState, useArtwork } from '../../contexts/UIStateContext'
+import { useArtwork, useUISelector } from '../../contexts/UIStateContext'
 import { DURATION, MOTION, PRESETS, SPRING, TWEEN } from '../../lib/motion'
 import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
@@ -329,7 +329,7 @@ export function Modal({
   categoryOverride = null,
   gradientOpacity = 0.85,
 }) {
-  const { engineState, radioState } = useUIState()
+  const { engineState, radioState } = useUISelector(state => ({ engineState: state.engineState, radioState: state.radioState }))
   const { isShortViewport } = useViewport()
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
   const { registerOverlay, pauseRendering } = useQuality()
@@ -608,7 +608,7 @@ export const ModalButton = memo(function ModalButton({
   className = '',
   ...props
 }) {
-  const { radioState } = useUIState()
+  const { radioState } = useUISelector(state => ({ radioState: state.radioState }))
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
 
   const activeCategory = radioState.activeSeedMode || 'all'
@@ -834,7 +834,7 @@ export const ModalProgress = memo(function ModalProgress({
   onCancel,
   className = ''
 }) {
-  const { radioState } = useUIState()
+  const { radioState } = useUISelector(state => ({ radioState: state.radioState }))
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
 
   const activeCategory = radioState.activeSeedMode || 'all'

@@ -10,8 +10,8 @@
     "window-controls-overlay",
     "standalone"
   ],
-  "background_color": "#121212",
-  "theme_color": "#000000",
+  "background_color": "#171210",
+  "theme_color": "#171210",
   "orientation": "any",
   "icons": [
     {

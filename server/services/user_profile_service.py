@@ -152,7 +152,7 @@ class UserProfileService:
         if settings_to_broadcast and self._websocket_service is not None:
             await self._websocket_service.broadcast_user_settings_updated(user_id, settings_to_broadcast)
 
-        return {"status": "success"}
+        return {"status": "success", "settings": settings_to_broadcast}
 
     async def delete_conversations(self, user_id: int, db: AsyncSession) -> None:
         await db.execute(delete(Conversation).where(Conversation.user_id == user_id))  # type: ignore

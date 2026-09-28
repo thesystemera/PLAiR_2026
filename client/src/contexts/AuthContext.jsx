@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef, useCallback, us
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 
 const AuthContext = createContext(null)
 
@@ -73,7 +73,7 @@ function withTimeout(promise, ms) {
 const isAuthFailure = (err) => err?.status === 401 || err?.status === 403
 
 export const AuthProvider = ({ children }) => {
-  const { publishAuthState, toastWarning } = useUIState()
+  const { publishAuthState, toastWarning } = useUISelector(state => ({ publishAuthState: state.publishAuthState, toastWarning: state.toastWarning }))
   const [initial] = useState(readInitialAuth)
   const [user, setUser] = useState(initial.user)
   const [token, setToken] = useState(initial.token)
@@ -81,6 +81,7 @@ export const AuthProvider = ({ children }) => {
   const [sessionExpiredCount, setSessionExpiredCount] = useState(0)
   const tokenRef = useRef(initial.token)
   const validationRef = useRef(null)
+  const revalidateSequenceRef = useRef(0)
   const lastValidatedRef = useRef(0)
   const refreshingRef = useRef(false)
   const toastWarningRef = useRef(toastWarning)
@@ -143,9 +144,11 @@ export const AuthProvider = ({ children }) => {
     }
 
     const entry = { token: current, promise: null, serverRejected: reason === 'server_rejected' }
+    const sequence = ++revalidateSequenceRef.current
     const promise = withTimeout(api.checkSession(current), REVALIDATE_TIMEOUT_MS)
       .then(data => {
         if (tokenRef.current !== current) return false
+        if (sequence !== revalidateSequenceRef.current) return true
         lastValidatedRef.current = Date.now()
         acceptUser(data)
         void maybeRefreshToken()

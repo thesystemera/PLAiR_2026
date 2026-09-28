@@ -1,7 +1,7 @@
 import { logger } from '../lib/logger'
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { cacheManager } from '../lib/cacheManager'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 import { useNetwork } from './NetworkContext'
 
 const StorageContext = createContext(null)
@@ -19,7 +19,15 @@ export function triggerStorageRefresh() {
 }
 
 export function StorageProvider({ children }) {
-  const { toastSuccess, toastError, audioState } = useUIState()
+  const {
+    toastSuccess,
+    toastError,
+    audioState,
+  } = useUISelector(state => ({
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+    audioState: state.audioState,
+  }))
   const success = toastSuccess
   const showError = toastError
   const { networkQuality } = useNetwork()

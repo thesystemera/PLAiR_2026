@@ -2,13 +2,21 @@ import { createContext, useContext, useEffect } from 'react'
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder'
 import { useFFTProcessor } from '../hooks/useFFTProcessor'
 import { triggerHaptic } from '../lib/haptics'
-import { useUIState } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
 
 const VoiceRecordingContext = createContext(null)
 
 export function VoiceRecordingProvider({ children, mixerRef }) {
   const voiceRecorder = useVoiceRecorder()
-  const { setMixerRef, toastError, reportEngineStatus } = useUIState()
+  const {
+    setMixerRef,
+    toastError,
+    reportEngineStatus,
+  } = useUISelector(state => ({
+    setMixerRef: state.setMixerRef,
+    toastError: state.toastError,
+    reportEngineStatus: state.reportEngineStatus,
+  }))
   const errorToast = toastError
 
   useFFTProcessor(

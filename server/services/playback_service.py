@@ -108,9 +108,10 @@ class PlaybackService(SingletonService):
             except ValueError:
                 pass
 
-    async def _notify_session_change(self, session_id: str):
+    async def _notify_session_change(self, session_id: str, state: Optional[Dict[str, Any]] = None):
         if session_id in self.session_callbacks:
-            state = self.get_session_state(session_id).get_state()
+            if state is None:
+                state = self.get_session_state(session_id).get_state()
             callbacks = list(self.session_callbacks[session_id])
             for callback in callbacks:
                 try:
@@ -127,46 +128,46 @@ class PlaybackService(SingletonService):
     async def play(self, session_id: str, track_id: Optional[str] = None, user_id: Optional[int] = None,
                    device_id: Optional[str] = None, claim: bool = False):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.play(track_id=track_id, user_id=user_id, notify_callback=notify,
                                 device_id=device_id, claim=claim)
 
     async def pause(self, session_id: str):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.pause(notify_callback=notify)
 
     async def stop(self, session_id: str):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.stop(notify_callback=notify)
 
     async def next(self, session_id: str, user_id: Optional[int] = None, skip_reason: Optional[str] = None):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.next(user_id=user_id, notify_callback=notify, skip_reason=skip_reason)
 
     async def previous(self, session_id: str, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.previous(user_id=user_id, notify_callback=notify)
 
     async def seek(self, session_id: str, position_ms: int):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.seek(position_ms=position_ms, notify_callback=notify)
 
     async def add_to_queue(self, session_id: str, track_ids: List[str],
                            position: Optional[int] = None, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.add_to_queue(
             track_ids=track_ids,
             position=position,
@@ -176,8 +177,8 @@ class PlaybackService(SingletonService):
 
     async def remove_from_queue(self, session_id: str, track_id: str, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.remove_from_queue(
             track_id=track_id,
             user_id=user_id,
@@ -187,8 +188,8 @@ class PlaybackService(SingletonService):
     async def seed_radio(self, session_id: str, category: str = "all",
                          track_id: Optional[str] = None, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.seed_radio(
             category=category,
             track_id=track_id,
@@ -199,8 +200,8 @@ class PlaybackService(SingletonService):
     async def handle_preference_change(self, session_id: str, user_id: int,
                                        track_id: str, preference_type: str):
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.handle_preference_change(
             user_id=user_id,
             track_id=track_id,
@@ -215,15 +216,15 @@ class PlaybackService(SingletonService):
     async def transfer_playback(self, session_id: str, device_id: str, play: Optional[bool] = None,
                                 requester_device_id: Optional[str] = None, seq=None) -> bool:
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.transfer(device_id, play=play, notify_callback=notify,
                                     requester_device_id=requester_device_id, seq=seq)
 
     async def claim_playback(self, session_id: str, device_id: str, play: Optional[bool] = None) -> bool:
         state = self.get_session_state(session_id)
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
         return await state.claim(device_id, play=play, notify_callback=notify)
 
     async def initialize_new_session(self, session_id: str, user_id: Optional[int] = None):
@@ -232,8 +233,8 @@ class PlaybackService(SingletonService):
             await self._initialize_new_session_unlocked(state, session_id, user_id)
 
     async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str, user_id: Optional[int]):
-        async def notify(_):
-            await self._notify_session_change(session_id)
+        async def notify(snapshot):
+            await self._notify_session_change(session_id, snapshot)
 
         if len(state.queue) > 0:
             log_service.detail(f"[PlaybackService] {log_service.who(session_id)} already initialized", "playback")

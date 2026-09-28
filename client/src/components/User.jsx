@@ -3,12 +3,13 @@ import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, H
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { useDeviceSelector } from '../hooks/useDeviceSelector'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useDialog } from '../contexts/DialogContext'
 import { api } from '../lib/api'
+import { saveGuestSettings } from '../lib/accountSettings'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
@@ -378,7 +379,35 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { getPreferences, removePreference, isPending } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor, getPurpleBase } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
-  const { audioState, downloadState, publishDownloadState, settingsState, publishSettings, toastSuccess, toastError, toastInfo, openUploadModal, openUsageModal, tiltEnabled, tiltNeedsPermission, enableTiltEffects } = useUIState()
+  const {
+    audioState,
+    downloadState,
+    publishDownloadState,
+    settingsState,
+    publishSettings,
+    toastSuccess,
+    toastError,
+    toastInfo,
+    openUploadModal,
+    openUsageModal,
+    tiltEnabled,
+    tiltNeedsPermission,
+    enableTiltEffects,
+  } = useUISelector(state => ({
+    audioState: state.audioState,
+    downloadState: state.downloadState,
+    publishDownloadState: state.publishDownloadState,
+    settingsState: state.settingsState,
+    publishSettings: state.publishSettings,
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+    toastInfo: state.toastInfo,
+    openUploadModal: state.openUploadModal,
+    openUsageModal: state.openUsageModal,
+    tiltEnabled: state.tiltEnabled,
+    tiltNeedsPermission: state.tiltNeedsPermission,
+    enableTiltEffects: state.enableTiltEffects,
+  }))
   const success = toastSuccess
   const error = toastError
 
@@ -654,6 +683,12 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       }
 
       publishSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
+
+      if (!user) {
+        saveGuestSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
+        success(message)
+        return
+      }
 
       await api.updateUserProfile({
         tts_muted: newTtsMuted,

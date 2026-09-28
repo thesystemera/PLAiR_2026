@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { usePlayback } from '../contexts/PlaybackContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useVoiceRecording } from '../contexts/VoiceRecordingContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useUISound } from '../hooks/useUISound'
 
 let _keyboardRecordingCallback = null
@@ -16,9 +16,15 @@ export function KeyboardControls({
   onCloseLogin = null,
   onCloseRegister = null
 }) {
-  const playback = usePlayback()
+  const playback = usePlaybackActions()
   const { isRecording, startRecording, stopRecording } = useVoiceRecording()
-  const { interfaceState, reportInterfaceState } = useUIState()
+  const {
+    interfaceState,
+    reportInterfaceState,
+  } = useUISelector(state => ({
+    interfaceState: state.interfaceState,
+    reportInterfaceState: state.reportInterfaceState,
+  }))
   const uiSound = useUISound()
 
   const stateRef = useRef({})

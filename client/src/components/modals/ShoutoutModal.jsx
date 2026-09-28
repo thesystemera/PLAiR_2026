@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
 import { usePlaybackShoutout, useShoutoutProgress } from '../../contexts/PlaybackShoutoutContext'
-import { useUIState } from '../../contexts/UIStateContext'
+import { useUISelector } from '../../contexts/UIStateContext'
 import { useVoiceRecording } from '../../contexts/VoiceRecordingContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { logger } from '../../lib/logger'
@@ -345,7 +345,17 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
   const [isSubmittingReply, setIsSubmittingReply] = useState(false)
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const { getWhite, getGrey300, getGrey400, getBorder, getCategoryMetadata } = useDynamicTheme()
-  const { shoutoutFftDataRef, contentUpdates, toastSuccess, toastError } = useUIState()
+  const {
+    shoutoutFftDataRef,
+    contentUpdates,
+    toastSuccess,
+    toastError,
+  } = useUISelector(state => ({
+    shoutoutFftDataRef: state.shoutoutFftDataRef,
+    contentUpdates: state.contentUpdates,
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+  }))
   const { isRecording, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { user } = useAuth()
 

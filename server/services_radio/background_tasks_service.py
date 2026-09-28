@@ -3,6 +3,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
+from sqlalchemy.orm import load_only
 from database.models import PlayEvent, User, WeatherData
 from config.settings import settings
 from services import log_service
@@ -32,39 +33,20 @@ class BackgroundTasksService:
                 async with self.async_session_maker() as db:
                     active_since = datetime.now(timezone.utc) - timedelta(days=14)
                     active_user_ids = select(PlayEvent.user_id).where(PlayEvent.started_at >= active_since).distinct()
-                    result = await db.execute(select(User).where(User.id.in_(active_user_ids)))
-                    users = result.scalars().all()
+                    users = (await db.execute(
+                        select(User.id, User.latitude, User.longitude).where(User.id.in_(active_user_ids))
+                    )).all()
 
-                    for user in users:
-                        if user.latitude and user.longitude:
-                            with usage_tracking.subject_scope(user_id=user.id):
-                                weather_desc = await self.web_service.retrieve_weather_data(
-                                    user.latitude, user.longitude, 'current'
-                                )
+                fetched = []
+                for user_id, latitude, longitude in users:
+                    if latitude and longitude:
+                        with usage_tracking.subject_scope(user_id=user_id):
+                            weather_desc = await self.web_service.retrieve_weather_data(latitude, longitude, 'current')
+                        if weather_desc:
+                            fetched.append((user_id, weather_desc))
 
-                            if weather_desc:
-                                weather_result = await db.execute(
-                                    select(WeatherData).where(WeatherData.user_id == user.id)
-                                )
-                                weather_data = weather_result.scalar_one_or_none()
-
-                                if weather_data and settings.DJ_WEATHER_CUES_ENABLED and weather_data.timestamp and                                         datetime.now(timezone.utc) - weather_data.timestamp < timedelta(hours=3):
-                                    cue = weather_change_cue(weather_data.description, weather_desc)
-                                    if cue:
-                                        content_bank.set_weather_cue(f"user:{user.id}", *cue)
-                                if weather_data:
-                                    weather_data.description = weather_desc
-                                    weather_data.timestamp = datetime.now(timezone.utc)
-                                else:
-                                    weather_data = WeatherData(
-                                        user_id=user.id,
-                                        description=weather_desc,
-                                        timestamp=datetime.now(timezone.utc)
-                                    )
-                                    db.add(weather_data)
-
-                                await db.commit()
-                                log_service.external(f"Weather Updater: Updated weather for user {user.id}")
+                if fetched:
+                    await self._save_user_weather(fetched)
 
                 guests = await self.update_guest_weather()
                 if guests:
@@ -78,12 +60,35 @@ class BackgroundTasksService:
                 log_service.error(f"Weather updater error: {e}")
                 await asyncio.sleep(60)
 
+    async def _save_user_weather(self, fetched: list) -> None:
+        async with self.async_session_maker() as db:
+            existing = {row.user_id: row for row in (await db.execute(
+                select(WeatherData).where(WeatherData.user_id.in_([user_id for user_id, _ in fetched]))
+            )).scalars().all()}
+            for user_id, weather_desc in fetched:
+                weather_data = existing.get(user_id)
+                if weather_data and settings.DJ_WEATHER_CUES_ENABLED and weather_data.timestamp and \
+                        datetime.now(timezone.utc) - weather_data.timestamp < timedelta(hours=3):
+                    cue = weather_change_cue(weather_data.description, weather_desc)
+                    if cue:
+                        content_bank.set_weather_cue(f"user:{user_id}", *cue)
+                if weather_data:
+                    weather_data.description = weather_desc
+                    weather_data.timestamp = datetime.now(timezone.utc)
+                else:
+                    db.add(WeatherData(user_id=user_id, description=weather_desc, timestamp=datetime.now(timezone.utc)))
+            await db.commit()
+        for user_id, _ in fetched:
+            log_service.external(f"Weather Updater: Updated weather for user {user_id}")
+
     async def active_regions(self) -> list:
         regions = {}
         async with self.async_session_maker() as db:
             active_since = datetime.now(timezone.utc) - timedelta(days=14)
             active_user_ids = select(PlayEvent.user_id).where(PlayEvent.started_at >= active_since).distinct()
-            users = (await db.execute(select(User).where(User.id.in_(active_user_ids)))).scalars().all()
+            users = (await db.execute(select(User).options(
+                load_only(User.id, User.timezone, User.latitude, User.longitude, User.location, raiseload=True))
+                .where(User.id.in_(active_user_ids)))).scalars().all()
         for user in users:
             region = regional_kb.resolve_region(user)
             if region:
@@ -241,15 +246,26 @@ class BackgroundTasksService:
                     continue
 
                 budget = settings.YOUTUBE_CLIPS_PREFETCH_PER_CYCLE
+                attempts = 0
                 downloaded = 0
 
+                for keyword in self.youtube_clip_service.take_priority_keywords(budget):
+                    attempts += 1
+                    try:
+                        if await self.youtube_clip_service.get_clip_for_keyword(keyword):
+                            downloaded += 1
+                    except Exception as e:
+                        log_service.error(f"[YOUTUBE] Pre-download failed for '{keyword}': {e}")
+                    await asyncio.sleep(2)
+
                 for track in list(self.catalog_service.tracks.values()):
-                    if downloaded >= budget:
+                    if attempts >= budget:
                         break
                     metadata = track if isinstance(track, dict) else {}
                     for keyword in self.youtube_clip_service.missing_keywords_for_track(metadata):
-                        if downloaded >= budget:
+                        if attempts >= budget:
                             break
+                        attempts += 1
                         try:
                             if await self.youtube_clip_service.get_clip_for_keyword(keyword):
                                 downloaded += 1
@@ -266,7 +282,7 @@ class BackgroundTasksService:
 
                 await self.youtube_clip_service.enforce_cache_limit()
 
-                await asyncio.sleep(1800)
+                await self.youtube_clip_service.wait_for_work(1800)
 
             except asyncio.CancelledError:
                 log_service.info("Video Clip Pre-Downloader: Task cancelled")
