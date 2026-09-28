@@ -337,17 +337,12 @@ class GooglePlacesCollector(Collector):
     async def fetch(self, region: Region) -> list[KnowledgeItem]:
         if not region.center:
             return []
-        expires = datetime.now(timezone.utc) + timedelta(days=PLACE_ID_RETENTION_DAYS)
-        items = []
         for category in PLACES_CATEGORIES:
-            for place_id in await self.location_service.search_place_ids(
-                    category, region.center, PLACES_SEARCH_RADIUS_M, PLACES_PER_CATEGORY):
-                items.append(KnowledgeItem(source="google_places", kind=KIND_PLACE, region_key=region.key,
-                                           external_id=f"{place_id}|{category}", title="", tags=[category],
-                                           expires_at=expires, attribution="Google Maps"))
+            await self.location_service.get_nearby_places(category, region.center, PLACES_SEARCH_RADIUS_M,
+                                                          PLACES_PER_CATEGORY, wait_for_memory=True)
             if not self.location_service.available():
                 break
-        return items
+        return []
 
     async def hydrate(self, item: KnowledgeItem) -> Optional[KnowledgeItem]:
         if item.title:

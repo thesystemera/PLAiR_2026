@@ -898,7 +898,8 @@ class DJPromptService:
         return main_response, notes_section
 
     @gpt_error_handler
-    async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None) -> dict:
+    async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
+                                       on_route=None) -> dict:
         from services_radio.dj_tools import (
             DJ_FUNCTION_DECLARATIONS,
             READ_TOOLS,
@@ -924,6 +925,8 @@ class DJPromptService:
 
         fetch_time = (time.perf_counter() - start_time) * 1000
         use_tools = bool(route.get("use_tools"))
+        if on_route is not None:
+            await on_route(route)
 
         if use_tools:
             ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]

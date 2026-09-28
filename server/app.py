@@ -314,7 +314,12 @@ async def lifespan(_app: FastAPI):
         await asyncio.to_thread(news_vector_db.load_initial_data)
         news_search = SemanticSearch(news_vector_db, local_knowledge.NewsPromptCache())
         await news_search.prompt_cache.initialize(ai_service, news_vector_db)
-        local_knowledge.install(local_vector_db, local_search, news_vector_db, news_search)
+        place_vector_db = local_knowledge.PlaceVectorDatabaseService(nugget_source)
+        await asyncio.to_thread(place_vector_db.load_initial_data)
+        place_search = SemanticSearch(place_vector_db, local_knowledge.PlacePromptCache())
+        await place_search.prompt_cache.initialize(ai_service, place_vector_db)
+        local_knowledge.install(local_vector_db, local_search, news_vector_db, news_search, place_vector_db,
+                                place_search)
         log_service.success("✓ Local knowledge vectors initialized")
     except Exception as e:
         log_service.warning(f"⚠️  Local knowledge vectors unavailable: {e}")

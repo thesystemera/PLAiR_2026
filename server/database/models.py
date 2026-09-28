@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Date, DateTime, ForeignKey, Enum, UniqueConstraint, Index, Boolean, Text, Float, LargeBinary
+from sqlalchemy import Column, Integer, BigInteger, String, Date, DateTime, ForeignKey, Enum, UniqueConstraint, Index, Boolean, Text, Float, LargeBinary, Identity
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timezone
 import enum
@@ -308,6 +308,7 @@ class PlaceCache(Base):
     __tablename__ = "place_cache"
 
     place_id = Column(String, primary_key=True)
+    row_id = Column(BigInteger, Identity(always=False), unique=True, nullable=False)
     name = Column(String, nullable=False)
     type = Column(String, nullable=True)
     address = Column(String, nullable=True)

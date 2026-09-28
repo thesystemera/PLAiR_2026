@@ -232,6 +232,9 @@ class KnowledgeNode:
     def can_fetch(self, q: PulseQuery) -> bool:
         return False
 
+    async def wants_fetch(self, q: PulseQuery, found: list[PulseItem]) -> bool:
+        return len(found) < settings.PULSE_FETCH_BELOW
+
     async def fetch(self, q: PulseQuery) -> list[PulseItem]:
         return []
 
@@ -344,42 +347,51 @@ class PlacesNode(KnowledgeNode):
     kinds = (KIND_PLACE,)
 
     @staticmethod
-    def _from_result(result: dict, score: float) -> PulseItem:
-        details = [result.get("type") or ""]
-        if result.get("rating"):
-            details.append(f"rated {result['rating']}")
-        if result.get("address"):
-            details.append(result["address"])
-        return PulseItem(id=f"place:{result['place_id']}", kind=KIND_PLACE, title=result.get("name") or "",
-                         text=", ".join(d for d in details if d), source="Google Maps", score=score,
-                         where=geo.from_row(result.get("address") or result.get("name"), result.get("latitude"),
-                                            result.get("longitude")),
-                         payload={"website": result.get("website")}, entities=[result.get("name") or ""])
+    def _item(place_id: str, title: str, kind: str, rating, price, where: Optional[geo.Where], score: float,
+              website: Optional[str] = None) -> PulseItem:
+        details = [kind or ""]
+        if rating:
+            details.append(f"rated {rating}")
+        if price:
+            details.append(price)
+        return PulseItem(id=f"place:{place_id}", kind=KIND_PLACE, title=title or "",
+                         text=", ".join(d for d in details if d), source="Google Maps", score=score, where=where,
+                         payload={"website": website}, entities=[title or ""])
+
+    @classmethod
+    def _from_result(cls, result: dict, score: float) -> PulseItem:
+        return cls._item(result["place_id"], result.get("name"), result.get("type"), result.get("rating"),
+                         result.get("price_level"),
+                         geo.from_row(result.get("address") or result.get("name"), result.get("latitude"),
+                                      result.get("longitude")), score, result.get("website"))
+
+    @classmethod
+    def _from_meta(cls, meta: Dict[str, Any], score: float) -> PulseItem:
+        return cls._item(meta.get("place_id") or "", meta.get("title"), meta.get("type"), meta.get("rating"),
+                         meta.get("price_level"), geo.Where.from_dict(meta.get("where")), score, meta.get("website"))
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
-        coords = q.listener.location.coords
-        if q.text and coords:
-            results = await place_memory.lookup(q.text, coords[0], coords[1], settings.PULSE_PLACE_RADIUS_M,
-                                                q.limit)
-            return [self._from_result(r, 0.7) for r in results or [] if r.get("place_id")]
-        regional = regional_kb.get_regional_knowledge()
-        if q.text or regional is None or q.listener.region is None:
+        search = local_knowledge.place_search
+        if search is None:
             return []
-        scored = await regional.query(q.listener.region, (regional_kb.KIND_PLACE,), q.listener.taste, limit=4)
-        items = []
-        for base, item in scored:
-            hydrated = await regional.hydrate(item)
-            if hydrated and hydrated.title:
-                items.append(PulseItem(id=f"place:{item.external_id.split('|', 1)[0]}", kind=KIND_PLACE,
-                                       title=hydrated.title, text=hydrated.text, source="Google Maps", score=base,
-                                       where=geo.from_row(hydrated.area or hydrated.title, hydrated.latitude,
-                                                          hydrated.longitude),
-                                       entities=[hydrated.title]))
-        return items
+        here = q.listener.where
+        city_m = settings.PULSE_CITY_RADIUS_KM * 1000
+
+        def keep(meta: Dict[str, Any]) -> bool:
+            where = geo.Where.from_dict(meta.get("where"))
+            return here is None or where is None or geo.gap_m(here, where) <= city_m
+
+        results = await search.search(q.text, n=q.per_kind, keep=keep, use_ai=q.use_ai)
+        return [self._from_meta(match.meta, match.score) for match in results]
 
     def can_fetch(self, q: PulseQuery) -> bool:
-        return bool(q.text) and q.listener.location.coords is not None and services.location_service is not None \
+        return bool(q.text) and q.kinds is not None and KIND_PLACE in q.kinds \
+            and q.listener.location.coords is not None and services.location_service is not None \
             and services.location_service.available()
+
+    async def wants_fetch(self, q: PulseQuery, found: list[PulseItem]) -> bool:
+        coords = q.listener.location.coords
+        return not await place_memory.searched_near(q.text, coords[0], coords[1])
 
     async def fetch(self, q: PulseQuery) -> list[PulseItem]:
         results = await services.location_service.get_nearby_places(q.text, q.listener.location.coords,
@@ -966,10 +978,15 @@ class Pulse:
         found = {node.name: items for node, items in zip(nodes, results)}
         items = [item for group in results for item in group]
         live_node = None
-        if q.allow_fetch and q.text and len(items) < settings.PULSE_FETCH_BELOW:
-            fetchable = [n for n in nodes if n.can_fetch(q)]
-            if fetchable:
-                live_node = fetchable[0]
+        if q.allow_fetch and q.text:
+            for node in nodes:
+                try:
+                    if node.can_fetch(q) and await node.wants_fetch(q, items):
+                        live_node = node
+                        break
+                except Exception as e:
+                    log_service.warning(f"[PULSE] {node.name} fetch check failed: {type(e).__name__}: {e}")
+            if live_node is not None:
                 try:
                     fetched = await asyncio.wait_for(live_node.fetch(q), timeout=settings.PULSE_FETCH_TIMEOUT_S)
                 except Exception as e:

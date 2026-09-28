@@ -304,6 +304,7 @@ export function UIStateProvider({ children }) {
     currentIndex: 0,
     talkBreak: null,
     audioNeedsTap: false,
+    djActivity: [],
   })
 
   const engineRef = useRef({
@@ -862,6 +863,7 @@ export function UIStateProvider({ children }) {
     if (updates.currentIndex !== undefined) stateUpdates.currentIndex = updates.currentIndex
     if (updates.talkBreak !== undefined) stateUpdates.talkBreak = updates.talkBreak
     if (updates.audioNeedsTap !== undefined) stateUpdates.audioNeedsTap = updates.audioNeedsTap
+    if (updates.djActivity !== undefined) stateUpdates.djActivity = updates.djActivity
 
     const keys = Object.keys(stateUpdates)
     if (keys.length > 0) {

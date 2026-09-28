@@ -209,6 +209,13 @@ def _quote(text: str, limit: int = 160) -> str:
     return flat if len(flat) <= limit else flat[:limit - 3] + "..."
 
 
+
+
+def hal_summary(commands: Optional[str]) -> str:
+    lines = [line.strip() for line in (commands or "").replace("[HAL11000]", "").splitlines() if line.strip()]
+    readable = [" ".join(re.sub(r"[{}()]", " ", line).split()) for line in lines]
+    return " · ".join(readable[:3])[:120]
+
 class ConversationService:
     def __init__(self):
         self.dj_prompt_service = None
@@ -510,6 +517,12 @@ class ConversationService:
             raise RuntimeError("dj_prompt_service not initialized")
 
         ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin)
+        if self.broadcast_func:
+            broadcast = self.broadcast_func
+
+            async def notify(data):
+                await broadcast(session_id, {"type": "dj_activity", "data": data})
+            ctx.notify = notify
         runtime = DJToolRuntime(self.command_executor, ctx)
         spoken = []
         impulse_sent = []
@@ -539,9 +552,21 @@ class ConversationService:
                     session_id=session_id
                 )
 
+        async def announce_route(route):
+            steps = [str(step).split("(", 1)[0].strip() for step in route.get("tool_plan") or []]
+            ctx.planned = {step.split()[-1] for step in steps if step} if route.get("use_tools") else None
+            kinds = ", ".join((route.get("pulse") or {}).get("kinds") or [])
+            if route.get("use_tools"):
+                label, summary = "Producer planned a lookup", " > ".join(dict.fromkeys(s for s in steps if s))
+            else:
+                label, summary = "Producer: straight reply", f"station notes: {kinds}" if kinds else ""
+            await ctx.activity("start", call_id=f"{ctx.turn_id}:route", tool="producer", label=label)
+            await ctx.activity("result", call_id=f"{ctx.turn_id}:route", tool="producer", outcome="done",
+                               summary=summary[:120])
+
         try:
             result = await self.dj_prompt_service.gpt_dj_interactive_tools(transcription, session_dict, runtime,
-                                                                           speak_preamble)
+                                                                           speak_preamble, announce_route)
             if result and result["status"] == "na":
                 log_service.detail(f"{log_service.who(session_id)}: DJ response not applicable", "listener")
                 return
@@ -566,14 +591,22 @@ class ConversationService:
                                      f"{' -> ' + record['reason'] if record.get('reason') else ''}")
 
             commands_for_display = runtime.commands_for_display()
-            if not (result or {}).get("used_tools") and full_main:
+            if not (result or {}).get("tool_calls") and full_main:
+                hal_id = f"{ctx.turn_id}:hal"
+                await ctx.activity("start", call_id=hal_id, tool="hal11000",
+                                   label="HAL 11000 reading the reply for commands")
                 commands_for_display = await self._computer_pass(full_response, transcription, session_dict,
                                                                  session_id)
+                found = hal_summary(commands_for_display)
+                await ctx.activity("result", call_id=hal_id, tool="hal11000", outcome="found" if found else "empty",
+                                   summary=found or "no commands")
 
             await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display,
                                                     user_id, session_id, is_guest))
         finally:
             ctx.gate.set()
+            if ctx.activity_sent:
+                await ctx.activity("done")
 
     async def _process_gpt_and_orchestrate(self, transcription, user_id, session_id, is_guest, session_dict,
                                            origin="text"):

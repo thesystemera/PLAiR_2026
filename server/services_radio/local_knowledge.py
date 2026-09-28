@@ -40,6 +40,24 @@ FROM news_items
 WHERE expires_at > now()
 """
 
+PLACE_VIEW_SQL = """
+CREATE OR REPLACE VIEW place_nuggets AS
+SELECT row_id AS rowid,
+       'place:' || place_id AS nugget_id,
+       json_build_object(
+           'id', 'place:' || place_id, 'kind', 'place', 'place_id', place_id, 'title', name, 'type', type,
+           'address', address, 'tags', tags::json, 'rating', rating, 'rating_count', rating_count,
+           'price_level', price_level, 'hours', opening_hours::json, 'website', website, 'phone', phone,
+           'fetched_at', fetched_at,
+           'where', json_build_object('label', coalesce(address, name), 'lat', latitude, 'lon', longitude,
+                                      'radius_m', 0, 'scope', 'spot')
+       )::text AS metadata_json
+FROM place_cache
+"""
+
+PRICE_WORDS = {"$": "cheap, inexpensive", "$$": "moderately priced", "$$$": "pricey, upmarket",
+               "$$$$": "very expensive, fine dining"}
+
 KIND_LABELS = {"event": "gig, concert, show or event", "place": "place, venue, shop, bar or cafe",
                "news": "local news story", "community": "listener shoutout"}
 
@@ -123,6 +141,45 @@ class NewsVectorDatabaseService(SemanticVectorDatabaseService):
     single_item_noun = "story"
 
 
+def place_type_text(item: Dict[str, Any]) -> str:
+    return ", ".join(dict.fromkeys(t for t in [item.get("type"), *(item.get("tags") or [])] if t))
+
+
+def place_hours_text(item: Dict[str, Any]) -> str:
+    hours = item.get("hours")
+    return "; ".join(str(h) for h in hours)[:400] if isinstance(hours, list) else ""
+
+
+def place_quality_text(item: Dict[str, Any]) -> str:
+    parts = []
+    if item.get("rating"):
+        parts.append(f"rated {item['rating']} from {item.get('rating_count') or 'a few'} reviews")
+    if item.get("price_level"):
+        parts.append(PRICE_WORDS.get(item["price_level"], item["price_level"]))
+    return ", ".join(parts)
+
+
+class PlaceVectorDatabaseService(SemanticVectorDatabaseService):
+    category_specs = (
+        Category("place_name", 0.30, field_text("title"), "The place's name"),
+        Category("place_type", 0.30, place_type_text, "What sort of place it is (cafe, cocktail bar, record store)"),
+        Category("place_area", 0.20, field_text("address"), "Where it is: street, suburb, city"),
+        Category("place_hours", 0.10, place_hours_text, "Opening hours: early, late night, weekends"),
+        Category("place_quality", 0.10, place_quality_text, "Rating and price: cheap, upmarket, well reviewed"),
+    )
+    log_channel = "system"
+    service_label = "Places"
+    display_name = "Places"
+    index_dir_setting_name = "EMBEDDINGS_DIR"
+    index_file_prefix = "places"
+    source_table = "place_nuggets"
+    source_id_column = "nugget_id"
+    source_label = "places"
+    source_db_label = "ai_radio"
+    item_noun = "places"
+    single_item_noun = "place"
+
+
 class LocalNuggetSource:
     def _get_connection(self):
         return psycopg2.connect(settings.DATABASE_URL)
@@ -133,6 +190,7 @@ class LocalNuggetSource:
             c = conn.cursor()
             c.execute(VIEW_SQL)
             c.execute(NEWS_VIEW_SQL)
+            c.execute(PLACE_VIEW_SQL)
             conn.commit()
         finally:
             conn.close()
@@ -154,17 +212,28 @@ NewsPromptCache = make_prompt_cache(
     "- 'what's RNZ saying about the election': news_outlet and news_tags high.\n"
     "- 'what happened on K Road': news_place high, news_title some.")
 
+PlacePromptCache = make_prompt_cache(
+    PlaceVectorDatabaseService, "place_query_intent_cache", "places in a listener's city (cafes, bars, shops, venues)",
+    "- 'late night pizza': place_type and place_hours high.\n"
+    "- 'cheap eats on K Road': place_type, place_area and place_quality high.\n"
+    "- 'Brothers Beer': place_name high.\n"
+    "- 'best rated coffee': place_type and place_quality high.")
+
 local_vector_db: Optional[LocalKnowledgeVectorDatabaseService] = None
 local_search: Optional[SemanticSearch] = None
 news_vector_db: Optional[NewsVectorDatabaseService] = None
 news_search: Optional[SemanticSearch] = None
+place_vector_db: Optional[PlaceVectorDatabaseService] = None
+place_search: Optional[SemanticSearch] = None
 
 
 def install(vector_db: LocalKnowledgeVectorDatabaseService, search: SemanticSearch,
-            news_db: Optional[NewsVectorDatabaseService] = None, news: Optional[SemanticSearch] = None) -> None:
-    global local_vector_db, local_search, news_vector_db, news_search
+            news_db: Optional[NewsVectorDatabaseService] = None, news: Optional[SemanticSearch] = None,
+            place_db: Optional[PlaceVectorDatabaseService] = None, places: Optional[SemanticSearch] = None) -> None:
+    global local_vector_db, local_search, news_vector_db, news_search, place_vector_db, place_search
     local_vector_db, local_search = vector_db, search
     news_vector_db, news_search = news_db, news
+    place_vector_db, place_search = place_db, places
 
 
 def mark_dirty() -> None:
@@ -175,3 +244,8 @@ def mark_dirty() -> None:
 def mark_news_dirty() -> None:
     if news_vector_db is not None:
         news_vector_db.dirty = True
+
+
+def mark_places_dirty() -> None:
+    if place_vector_db is not None:
+        place_vector_db.dirty = True

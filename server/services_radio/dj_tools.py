@@ -1,5 +1,6 @@
 import asyncio
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -277,6 +278,37 @@ def tool_activity(calls) -> str:
     return " and ".join(phrases[:2])
 
 
+KIND_NOUNS = {"event": ("gig", "gigs"), "place": ("place", "places"), "news": ("story", "stories"),
+              "weather": ("forecast", "forecasts"), "area": ("area note", "area notes"),
+              "artist": ("artist bio", "artist bios"), "track": ("track", "tracks"),
+              "community": ("shoutout", "shoutouts"), "chart": ("chart", "charts"), "trend": ("trend", "trends")}
+
+
+def activity_summary(name: str, result: Any) -> tuple[str, str]:
+    if not isinstance(result, dict):
+        return "done", ""
+    status = result.get("status") or "ok"
+    if status in FAILED_STATUSES:
+        return "failed", "nothing doing" if status in ("no_results", "not_found", "no_lyrics") else "couldn't"
+    if status == "empty":
+        return "empty", "nothing on hand"
+    grouped = result.get("results")
+    if isinstance(grouped, dict):
+        parts = []
+        for kind, items in grouped.items():
+            singular, plural = KIND_NOUNS.get(kind, (kind, kind))
+            parts.append(f"{len(items)} {singular if len(items) == 1 else plural}")
+        return ("found", " · ".join(parts[:4])) if parts else ("empty", "nothing on hand")
+    if result.get("now_playing"):
+        return "found", f"playing {result['now_playing']}"
+    if result.get("queued"):
+        return "found", f"queued {len(result['queued'])} track{'s' if len(result['queued']) != 1 else ''}"
+    items = result.get("items")
+    if isinstance(items, list):
+        return ("found", f"{len(items)} found") if items else ("empty", "nothing on hand")
+    return "done", "on it" if name in SEGMENT_TOOLS else "done"
+
+
 def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "pulse_search":
         return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "", value=args.get("query"))
@@ -334,6 +366,19 @@ class DJTurnContext:
     calls_made: int = 0
     live_fetches: int = 0
     pulse_listener: Any = None
+    notify: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
+    turn_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    activity_sent: bool = False
+    planned: Optional[set] = None
+
+    async def activity(self, phase: str, **data) -> None:
+        if self.notify is None:
+            return
+        self.activity_sent = True
+        try:
+            await self.notify({"turn_id": self.turn_id, "phase": phase, **data})
+        except Exception as e:
+            log_service.detail(f"[DJ TOOLS] activity notice failed: {type(e).__name__}: {e}", "commands")
 
     @property
     def user_id(self) -> Optional[int]:
@@ -428,6 +473,9 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError(f"Unknown tool '{name}'")
 
 
+PLAN_GATED_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist", "rate_track"}
+
+
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
     if name in READ_TOOLS and ctx.calls_made < settings.DJ_TOOL_MAX_CALLS_PER_TURN:
         return None
@@ -439,6 +487,10 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
         return None
 
     listener_text = ctx.transcription or ""
+
+    if name in PLAN_GATED_TOOLS and ctx.planned is not None and name not in ctx.planned:
+        return ("The listener's current message doesn't ask for that; earlier requests in the conversation were "
+                "already handled. Answer this message only.")
 
     if name in SAVE_TOOLS:
         if not ctx.user_id:
@@ -526,13 +578,23 @@ class DJToolRuntime:
 
         record = {"name": name, "args": args, "status": "executed", "command": command_string(name, args)}
         self.ctx.records.append(record)
+        call_id = f"{self.ctx.turn_id}:{self.ctx.calls_made}"
+        await self.ctx.activity("start", call_id=call_id, tool=name, label=tool_activity([(name, args)]) or name,
+                                query=str(args.get("query") or "")[:80], kinds=list(args.get("kinds") or []))
         if name in READ_TOOLS:
             log_service.detail(f"[DJ TOOLS] {record['command']} for session {self.session_dict.get('session_id')}",
                                "commands")
         else:
             log_service.commands(f"[DJ TOOLS] Executing {record['command']} for session {self.session_dict.get('session_id')}")
-        result = await handler(args)
+        try:
+            result = await handler(args)
+        except Exception:
+            await self.ctx.activity("result", call_id=call_id, tool=name, outcome="failed", summary="couldn't")
+            raise
         record["result"] = result
+        outcome, summary = activity_summary(name, result)
+        await self.ctx.activity("result", call_id=call_id, tool=name, outcome=outcome, summary=summary,
+                                live=bool(isinstance(result, dict) and result.get("live")))
         if isinstance(result, dict) and result.get("status") in FAILED_STATUSES:
             result = {**result, "on_air": FAILED_ACTION_NOTE}
         return result
@@ -572,7 +634,7 @@ class DJToolRuntime:
         grouped: Dict[str, list] = {}
         for item in items:
             grouped.setdefault(item.kind, []).append(item.brief(listener.tz_name))
-        return {"status": "ok", "note": READ_NOTE, "results": grouped}
+        return {"status": "ok", "note": READ_NOTE, "results": grouped, "live": any(item.live for item in items)}
 
     async def _pulse_detail(self, args):
         pulse, listener = await self._pulse_listener()

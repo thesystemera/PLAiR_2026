@@ -193,17 +193,43 @@ async def remember(query: str, lat: float, lon: float, radius_m: float, results:
                     longitude=round(lon, SEARCH_ORIGIN_DECIMALS), radius_m=int(radius_m),
                     place_ids=json.dumps(ids), created_at=now, expires_at=expires))
             await db.execute(delete(PlaceSearch).where(PlaceSearch.expires_at < now))
-            await db.execute(delete(PlaceCache).where(PlaceCache.expires_at < now))
             await db.commit()
     except Exception as e:
         log_service.warning(f"[PLACES] memory save failed: {type(e).__name__}: {e}")
+        return
+    await embed_now()
+
+
+async def embed_now() -> None:
+    from services.semantic_source import rebuild_if_dirty
+    from services_radio import local_knowledge
+    local_knowledge.mark_places_dirty()
+    try:
+        await rebuild_if_dirty(local_knowledge.place_vector_db)
+    except Exception as e:
+        log_service.warning(f"[PLACES] embedding new places failed: {type(e).__name__}: {e}")
+
+
+async def searched_near(query: str, lat: float, lon: float) -> bool:
+    norm = normalize_query(query)
+    if not norm:
+        return True
+    reuse_m = settings.PLACE_MEMORY_REUSE_DISTANCE_M
+    south, north, west, east = _box(lat, lon, reuse_m)
+    async with AsyncSessionLocal() as db:
+        searches = (await db.execute(select(PlaceSearch).where(and_(
+            PlaceSearch.expires_at > datetime.now(timezone.utc), PlaceSearch.latitude.between(south, north),
+            PlaceSearch.longitude.between(west, east))))).scalars().all()
+    return any(distance_m(lat, lon, search.latitude, search.longitude) <= reuse_m
+               and query_similarity(norm, search.query_norm) >= settings.PLACE_MEMORY_QUERY_MATCH
+               for search in searches)
 
 
 async def get_place(place_id: str) -> Optional[dict]:
     try:
         async with AsyncSessionLocal() as db:
             row = await db.get(PlaceCache, place_id)
-        if row is None or row.expires_at <= datetime.now(timezone.utc):
+        if row is None:
             return None
         return {"name": row.name, "type": row.type or "", "address": row.address or "",
                 "latitude": row.latitude, "longitude": row.longitude}

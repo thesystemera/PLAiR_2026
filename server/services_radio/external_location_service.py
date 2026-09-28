@@ -85,7 +85,8 @@ class LocationService:
             return None
         return {"name": name, "type": ((data or {}).get("primaryTypeDisplayName") or {}).get("text") or ""}
 
-    async def get_nearby_places(self, query, location, radius=1500, max_results=5) -> list[dict]:
+    async def get_nearby_places(self, query, location, radius=1500, max_results=5,
+                                wait_for_memory: bool = False) -> list[dict]:
         if not settings.GOOGLE_PLACES_API_KEY:
             raise LocationSearchUnavailable("GOOGLE_PLACES_API_KEY is not set")
 
@@ -98,7 +99,7 @@ class LocationService:
             cached = self._cached(key)
             if cached is not None:
                 return cached
-            return await self._search_nearby(query, location, lat, lon, radius, max_results, key)
+            return await self._search_nearby(query, location, lat, lon, radius, max_results, key, wait_for_memory)
 
     def _cached(self, key: tuple) -> Optional[list]:
         cached = self._cache.get(key)
@@ -112,7 +113,8 @@ class LocationService:
             self._locks = {k: lock for k, lock in self._locks.items() if lock.locked()}
         return self._locks.setdefault(key, asyncio.Lock())
 
-    async def _search_nearby(self, query, location, lat, lon, radius, max_results, key) -> list[dict]:
+    async def _search_nearby(self, query, location, lat, lon, radius, max_results, key,
+                             wait_for_memory: bool = False) -> list[dict]:
         remembered = await place_memory.lookup(query, float(location[0]), float(location[1]), radius, max_results)
         if remembered:
             self._remember_in_process(key, remembered)
@@ -155,8 +157,11 @@ class LocationService:
                 "longitude": place.get("location", {}).get("longitude"),
             })
 
-        spawn(place_memory.remember(query, float(location[0]), float(location[1]), radius, results),
-              name="place_memory_save")
+        saving = place_memory.remember(query, float(location[0]), float(location[1]), radius, results)
+        if wait_for_memory:
+            await saving
+        else:
+            spawn(saving, name="place_memory_save")
         self._remember_in_process(key, results)
         return results
 

@@ -291,6 +291,7 @@ class Settings:
     PULSE_RECENCY_HALF_LIFE_DAYS: float = float(os.getenv("PULSE_RECENCY_HALF_LIFE_DAYS", "7"))
     PULSE_LINK_DISTANCE_M: float = float(os.getenv("PULSE_LINK_DISTANCE_M", "300"))
     PULSE_NEAR_RADIUS_M: float = float(os.getenv("PULSE_NEAR_RADIUS_M", "3000"))
+    PULSE_CITY_RADIUS_KM: float = float(os.getenv("PULSE_CITY_RADIUS_KM", "60"))
     GEO_ENABLED: bool = os.getenv("GEO_ENABLED", "true").lower() == "true"
     GEO_MISS_RETRY_DAYS: int = int(os.getenv("GEO_MISS_RETRY_DAYS", "30"))
     GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))

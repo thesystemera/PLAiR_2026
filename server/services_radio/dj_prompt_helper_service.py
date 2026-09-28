@@ -161,6 +161,19 @@ def remove_consecutive_duplicates(text: str) -> str:
 
     return '\n'.join(deduplicated)
 
+INTERNAL_MARKER_PATTERN = re.compile(
+    r'\[\s*INTERNAL[^\]\n]*\]|^[ \t]*\**INTERNAL[ _-]+(?:DIALOGUE|DIALOG|DISCUSSION|NOTES?|THOUGHTS?|MONOLOGUE)\**[ \t]*:',
+    re.IGNORECASE | re.MULTILINE)
+
+
+def normalize_internal_marker(text: str) -> str:
+    def replacer(match):
+        if match.group(0) != '[INTERNAL DIALOGUE]':
+            log_service.filter(f"[META CLEANUP] Normalised notes marker: {match.group(0).strip()}")
+        return '[INTERNAL DIALOGUE]'
+    return INTERNAL_MARKER_PATTERN.sub(replacer, text)
+
+
 def clean_gpt_output(text, role='dj_content'):
     if not isinstance(text, str):
         log_service.debug(f"Cleanup: Input was not a string, converting from {type(text)}")
@@ -182,6 +195,7 @@ def clean_gpt_output(text, role='dj_content'):
     text = ''.join(char for char in text if ord(char) >= 32 or char == '\n')
 
     text = remove_consecutive_duplicates(text)
+    text = normalize_internal_marker(text)
 
     original_text = text
     removed_parts = []
@@ -234,7 +248,7 @@ def clean_gpt_output(text, role='dj_content'):
                 removed_parts.append(f"Removed invalid tag section: {invalid_content}")
                 return ' '
 
-        return re.sub(pattern, replacer, text)
+        return re.sub(pattern, replacer, text, flags=re.DOTALL)
 
     if role != 'command':
         log_service.filter(f"[META CLEANUP] Starting cleanup for role '{role}'")

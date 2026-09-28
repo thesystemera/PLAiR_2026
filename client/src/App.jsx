@@ -39,6 +39,7 @@ import Register from './components/Auth/Register'
 import ToastContainer from './components/Toast'
 import {OnAirFrame} from './components/OnAirBadge'
 import {OfflinePill} from './components/OfflinePill'
+import {DJActivity, DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
@@ -786,6 +787,7 @@ function App() {
         <TrackDataLoader />
         <MediaSessionBridge />
         <ConnectionNotice />
+        <DJActivityBridge />
         <KeyboardControls
         showLogin={showLogin}
         showRegister={showRegister}
@@ -808,6 +810,7 @@ function App() {
 
         <OnAirFrame />
         <OfflinePill />
+        <DJActivity />
         <AudioUnlockPrompt />
 
         <AnimatePresence>

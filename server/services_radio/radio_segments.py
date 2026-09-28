@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -342,14 +343,12 @@ class LocalSegment(RadioSegment):
                                                 exclude=ctx.aired_regional_ids, min_score=0.1, record_hit=True):
                 facts.append(f"Gig/event: {_event_line(item, ctx.tz_name)}")
                 keys.append(f"regional:{item.item_id}")
-        if regional_kb.PLACES_COLLECTOR_ENABLED:
-            for _, item in await regional.query(ctx.region, (regional_kb.KIND_PLACE,), taste, limit=1,
-                                                exclude=ctx.aired_regional_ids):
-                hydrated = await regional.hydrate(item)
-                if hydrated and hydrated.title:
-                    kind = f", {hydrated.text}" if hydrated.text else ""
-                    facts.append(f"Local spot: {hydrated.title}{kind} (via Google Maps)")
-                    keys.append(f"regional:{item.item_id}")
+        spot = await _local_spot(ctx, taste)
+        if spot is not None:
+            kind = f", {spot['type']}" if spot.get("type") else ""
+            area = f" on {spot['address'].split(',')[0]}" if spot.get("address") else ""
+            facts.append(f"Local spot: {spot['title']}{kind}{area} (via Google Maps)")
+            keys.append(f"regional:{spot['id']}")
         if not facts:
             return None
         neighbourhood = await _neighbourhood(ctx)
@@ -360,6 +359,25 @@ class LocalSegment(RadioSegment):
             notes.append(f"Listener's taste: {', '.join(list(taste.genres)[:5])}")
         return SegmentContent(facts=facts, keys=keys, notes=notes, moods=self.moods,
                               title=f"What's on in {ctx.place_name}")
+
+
+async def _local_spot(ctx: SegmentContext, taste) -> Optional[dict]:
+    from services_radio import geo, local_knowledge
+    search = local_knowledge.place_search
+    if search is None or ctx.region is None:
+        return None
+    centre = geo.from_row("", *ctx.region.center) if ctx.region.center else None
+    city_m = settings.PULSE_CITY_RADIUS_KM * 1000
+
+    def keep(meta: dict) -> bool:
+        if meta.get("id") in ctx.aired_regional_ids:
+            return False
+        where = geo.Where.from_dict(meta.get("where"))
+        return centre is None or where is None or geo.gap_m(centre, where) <= city_m
+
+    interests = ", ".join(sorted(taste.interests)[:3]) if taste is not None and taste.interests else ""
+    matches = await search.search(interests, n=5, keep=keep)
+    return random.choice(matches).meta if matches else None
 
 
 class CommunitySegment(RadioSegment):
