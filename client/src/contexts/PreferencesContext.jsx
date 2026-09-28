@@ -2,9 +2,10 @@ import { logger } from '../lib/logger'
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '../lib/api'
 import { safeStorage } from '../lib/safeStorage'
+import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useAuth } from './AuthContext'
 import { useWebSocketSubscribe, WebSocketContext } from './WebSocketContext'
-import { useUIActions, useUIState } from './UIStateContext'
+import { useUIActions, useUIState, uiState } from './UIStateContext'
 
 const PreferencesContext = createContext(null)
 
@@ -198,7 +199,7 @@ export function PreferencesProvider({ children }) {
     } catch (err) {
       logger.error('[Preferences] Failed to save Radio Mode settings:', err)
       setRadioModeState(previous)
-      error('Could not save Radio Mode settings')
+      error(uiState.audioState.offlineMode ? err.message : 'Could not save Radio Mode settings')
       return previous
     } finally {
       setRadioModeSaving(false)
@@ -288,6 +289,7 @@ export function PreferencesProvider({ children }) {
       if (entry.version !== version) return false
       if (preferenceType) await api.setPreference(type, id, preferenceType)
       else await api.removePreference(type, id)
+      if (type === 'track' && (preferenceType === 'like' || preferenceType === 'super_like')) backgroundDownloader.wake()
       return true
     })
     entry.chain = run.catch(() => {})

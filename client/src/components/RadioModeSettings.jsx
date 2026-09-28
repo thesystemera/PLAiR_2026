@@ -16,7 +16,7 @@ const SEGMENTS = [
 
 export const RadioModeSettings = memo(function RadioModeSettings({ className = '' }) {
   const { radioMode, radioOptions, radioModeSaving, updateRadioMode } = usePreferences()
-  const { settingsState, toastSuccess } = useUIState()
+  const { settingsState, toastSuccess, audioState } = useUIState()
   const [open, setOpen] = useState(() => safeStorage.get('userPanel_radioMode') === 'true')
 
   useEffect(() => {
@@ -78,6 +78,9 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
         </div>
         {djMuted && radioMode.enabled && (
           <div className="text-xs text-amber-300 mt-1">DJ voice is muted, so breaks are paused.</div>
+        )}
+        {audioState.offlineMode && (
+          <div className="text-xs text-amber-300 mt-1">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</div>
         )}
       </SettingRow>
 

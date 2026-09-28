@@ -38,6 +38,10 @@ class API {
     this._notifyConnectivity({ type: 'recovered' })
   }
 
+  reportServerLost() {
+    this._notifyConnectivity({ type: 'lost' })
+  }
+
   async syncOfflineWrites() {
     if (this.syncingOfflineWrites) return this.syncingOfflineWrites
     const pending = offlineBackend.takePendingPreferenceWrites()
@@ -555,12 +559,13 @@ class API {
     })
   }
 
-  getStreamUrl(trackId, bitrate = null) {
+  getStreamUrl(trackId, bitrate = null, purpose = 'play') {
     const baseUrl = `/api/stream/${trackId}/webm`
     const session = getSessionIds()
     const params = new URLSearchParams({
       guest_id: session.guestId,
-      device_id: session.deviceId
+      device_id: session.deviceId,
+      purpose
     })
 
     if (STREAM_BITRATES.has(bitrate)) {
@@ -568,6 +573,16 @@ class API {
     }
 
     return `${baseUrl}?${params.toString()}`
+  }
+
+  getMp3StreamUrl(trackId, purpose = 'play') {
+    const session = getSessionIds()
+    const params = new URLSearchParams({
+      guest_id: session.guestId,
+      device_id: session.deviceId,
+      purpose
+    })
+    return `/api/stream/${trackId}?${params.toString()}`
   }
 
   getRenderAudioUrl(trackId) {

@@ -157,25 +157,16 @@ class Settings:
     TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-30"))
     TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-8"))
     VOICE_PREFERENCES: dict = {
-        "terry": {
-            "orpheus_voice": os.getenv("TTS_VOICE_TERRY", "dan"),
-            "temperature": float(os.getenv("TTS_TEMPERATURE_TERRY", "0.7")),
-        },
-        "shaquille": {
-            "orpheus_voice": os.getenv("TTS_VOICE_SHAQUILLE", "leo"),
-            "temperature": float(os.getenv("TTS_TEMPERATURE_SHAQUILLE", "0.8")),
-        },
-        "station": {
-            "orpheus_voice": os.getenv("TTS_VOICE_STATION", "zac"),
-            "temperature": float(os.getenv("TTS_TEMPERATURE_STATION", "0.6")),
-        }
+        "tara": {"orpheus_voice": "tara", "temperature": 0.7},
+        "leo": {"orpheus_voice": "leo", "temperature": 0.8},
+        "station": {"orpheus_voice": "zac", "temperature": 0.6},
     }
 
     GENERATION_PERMISSIONS: dict = {
-        'meta': {'terry', 'shaquille'},
-        'impulse': {'terry', 'shaquille'},
-        'sentence': {'terry', 'shaquille'},
-        'breath': {'terry', 'shaquille'},
+        'meta': {'tara', 'leo'},
+        'impulse': {'tara', 'leo'},
+        'sentence': {'tara', 'leo'},
+        'breath': {'tara', 'leo'},
         'audio': set()
     }
 
@@ -621,6 +612,7 @@ class Settings:
     STINGS_SFX_PIPS_TITLE: str = os.getenv("STINGS_SFX_PIPS_TITLE", "top of the hour beeps").strip().lower()
 
     ENABLE_FILE_LOGGING: bool = os.getenv("ENABLE_FILE_LOGGING", "True").lower() == "true"
+    LOG_VERBOSE: str = os.getenv("LOG_VERBOSE", "")
 
 
     STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")

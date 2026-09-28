@@ -149,11 +149,12 @@ class PlaybackPopulationService:
 
         if len(new_tracks) < needed:
             log_service.warning(
-                f"[{session_id}] Queue partially filled: {len(new_tracks)}/{needed}. "
-                f"Catalog may be small or exhausted."
+                f"{log_service.who(session_id)}: {radio_mode} queue only partly filled ({len(new_tracks)}/{needed}) - "
+                f"catalog may be small or exhausted"
             )
         else:
-            log_service.success(f"[{session_id}] Queue filled: {len(new_tracks)}/{needed} tracks")
+            log_service.detail(f"{log_service.who(session_id)}: {radio_mode} queue filled with {len(new_tracks)} "
+                               f"track(s)", "playback")
 
         return new_tracks
 
@@ -176,13 +177,13 @@ class PlaybackPopulationService:
             results = await self._search_similar_artists(seed_track, needed, prefs["bans"])
         else:
             query = _build_category_query(seed_track, category)
-            log_service.playback(f"[{session_id}] Seed fill — category: {category}, query: {query[:100]}...")
+            log_service.detail(f"{log_service.who(session_id)}: seed fill {category}, query: {query[:100]}", "playback")
             try:
                 results = await self.vector_search.search(
                     query=query, n_results=needed + 10, banned_ids=prefs["bans"],
                 )
             except Exception as e:
-                log_service.error(f"[{session_id}] Vector search failed during seed fill: {e}")
+                log_service.error(f"{log_service.who(session_id)}: vector search failed during {category} seed fill: {e}")
                 results = []
 
         new_tracks = []
@@ -195,7 +196,7 @@ class PlaybackPopulationService:
             if len(new_tracks) >= needed:
                 break
 
-        log_service.success(f"[{session_id}] Seed fill returned {len(new_tracks)} tracks")
+        log_service.detail(f"{log_service.who(session_id)}: seed fill returned {len(new_tracks)} tracks", "playback")
         return new_tracks
 
     async def _fill_playlist(
@@ -219,18 +220,17 @@ class PlaybackPopulationService:
         existing_ids: Set[str], session_id: str,
     ) -> List[Dict]:
         period = mode.replace("top_hits_", "")
-        log_service.playback(f"[{session_id}] Filling queue with {period} top hits")
 
         try:
             top_hits = await analytics_service.get_top_hits(
                 period=period, limit=needed + len(existing_ids) + len(banned_ids) + 10,
             )
         except Exception as e:
-            log_service.error(f"[{session_id}] Failed to fetch top hits: {e}")
+            log_service.error(f"{log_service.who(session_id)}: failed to fetch {period} top hits: {e}")
             return []
 
         if not top_hits:
-            log_service.error(f"[{session_id}] No top hits available for period: {period}")
+            log_service.throttled(f"no_top_hits:{period}", f"No {period} top hits available - queues fall back to other sources")
             return []
 
         new_tracks = []
@@ -245,7 +245,7 @@ class PlaybackPopulationService:
                     existing_ids.add(tid)
 
         random.shuffle(new_tracks)
-        log_service.success(f"[{session_id}] Added {len(new_tracks)} tracks from {period} top hits")
+        log_service.detail(f"{log_service.who(session_id)}: added {len(new_tracks)} tracks from {period} top hits", "playback")
         return new_tracks
 
     def _fill_favorites(
@@ -275,7 +275,7 @@ class PlaybackPopulationService:
                 existing_ids.add(chosen_id)
 
         random.shuffle(new_tracks)
-        log_service.playback(f"[{session_id}] Favorites: added {len(new_tracks)}/{needed} tracks")
+        log_service.detail(f"{log_service.who(session_id)}: favorites added {len(new_tracks)}/{needed} tracks", "playback")
         return new_tracks
 
     async def _fill_discovery(
@@ -300,7 +300,7 @@ class PlaybackPopulationService:
         if len(favorites_added) < target_favs:
             target_discovery += target_favs - len(favorites_added)
             if target_discovery > 0:
-                log_service.playback(f"[{session_id}] Favorites exhausted, redirecting to discovery")
+                log_service.detail(f"{log_service.who(session_id)}: favorites exhausted, filling with discovery", "playback")
 
         discovery_added = []
         if target_discovery > 0 and self.vector_search:
@@ -318,7 +318,7 @@ class PlaybackPopulationService:
                             if len(discovery_added) >= target_discovery:
                                 break
                 except Exception as e:
-                    log_service.error(f"[{session_id}] Discovery search failed: {e}")
+                    log_service.error(f"{log_service.who(session_id)}: Discovery search failed: {e}")
 
         combined = favorites_added + discovery_added
         random.shuffle(combined)
@@ -359,7 +359,7 @@ class PlaybackPopulationService:
                 query=context_ids, n_results=needed + 15, banned_ids=prefs["bans"],
             )
         except Exception as e:
-            log_service.error(f"[{session_id}] Seed mode search failed: {e}")
+            log_service.error(f"{log_service.who(session_id)}: Seed mode search failed: {e}")
             return []
 
         _apply_preference_boost(results, prefs["likes"], prefs["super_likes"])
@@ -410,8 +410,8 @@ class PlaybackPopulationService:
         if not self.catalog or not self.catalog.tracks:
             return []
 
-        log_service.warning(
-            f"[{session_id}] Falling back to random catalog for {needed} tracks"
+        log_service.detail(
+            f"{log_service.who(session_id)}: falling back to random catalog for {needed} tracks", "playback"
         )
 
         all_ids = list(self.catalog.tracks.keys())

@@ -68,28 +68,28 @@ def filter_response_by_role(text: str, role: str) -> str:
 
     role_rules = {
         'dj_interactive': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'SHAQUILLE', 'TERRY', 'INTERNAL DIALOGUE', 'IMPULSE'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE'],
             'forbidden_tags': ['HAL11000'],
             'description': 'Interactive DJ'
         },
         'dj_onboarding': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'SHAQUILLE', 'TERRY', 'INTERNAL DIALOGUE'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE'],
             'forbidden_tags': ['HAL11000'],
             'description': 'Onboarding DJ'
         },
         'dj_announcements': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'SHAQUILLE', 'TERRY'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
             'forbidden_tags': ['HAL11000', 'INTERNAL DIALOGUE'],
             'description': 'Announcements DJ'
         },
         'dj_content': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'SHAQUILLE', 'TERRY'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
             'forbidden_tags': ['HAL11000', 'INTERNAL DIALOGUE'],
             'description': 'Content DJ'
         },
         'command': {
             'allowed_tags': [],
-            'forbidden_tags': ['BROADCAST', 'TXT', 'SHAQUILLE', 'TERRY', 'INTERNAL DIALOGUE', 'IMPULSE', 'HAL11000'],
+            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE', 'HAL11000'],
             'description': 'Command extraction'
         }
     }
@@ -221,7 +221,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     def keep_valid_tags(text):
         valid_tags = [
-            'BROADCAST', 'TXT', 'TERRY', 'SHAQUILLE', 'INTERNAL DIALOGUE', 'IMPULSE'
+            'BROADCAST', 'TXT', 'TARA', 'LEO', 'INTERNAL DIALOGUE', 'IMPULSE'
         ]
         pattern = r'\[(' + '|'.join(valid_tags) + r')\]|' + r'\[(.*?)\](.*?)(?=\[|$)'
 
@@ -260,7 +260,7 @@ def clean_gpt_output(text, role='dj_content'):
 
 MARKUP_TOKEN_PATTERN = re.compile(r'\*[^*]+\*|%[^%]+%|\$[^$\s]+\$|@\d+@|&\d+(?:\.\d+)?&')
 PROXIMITY_TAG_PATTERN = re.compile(r'&\d+(?:\.\d+)?&')
-SPEAKER_TAG_PATTERN = re.compile(r'\[(SHAQUILLE|TERRY)]')
+SPEAKER_TAG_PATTERN = re.compile(r'\[(LEO|TARA)]')
 
 def dj_script_problems(text, role='dj_content'):
     if not text or not str(text).strip():

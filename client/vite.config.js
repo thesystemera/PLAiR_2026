@@ -1,8 +1,43 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { existsSync, readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+const PRECACHE_PUBLIC_DIRS = ['audio/interface']
+const PRECACHE_PUBLIC_FILES = [
+  'index.html',
+  'manifest.json',
+  'images/favicon.ico',
+  'images/plair_icon.png',
+  'images/plair_icon_192.png',
+  'images/plair_icon_512.png',
+  'images/plair_icon_maskable.png',
+  'images/plair_icon_maskable_192.png',
+  'images/apple-touch-icon.png',
+  'images/default_background.webp',
+  'images/default_profile_pic.png',
+]
+
+function offlineAssetManifest() {
+  const publicDir = fileURLToPath(new URL('./public/', import.meta.url))
+  return {
+    name: 'plair-offline-asset-manifest',
+    apply: 'build',
+    generateBundle(_, bundle) {
+      const built = Object.keys(bundle).filter(name => name.startsWith('assets/')).map(name => `/${name}`)
+      const extra = PRECACHE_PUBLIC_DIRS.flatMap(dir => {
+        const full = `${publicDir}${dir}`
+        return existsSync(full) ? readdirSync(full).map(file => `/${dir}/${file}`) : []
+      })
+      const files = PRECACHE_PUBLIC_FILES.filter(file => file === 'index.html' || existsSync(`${publicDir}${file}`)).map(file => `/${file}`)
+      const assets = [...new Set(['/', ...files, ...extra, ...built])]
+      this.emitFile({ type: 'asset', fileName: 'asset-manifest.json', source: JSON.stringify({ assets }, null, 2) })
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), offlineAssetManifest()],
   server: {
     port: 3000,
     host: '0.0.0.0',

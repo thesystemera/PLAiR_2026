@@ -216,7 +216,7 @@ export function Shoutouts() {
   const { user } = useAuth()
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const scrollContainerRef = useRef(null)
-  const { contentUpdates, toastError, toastSuccess } = useUIState()
+  const { contentUpdates, toastError, toastSuccess, audioState } = useUIState()
   const { showConfirm } = useDialog()
 
   const errorToast = toastError
@@ -514,11 +514,19 @@ export function Shoutouts() {
                 onBackToGenres={handleBackToCategories}
                 contentType="shoutouts"
               />
-              <MediaEmptyState
-                icon={ShoutoutsIcon}
-                title={isSearchMode ? 'No shoutouts found' : selectedCategory ? `No ${selectedCategory} shoutouts` : 'No shoutouts yet!'}
-                subtitle={isSearchMode ? 'Try adjusting your search' : selectedCategory ? 'Try selecting a different category' : 'Use voice recording to create one.'}
-              />
+              {audioState.offlineMode ? (
+                <MediaEmptyState
+                  icon={ShoutoutsIcon}
+                  title="Shoutouts need a connection"
+                  subtitle="They'll be back when PLAiR is online. Your downloads keep playing in the meantime."
+                />
+              ) : (
+                <MediaEmptyState
+                  icon={ShoutoutsIcon}
+                  title={isSearchMode ? 'No shoutouts found' : selectedCategory ? `No ${selectedCategory} shoutouts` : 'No shoutouts yet!'}
+                  subtitle={isSearchMode ? 'Try adjusting your search' : selectedCategory ? 'Try selecting a different category' : 'Use voice recording to create one.'}
+                />
+              )}
             </>
           ) : (
             <>

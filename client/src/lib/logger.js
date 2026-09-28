@@ -9,14 +9,31 @@ const config = {
   enabled: true,
 }
 
+let sink = null
+
+export function setLogSink(fn) {
+  sink = typeof fn === 'function' ? fn : null
+}
+
+function forward(level, args) {
+  if (!sink) return
+  try {
+    sink(level, args)
+  } catch {
+    sink = null
+  }
+}
+
 export const logger = {
   critical: (...args) => {
+    forward('error', args)
     if (config.enabled && config.level >= LOG_LEVELS.CRITICAL) {
       console.error('[CRITICAL]', ...args)
     }
   },
 
   info: (...args) => {
+    forward('info', args)
     if (config.enabled && config.level >= LOG_LEVELS.INFO) {
       console.log('[INFO]', ...args)
     }
@@ -29,12 +46,14 @@ export const logger = {
   },
 
   warn: (...args) => {
+    forward('warn', args)
     if (config.enabled && config.level >= LOG_LEVELS.INFO) {
       console.warn('[WARN]', ...args)
     }
   },
 
   error: (...args) => {
+    forward('error', args)
     if (config.enabled && config.level >= LOG_LEVELS.CRITICAL) {
       console.error('[ERROR]', ...args)
     }

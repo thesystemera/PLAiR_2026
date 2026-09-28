@@ -29,8 +29,8 @@ import {
 import { useUISound } from '../hooks/useUISound'
 
 const DJ_SPEAKERS = {
-  terry: { name: 'Terry', color: 'blue' },
-  shaquille: { name: 'Shaquille', color: 'pink' },
+  tara: { name: 'Tara', color: 'blue' },
+  leo: { name: 'Leo', color: 'pink' },
   computer: { name: 'Computer', color: 'green' }
 }
 
@@ -51,7 +51,7 @@ function cleanMetadata(text) {
 function parseMessage(message) {
   if (!message) return []
 
-  const parts = message.split(/(\[BROADCAST]|\[TXT]|\[TERRY]|\[SHAQUILLE]|\[INTERNAL DIALOGUE])/g)
+  const parts = message.split(/(\[BROADCAST]|\[TXT]|\[TARA]|\[LEO]|\[INTERNAL DIALOGUE])/g)
   const result = []
 
   let currentType = MESSAGE_TYPES.BROADCAST
@@ -99,7 +99,7 @@ function parseMessage(message) {
         currentType = MESSAGE_TYPES.TXT
       } else if (tag === 'INTERNAL DIALOGUE') {
         currentType = MESSAGE_TYPES.INTERNAL
-      } else if (tag === 'TERRY' || tag === 'SHAQUILLE') {
+      } else if (tag === 'TARA' || tag === 'LEO') {
         currentSpeaker = tag.toLowerCase()
       } else {
         contentBuffer += part
@@ -121,7 +121,7 @@ function parseMessage(message) {
       mergedResult[mergedResult.length - 1].content += ' ' + item.content
     } else if (item.content.trim()) {
       if (item.type === MESSAGE_TYPES.INTERNAL) {
-          const internalParts = item.content.split(/(\[TERRY]|\[SHAQUILLE])\s*/g)
+          const internalParts = item.content.split(/(\[TARA]|\[LEO])\s*/g)
 
           let internalSpeaker = item.speaker || 'computer';
           let currentInternalContent = '';
@@ -130,7 +130,7 @@ function parseMessage(message) {
               const part = internalParts[i].trim();
               if (!part) continue;
 
-              if (part === '[TERRY]' || part === '[SHAQUILLE]') {
+              if (part === '[TARA]' || part === '[LEO]') {
                   if (currentInternalContent) {
                        mergedResult.push({
                            type: MESSAGE_TYPES.INTERNAL,

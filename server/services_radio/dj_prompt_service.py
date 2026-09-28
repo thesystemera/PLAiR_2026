@@ -76,7 +76,7 @@ SEGMENT_DATA_NODES = {
     'biography': 'data_biography',
     'lyrics': 'data_lyrics',
 }
-SEGMENT_HOSTS = {'weather': ('TERRY', 'SHAQUILLE')}
+SEGMENT_HOSTS = {'weather': ('TARA', 'LEO')}
 SEGMENT_SUBJECTS = {
     'news': ('the news wire', 'the news'),
     'weather': ('the weather feed', 'the weather'),
@@ -525,7 +525,7 @@ class DJPromptService:
         return bool(location.address or location.city) and not needs_coordinates
 
     async def _unavailable_segment(self, gpt_type: str, user_id, session_id=None) -> UnavailableSegment:
-        host, cohost = SEGMENT_HOSTS.get(gpt_type, ('SHAQUILLE', 'TERRY'))
+        host, cohost = SEGMENT_HOSTS.get(gpt_type, ('LEO', 'TARA'))
         subject, label = SEGMENT_SUBJECTS.get(gpt_type, ('that', 'that'))
         location_need = LOCATION_SEGMENTS.get(gpt_type)
         if location_need and not await self._listener_has_location(user_id, location_need[1], session_id):
@@ -796,11 +796,11 @@ class DJPromptService:
         )
 
         if not (context_data.get('data_shoutouts_data') or "").strip():
-            log_service.user_content("Shoutouts: No shoutouts available - skipping interpretation")
+            log_service.detail("Shoutouts: No shoutouts available - skipping interpretation", "user_content")
             return None
 
         system_prompt = assemble_prompt(context_data, final_nodes)
-        log_service.user_content(f"Shoutouts: Shoutouts Prompt: {system_prompt}")
+        log_service.detail(f"Shoutouts: Shoutouts Prompt: {system_prompt}", "user_content")
 
         response_text = await self._execute_gpt_and_save(
             gpt_type='shoutouts',
@@ -811,10 +811,10 @@ class DJPromptService:
             validate_script=True
         )
 
-        log_service.user_content(f"Shoutouts: Shoutouts Raw Response: {response_text}")
+        log_service.detail(f"Shoutouts: Shoutouts Raw Response: {response_text}", "user_content")
 
         if "[N/A]" in response_text:
-            log_service.user_content("Shoutouts: Shoutouts response is not applicable ([N/A])")
+            log_service.detail("Shoutouts: Shoutouts response is not applicable ([N/A])", "user_content")
             return None
         return response_text.strip().strip('"')
 
@@ -1182,8 +1182,8 @@ class DJPromptService:
             f"[LISTENER TXT] {transcription}\n"
             f"[DJ RESPONSE] {filtered_gpt_response}"
         )
-        log_service.commands(f"[HAL11000 PIPELINE] System Prompt:\n{system_prompt}")
-        log_service.commands(f"[HAL11000 PIPELINE] User Message:\n{user_message}")
+        log_service.detail(f"[HAL11000 PIPELINE] System Prompt:\n{system_prompt}", "commands")
+        log_service.detail(f"[HAL11000 PIPELINE] User Message:\n{user_message}", "commands")
         commands_text = await self._execute_gpt_stream(
             model=self.config['command_model'],
             max_tokens=self.config['command_tokens'],
@@ -1193,18 +1193,18 @@ class DJPromptService:
                 {"role": "user", "content": user_message}
             ]
         )
-        log_service.commands(f"[HAL11000 PIPELINE] Raw GPT Response (BEFORE cleaning):\n{commands_text}")
+        log_service.detail(f"[HAL11000 PIPELINE] Raw GPT Response (BEFORE cleaning):\n{commands_text}", "commands")
 
         command_pattern = r'\(\{[a-z_]+(?::[0-9_]+)?\}(?:\{[a-z_]+(?::[0-9_]+)?\})*\)(?:"[^"]*")?|\{N/A\}'
 
         extracted_commands = re.findall(command_pattern, commands_text)
-        log_service.commands("[HAL11000 PIPELINE] Command extraction output for forbidden blocks")
+        log_service.detail("[HAL11000 PIPELINE] Command extraction output for forbidden blocks", "commands")
 
         if not extracted_commands:
-            log_service.commands("[HAL11000 PIPELINE] No commands extracted (result: )")
+            log_service.detail("[HAL11000 PIPELINE] No commands extracted (result: )", "commands")
             return ""
 
         formatted_commands = '\n'.join(extracted_commands)
-        log_service.commands(f"[HAL11000 PIPELINE] Cleaned GPT Response (AFTER filtering):\n{formatted_commands}")
+        log_service.detail(f"[HAL11000 PIPELINE] Cleaned GPT Response (AFTER filtering):\n{formatted_commands}", "commands")
 
         return formatted_commands

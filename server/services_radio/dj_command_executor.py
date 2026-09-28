@@ -161,7 +161,7 @@ class CommandExecutorService:
     async def process_commands(self, commands, session_dict):
         session_id = session_dict.get('session_id')
 
-        log_service.commands(f"[COMMAND EXECUTOR] Processing commands for session {session_id}")
+        log_service.detail(f"[COMMAND EXECUTOR] Processing commands for session {session_id}", "commands")
 
         grouped_commands = {
             "play": [],
@@ -172,7 +172,7 @@ class CommandExecutorService:
         for command in commands.split('\n'):
             command = command.replace('[HAL11000]', '').strip()
             if command:
-                log_service.commands(f"[COMMAND EXECUTOR] Parsing: {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Parsing: {command}", "commands")
             if "{play}" in command and "{play_shoutouts}" not in command and "{seed}" not in command and "{playlist}" not in command:
                 grouped_commands["play"].append(command)
             elif "{cue}" in command:
@@ -180,8 +180,8 @@ class CommandExecutorService:
             else:
                 grouped_commands["other"].append(command)
 
-        log_service.commands(
-            f"[COMMAND EXECUTOR] Grouped: {len(grouped_commands['play'])} Play, {len(grouped_commands['cue'])} Cue, {len(grouped_commands['other'])} Other")
+        log_service.detail(
+            f"[COMMAND EXECUTOR] Grouped: {len(grouped_commands['play'])} Play, {len(grouped_commands['cue'])} Cue, {len(grouped_commands['other'])} Other", "commands")
 
         searches = [(self._parse_search_query(command), True) for command in grouped_commands["play"]]
         searches += [(self._parse_search_query(command), False) for command in grouped_commands["cue"]]
@@ -200,34 +200,34 @@ class CommandExecutorService:
             elif "{continue}" in command and session_id:
                 await self._continue_playback(session_dict)
             elif "{seed}" in command and session_id:
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Seed radio - {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Seed radio - {command}", "commands")
                 spawn(self._handle_seed_radio(command, session_dict), name="_handle_seed_radio")
             elif "{playlist}" in command and session_id:
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Playlist mode - {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Playlist mode - {command}", "commands")
                 spawn(self._handle_playlist(command, session_dict), name="_handle_playlist")
             elif "{like}" in command or "{dislike}" in command or "{ban}" in command or "{superstar}" in command:
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Track preference - {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Track preference - {command}", "commands")
                 spawn(self._handle_track_preference(command, session_dict), name="_handle_track_preference")
             elif "{lyrics}" in command:
-                log_service.commands("[COMMAND EXECUTOR] Executing: Fetch lyrics from catalog")
+                log_service.detail("[COMMAND EXECUTOR] Executing: Fetch lyrics from catalog", "commands")
                 self.spawn_segment(self._trigger_lyrics_interpretation(command, session_dict), session_dict,
                                    "_trigger_lyrics_interpretation")
             elif "{biography}" in command:
                 query = self._extract_value_from_action(command, "biography")
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Fetch biography for '{query}'")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch biography for '{query}'", "commands")
                 self.spawn_segment(self._trigger_biography_interpretation(query, session_dict), session_dict,
                                    "_trigger_biography_interpretation")
             elif "{news}" in command:
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Fetch news - {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch news - {command}", "commands")
                 self.spawn_segment(self._process_news_command(command, session_dict), session_dict,
                                    "_process_news_command")
             elif "{events}" in command:
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Fetch events - {command}")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch events - {command}", "commands")
                 self.spawn_segment(self._process_events_command(command, session_dict), session_dict,
                                    "_process_events_command")
             elif "{find_amenities}" in command:
                 query = self._extract_value_from_action(command, "find_amenities")
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Find amenities for '{query}'")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Find amenities for '{query}'", "commands")
                 self.spawn_segment(self._trigger_location_search_interpretation(query, session_dict), session_dict,
                                    "_trigger_location_search_interpretation")
             elif "{weather}" in command:
@@ -238,25 +238,25 @@ class CommandExecutorService:
                     forecast_type = "tomorrow"
                 elif "{this_week}" in command:
                     forecast_type = "week"
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Fetch weather forecast ({forecast_type})")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Fetch weather forecast ({forecast_type})", "commands")
                 self.spawn_segment(self._trigger_weather_interpretation(forecast_type, session_dict), session_dict,
                                    "_trigger_weather_interpretation")
             elif SAVE_COMMAND_PATTERN.search(command) and not self._voice_turn(session_dict):
                 log_service.warning(f"[COMMAND EXECUTOR] Skipping {command} - saving needs the listener's own voice recording")
             elif "{save_shoutout}" in command:
-                log_service.commands("[COMMAND EXECUTOR] Executing: Save user shoutout")
+                log_service.detail("[COMMAND EXECUTOR] Executing: Save user shoutout", "commands")
                 spawn(self._process_shoutout("save", session_dict), name="_process_shoutout")
             elif "{save_shoutout_reply" in command:
                 parent_id = self._shoutout_reply_parent(command)
                 if parent_id:
-                    log_service.commands(f"[COMMAND EXECUTOR] Executing: Save shoutout reply to {parent_id}")
+                    log_service.detail(f"[COMMAND EXECUTOR] Executing: Save shoutout reply to {parent_id}", "commands")
                     spawn(self._save_shoutout_reply(session_dict, parent_id), name="_save_shoutout_reply")
                 else:
                     log_service.error(f"[COMMAND EXECUTOR] save_shoutout_reply missing or invalid parent_id: {command}")
             elif "{play_shoutouts}" in command:
                 query = self._extract_value_from_action(command, "play_shoutouts")
-                log_service.commands(
-                    f"[COMMAND EXECUTOR] Executing: Play community shoutouts (Query: {query if query else 'Generic'})")
+                log_service.detail(
+                    f"[COMMAND EXECUTOR] Executing: Play community shoutouts (Query: {query if query else 'Generic'})", "commands")
                 self.spawn_segment(self._trigger_shoutouts_interpretation(session_dict, query), session_dict,
                                    "_trigger_shoutouts_interpretation")
             elif "{save_opinion}" in command or "{opinion}" in command:
@@ -267,7 +267,7 @@ class CommandExecutorService:
                     opinion += " previous"
                 elif "{later}" in command:
                     opinion += " next"
-                log_service.commands(f"[COMMAND EXECUTOR] Executing: Save user opinion ({opinion})")
+                log_service.detail(f"[COMMAND EXECUTOR] Executing: Save user opinion ({opinion})", "commands")
                 spawn(self._process_opinion(opinion, session_dict), name="_process_opinion")
 
     @staticmethod
@@ -293,7 +293,7 @@ class CommandExecutorService:
         if state.get('current_track') and not state.get('is_playing'):
             await self.execute_playback_control(session_dict, "resume")
         else:
-            log_service.commands("[COMMAND EXECUTOR] Continue: playback already running - nothing to do")
+            log_service.detail("[COMMAND EXECUTOR] Continue: playback already running - nothing to do", "commands")
 
     async def execute_searches(self, session_dict, searches):
         session_id = session_dict.get('session_id')
@@ -310,7 +310,7 @@ class CommandExecutorService:
         for query, play in searches:
             if not query:
                 continue
-            log_service.commands(f"[COMMAND EXECUTOR] Category search: {query}")
+            log_service.detail(f"[COMMAND EXECUTOR] Category search: {query}", "commands")
             results = await self.vector_search_service.search(
                 query=query,
                 n_results=5,
@@ -321,7 +321,7 @@ class CommandExecutorService:
             per_query.append({"query": query, "found": len(track_ids)})
             if play and not play_first:
                 play_first = True
-            log_service.commands(f"[COMMAND EXECUTOR] Found {len(track_ids)} tracks for: {query}")
+            log_service.detail(f"[COMMAND EXECUTOR] Found {len(track_ids)} tracks for: {query}", "commands")
 
             if session_id and track_ids:
                 feedback_msg = f"Found {len(track_ids)} track{'s' if len(track_ids) != 1 else ''} for '{query}'"
@@ -329,13 +329,13 @@ class CommandExecutorService:
 
         now_playing = None
         if tracks_to_add and session_id:
-            log_service.commands(f"[COMMAND EXECUTOR] Adding {len(tracks_to_add)} tracks to queue")
+            log_service.detail(f"[COMMAND EXECUTOR] Adding {len(tracks_to_add)} tracks to queue", "commands")
             await self.playback_service.add_to_queue(session_id, tracks_to_add, user_id=user_id)
             if play_first and tracks_to_add:
-                log_service.commands(f"[COMMAND EXECUTOR] Playing first track: {tracks_to_add[0]}")
+                log_service.detail(f"[COMMAND EXECUTOR] Playing first track: {tracks_to_add[0]}", "commands")
                 await self.playback_service.play(session_id, tracks_to_add[0], user_id=user_id)
                 now_playing = self._track_label(tracks_to_add[0])
-            log_service.commands(f"[COMMAND EXECUTOR] Successfully added {len(tracks_to_add)} tracks to queue")
+            log_service.detail(f"[COMMAND EXECUTOR] Successfully added {len(tracks_to_add)} tracks to queue", "commands")
 
         if searches:
             feedback_type = 'info'
@@ -401,16 +401,16 @@ class CommandExecutorService:
             return {"status": "error", "reason": "No active playback session"}
 
         if action == "next":
-            log_service.commands("[COMMAND EXECUTOR] Executing: Skip to next track")
+            log_service.detail("[COMMAND EXECUTOR] Executing: Skip to next track", "commands")
             await self.playback_service.next(session_id, user_id=user_id)
         elif action == "previous":
-            log_service.commands("[COMMAND EXECUTOR] Executing: Skip to previous track")
+            log_service.detail("[COMMAND EXECUTOR] Executing: Skip to previous track", "commands")
             await self.playback_service.previous(session_id)
         elif action == "pause":
-            log_service.commands("[COMMAND EXECUTOR] Executing: Pause playback")
+            log_service.detail("[COMMAND EXECUTOR] Executing: Pause playback", "commands")
             await self.playback_service.pause(session_id)
         elif action == "resume":
-            log_service.commands("[COMMAND EXECUTOR] Executing: Resume playback")
+            log_service.detail("[COMMAND EXECUTOR] Executing: Resume playback", "commands")
             await self.playback_service.play(session_id)
         else:
             return {"status": "error", "reason": f"Unknown playback action '{action}'"}
@@ -586,7 +586,7 @@ class CommandExecutorService:
             log_service.error("User Content Service not available")
             return {"status": "error", "reason": "User content service unavailable"}
 
-        log_service.commands(f"Delegating opinion processing for user {user_id} on track {track['id']}")
+        log_service.detail(f"Delegating opinion processing for user {user_id} on track {track['id']}", "commands")
 
         success = await self.user_content_service.process_opinion_upload(
             user_id=user_id,
@@ -646,7 +646,7 @@ class CommandExecutorService:
             log_service.error("User Content Service not available")
             return {"status": "error", "reason": "User content service unavailable"}
 
-        log_service.commands(f"Delegating shoutout processing for user {user_id}")
+        log_service.detail(f"Delegating shoutout processing for user {user_id}", "commands")
 
         success, transcription = await self.user_content_service.process_shoutout_upload(
             user_id=user_id,
@@ -707,7 +707,7 @@ class CommandExecutorService:
                 }, room=session_id)
             return {"status": "error", "reason": "Parent shoutout not found or is already a reply"}
 
-        log_service.commands(f"Delegating shoutout reply processing for user {user_id} to parent {parent_id}")
+        log_service.detail(f"Delegating shoutout reply processing for user {user_id} to parent {parent_id}", "commands")
 
         success, transcription = await self.user_content_service.process_shoutout_upload(
             user_id=user_id,
@@ -1054,7 +1054,7 @@ class CommandExecutorService:
 
         track_name = self._track_label(track_id) or "this track"
 
-        log_service.commands(f"[COMMAND EXECUTOR] Seeding radio based on {track_name} ({mode_display})")
+        log_service.detail(f"[COMMAND EXECUTOR] Seeding radio based on {track_name} ({mode_display})", "commands")
 
         seeded = await self.playback_service.seed_radio(session_id, category=mode, user_id=user_id)
 
@@ -1127,7 +1127,7 @@ class CommandExecutorService:
         if not mode_display:
             return {"status": "error", "reason": f"Unknown playlist '{mode}'"}
 
-        log_service.commands(f"[COMMAND EXECUTOR] Playing playlist: {mode_display}")
+        log_service.detail(f"[COMMAND EXECUTOR] Playing playlist: {mode_display}", "commands")
 
         await self.playback_service.seed_radio(session_id, category=mode, user_id=user_id)
 

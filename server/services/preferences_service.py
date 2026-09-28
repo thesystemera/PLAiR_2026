@@ -10,6 +10,15 @@ from services.base_service import SingletonService
 from services.user_data_cache_service import user_data_cache
 from services.user_content_database_service import public_shoutout
 
+PREFERENCE_VERBS = {"like": "liked", "super_like": "super-liked", "ban": "banned", "dislike": "disliked"}
+
+
+def _track_label(playback_service, track_id: str) -> str:
+    catalog = getattr(playback_service, "catalog", None)
+    track = catalog.get_track(track_id) if catalog is not None else None
+    return log_service.track_label(track, f"track {track_id}")
+
+
 class PreferencesService(SingletonService):
     def __init__(self):
         super().__init__()
@@ -58,7 +67,9 @@ class PreferencesService(SingletonService):
         await db.commit()
 
         await user_data_cache.invalidate_preferences(user_id)
-        log_service.api(f"Preference set: {preference_type} on track {track_id}")
+        log_service.listener(
+            f"{log_service.who(user_id=user_id)}: {PREFERENCE_VERBS.get(preference_type, preference_type)} "
+            f"{_track_label(playback_service, track_id)}")
 
         if playback_service:
             session_id = str(user_id)
@@ -93,7 +104,8 @@ class PreferencesService(SingletonService):
             await db.commit()
 
             await user_data_cache.invalidate_preferences(user_id)
-            log_service.api(f"Preference removed for track {track_id}")
+            log_service.listener(
+                f"{log_service.who(user_id=user_id)}: cleared their rating of {_track_label(playback_service, track_id)}")
 
             if playback_service:
                 session_id = str(user_id)
@@ -143,7 +155,9 @@ class PreferencesService(SingletonService):
             db.add(new_pref)
 
         await db.commit()
-        log_service.user_content(f"Shoutout preference set: {preference_type} on {shoutout_id}")
+        log_service.listener(
+            f"{log_service.who(user_id=user_id)}: {PREFERENCE_VERBS.get(preference_type, preference_type)} "
+            f"shoutout {shoutout_id}")
 
         if broadcast_callback:
             await broadcast_callback(user_id, shoutout_id, preference_type)
@@ -168,7 +182,7 @@ class PreferencesService(SingletonService):
         if existing:
             await db.delete(existing)
             await db.commit()
-            log_service.user_content(f"Shoutout preference removed for {shoutout_id}")
+            log_service.listener(f"{log_service.who(user_id=user_id)}: cleared their rating of shoutout {shoutout_id}")
 
             if broadcast_callback:
                 await broadcast_callback(user_id, shoutout_id, "none")
@@ -310,7 +324,8 @@ class PreferencesService(SingletonService):
             row.settings = json.dumps(prefs)
             row.updated_at = utc_now()
         await db.commit()
-        log_service.api(f"Radio Mode settings saved for user {user_id}: {'on' if prefs['enabled'] else 'off'}")
+        log_service.listener(
+            f"{log_service.who(user_id=user_id)}: Radio Mode settings saved ({'on' if prefs['enabled'] else 'off'})")
         return prefs
 
 preferences_service = PreferencesService()

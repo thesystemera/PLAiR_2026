@@ -93,8 +93,7 @@ class UserContentDatabaseService(SingletonService):
     async def initialize(self):
         if self._service_initialized:
             return
-        log_service.user_content("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        log_service.user_content("Loading Shoutouts from JSON → PostgreSQL Database")
+        log_service.detail("Loading Shoutouts from JSON → PostgreSQL Database", "user_content")
 
         if not self.users_dir.exists():
             log_service.warning(f"Users directory not found: {self.users_dir}")
@@ -186,8 +185,7 @@ class UserContentDatabaseService(SingletonService):
         self.shoutout_ids.sort(key=lambda sid: self.shoutouts[sid].get("timestamp", ""), reverse=True)
 
         log_service.user_content(
-            f"📊 Sync complete: {len(self.shoutouts)} shoutouts | +{added_count} new | ~{updated_count} updated | -{len(removed_ids)} removed")
-        log_service.user_content("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            f"Shoutouts synced: {len(self.shoutouts)} shoutouts | +{added_count} new | ~{updated_count} updated | -{len(removed_ids)} removed")
         self._service_initialized = True
 
     async def save_audio_file(self, user_id: Union[int, str], timestamp: str, audio_bytes: bytes) -> Optional[Path]:

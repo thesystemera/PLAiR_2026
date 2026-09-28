@@ -1,9 +1,33 @@
 from typing import Optional
 from pathlib import Path
 from fastapi import HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 import aiofiles
 from database import User
+
+def parse_range(range_header: str, file_size: int):
+    spec = range_header.strip().lower()
+    if not spec.startswith("bytes="):
+        return None
+    first, sep, last = spec[len("bytes="):].split(",")[0].strip().partition("-")
+    if not sep:
+        return None
+    try:
+        if first == "":
+            if not last:
+                return None
+            length = min(int(last), file_size)
+            if length <= 0:
+                return None
+            return file_size - length, file_size - 1
+        start = int(first)
+        end = int(last) if last else file_size - 1
+    except ValueError:
+        return None
+    if start < 0 or start >= file_size or start > end:
+        return None
+    return start, min(end, file_size - 1)
+
 
 class MediaStreamingService:
 
@@ -41,12 +65,10 @@ class MediaStreamingService:
         headers = extra_headers or {}
 
         if range_header:
-            range_match = range_header.replace("bytes=", "").split("-")
-            start = int(range_match[0]) if range_match[0] else 0
-            end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
-
-            if end >= file_size:
-                end = file_size - 1
+            parsed = parse_range(range_header, file_size)
+            if parsed is None:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}", "Accept-Ranges": "bytes"})
+            start, end = parsed
 
             content_length = end - start + 1
 

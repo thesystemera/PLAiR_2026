@@ -1,46 +1,91 @@
 # Offline Mode Architecture - Complete Documentation
 
-**Last Updated:** September 2026
-**Status:** Offline library, routing and connectivity detection work; automatic hand-off of *playback* to the local engine when the server drops is still parked (see "Current state" below).
+**Last Updated:** 28 September 2026
+**Status:** Complete. When PLAiR can't be reached (no internet, or the server is down), the device keeps playing from its downloads, and it hands back to the server without a cut when the server returns. Tested in headless Chrome against a mock backend. Not yet tested on a real phone.
 
 ---
 
-## Current state (September 2026)
+## Current state (28 September 2026)
 
-### What changed
-- **Connectivity detection (`NetworkContext.jsx`)** now has hysteresis instead of flipping on a single failed health check:
-  - first `/api/health` probe runs immediately on load (it used to wait 10 s);
-  - the server is declared unreachable only after **2 consecutive failed probes** (1.5 s apart, 4 s timeout each), and reachable again only after **2 consecutive successes** (3 s apart);
-  - **flap damping:** if the server drops again within 2 minutes of recovering, each extra flap requires 2 more successes before leaving degraded mode (max +6);
-  - the browser `offline` event is confirmed for 2 s before committing (network hand-offs such as Wi-Fi to cellular no longer flash "offline");
-  - any API call that fails with a network error or a 502/503/504 (nginx up, backend down) calls `api.reportServerTrouble()`, which triggers an immediate probe, so a dead backend is noticed in ~2 s instead of up to 10 s;
-  - probes also run when the tab becomes visible again.
-- UIState `audioState` gained **`offlineMode`** (`connectionMode !== 'full'`), the SSOT flag for "the app is running on the offline library". `api._routeRequest` keeps routing on `!isOnline || !isServerAvailable`, which is the same condition.
-- On recovery NetworkContext emits `api.reportServerRecovered()` and calls **`api.syncOfflineWrites()`**: likes/super-likes/bans made while offline are queued (`offline_pending_preferences` in safeStorage) and replayed to the server. Previously they were never synced.
-- **Preference snapshot:** every successful online `getUserPreferences` is mirrored into the offline preference store, so offline queues can weight by the listener's real likes (before, only likes made *while offline* were known).
-- **`offlineAPI.js` queue logic rewritten (same class/API):**
-  - `getPlaybackState()` called `cacheManager.getCachedTrackList()`, which did not exist, so an offline cold boot never produced a queue. Fixed (it now starts a local session).
-  - new `startLocalSession({ currentTrack, radioMode, isPlaying, progressMs })` and `advanceTo(trackId)` for a local radio: weighted shuffle of the downloads (super-like +2, like +1, bans excluded, radio-mode similarity for genre/mood/artist/style/vocal seeds, `favorites` restricts to liked tracks when at least 3 are downloaded), avoids the last 30 played tracks and back-to-back same artist.
-  - `play()` no longer spends the 5 best recommendations as fake "history" before the current track; `previous()` used to leave the current track unchanged (it only unshifted history); both fixed. `addToQueue`/`removeFromQueue` now work on the local queue and return `added`.
-  - offline `login`/`register` now **throw** a friendly error instead of returning an object that `startSession` treated as a successful login (it cleared the token and stored `cached_user = "undefined"`).
-  - catalog/search/stats/genres read the lightweight cached list; `sort_by=genre` works offline; search matches title, artist, style, genres, moods, tags.
-- **`offlineStorage.js`:** metadata is normalized on save and read (`normalizeTrackMetadata`: both `title/artist_name/style/duration_ms` and `generation_params`/`track_info`), because tracks cached from the queue were stored in the simplified queue shape and showed as "Unknown"/lost their duration offline. Transactions reopen the connection if iOS Safari closed it, saves resolve on transaction `complete` (quota errors surface), `open` has a 5 s timeout, and a missing/blocked IndexedDB (private mode) marks the library unavailable instead of throwing.
-- **`cacheManager.js`:** memoized `getCachedTrackList()` (no blobs) with `onChange` listeners; `isCached`, storage info and eviction use it. `activeStreams` is capped at 3 (partially streamed, skipped tracks used to keep their chunks in memory forever). LRU eviction now evicts non-liked tracks first and never the track being saved; `hasRoomFor()` lets background downloads avoid evict/redownload churn (important with the iOS 50 MB cap). Truncated downloads are rejected instead of being cached. Init failures no longer throw.
+### What the listener sees
+- **Server drops mid-song:** the song keeps playing. About 2-4 s later a pill appears at the top, `Offline · playing your downloads (N)` (guests too). If the song is downloaded, playback quietly moves to the downloaded copy (120 ms crossfade of identical audio at the same position). If it isn't, it plays to the end of what was already buffered, and when the buffer runs dry (1.5 s of stall) it skips to a download.
+- **While offline:** next, previous, seek, pause, tapping a track in the catalog, adding to the queue and Seed Radio all work on the downloads. The catalog shows only downloads, or `No downloads yet` when there are none. Voice search, the DJ, Radio Mode and shoutouts show a short friendly message instead of an error, and Radio Mode talk breaks pause. The "Failed to load tracks" toast and the red "Disconnected from server" toast no longer fire during an outage (the pill is the status).
+- **Server comes back:** the socket reconnects immediately (it no longer waits out its backoff, which could be 30 s). The device hands its current song and position to the server; the audio is not reloaded or re-seeked. The pill disappears, and likes made offline are sent to the server.
+  - If **another device on the account is playing** when the server returns, this device finishes its current song and then steps aside (becomes a remote), so the two devices don't fight.
+  - If this device was only a **remote** before the outage and nobody pressed play on it, it simply follows the server again.
+- **Reloading while offline** (even with nginx down) works: the service worker serves the whole app from its cache, and the downloads play.
+- **Signed-in users stay signed in** through outages and offline reloads (only a real 401/403 or WebSocket close 4401 signs out).
 
-### Parked (not done yet)
-1. **Automatic playback hand-off** (the owner's main ask). The pieces are ready (`audioState.offlineMode`, `offlineBackend.startLocalSession/advanceTo/next/previous`), but `PlaybackContext.jsx` still gates its offline paths on `audioState.isOnline` (browser online flag), not on `offlineMode`. Planned change:
-   - on `offlineMode` true: ignore/stash server snapshots, mark this device locally active (`audio.setActiveDevice(true)`, `reportEngineStatus({ isActiveDevice: true })`), end any armed talk break (`talkBreak.onServerState(null, ...)`), call `startLocalSession({ currentTrack: desired.track, isPlaying, progressMs: engine position })` and apply it without touching the engine's current track; `getTrackSource` returns cached blobs only; auto-advance (`handleCrossfadeStart`) calls `offlineBackend.advanceTo`; next/previous/seek/pause act locally; a stream that runs dry (`waiting` for >1.5 s on a non-cached source) skips to the next local track.
-   - on `offlineMode` false + WebSocket reconnected + first server snapshot: if playing locally and the server has no online active device (or it is us), hand over with `play {track_id, claim: true}` + `seek {position_ms}` (the existing seq/ack machinery keeps the current audio untouched); if another device is active, finish the current track locally and then apply the server state; if paused, apply the server state paused.
-   - `WebSocketContext.send` still contains an old "offline simulation" (`offlineBackend.pause/seek` do not exist); it should be replaced by returning `'offline'` while `offlineMode` is set, and the socket should reconnect immediately on `api.onConnectivity('recovered')` instead of waiting for its backoff (up to 30 s).
-   - `audioEngine.handleOfflineTransition` passes `cached.metadata` (undefined for the flattened record) so the reloaded slot loses `duration_ms` and auto-crossfade stops; it should reuse `currentSlot.metadata` and only reload when the MSE stream is incomplete.
-2. **UI:** an "Offline · playing your downloads (N)" pill for guests too (today only the signed-in DevicePicker button shows the offline icon + count), offline empty state in Catalog ("No downloads yet"), suppressing the "Failed to load tracks" toast while the health check is failing, friendlier voice-search/transcription message offline.
-3. **Service worker:** index.html is cached, but the hashed JS/CSS are only cached when fetched while the SW controls the page, so the *first* visit is not reload-proof offline. Fix: precache the `/assets/*` URLs referenced by `index.html` at install and let the page post its loaded `/assets/` URLs to the SW; add a ~4 s timeout to navigation fetches; stop intercepting `/api/stream/` (the SW audio cache duplicates IndexedDB and answers Range requests with full 200 bodies).
-4. **Background downloader:** `shouldDownload()` requires `networkQuality === 'excellent'`, which only Chrome's Network Information API can report, so Safari/iOS/Firefox never auto-download liked tracks; it should also check `cacheManager.hasRoomFor()` and `isServerAvailable`. The iOS cap (50 MB, about 8 tracks) is very conservative; consider a quota-aware cap from `navigator.storage.estimate()`.
+### How it works (files)
+- `NetworkContext.jsx`: server-down detection with hysteresis (2 failed `/api/health` probes 1.5 s apart; back after 2 successes 3 s apart; more after flapping; browser `offline` confirmed for 2 s). It publishes `audioState.offlineMode` (the SSOT) and emits `api.reportServerLost()` / `api.reportServerRecovered()`. A 502/503/504, a network error, or a WebSocket that closes abnormally triggers an immediate probe (`api.reportServerTrouble`).
+- `PlaybackContext.jsx`, **local mode** (`localRef`):
+  - `enterLocalMode()` runs when `offlineMode` turns on. It resets pending command state, ends any armed or on-air talk break (resuming music from a hold), marks this device locally active (`audio.setActiveDevice(true)` + `reportEngineStatus({ isActiveDevice: true })`), and starts `offlineBackend.startLocalSession()`.
+    - It keeps the current track if the engine is already playing it or it is downloaded. Otherwise it starts a download: playing if this device was playing, paused if it was a remote.
+    - If the current track is downloaded but still streaming, `engine.handleOfflineTransition()` swaps to the downloaded copy.
+  - `applyLocalState()` applies a local queue/state without touching the engine's current track. `getTrackSource()` returns downloads only in local mode.
+  - Auto-advance calls `offlineBackend.advanceTo()`. `next`/`previous`/`seek`/`togglePlay`/`playTrack`/`addToQueue`/`removeFromQueue`/`seedRadio` act locally.
+  - A stream that stalls for 1.5 s (`STARVED_SKIP_MS`) while offline skips to the next download. A download that fails to load is skipped (max 5 in a row, then pause).
+  - Server snapshots that arrive in local mode are stashed, not applied. Heartbeats and claim-on-open are suspended.
+  - `handBack()` runs when `offlineMode` turns off and a snapshot from the reconnected socket is available:
+    - **not used locally** → apply the server state;
+    - **another online device is active and we're playing** → `yielding`: drop the preloaded next track, finish the song, then `stepAside()` (apply the server state, so this device becomes a remote);
+    - **otherwise** → `claim` (only if we aren't already the server's active device) + `play {track_id}` + `seek {position_ms}` (+ `pause` if paused). `handoverRef` holds back snapshots until the first of those commands is acknowledged, so a stale "other device is active" snapshot can't silence this device mid-hand-back. Any transport (next/prev/play/pause/seek) during `yielding` takes over instead.
+- `WebSocketContext.jsx`: the old fake-offline simulation (it called `offlineBackend.pause/seek`, which don't exist) is gone. `send()` returns `'offline'` while `offlineMode` is on. Queued playback and talk-break messages are dropped when the server is lost (so stale commands aren't replayed), and the socket reconnects immediately on recovery.
+- `audioEngine.js`:
+  - `handleOfflineTransition()` now keeps the current slot's metadata. It used to drop `duration_ms`, which stopped the next crossfade.
+  - It only swaps when the current source is an incomplete stream, and it does so seamlessly.
+  - New helpers: `isCurrentSourceComplete()`, `isNextSourceComplete()`, `dropNext()`.
+  - A stream chunk that fails is retried every 2 s (up to 3 minutes) while the buffer keeps playing, so a short server blip no longer kills the song.
+- `offlineAPI.js`:
+  - friendly offline answers for voice search, the DJ, Radio Mode (`getRadioMode`/`updateRadioMode`) and shoutouts (`getShoutout`, stats, replies, reply upload, delete);
+  - calmer offline DJ lines.
+- UI:
+  - `OfflinePill.jsx` (rendered in `App.jsx`, visible to guests; count = playable downloads from `cacheManager.getStorageInfo().offlineTrackCount`);
+  - `Catalog.jsx` empty states and toast grace;
+  - `Shoutouts.jsx` offline empty state;
+  - `MediaSearch.jsx` voice search message;
+  - `Radio.jsx` DJ message;
+  - `RadioModeSettings.jsx` "talk breaks are paused" note;
+  - `PreferencesContext.jsx` Radio Mode error text;
+  - `Toast.jsx` moves top toasts below the pill;
+  - `App.jsx` 4 s grace before the disconnect toast.
+- `StorageContext.jsx` refreshes on `cacheManager.onChange`, so the pill count updates as downloads land.
+- **Service worker** (`public/sw.js`, caches `plair-static-v5` / `plair-dynamic-v4`):
+  - A Vite plugin in `vite.config.js` writes `asset-manifest.json` at build time (every `/assets/*` file, icons, interface sounds). The SW precaches it on install, and again when the page posts `PRECACHE` after load (`main.jsx`); that pass also prunes old `/assets/` entries, so updates keep working.
+  - Lookups use `ignoreVary` (the page's module-script requests otherwise miss precached entries).
+  - Navigations are network-first with a 4 s fallback to the cached shell, and a 5xx serves the cached shell.
+  - `/api/*` (including `/api/stream/`) is no longer intercepted: no duplicate audio cache. The old `plair-audio-v2` cache is deleted on activate.
+  - Cached media answers `Range` requests with proper 206 responses (Safari needs this).
+- **Background downloads** (`backgroundDownloader.js`):
+  - They no longer require Chrome's Network Information API (`networkQuality === 'excellent'`), so Safari, iOS and Firefox download liked tracks too.
+  - They skip when offline, IndexedDB is unavailable, Data Saver is on, or Chrome reports `saveData`, cellular, or 2g/3g.
+  - `cacheManager.canMakeRoomFor()` pauses downloads (30 min) when the cache is full of liked tracks, instead of evicting one liked track to download another.
+  - Liking a track, or the server coming back, wakes the downloader at once (it used to sleep up to 60 s).
+
+### Storage and downloads (decided by the owner, 28 Sep)
+- **Same experience on iPhone as on Android:** the download space is sized from the browser's own quota on every platform: `navigator.storage.estimate()`, half the quota, at most 2 GB, at least 200 MB where the quota allows (`cacheManager._sizeFromQuota`). Without an estimate it falls back to 500 MB on iOS and 2 GB elsewhere. The old fixed 50 MB iOS cap is gone.
+- Once there are downloads, the app asks the browser to keep them (`navigator.storage.persist()`, `cacheManager.requestPersistence`). It skips this on Firefox, which would show a prompt. iOS may still clear a site's storage after about 7 days without use unless it was added to the Home Screen; that is a platform rule.
+- **Wi-Fi vs mobile data:** Safari and Firefox don't expose the connection type, and the owner accepts that as a platform limitation. Background downloads measure their own speed and pause for 15 minutes after a download slower than 1 Mbps. They still skip Data Saver, `saveData`, cellular (Chrome) and 2g/3g.
 
 ### How to test
-- Unit-ish: `npx eslint src --quiet` and a scratch build (`npx vite build --outDir <scratch>`); never build into `client/dist` for tests.
-- End-to-end: run `vite preview` of a scratch build with `/api` + `/ws` proxied to a **mock** backend you can stop/start (FastAPI in the main venv works: health, catalog, `/api/stream/{id}/webm` with HEAD + Range, artwork, a `/ws/playback` that sends `playback_state` with `state_epoch`/`version`/`acks`). Use headless Chrome with `--disable-gpu --mute-audio`. Stop the mock: the health indicator should flip to degraded after ~2 s and the catalog should switch to the downloads; restart it: recovery after ~6 s (longer if it flapped recently).
-- On a phone: enable airplane mode mid-track, confirm the offline icon appears after ~2 s, the catalog shows downloads, likes made offline sync after reconnecting, and signing in is not lost.
+- `npx eslint src --quiet` and a scratch build: `npx vite build --outDir <scratch>`. Never build into `client/dist` for tests.
+- The end-to-end harness used on 28 Sep (it was in the session scratchpad, so copy it if you want to keep it) had four parts:
+  - a FastAPI mock backend with health, catalog, auth, preferences, `/api/stream/{id}/webm` with HEAD + Range, and `/ws/playback` with `state_epoch`/`version`/`acks`/`claim`;
+  - `vite preview` of a scratch build with `/api` + `/ws` proxied to the mock;
+  - a raw-CDP driver;
+  - headless Chrome with `--headless=new --disable-gpu --disable-software-rasterizer --mute-audio --autoplay-policy=no-user-gesture-required`.
+- All **51 checks** passed. They covered:
+  - server down mid-song (pill in ~3 s, no gap);
+  - a stream running dry, then a skip to a download;
+  - local next/previous;
+  - a downloads-only catalog;
+  - a smooth hand-back (play + seek, no jump);
+  - an offline reload with web and server both down;
+  - a flapping server (no gaps, only 2 mode changes);
+  - signed-in, with a liked track auto-downloaded, a seamless swap to it, offline likes synced and still signed in;
+  - two devices (one takes over, the other finishes its song and steps aside);
+  - no IndexedDB (iOS private mode): "no downloads yet", a clean pause, no exceptions.
+- **On a phone:** see the airplane-mode checklist in `docs/HANDOVER_2026-09-28.md`.
 
 ---
 
@@ -389,95 +434,11 @@ class API {
 
 ### 5. Playback Context (`client/src/contexts/PlaybackContext.jsx`)
 
-**Purpose:** Main playback orchestration - UNIFIED code path for online/offline
+**Purpose:** plays from the server when it is reachable, and runs a **local mode** on the downloads when `audioState.offlineMode` is on. See "Current state" above for the full behaviour.
 
-**Key Pattern - Always Check Cache First:**
-
-```javascript
-// THIS IS THE SAME CODE FOR ONLINE AND OFFLINE!
-const cachedTrack = await cacheManager.getCachedTrack(trackId)
-
-if (cachedTrack) {
-  // Use cached blob
-  url = URL.createObjectURL(cachedTrack.audioBlob)
-  isBlobUrl = true
-  audio.setIsCached(true)
-} else {
-  // Stream from server (will fail if offline, which is correct)
-  url = api.getStreamUrl(trackId)
-  audio.setIsCached(false)
-  cacheManager.beginTrackStream(trackId, metadata)
-}
-
-await engine.loadTrack(trackId, url, { isBlobUrl, ... })
-```
-
-**Why This Works:**
-1. Online + Cached: Uses blob, no network needed ✅
-2. Online + Not Cached: Streams from server, caches as it plays ✅
-3. Offline + Cached: Uses blob ✅
-4. Offline + Not Cached: `api.getStreamUrl()` would fail, but we never get here because offline tracks are pre-filtered ✅
-
-**Offline Playback Flow:**
-
-```
-User clicks track (offline)
-         ↓
-playTrack(trackId) checks isOnline
-         ↓
-Calls api.play(trackId)
-         ↓
-api.js routes to offlineBackend.play()
-         ↓
-offlineBackend builds smart queue with full metadata
-         ↓
-Returns { status: 'playing', state: {...}, offline: true }
-         ↓
-handlePlaybackState(state) processes response
-         ↓
-Calls cacheManager.getCachedTrack(trackId)
-         ↓
-Gets { audioBlob, artworkBlob, metadata }
-         ↓
-Creates URL.createObjectURL(audioBlob)
-         ↓
-audioEngine.loadTrack(url, { isBlobUrl: true })
-         ↓
-Track plays from cached blob! 🎵
-```
-
-**Important Methods:**
-
-```javascript
-// Unified playback method
-async playTrack(trackId) {
-  if (!isOnline) {
-    // Call offline API which returns full state
-    const response = await api.play(trackId)
-    await handlePlaybackState(response.state)
-    return
-  }
-
-  // Online: Send WebSocket command
-  wsSend({ type: 'playback_command', data: { command: 'play', track_id: trackId }})
-}
-
-// State handler (works for both online WebSocket and offline responses)
-async handlePlaybackState(data) {
-  const trackId = data.current_track?.id
-
-  // ALWAYS check cache first
-  const cached = await cacheManager.getCachedTrack(trackId)
-  const url = cached
-    ? URL.createObjectURL(cached.audioBlob)
-    : api.getStreamUrl(trackId)
-
-  await engine.loadTrack(trackId, url, { isBlobUrl: !!cached, ... })
-  setState(data) // Update React state with queue, etc.
-}
-```
-
----
+- `getTrackSource()` prefers a downloaded copy (unless the listener asked for a higher bitrate than the download and the server is reachable), otherwise streams and records the stream so it can be saved when complete. In local mode it returns downloads only.
+- Local mode (`localRef`) is entered by `enterLocalMode()` and left by `handBack()` (hand the current song + position to the server) or `stepAside()` (follow the server, used when another device is playing or this device never played locally).
+- Transport in local mode goes to `offlineBackend` (`next`, `previous`, `advanceTo`, `play`, `seedRadio`, `addToQueue`, `removeFromQueue`) and the result is applied with `applyLocalState()`, which never reloads the track that is already playing.
 
 ### 6. Network Detection (`client/src/contexts/NetworkContext.jsx`)
 
@@ -604,44 +565,35 @@ storageInfo = {
 17. Track plays from IndexedDB! 🎵
 ```
 
-### Scenario 3: Going Offline Mid-Session
+### Scenario 3: Server or Internet Lost Mid-Session
 
 ```
-1. User is online, playing streamed track
-2. Internet disconnects
-3. navigator.onLine → false
-4. NetworkContext fires 'offline' event
-5. publishAudioState({ isOnline: false })
-6. Current playing track continues (buffer not exhausted yet)
-7. Buffer runs low → 'waiting' event
-8. NetworkContext sets isBufferStarving = true
-9. PlaybackContext detects buffer starvation
-10. Auto-calls next() to skip to next track
-11. next() detects !isOnline
-12. Calls api.play(nextTrackId) → offlineBackend
-13. Builds queue from cached tracks only
-14. Playback continues seamlessly! 🎵
+1. Streaming track 1 (not downloaded); the server stops answering
+2. API errors / the WebSocket closing trigger an immediate /api/health probe
+3. 2 failed probes -> connectionMode 'degraded' (or 'offline') -> audioState.offlineMode = true
+4. PlaybackContext.enterLocalMode(): keep track 1 playing, build a local queue from the downloads
+5. The pill shows "Offline · playing your downloads (N)"
+6. Track 1's buffer runs dry -> 1.5 s stall -> skip to the next download
+7. Auto-advance / next / previous / seek run locally
 ```
 
-### Scenario 4: Coming Back Online
+### Scenario 4: Server Returns
 
 ```
-1. User is offline, playing cached tracks
-2. Internet reconnects
-3. navigator.onLine → true
-4. NetworkContext fires 'online' event
-5. publishAudioState({ isOnline: true })
-6. Current playing track continues (still using blob)
-7. App.jsx loadData() triggers (depends on isOnline)
-8. Retry logic kicks in for api.getTracks()
-9. Successfully fetches fresh catalog from server
-10. UI updates with full track list
-11. Next track user plays:
-    - Checks cacheManager first (hits cache)
-    - Uses blob (no network needed)
-12. Or if not cached:
-    - Streams from server
-    - Caches as it plays
+1. Health probes succeed twice -> offlineMode = false -> api.reportServerRecovered()
+2. WebSocket reconnects immediately; offline likes are synced (api.syncOfflineWrites)
+3. First playback_state on the new socket -> handBack()
+   - nobody else playing: claim (if needed) + play {track_id} + seek {position} -> no reload, no jump
+   - another device playing: finish this song, then follow the server as a remote
+4. Pill disappears; streaming resumes for the following tracks
+```
+
+### Scenario 5: Reload While Offline
+
+```
+1. The service worker serves the cached app shell (precached from asset-manifest.json)
+2. Health probes fail -> offlineMode -> local session starts paused on a download
+3. The catalog shows the downloads; pressing play starts them
 ```
 
 ---
@@ -816,78 +768,7 @@ class OfflineVectorSearch {
 
 ### 1. Background Download System
 
-**Concept:** Automatically cache liked tracks when on WiFi
-
-```javascript
-class BackgroundDownloader {
-  constructor() {
-    this.isEnabled = false
-    this.maxDailyDownload = 300 * 1024 * 1024  // 300MB/day
-    this.queue = []
-  }
-
-  async start() {
-    // Only run on WiFi
-    if (navigator.connection?.effectiveType !== 'wifi') return
-
-    // Only run when network is good
-    const quality = await networkContext.detectNetworkQuality()
-    if (quality.quality !== 'excellent') return
-
-    // Get user's liked tracks
-    const preferences = await api.getUserPreferences('track')
-    const likedIds = preferences
-      .filter(p => p.preference_type === 'super_like' || p.preference_type === 'like')
-      .map(p => p.track_id)
-
-    // Filter to non-cached
-    const notCached = []
-    for (const id of likedIds) {
-      if (!await cacheManager.isCached(id)) {
-        notCached.push(id)
-      }
-    }
-
-    // Download in priority order (super-likes first)
-    this.queue = prioritize(notCached)
-    await this.processQueue()
-  }
-
-  async processQueue() {
-    for (const trackId of this.queue) {
-      // Check constraints
-      if (!this.shouldContinue()) break
-
-      // Download track
-      const track = await api.getTrack(trackId)
-      await cacheManager.downloadAndCacheTrack(trackId, track, '192k')
-
-      // Throttle to not interfere with streaming
-      await sleep(2000)
-    }
-  }
-
-  shouldContinue() {
-    // Stop if network degrades
-    if (navigator.connection?.effectiveType !== 'wifi') return false
-
-    // Stop if user starts streaming (bandwidth priority)
-    if (playbackContext.state.is_playing) return false
-
-    // Stop if daily limit reached
-    const dailyUsage = await getDailyDownloadUsage()
-    if (dailyUsage >= this.maxDailyDownload) return false
-
-    return true
-  }
-}
-```
-
-**Trigger Points:**
-- App idle for 5+ minutes
-- On WiFi with good connection
-- Battery > 50% (mobile)
-- No active streaming
+**Implemented** in `client/src/lib/backgroundDownloader.js` (signed-in users, liked and super-liked tracks, 500 MB/day). See "Current state" for the rules; the iOS storage cap is an open decision.
 
 ### 2. Client-Side Vector Search
 
@@ -936,24 +817,7 @@ class OfflineSync {
 
 ### 4. Progressive Web App (PWA)
 
-Add service worker for true offline-first experience:
-
-```javascript
-// service-worker.js
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      return response || fetch(event.request)
-    })
-  )
-})
-```
-
-Would cache:
-- HTML shell
-- CSS/JS bundles
-- Static assets
-- API responses (with TTL)
+**Implemented:** `client/public/sw.js` precaches the app shell from the build's `asset-manifest.json`, so the app reloads with no connection. API responses are not cached by the service worker (the offline backend answers them from IndexedDB).
 
 ---
 
@@ -1088,6 +952,8 @@ await api.play()  // Should return { offline: true, state: {...} }
 
 ### Force offline mode for testing:
 
+The most realistic test is to stop the (mock) backend: the app should switch to the downloads in ~2-4 s. Or:
+
 ```javascript
 // Chrome DevTools:
 // 1. Open Network tab
@@ -1100,6 +966,6 @@ window.dispatchEvent(new Event('offline'))
 
 ---
 
-**Document Version:** 1.0
-**Last Reviewed:** December 2025
-**Next Review:** After implementing vector search or background download
+**Document Version:** 2.0
+**Last Reviewed:** 28 September 2026
+**Next Review:** After testing on a real phone and deciding the iOS storage cap

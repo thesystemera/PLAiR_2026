@@ -9,9 +9,9 @@ import config
 
 VOICES = ["tara", "leah", "jess", "leo", "dan", "mia", "zac", "zoe"]
 LINES = {
-    "shaquille": "Yo, yo, yo! PLAiR dot FM, you are locked in! That was Nine Inch Nails, and trust me, "
-                 "we are just getting warmed up. <laugh> Terry, tell 'em what's next!",
-    "terry": "<sigh> Oh, sure, let me just... check my notes. Right. It's grim out there, folks, "
+    "leo": "Yo, yo, yo! PLAiR dot FM, you are locked in! That was Nine Inch Nails, and trust me, "
+                 "we are just getting warmed up. <laugh> Tara, tell 'em what's next!",
+    "tara": "<sigh> Oh, sure, let me just... check my notes. Right. It's grim out there, folks, "
              "so grab a jacket. <chuckle> And maybe hide your ears, he's picking the next track.",
 }
 

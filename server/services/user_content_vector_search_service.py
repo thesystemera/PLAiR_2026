@@ -37,7 +37,7 @@ class UserContentVectorSearchService:
                 return current_annoy_index.get_nns_by_vector(vector_data, num_items)
 
         try:
-            log_service.user_content(f"Searching user content: {query}")
+            log_service.detail(f"Searching user content: {query}", "user_content")
 
             if use_ai_analysis and self.prompt_cache_service:
                 ai_analysis = await self.prompt_cache_service.analyze_query(query)
@@ -45,19 +45,19 @@ class UserContentVectorSearchService:
                     intent_category = ai_analysis.intent_category
                     query_weights = ai_analysis.category_weights.model_dump()
                     cleaned_query = ai_analysis.cleaned_query
-                    log_service.user_content(f"🤖 AI Intent: {intent_category} confidence: {ai_analysis.confidence:.2f}")
+                    log_service.detail(f"🤖 AI Intent: {intent_category} confidence: {ai_analysis.confidence:.2f}", "user_content")
                 else:
                     log_service.warning("AI analysis failed, falling back to keyword detection")
                     intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
             else:
                 intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
 
-            log_service.user_content(f"Category weights: {query_weights}")
+            log_service.detail(f"Category weights: {query_weights}", "user_content")
 
             query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
 
             if cleaned_query != query:
-                log_service.user_content(f"Cleaned query: {cleaned_query}")
+                log_service.detail(f"Cleaned query: {cleaned_query}", "user_content")
 
             nearest_ids = await asyncio.to_thread(_safe_search, query_embedding, n_results * 3)
 
@@ -66,7 +66,7 @@ class UserContentVectorSearchService:
                     log_service.error("Annoy index is empty")
                 return []
 
-            log_service.user_content(f"Found {len(nearest_ids)} candidates, re-ranking")
+            log_service.detail(f"Found {len(nearest_ids)} candidates, re-ranking", "user_content")
 
             results = await asyncio.to_thread(
                 self._rerank_candidates_sync, nearest_ids, query_embedding, query_weights, content_type, user_location
@@ -75,16 +75,16 @@ class UserContentVectorSearchService:
             results.sort(key=lambda x: x.get('final_score', 0), reverse=True)
 
             if results:
-                log_service.user_content("Top 5 matches:")
+                log_service.detail("Top 5 matches:", "user_content")
                 for i, item in enumerate(results[:5], 1):
                     username = item.get('user_data', {}).get('username', 'Unknown')
                     transcription = item.get('transcription', '')[:50]
                     score = item.get('final_score', 0)
-                    log_service.user_content(f"  {i}. {score:.3f} {username}: {transcription}...")
+                    log_service.detail(f"  {i}. {score:.3f} {username}: {transcription}...", "user_content")
 
             results = results[:n_results]
 
-            log_service.user_content(f"Returning {len(results)} results for {query} intent: {intent_category}")
+            log_service.detail(f"Returning {len(results)} results for {query} intent: {intent_category}", "user_content")
             return results
 
         except Exception as e:
@@ -288,90 +288,90 @@ class UserContentVectorSearchService:
                 "sentiment": 0.05, "content_theme": 0.03, "importance": 0.02,
                 "username": 0.00, "location": 0.00, "urgency": 0.00, "target_audience": 0.00
             }
-            log_service.user_content("🎯 Query intent: TRANSCRIPTION (message content)")
+            log_service.detail("🎯 Query intent: TRANSCRIPTION (message content)", "user_content")
         elif detected_category == "relationship":
             weights = {
                 "tags": 0.40, "transcription": 0.30, "category": 0.20,
                 "sentiment": 0.05, "importance": 0.03, "content_theme": 0.02,
                 "username": 0.00, "location": 0.00, "urgency": 0.00, "target_audience": 0.00
             }
-            log_service.user_content("🎯 Query intent: RELATIONSHIP")
+            log_service.detail("🎯 Query intent: RELATIONSHIP", "user_content")
         elif detected_category == "greeting":
             weights = {
                 "category": 0.40, "transcription": 0.30, "tags": 0.15,
                 "sentiment": 0.08, "username": 0.05, "content_theme": 0.02,
                 "location": 0.00, "urgency": 0.00, "importance": 0.00, "target_audience": 0.00
             }
-            log_service.user_content("🎯 Query intent: GREETING")
+            log_service.detail("🎯 Query intent: GREETING", "user_content")
         elif detected_category == "announcement":
             weights = {
                 "urgency": 0.30, "importance": 0.30, "category": 0.25,
                 "transcription": 0.10, "target_audience": 0.03, "tags": 0.02,
                 "location": 0.00, "username": 0.00, "sentiment": 0.00, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: ANNOUNCEMENT")
+            log_service.detail("🎯 Query intent: ANNOUNCEMENT", "user_content")
         elif detected_category == "sentiment":
             weights = {
                 "sentiment": 0.50, "transcription": 0.25, "tags": 0.12,
                 "category": 0.08, "content_theme": 0.03, "importance": 0.02,
                 "username": 0.00, "location": 0.00, "urgency": 0.00, "target_audience": 0.00
             }
-            log_service.user_content("🎯 Query intent: SENTIMENT")
+            log_service.detail("🎯 Query intent: SENTIMENT", "user_content")
         elif detected_category == "occasion":
             weights = {
                 "category": 0.50, "tags": 0.30, "transcription": 0.10,
                 "sentiment": 0.05, "importance": 0.03, "content_theme": 0.02,
                 "username": 0.00, "location": 0.00, "urgency": 0.00, "target_audience": 0.00
             }
-            log_service.user_content("🎯 Query intent: OCCASION")
+            log_service.detail("🎯 Query intent: OCCASION", "user_content")
         elif detected_category == "category":
             weights = {
                 "category": 0.50, "tags": 0.20, "transcription": 0.15,
                 "target_audience": 0.05, "urgency": 0.03, "importance": 0.03,
                 "location": 0.02, "username": 0.01, "sentiment": 0.01, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: CATEGORY")
+            log_service.detail("🎯 Query intent: CATEGORY", "user_content")
         elif detected_category == "urgency":
             weights = {
                 "urgency": 0.50, "importance": 0.20, "category": 0.15,
                 "transcription": 0.08, "tags": 0.04, "target_audience": 0.02,
                 "location": 0.01, "username": 0.00, "sentiment": 0.00, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: URGENCY")
+            log_service.detail("🎯 Query intent: URGENCY", "user_content")
         elif detected_category == "username":
             weights = {
                 "username": 0.60, "transcription": 0.20, "tags": 0.10,
                 "category": 0.05, "location": 0.03, "sentiment": 0.02,
                 "urgency": 0.00, "importance": 0.00, "target_audience": 0.00, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: USERNAME")
+            log_service.detail("🎯 Query intent: USERNAME", "user_content")
         elif detected_category == "location":
             weights = {
                 "location": 0.50, "target_audience": 0.20, "transcription": 0.15,
                 "category": 0.08, "tags": 0.04, "importance": 0.02,
                 "username": 0.01, "urgency": 0.00, "sentiment": 0.00, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: LOCATION")
+            log_service.detail("🎯 Query intent: LOCATION", "user_content")
         elif detected_category == "tags":
             weights = {
                 "tags": 0.50, "transcription": 0.25, "category": 0.12,
                 "content_theme": 0.08, "target_audience": 0.03, "sentiment": 0.02,
                 "username": 0.00, "location": 0.00, "urgency": 0.00, "importance": 0.00
             }
-            log_service.user_content("🎯 Query intent: TAGS")
+            log_service.detail("🎯 Query intent: TAGS", "user_content")
         elif detected_category == "target_audience":
             weights = {
                 "target_audience": 0.45, "importance": 0.25, "location": 0.15,
                 "category": 0.08, "transcription": 0.04, "tags": 0.02,
                 "username": 0.01, "urgency": 0.00, "sentiment": 0.00, "content_theme": 0.00
             }
-            log_service.user_content("🎯 Query intent: TARGET_AUDIENCE")
+            log_service.detail("🎯 Query intent: TARGET_AUDIENCE", "user_content")
         else:
             weights = {
                 "transcription": 0.30, "category": 0.15, "tags": 0.15,
                 "urgency": 0.10, "importance": 0.10, "username": 0.05,
                 "location": 0.05, "target_audience": 0.05, "sentiment": 0.03, "content_theme": 0.02
             }
-            log_service.user_content("🎯 Query intent: GENERAL")
+            log_service.detail("🎯 Query intent: GENERAL", "user_content")
 
         return detected_category or "general", weights, cleaned_query

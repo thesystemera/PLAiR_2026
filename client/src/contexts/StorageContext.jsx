@@ -85,7 +85,11 @@ export function StorageProvider({ children }) {
 
   useEffect(() => {
     setStorageRefreshCallback(scheduleStorageUpdate)
-    return () => setStorageRefreshCallback(null)
+    const unsubscribe = cacheManager.onChange(scheduleStorageUpdate)
+    return () => {
+      setStorageRefreshCallback(null)
+      unsubscribe()
+    }
   }, [scheduleStorageUpdate])
 
   const cacheTrack = useCallback(async (trackId, trackInfo = {}, bitrate = '192k') => {

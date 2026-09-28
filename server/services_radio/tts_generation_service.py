@@ -167,7 +167,7 @@ class TTSGenerationService:
         self._initialize_directories()
 
     def _initialize_directories(self):
-        voices = ['terry', 'shaquille']
+        voices = ['tara', 'leo']
 
         for voice in voices:
             os.makedirs(os.path.join(self.tts_directory, voice), exist_ok=True)
@@ -177,14 +177,15 @@ class TTSGenerationService:
 
         os.makedirs(self.audio_directory, exist_ok=True)
 
-        log_service.tts_generation("TTS Generation: Initialized all audio directories")
+        log_service.detail("TTS Generation: Initialized all audio directories", "tts_generation")
 
     def _log_metrics(self, event_type: str):
         total = self.metrics['hits'] + self.metrics['misses']
         ratio = (self.metrics['hits'] / total * 100) if total > 0 else 0
 
-        log_service.tts_generation(
-            f"STATS [{event_type.upper()}]: Hits: {self.metrics['hits']} | Misses: {self.metrics['misses']} | Vector Efficiency: {ratio:.1f}%"
+        log_service.detail(
+            f"STATS [{event_type.upper()}]: Hits: {self.metrics['hits']} | Misses: {self.metrics['misses']} | Vector Efficiency: {ratio:.1f}%",
+            "tts_generation"
         )
 
     def get_voice_directory(self, base_dir: str, voice: str) -> str:
@@ -252,11 +253,11 @@ class TTSGenerationService:
                 async with self._http().post(f"{settings.TTS_SERVER_URL}/abort/{job_id}") as response:
                     if response.status == 404:
                         self._aborted_jobs.discard(job_id)
-                        log_service.tts_generation(f"TTS abort: job {job_id} not abortable (finished or unsupported)")
+                        log_service.detail(f"TTS abort: job {job_id} not abortable (finished or unsupported)", "tts_generation")
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log_service.error(f"TTS abort failed for job {job_id}: {e}")
         if job_ids:
-            log_service.tts_generation(f"TTS abort: cancelled {len(job_ids)} job(s) for {owner}")
+            log_service.detail(f"TTS abort: cancelled {len(job_ids)} job(s) for {log_service.who(owner)}", "tts_generation")
 
     async def _stream_engine(
             self,
@@ -333,7 +334,7 @@ class TTSGenerationService:
         job_id = job.get('id')
         if job_id is not None and job_id in self._aborted_jobs:
             self._aborted_jobs.discard(job_id)
-            log_service.tts_generation(f"TTS job {job_id} aborted - discarding {len(pcm)} bytes of partial audio")
+            log_service.detail(f"TTS job {job_id} aborted - discarding {len(pcm)} bytes of partial audio", "tts_generation")
             return None
         if job.get('failed'):
             return None
@@ -392,7 +393,9 @@ class TTSGenerationService:
                 self.vector_db_service.save_embedding,
                 audio_path, tag, content_voice, embeddings_type
             )
-            log_service.tts_generation(f"API Cache: Background save and embedding complete: {audio_path}")
+            log_service.detail(
+                f"Clip cache: saved {embeddings_type.removesuffix('_embeddings')} clip for {content_voice} "
+                f"'{tag[:40]}' ({os.path.basename(audio_path)})", "tts_generation")
         except Exception as e:
             log_service.error(f"Background save failed: {e} {traceback.format_exc()}")
 
@@ -434,16 +437,16 @@ class TTSGenerationService:
         if cached is None:
             self.schedule_refresh('breath_embeddings', content_voice, context)
             fallback = await self.find_random_breath_sound(content_voice)
-            log_service.tts_generation(
+            log_service.detail(
                 f"Breath: no eligible cached breath for {content_voice} - random fallback "
-                f"{os.path.basename(fallback) if fallback else 'none'}")
+                f"{os.path.basename(fallback) if fallback else 'none'}", "tts_generation")
             return fallback
 
         cached_file_path, similarity = cached
         if similarity < settings.BREATH_SIMILARITY_THRESHOLD:
             self.schedule_refresh('breath_embeddings', content_voice, context)
-        log_service.tts_generation(
-            f"Breath: '{context[:40]}' -> {os.path.basename(cached_file_path)} (sim={similarity:.2f})")
+        log_service.detail(
+            f"Breath: '{context[:40]}' -> {os.path.basename(cached_file_path)} (sim={similarity:.2f})", "tts_generation")
         return cached_file_path
 
     async def find_random_breath_sound(self, voice_name: str) -> Optional[str]:
@@ -555,7 +558,7 @@ class TTSGenerationService:
                 await self._save_audio_and_embedding(
                     audio_path, audio_data, title or 'breath', description, content_voice, embeddings_type
                 )
-                log_service.tts_generation(f"Background refresh: cached new {embeddings_type} clip for '{tag[:40]}'")
+                log_service.detail(f"Background refresh: cached new {embeddings_type} clip for '{tag[:40]}'", "tts_generation")
                 counted = self._breath_library_counts.get(content_voice)
                 if embeddings_type == 'breath_embeddings' and counted:
                     self._breath_library_counts[content_voice] = (counted[0], counted[1] + 1)
@@ -686,8 +689,8 @@ class TTSGenerationService:
 
         if not can_generate:
             if embeddings_type == 'impulse_embeddings':
-                log_service.tts_generation(
-                    "Impulse: No suitable impulse found in vector DB and generation not permitted.")
+                log_service.detail(
+                    "Impulse: No suitable impulse found in vector DB and generation not permitted.", "tts_generation")
             return None, None
 
         if embeddings_type not in ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings'):

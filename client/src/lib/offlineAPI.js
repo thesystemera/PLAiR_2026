@@ -8,6 +8,14 @@ const TARGET_INDEX = 5
 const RECENT_LIMIT = 30
 const MIN_FAVORITES_POOL = 3
 
+const OFFLINE_MESSAGES = {
+  voiceSearch: 'Voice search needs a connection to PLAiR. You can still type to search your downloads.',
+  shoutouts: 'Shoutouts need a connection to PLAiR. They will be back when you are online.',
+  reply: 'Replies need a connection to PLAiR. Please try again when you are back online.',
+  deleteShoutout: 'Deleting a shoutout needs a connection to PLAiR. Please try again when you are back online.',
+  radioMode: 'Radio Mode needs a connection to PLAiR. Your change was not saved.',
+}
+
 const STORAGE_KEYS = {
   TRACK_PREFERENCES: 'offline_track_preferences',
   SHOUTOUT_PREFERENCES: 'offline_shoutout_preferences',
@@ -560,6 +568,34 @@ class OfflineBackend {
     }
   }
 
+  async getShoutout() {
+    throw new Error(OFFLINE_MESSAGES.shoutouts)
+  }
+
+  async getShoutoutStats() {
+    throw new Error(OFFLINE_MESSAGES.shoutouts)
+  }
+
+  async getShoutoutReplies() {
+    return { replies: [], offline: true }
+  }
+
+  async uploadShoutoutReply() {
+    throw new Error(OFFLINE_MESSAGES.reply)
+  }
+
+  async deleteShoutout() {
+    throw new Error(OFFLINE_MESSAGES.deleteShoutout)
+  }
+
+  async getRadioMode() {
+    throw new Error(OFFLINE_MESSAGES.radioMode)
+  }
+
+  async updateRadioMode() {
+    throw new Error(OFFLINE_MESSAGES.radioMode)
+  }
+
   async play(trackId = null) {
     try {
       const tracks = await this._libraryTracks()
@@ -845,7 +881,7 @@ class OfflineBackend {
   }
 
   async transcribe() {
-    throw new Error('Transcription requires an internet connection')
+    throw new Error(OFFLINE_MESSAGES.voiceSearch)
   }
 
   async deleteUserTrack() {
@@ -976,11 +1012,9 @@ class OfflineBackend {
 
   async djTalk(_params) {
     const offlineResponses = [
-      "Sorry buddy, I'm currently offline! 😅 Hit me up when you're back on the grid.",
-      "Yo! I'm in airplane mode right now. Can't chat but the beats are still playing! ✈️",
-      "DJ is off the air at the moment. We'll be back after these messages... (when you're online)",
-      "🎧 *static noises* Sorry, the signal's down. The music keeps spinning though!",
-      "No internet, no DJ chat. But hey, at least the tracks are cached! 💾",
+      "We're off air while PLAiR is offline, so we can't hear you right now. Your downloads keep playing, and we'll be back the moment the connection is.",
+      "The studio line is down for a bit. Keep enjoying your downloads, and talk to us again when you're back online.",
+      "No signal to the studio right now. The music keeps going from your downloads, and we'll pick up the chat when PLAiR is reachable again.",
     ]
 
     const randomResponse = offlineResponses[Math.floor(Math.random() * offlineResponses.length)]

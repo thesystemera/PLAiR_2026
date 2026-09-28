@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, u
 import { useUIState } from './UIStateContext'
 import { logger } from '../lib/logger'
 import { api } from '../lib/api'
+import { reportClientEvent } from '../lib/errorReporter'
 
 const NetworkContext = createContext(null)
 
@@ -31,6 +32,7 @@ const CONNECTION_TYPE_BITRATES = {
 
 const SERVER_HEALTH = {
   CHECK_INTERVAL_MS: 10000,
+  HIDDEN_CHECK_MS: 60000,
   SUSPECT_CHECK_MS: 1500,
   RECOVERY_CHECK_MS: 3000,
   TIMEOUT_MS: 4000,
@@ -87,6 +89,7 @@ export function NetworkProvider({ children }) {
         ? Math.min(flapPenaltyRef.current + 1, SERVER_HEALTH.MAX_FLAP_PENALTY)
         : 0
       logger.warn('[Network] Server unreachable (confirmed) - entering degraded mode')
+      reportClientEvent('server_unreachable', `Server unreachable (browser ${navigator.onLine ? 'online' : 'offline'})`)
     }
     setIsServerAvailable(available)
   }, [])
@@ -139,9 +142,12 @@ export function NetworkProvider({ children }) {
       healthTimerRef.current = null
     }
     if (!navigator.onLine) return
-    const delay = delayOverride ?? (!serverAvailableRef.current
+    const baseDelay = delayOverride ?? (!serverAvailableRef.current
       ? SERVER_HEALTH.RECOVERY_CHECK_MS
       : (failuresRef.current > 0 ? SERVER_HEALTH.SUSPECT_CHECK_MS : SERVER_HEALTH.CHECK_INTERVAL_MS))
+    const delay = delayOverride === null && document.visibilityState === 'hidden' && serverAvailableRef.current && !failuresRef.current
+      ? Math.max(baseDelay, SERVER_HEALTH.HIDDEN_CHECK_MS)
+      : baseDelay
     healthTimerRef.current = setTimeout(() => {
       healthTimerRef.current = null
       void checkServerHealth()
@@ -228,6 +234,8 @@ export function NetworkProvider({ children }) {
     if (newMode === 'full') {
       api.reportServerRecovered()
       void api.syncOfflineWrites()
+    } else if (previousMode === 'full') {
+      api.reportServerLost()
     }
   }, [isOnline, isServerAvailable, connectionMode, deriveConnectionMode, publishAudioState])
 

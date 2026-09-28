@@ -27,6 +27,7 @@ const CONTENT_HOLD_MS = 1500
 const FOLLOW_USER_SCROLL_GRACE_MS = 4000
 const FOLLOW_DELAY_MS = 120
 const FOLLOW_MARGIN_PX = 24
+const FOLLOW_RELEASE_MS = 900
 const HIGHLIGHT_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: { duration: 0 } }
 const HIGHLIGHT_FLASH_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: MOTION.settle }
 
@@ -339,6 +340,7 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   }, [queue])
 
   const lastUserScrollRef = useRef(0)
+  const autoScrollReleaseRef = useRef(null)
 
   useEffect(() => {
     const scroller = listRef.current?.closest('[data-scroller]')
@@ -370,11 +372,15 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
       if (!target || !scroller || scroller.clientHeight === 0) return
       if (performance.now() - lastUserScrollRef.current < FOLLOW_USER_SCROLL_GRACE_MS) return
       const scrollerRect = scroller.getBoundingClientRect()
+      if (scrollerRect.right <= 0 || scrollerRect.left >= window.innerWidth) return
       const rowRect = target.getBoundingClientRect()
       const fullyVisible = rowRect.top >= scrollerRect.top + FOLLOW_MARGIN_PX && rowRect.bottom <= scrollerRect.bottom - FOLLOW_MARGIN_PX
       if (fullyVisible) return
       const rowTop = rowRect.top - scrollerRect.top + scroller.scrollTop
       const top = Math.max(0, rowTop - scroller.clientHeight * 0.25)
+      scroller.dataset.autoScroll = '1'
+      clearTimeout(autoScrollReleaseRef.current)
+      autoScrollReleaseRef.current = setTimeout(() => { delete scroller.dataset.autoScroll }, FOLLOW_RELEASE_MS)
       scroller.scrollTo({ top, behavior: reduceMotion ? 'auto' : 'smooth' })
     }, FOLLOW_DELAY_MS)
     return () => clearTimeout(timeoutId)

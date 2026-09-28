@@ -19,8 +19,9 @@ def level_sound_effect(audio: AudioSegment) -> AudioSegment:
     before_dbfs = audio.dBFS
     gain = sound_effect_gain_db(before_dbfs, audio.max_dBFS)
     leveled = audio.apply_gain(gain)
-    log_service.tts_broadcast(
-        f"Background audio: BEFORE={before_dbfs:.1f} dBFS, AFTER={leveled.dBFS:.1f} dBFS, GAIN={gain:+.1f} dB"
+    log_service.detail(
+        f"Background audio: BEFORE={before_dbfs:.1f} dBFS, AFTER={leveled.dBFS:.1f} dBFS, GAIN={gain:+.1f} dB",
+        "tts_broadcast"
     )
     return leveled
 

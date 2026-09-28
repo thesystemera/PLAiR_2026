@@ -63,10 +63,12 @@ function bufferedStart(sourceBuffer) {
 }
 
 export class DJStreamPlayer {
-  constructor({ element, getOutput = null, onSpeakingChange = null, log = noopLog, env = null, timing = null }) {
+  constructor({ element, getOutput = null, onSpeakingChange = null, onBlocked = null, onUnsupported = null, log = noopLog, env = null, timing = null }) {
     this.element = element
     this.getOutput = getOutput
     this.onSpeakingChange = onSpeakingChange
+    this.onBlocked = onBlocked
+    this.onUnsupported = onUnsupported
     this.log = log
     this.env = { ...defaultEnv(), ...(env || {}) }
     this.timing = { ...DJ_STREAM_TIMING, ...(timing || {}) }
@@ -166,6 +168,7 @@ export class DJStreamPlayer {
       if (!this._unsupportedLogged) {
         this._unsupportedLogged = true
         this.log.warn('[DJ Stream] MediaSource WebM/Opus not supported - DJ voice unavailable on this browser')
+        this.onUnsupported?.()
       }
       return
     }
@@ -626,6 +629,12 @@ export class DJStreamPlayer {
     if (this._isStale(gen)) return
     if (error?.name === 'AbortError') return
     if (error?.name === 'NotAllowedError') {
+      if (this.onBlocked && !this.cur?.blockedOnce) {
+        this.cur.blockedOnce = true
+        this.log.warn('[DJ Stream] Playback blocked - waiting for the next tap')
+        this.onBlocked(() => this._startElement(gen))
+        return
+      }
       this.log.warn('[DJ Stream] Playback blocked until the listener interacts with the page')
       this._fail('autoplay-blocked')
       return

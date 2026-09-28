@@ -105,6 +105,9 @@ class PlaybackState:
                 return track
         return None
 
+    def _who(self, device_id: Optional[str] = None) -> str:
+        return log_service.who(self.session_id, device_id)
+
     def get_simulated_progress(self) -> int:
         if not self.is_playing or self.last_update_time is None:
             return self.progress_ms
@@ -157,14 +160,14 @@ class PlaybackState:
         except asyncio.TimeoutError:
             pass
         except Exception as e:
-            log_service.error(f"[{self.session_id}] Queue prefill failed: {e}")
+            log_service.error(f"{self._who()}: Queue prefill failed: {e}")
 
     def device_connected(self, device_id: str) -> bool:
         self._online_devices.add(device_id)
         self._device_offline_since.pop(device_id, None)
         if self.active_device_id is None:
             self.active_device_id = device_id
-            log_service.playback(f"[{self.session_id}] No active device - activating first connected device {device_id[:8]}")
+            log_service.detail(f"{self._who(device_id)}: first device online - playback is on this device", "playback")
             return True
         return False
 
@@ -193,7 +196,7 @@ class PlaybackState:
             return True
         return (now if now is not None else time.time()) - offline_since >= self.DEVICE_CLAIM_GRACE_S
 
-    def _apply_transfer(self, device_id: str, play: Optional[bool] = None) -> bool:
+    def _apply_transfer(self, device_id: str, play: Optional[bool] = None, reason: str = "transfer") -> bool:
         previous = self.active_device_id
         self.progress_ms = self.get_simulated_progress()
         self.last_update_time = time.time()
@@ -204,15 +207,17 @@ class PlaybackState:
         if previous != device_id:
             self._last_transfer_at = time.time()
             log_service.playback(
-                f"[{self.session_id}] Playback transferred {previous[:8] if previous else 'none'} -> {device_id[:8]} "
-                f"at {self.progress_ms}ms"
+                f"{self._who(device_id)}: playback moved here from device {previous[:8] if previous else 'none'} "
+                f"({reason}) at {log_service.clock(self.progress_ms)} of {log_service.track_label(self.current_track)}"
             )
         return previous != device_id
 
     async def transfer(self, device_id: str, play: Optional[bool] = None, notify_callback=None,
                        requester_device_id: Optional[str] = None, seq=None) -> bool:
         async with self._command(requester_device_id, seq):
-            changed = self._apply_transfer(device_id, play=play)
+            reason = "picked on this device" if requester_device_id in (None, device_id) \
+                else f"sent from device {requester_device_id[:8]}"
+            changed = self._apply_transfer(device_id, play=play, reason=reason)
             if notify_callback:
                 await notify_callback(self.get_state())
         return changed
@@ -223,7 +228,7 @@ class PlaybackState:
                 if notify_callback:
                     await notify_callback(self.get_state())
                 return False
-            self._apply_transfer(device_id, play=play)
+            self._apply_transfer(device_id, play=play, reason="claimed")
             if notify_callback:
                 await notify_callback(self.get_state())
         return True
@@ -242,8 +247,7 @@ class PlaybackState:
         async with self._command(device_id, seq):
             verdict = self.open_claim_verdict(device_id)
             if verdict == "claim":
-                self._apply_transfer(device_id)
-                log_service.playback(f"[{self.session_id}] Device {device_id[:8]} claimed playback on open")
+                self._apply_transfer(device_id, reason="app opened on this device")
             if notify_callback:
                 await notify_callback(self.get_state())
         return verdict
@@ -386,7 +390,7 @@ class PlaybackState:
         try:
             await self._auto_fill_queue(user_id=user_id, notify_callback=notify_callback)
         except Exception as e:
-            log_service.error(f"[{self.session_id}] Background queue auto-fill error: {e}")
+            log_service.error(f"{self._who()}: Background queue auto-fill error: {e}")
 
     def _spawn_background_fill(self, user_id: Optional[int], notify_callback):
         spawn(safe_background_task(
@@ -404,7 +408,7 @@ class PlaybackState:
             try:
                 await self._auto_fill_queue(user_id=user_id)
             except Exception as e:
-                log_service.error(f"[{self.session_id}] Queue fill before skip failed: {e}")
+                log_service.error(f"{self._who()}: Queue fill before skip failed: {e}")
                 return self._has_next_track()
         return self._has_next_track()
 
@@ -412,7 +416,8 @@ class PlaybackState:
                    device_id: Optional[str] = None, seq=None, claim: bool = False):
         async with self._command(device_id, seq):
             if claim and device_id and self.can_claim(device_id):
-                self._apply_transfer(device_id)
+                self._apply_transfer(device_id, reason="play pressed here")
+            was_playing = self.is_playing
 
             if track_id:
                 track = self.catalog.get_track(track_id) if self.catalog else None
@@ -439,8 +444,7 @@ class PlaybackState:
                         self._enforce_queue_size()
 
                     self.progress_ms = 0
-                log_service.playback(
-                    f"[{self.session_id}] Playing: {track.get('generation_params', {}).get('title', 'Unknown')}")
+                log_service.playback(f"{self._who(device_id)}: picked {log_service.track_label(track)}")
 
             if not self.current_track:
                 await self._auto_fill_queue(user_id=user_id)
@@ -456,6 +460,10 @@ class PlaybackState:
 
             self.is_playing = True
             self.last_update_time = time.time()
+            if not track_id and not was_playing and device_id:
+                log_service.playback(
+                    f"{self._who(device_id)}: resumed {log_service.track_label(self.current_track)} "
+                    f"at {log_service.clock(self.progress_ms)}")
             current_id = self.current_track["id"]
             if self._current_play_track_id != current_id:
                 self._log_play_start(track_id=current_id, user_id=user_id)
@@ -472,7 +480,9 @@ class PlaybackState:
             self.progress_ms = self.get_simulated_progress()
             self.is_playing = False
             self.last_update_time = time.time()
-            log_service.playback(f"[{self.session_id}] Playback paused")
+            log_service.playback(
+                f"{self._who(device_id)}: paused {log_service.track_label(self.current_track)} "
+                f"at {log_service.clock(self.progress_ms)}")
             if notify_callback:
                 await notify_callback(self.get_state())
         return True
@@ -488,7 +498,7 @@ class PlaybackState:
             self.progress_ms = 0
             self.last_update_time = None
             self.radio_mode = 'top_hits_week'
-            log_service.playback(f"[{self.session_id}] Playback stopped")
+            log_service.playback(f"{self._who(device_id)}: playback stopped, queue cleared")
             if notify_callback:
                 await notify_callback(self.get_state())
         return True
@@ -517,11 +527,12 @@ class PlaybackState:
         async with self._command(device_id, seq):
             advanced = await self._next_unlocked(user_id, skip_reason)
             if advanced:
-                title = (self.current_track or {}).get('generation_params', {}).get('title', 'Unknown')
-                log_service.playback(f"[{self.session_id}] Next -> {title}")
+                log_service.playback(
+                    f"{self._who(device_id)}: skipped to {log_service.track_label(self.current_track)} "
+                    f"({skip_reason or 'skip'})")
                 await self._prefill_before_broadcast(user_id)
             else:
-                log_service.warning(f"[{self.session_id}] Next ignored: no following track available")
+                log_service.warning(f"{self._who(device_id)}: skip ignored - no next track available")
             if notify_callback:
                 await notify_callback(self.get_state())
 
@@ -552,7 +563,7 @@ class PlaybackState:
 
             if moved:
                 self._log_play_start(track_id=self.current_track_id, user_id=user_id)
-                log_service.playback(f"[{self.session_id}] Previous -> {self.current_track_id[:8]}")
+                log_service.playback(f"{self._who(device_id)}: back to {log_service.track_label(self.current_track)}")
 
             if notify_callback:
                 await notify_callback(self.get_state())
@@ -577,7 +588,9 @@ class PlaybackState:
             self._last_broadcast_time = 0
             self.seek_version += 1
 
-            log_service.playback(f"[{self.session_id}] Seeked to: {self.progress_ms}ms")
+            log_service.playback(
+                f"{self._who(device_id)}: seeked to {log_service.clock(self.progress_ms)} in "
+                f"{log_service.track_label(self.current_track)}")
             if notify_callback:
                 await notify_callback(self.get_state())
         return True
@@ -605,7 +618,7 @@ class PlaybackState:
 
                 self._enforce_queue_size()
 
-            log_service.playback(f"[{self.session_id}] Added {len(added)} track(s) to queue")
+            log_service.playback(f"{self._who()}: queued {len(added)} track(s)")
 
             if notify_callback:
                 await notify_callback(self.get_state())
@@ -638,7 +651,7 @@ class PlaybackState:
             try:
                 await self._auto_fill_queue(user_id=user_id)
             except Exception as e:
-                log_service.error(f"[{self.session_id}] Queue fill after removal failed: {e}")
+                log_service.error(f"{self._who()}: Queue fill after removal failed: {e}")
 
         async with self._queue_lock:
             if self.current_track_id is None:
@@ -655,6 +668,7 @@ class PlaybackState:
     async def remove_from_queue(self, track_id: str, user_id: Optional[int] = None, notify_callback=None):
         async with self._command():
             was_current = track_id == self.current_track_id
+            removed_track = next((t for t in self.queue if t.get("id") == track_id), None)
             if was_current:
                 self._log_play_end(user_id=user_id, event_type="skip", skip_reason="removed")
             removed = await self._remove_from_queue_unlocked(track_id, user_id=user_id)
@@ -663,7 +677,8 @@ class PlaybackState:
             if was_current and self.current_track_id:
                 self._log_play_start(track_id=self.current_track_id, user_id=user_id)
 
-            log_service.playback(f"[{self.session_id}] Removed track from queue: {track_id}")
+            log_service.playback(
+                f"{self._who()}: removed {log_service.track_label(removed_track, track_id)} from the queue")
 
             await self._prefill_before_broadcast(user_id)
             if notify_callback:
@@ -684,8 +699,6 @@ class PlaybackState:
                 self.current_track_id = None
                 self._auto_filled_track_ids.clear()
 
-            log_service.playback(f"[{self.session_id}] Mode switched to: {category.title()}")
-
             await self._auto_fill_queue(user_id=user_id, notify_callback=notify_callback)
 
             if self.queue:
@@ -695,12 +708,16 @@ class PlaybackState:
                     self.last_update_time = time.time()
                     self._shift_queue_to_target()
 
-                log_service.playback(f"[{self.session_id}] Queue seeded: {self.queue[0].get('generation_params', {}).get('title', 'Unknown')}")
+                log_service.playback(
+                    f"{self._who()}: switched to {category} radio, starting with "
+                    f"{log_service.track_label(self.queue[0])} ({len(self.queue)} queued)")
 
                 if notify_callback:
                     await notify_callback(self.get_state())
-            elif notify_callback:
-                await notify_callback(self.get_state())
+            else:
+                log_service.warning(f"{self._who()}: switched to {category} radio but no tracks were found")
+                if notify_callback:
+                    await notify_callback(self.get_state())
 
             return True
 
@@ -709,16 +726,14 @@ class PlaybackState:
         if track_id:
             seed_track = self.catalog.get_track(track_id) if self.catalog else None
             if not seed_track:
-                log_service.error(f"[{self.session_id}] Seed track not found: {track_id}")
+                log_service.error(f"{self._who()}: {category} radio not seeded - seed track {track_id} not found")
                 return False
         else:
             seed_track = self.current_track or (self.history[-1] if self.history else None)
 
         if not seed_track:
-            log_service.warning(f"[{self.session_id}] No seed track available")
+            log_service.warning(f"{self._who()}: {category} radio not seeded - no seed track available")
             return False
-
-        log_service.playback(f"[{self.session_id}] Seeding radio — category: {category}")
 
         async with self._queue_lock:
             self._reset_fill_epoch()
@@ -746,7 +761,9 @@ class PlaybackState:
                 if seed_epoch == self._fill_epoch:
                     self._append_unique_tracks(new_tracks)
 
-            log_service.success(f"[{self.session_id}] Radio seeded with {len(self.queue)} tracks")
+            log_service.playback(
+                f"{self._who()}: seeded {category} radio from {log_service.track_label(seed_track)} "
+                f"({len(self.queue)} tracks queued)")
 
         if len(self.queue) < self.QUEUE_SIZE:
             self._spawn_background_fill(user_id, notify_callback)
@@ -758,7 +775,8 @@ class PlaybackState:
                 self.last_update_time = time.time()
                 self._shift_queue_to_target()
 
-            log_service.playback(f"[{self.session_id}] Queue seeded: {self.queue[0].get('generation_params', {}).get('title', 'Unknown')}")
+            log_service.detail(
+                f"{self._who()}: {category} radio starts with {log_service.track_label(self.queue[0])}", "playback")
 
         if notify_callback:
             await notify_callback(self.get_state())
@@ -777,14 +795,15 @@ class PlaybackState:
                 return
 
             if is_current:
-                log_service.playback(f"[{self.session_id}] Ban: Skipping current track {track_id}")
                 self._log_play_end(user_id=user_id, event_type="skip", skip_reason="ban")
             else:
-                log_service.playback(f"[{self.session_id}] Ban: Removing {track_id} from queue")
+                log_service.detail(f"{self._who()}: banned track {track_id} removed from the queue", "playback")
 
             await self._remove_from_queue_unlocked(track_id, user_id=user_id)
 
             if is_current and self.current_track_id:
+                log_service.playback(
+                    f"{self._who()}: skipped the banned track, now playing {log_service.track_label(self.current_track)}")
                 self._log_play_start(track_id=self.current_track_id, user_id=user_id)
 
             if notify_callback:
@@ -798,15 +817,12 @@ class PlaybackState:
                                       device_id: Optional[str] = None, seq=None):
         applied = False
         async with self._command(device_id, seq):
-            log_service.playback(
-                f"[{self.session_id}] Track transition: {from_track_id[:8] if from_track_id else 'None'} → {to_track_id[:8] if to_track_id else 'None'} ({transition_type})")
-
             if crossfade_info:
-                log_service.playback(
-                    f"[{self.session_id}] Crossfade analytics: "
+                log_service.detail(
+                    f"{self._who(device_id)}: crossfade analytics "
                     f"duration={crossfade_info.get('actual_duration_ms', 0)}ms, "
                     f"used_hint={crossfade_info.get('used_backend_hint', False)}, "
-                    f"confidence={crossfade_info.get('backend_confidence', 'none')}"
+                    f"confidence={crossfade_info.get('backend_confidence', 'none')}", "playback"
                 )
 
             if not to_track_id or to_track_id == self.current_track_id:
@@ -816,7 +832,7 @@ class PlaybackState:
 
             if from_track_id and self.current_track_id and from_track_id != self.current_track_id:
                 log_service.warning(
-                    f"[{self.session_id}] Stale transition ignored: device left {from_track_id[:8]} "
+                    f"{self._who(device_id)}: stale transition ignored - device left {from_track_id[:8]} "
                     f"but session is on {self.current_track_id[:8]}"
                 )
                 if notify_callback:
@@ -840,7 +856,7 @@ class PlaybackState:
                     applied = True
 
                 elif found_in_history:
-                    log_service.playback(f"[{self.session_id}] Track found in history, moving to queue")
+                    log_service.detail(f"{self._who(device_id)}: track found in history, moving to queue", "playback")
                     history_index = next((i for i, t in enumerate(self.history) if t['id'] == to_track_id), -1)
                     restored_track = self.history.pop(history_index)
                     self.queue.insert(0, restored_track)
@@ -852,7 +868,7 @@ class PlaybackState:
                 else:
                     queue_preview = [t['id'][:8] for t in self.queue[:5]] if self.queue else []
                     log_service.error(
-                        f"[{self.session_id}] DESYNC: Frontend moved to {to_track_id[:8]} "
+                        f"{self._who(device_id)}: DESYNC - frontend moved to {to_track_id[:8]} "
                         f"but track not in backend queue or history. Queue head: {queue_preview}. "
                         f"Attempting force sync by reloading queue from catalog."
                     )
@@ -866,7 +882,7 @@ class PlaybackState:
                         self._enforce_queue_size()
                         applied = True
                     else:
-                        log_service.error(f"[{self.session_id}] CRITICAL: Track {to_track_id} totally unknown.")
+                        log_service.error(f"{self._who()}: CRITICAL: Track {to_track_id} totally unknown.")
 
                 if applied:
                     self.progress_ms = 0
@@ -874,6 +890,12 @@ class PlaybackState:
                     self.last_update_time = time.time()
 
             if applied:
+                fade = ""
+                if crossfade_info and crossfade_info.get('actual_duration_ms'):
+                    fade = f", {crossfade_info.get('actual_duration_ms', 0) / 1000:.1f}s crossfade"
+                log_service.playback(
+                    f"{self._who(device_id)}: now playing {log_service.track_label(self.current_track, to_track_id)} "
+                    f"({'next track' if transition_type in (None, 'crossfade') else transition_type}{fade})")
                 self._log_play_start(track_id=to_track_id, user_id=user_id)
                 await self._prefill_before_broadcast(user_id)
 

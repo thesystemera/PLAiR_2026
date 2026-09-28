@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
-import { useRadioUI, useUIState } from '../contexts/UIStateContext'
+import { useRadioUI, useUIState, uiState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
 import { api } from '../lib/api'
@@ -79,7 +79,7 @@ export function Radio() {
   const anchorRef = useRef(null)
   const { offset: maskOffset, scale: anchorScale } = useRadioAnchor(scrollerRef, anchorRef)
 
-  const { toastError } = useUIState()
+  const { toastError, toastInfo } = useUIState()
   const errorToast = toastError
   const uiSound = useUISound(window.audioEngine)
   const emitWebSocketEvent = useWebSocketEmit()
@@ -96,12 +96,13 @@ export function Radio() {
         try {
           const response = await api.djTalk({ audio: base64Audio, text: null, context: 'generic_talk' })
           if (response?.offline && response?.response) {
-            emitWebSocketEvent('transcription_complete', { text: '🎤 [Voice message - transcription unavailable offline]' })
+            emitWebSocketEvent('transcription_complete', { text: '🎤 Voice message (not sent, you are offline)' })
             setTimeout(() => emitWebSocketEvent('conversation_update', { bot_response: response.response }), 300)
           }
         } catch (err) {
           logger.error('[Radio] Failed to contact DJs:', err)
-          errorToast('Failed to contact DJs', 3000)
+          if (uiState.audioState.offlineMode) toastInfo("The DJs can't hear you while PLAiR is offline. Your music keeps playing.", 4000)
+          else errorToast('Failed to contact DJs', 3000)
         } finally {
           reportEngineStatus({ isAIProcessing: false })
         }
@@ -112,7 +113,7 @@ export function Radio() {
       errorToast('Failed to process audio', 3000)
       reportEngineStatus({ isAIProcessing: false })
     }
-  }, [reportEngineStatus, errorToast, emitWebSocketEvent])
+  }, [reportEngineStatus, errorToast, toastInfo, emitWebSocketEvent])
 
   useEffect(() => {
     registerKeyboardRecordingCallback(sendToDJ)

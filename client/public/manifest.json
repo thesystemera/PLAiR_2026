@@ -1,11 +1,15 @@
 {
+  "id": "/",
   "name": "PLAiR - Personalized Localized Adaptive Interactive Radio",
   "short_name": "PLAiR",
   "description": "Personalized Localized Adaptive Interactive Radio - Your AI-powered music companion",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
   "background_color": "#121212",
   "theme_color": "#000000",
   "orientation": "any",
@@ -23,6 +27,12 @@
       "purpose": "any"
     },
     {
+      "src": "/images/plair_icon_maskable_192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "maskable"
+    },
+    {
       "src": "/images/plair_icon_maskable.png",
       "type": "image/png",
       "sizes": "512x512",
@@ -33,14 +43,15 @@
     {
       "src": "/images/screenshot1.png",
       "type": "image/png",
-      "sizes": "1280x720"
-    },
-    {
-      "src": "/images/screenshot2.png",
-      "type": "image/png",
-      "sizes": "1280x720"
+      "sizes": "540x720",
+      "form_factor": "narrow",
+      "label": "PLAiR on your phone"
     }
   ],
-  "categories": ["music", "entertainment", "personalization"],
+  "categories": [
+    "music",
+    "entertainment",
+    "personalization"
+  ],
   "lang": "en-US"
 }

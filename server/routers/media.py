@@ -20,6 +20,32 @@ SAFE_CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,160}\.mp4")
 
 router = APIRouter()
 
+STREAM_PURPOSES = {"play": "playing", "download": "downloading for offline"}
+RANGE_START = re.compile(r"bytes=(\d+)-")
+
+
+def _listener_label(request: Request, current_user: Optional[User]) -> str:
+    device_id = request.query_params.get("device_id") or None
+    if current_user:
+        log_service.remember_user(current_user.id, current_user.username)
+        return log_service.who(user_id=current_user.id, device_id=device_id)
+    session_id = services.websocket_service.session_for_device(device_id) if services.websocket_service and device_id else None
+    return log_service.who(session_id or request.query_params.get("guest_id") or "unknown", device_id)
+
+
+def _log_stream_start(request: Request, track_id: str, bitrate: str, range_header: Optional[str],
+                      current_user: Optional[User]):
+    if request.method == "HEAD":
+        return
+    match = RANGE_START.match(range_header or "")
+    if match and int(match.group(1)) > 0:
+        return
+    purpose = STREAM_PURPOSES.get(request.query_params.get("purpose") or "play", "playing")
+    track = services.catalog_service.get_track(track_id) if services.catalog_service else None
+    params = (track or {}).get("generation_params", {})
+    title = f"'{params.get('title', track_id)}' by {params.get('artist_name') or 'unknown'}"
+    log_service.playback(f"[STREAM] {_listener_label(request, current_user)} is {purpose} {title} ({bitrate})")
+
 @router.get("/api/stream/{track_id}")
 async def stream_track(
         track_id: str,
@@ -97,10 +123,7 @@ async def stream_webm_track(
     if bitrate not in ALLOWED_STREAM_BITRATES:
         bitrate = services.media_streaming_service.resolve_bitrate(current_user)
 
-    if current_user:
-        log_service.api(f"Streaming WebM {track_id} → {bitrate} for {current_user.username}")
-    else:
-        log_service.api(f"Streaming WebM {track_id} → {bitrate} for guest")
+    _log_stream_start(request, track_id, bitrate, range_header, current_user)
 
     assert services.catalog_service is not None
     assert services.transcoding_service is not None

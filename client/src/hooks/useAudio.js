@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useCallback } from 'react'
+import { useEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { AudioEngine } from '../lib/audioEngine'
 import { AudioMixer } from '../lib/audioMixer'
 import { cacheManager } from '../lib/cacheManager'
@@ -9,7 +9,8 @@ import { logger } from '../lib/logger'
 export function useAudio() {
   const { refreshStorageInfo, refreshDataUsage } = useStorage()
   const { publishAudioState } = useUIState()
-  const engineRef = useRef(null)
+  const [initialEngine] = useState(() => (typeof window !== 'undefined' ? new AudioEngine() : null))
+  const engineRef = useRef(initialEngine)
   const mixerRef = useRef(null)
   const audioRef = useRef({ current: null })
   const isInitializedRef = useRef(false)

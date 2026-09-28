@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import os
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Dict, Optional, Set, Tuple
 
 COLORS = {
     'RESET': '\033[0m',
@@ -43,6 +45,7 @@ LOG_CATEGORIES = {
     'external': {'color': 'CYAN', 'enabled': False},
 
     'conversation': {'color_fg': 'WHITE', 'color_bg': 'BG_GREEN', 'enabled': False},
+    'listener': {'color_fg': 'BLACK', 'color_bg': 'BG_WHITE', 'enabled': True},
     'persona_profile': {'color': 'GREEN', 'enabled': False},
     'user_content': {'color': 'CYAN', 'enabled': True},
 
@@ -84,6 +87,23 @@ _log_loop: Optional[asyncio.AbstractEventLoop] = None
 _print_lock = Lock()
 _file_logger: Optional[logging.Logger] = None
 _file_handler: Optional[RotatingFileHandler] = None
+_throttle_lock = Lock()
+_throttled: Dict[str, Tuple[float, int]] = {}
+_usernames: Dict[int, str] = {}
+_verbose_categories: Optional[Set[str]] = None
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+def apply_category_overrides():
+    for name, enabled in (("LOG_CATEGORIES_ON", True), ("LOG_CATEGORIES_OFF", False)):
+        for category in (os.getenv(name) or "").split(","):
+            category = category.strip()
+            if category in LOG_CATEGORIES:
+                LOG_CATEGORIES[category]['enabled'] = enabled
 
 def _console_safe(text: str) -> str:
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
@@ -101,6 +121,7 @@ def _setup_file_logger():
             print("File logging is disabled via settings.")
             return None
 
+        apply_category_overrides()
         logs_dir = Path(settings.LOGS_DIR)
 
         _file_logger = logging.getLogger('plair_radio')
@@ -115,8 +136,8 @@ def _setup_file_logger():
         log_file = logs_dir / 'radio.log'
         _file_handler = RotatingFileHandler(
             log_file,
-            maxBytes=1048576,
-            backupCount=5,
+            maxBytes=_env_int("LOG_FILE_MAX_MB", 20) * 1024 * 1024,
+            backupCount=_env_int("LOG_FILE_BACKUPS", 10),
             encoding='utf-8',
             delay=True
         )
@@ -184,7 +205,8 @@ async def _log_worker():
                         'debug': logging.DEBUG,
                     }
                     level = level_map.get(category, logging.INFO)
-                    _file_logger.log(level, f"[{category.upper()}] {message}")
+                    tag = "" if category in ("error", "warning", "info", "debug") else f"[{category.upper()}] "
+                    _file_logger.log(level, f"{tag}{message}")
                 except Exception:
                     pass
 
@@ -231,6 +253,80 @@ def log(message: str, category: str = "info"):
 
     _enqueue_log(entry)
 
+def verbose_enabled(category: str) -> bool:
+    global _verbose_categories
+    if _verbose_categories is None:
+        try:
+            from config.settings import settings
+            raw = settings.LOG_VERBOSE
+        except Exception:
+            raw = os.getenv("LOG_VERBOSE", "")
+        _verbose_categories = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    return "all" in _verbose_categories or category in _verbose_categories
+
+
+def detail(msg: str, category: str = "debug"):
+    if verbose_enabled(category):
+        log(msg, category)
+
+
+def throttled(key: str, msg: str, category: str = "warning", every_s: float = 600.0):
+    now = time.monotonic()
+    with _throttle_lock:
+        last, suppressed = _throttled.get(key, (None, 0))
+        if last is not None and now - last < every_s:
+            _throttled[key] = (last, suppressed + 1)
+            return
+        _throttled[key] = (now, 0)
+    if suppressed:
+        minutes = max(1, round((now - last) / 60))
+        msg = f"{msg} (repeated {suppressed}x in the last {minutes} min)"
+    log(msg, category)
+
+
+def remember_user(user_id, username: Optional[str]):
+    try:
+        if username:
+            _usernames[int(user_id)] = str(username)
+    except (TypeError, ValueError):
+        pass
+
+
+def who(session_id=None, device_id: Optional[str] = None, user_id=None) -> str:
+    key = str(session_id if session_id is not None else (user_id if user_id is not None else "")).strip()
+    if key.startswith("user:"):
+        key = key[5:]
+    if key.isdigit() and key != "0":
+        name = _usernames.get(int(key))
+        label = f"{name} (user {key})" if name else f"user {key}"
+    elif key.startswith("guest_"):
+        label = key[:14]
+    elif key in ("", "0", "None"):
+        label = "system"
+    else:
+        label = key[:14]
+    if device_id:
+        label += f", device {str(device_id)[:8]}"
+    return label
+
+
+def track_label(track, fallback: str = "unknown track") -> str:
+    if not track:
+        return fallback
+    params = track.get("generation_params") or {}
+    title = params.get("title") or track.get("title") or track.get("id") or fallback
+    artist = params.get("artist_name") or track.get("artist_name")
+    return f"'{title}' by {artist}" if artist else f"'{title}'"
+
+
+def clock(ms) -> str:
+    try:
+        seconds = max(0, int(ms) // 1000)
+    except (TypeError, ValueError):
+        return "?:??"
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 def error(msg): log(msg, "error")
 def warning(msg): log(msg, "warning")
 def info(msg): log(msg, "info")
@@ -244,6 +340,7 @@ def api(msg): log(msg, "api")
 def external(msg): log(msg, "external")
 
 def conversation(msg): log(msg, "conversation")
+def listener(msg): log(msg, "listener")
 def persona_profile(msg): log(msg, "persona_profile")
 def user_content(msg): log(msg, "user_content")
 

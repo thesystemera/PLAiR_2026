@@ -33,12 +33,13 @@ async def transcribe_audio(
     if len(audio_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty audio file")
 
-    log_service.api(f"[{session_id}] Voice transcription request ({len(audio_bytes)} bytes)")
-
     result = await whisper_dual_service.transcribe_quality(audio_bytes)
 
     if not result:
+        log_service.warning(f"{log_service.who(session_id)}: voice dictation could not be transcribed")
         raise HTTPException(status_code=500, detail="Transcription failed")
+
+    log_service.listener(f"{log_service.who(session_id)}: dictated {result['duration']:.1f}s of voice into text")
 
     return {
         "text": result["text"],

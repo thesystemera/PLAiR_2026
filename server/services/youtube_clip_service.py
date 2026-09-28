@@ -288,7 +288,7 @@ class YouTubeClipService:
 
         videos = await self.search_videos(keyword, max_results=3)
         if not videos:
-            log_service.warning(f"[YOUTUBE] No videos found for '{keyword}'")
+            log_service.detail(f"[YOUTUBE] No videos found for '{keyword}'", "external")
             self.failed_searches[cache_key] = time.monotonic()
             return None
 

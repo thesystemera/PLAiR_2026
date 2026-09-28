@@ -73,6 +73,7 @@ const ARTWORK_MOTION = {
 const blurCache = new Map()
 const decodedArtwork = new Map()
 const BLUR_RADII = [18, 10, 5]
+const BLUR_CACHE_LIMIT = 60
 const ENTRANCE_MS = 650
 const ARTWORK_DIM_OVERLAY = { backgroundColor: 'rgba(0, 0, 0, 0.7)' }
 
@@ -133,6 +134,11 @@ function createBlurredImage(src, blurRadius) {
       canvas.toBlob((blob) => {
         const url = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/jpeg', 0.8)
         blurCache.set(key, url)
+        while (blurCache.size > BLUR_CACHE_LIMIT) {
+          const [oldestKey, oldestUrl] = blurCache.entries().next().value
+          blurCache.delete(oldestKey)
+          if (oldestUrl.startsWith('blob:')) URL.revokeObjectURL(oldestUrl)
+        }
         resolve(url)
       }, 'image/jpeg', 0.8)
     }

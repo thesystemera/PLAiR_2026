@@ -135,7 +135,7 @@ class WhisperDualService(SingletonService):
                 temp_file.write(audio_data)
                 temp_file_path = temp_file.name
 
-            log_service.system(f"Fast transcribing ({len(audio_data)} bytes)...")
+            log_service.detail(f"Fast transcribing ({len(audio_data)} bytes)...", "system")
 
             started = time.perf_counter()
             transcription = await asyncio.wait_for(
@@ -152,7 +152,7 @@ class WhisperDualService(SingletonService):
                 log_service.error("Fast transcription produced empty result")
                 return None
 
-            log_service.success(f"✓ Fast transcribed: \"{transcription}\"")
+            log_service.detail(f"Fast transcribed: \"{transcription}\"", "system")
             return transcription
 
         except asyncio.TimeoutError:
@@ -194,7 +194,7 @@ class WhisperDualService(SingletonService):
                 temp_file.write(audio_data)
                 temp_file_path = temp_file.name
 
-            log_service.system(f"Quality transcribing ({len(audio_data)} bytes)...")
+            log_service.detail(f"Quality transcribing ({len(audio_data)} bytes)...", "system")
 
             started = time.perf_counter()
             segments, info = await asyncio.wait_for(
@@ -244,8 +244,9 @@ class WhisperDualService(SingletonService):
                 "words": words_list
             }
 
-            log_service.success(f"✓ Quality transcribed: \"{full_text}\"")
-            log_service.system(f"  Duration: {info.duration:.2f}s, Language: {info.language} ({info.language_probability:.2%})")
+            log_service.detail(
+                f"Quality transcribed: \"{full_text}\" ({info.duration:.2f}s, {info.language} "
+                f"{info.language_probability:.0%})", "system")
 
             return result
 

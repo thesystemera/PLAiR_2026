@@ -163,11 +163,10 @@ class VectorDBService:
             elif table_name == "breath_embeddings":
                 self.breath_db_data = data
 
-        log_service.tts_vector_db("Loading Annoy indexes from disk...")
         self._load_annoy_indexes()
 
         end_time = time.perf_counter()
-        log_service.tts_vector_db(f"load_initial_data took {end_time - start_time:.4f} seconds.")
+        log_service.tts_vector_db(f"Vector Database: clip cache loaded in {end_time - start_time:.2f}s")
         return db_data_results
 
     def _load_annoy_indexes(self):
@@ -207,11 +206,10 @@ class VectorDBService:
             try:
                 index_1.load(ann_file_1)
                 items_1 = index_1.get_n_items()
-                log_service.tts_vector_db(f"  ✓ Loaded {db_name}_1.ann: {items_1} items")
 
                 index_2.load(ann_file_2)
                 items_2 = index_2.get_n_items()
-                log_service.tts_vector_db(f"  ✓ Loaded {db_name}_2.ann: {items_2} items")
+                log_service.detail(f"Vector Database: loaded {db_name} indexes ({items_1}/{items_2} items)", "tts_vector_db")
 
                 if items_1 == 0 and items_2 == 0:
                     log_service.warning(f"  ✗ Both {db_name} indexes are empty (0 items)")
@@ -278,11 +276,10 @@ class VectorDBService:
         conn.close()
 
         if not data:
-            log_service.tts_vector_db(f"Vector Database: {table_name} table is empty. It will be populated as responses are generated.")
+            log_service.tts_vector_db(f"Vector Database: {table_name} is empty (fills as clips are generated)")
         else:
-            log_service.tts_vector_db(f"Vector Database: Loaded {len(data)} embeddings from {table_name}.")
-            for voice, count in voice_counts.items():
-                log_service.tts_vector_db(f"Vector Database:   {voice}: {count} embeddings")
+            voices = ", ".join(f"{voice} {count}" for voice, count in sorted(voice_counts.items()))
+            log_service.tts_vector_db(f"Vector Database: {table_name}: {len(data)} clips ({voices})")
 
         return data, voice_counts
 
@@ -348,7 +345,7 @@ class VectorDBService:
                     db_type
                 ))
 
-            log_service.tts_vector_db(f"Vector Cache: Saved new {db_type} embedding to cache and memory: {os.path.basename(audio_path)}")
+            log_service.detail(f"Vector Cache: Saved new {db_type} embedding: {os.path.basename(audio_path)}", "tts_vector_db")
 
     def query_embeddings(
             self,
@@ -362,7 +359,6 @@ class VectorDBService:
         query_embedding = query_embedding / np.linalg.norm(query_embedding)
 
         current_time = time.time()
-        log_service.tts_vector_db(f"Vector Cache: Querying for similar {db_type} responses to: '{response_str[:50]}...' for voice: {voice_name}")
 
         results = []
         skipped_count = 0
@@ -375,7 +371,9 @@ class VectorDBService:
         with self.index_lock:
             current_annoy_index = index_pair[0] if self.current_slots[db_type] == 1 else index_pair[1]
             if current_annoy_index.get_n_items() == 0:
-                log_service.warning(f"Annoy index for {db_type} is empty. Queries may be slow or incomplete.")
+                log_service.throttled(f"tts_index_empty:{db_type}",
+                                      f"Vector Cache: {db_type} index is empty - every lookup misses until the next rebuild",
+                                      "tts_vector_db")
                 nearest_ids = []
             else:
                 nearest_ids = current_annoy_index.get_nns_by_vector(query_embedding, top_n * 10)
@@ -442,10 +440,10 @@ class VectorDBService:
             with self.shotgun_lock:
                 self.shotgun_cache[top_filename] = current_time
 
-        log_service.tts_vector_db(f"Vector Cache: Process complete: {len(results)} results selected, {skipped_count} skipped")
-
-        query_end_time = time.perf_counter()
-        log_service.tts_vector_db(f"VectorDB query_embeddings for '{response_str[:30]}...' took {query_end_time - query_start_time:.4f} seconds.")
+        best = f"best {results[0][2]:.3f}" if results else "no match"
+        log_service.detail(
+            f"Vector Cache: {db_type} lookup for {voice_name} '{response_str[:40]}' -> {best}, "
+            f"{skipped_count} on cooldown ({time.perf_counter() - query_start_time:.2f}s)", "tts_vector_db")
         return results
 
     def rebuild_indexes(self):
@@ -463,11 +461,9 @@ class VectorDBService:
                         time.sleep(0.1)
             return False
 
-        log_service.tts_vector_db("Vector Database: Starting index rebuild and database sync")
-
         rebuilt = []
+        sizes = []
         for db_name, (index_1, index_2) in self.index_pairs.items():
-            db_rebuild_start_time = time.perf_counter()
             new_index = None
             try:
                 new_index = AnnoyIndex(1024, 'angular')
@@ -489,12 +485,10 @@ class VectorDBService:
                     max_row_id = max(max_row_id, row_id)
                     items_added += 1
 
-                log_service.tts_vector_db(f"Vector Database: Added {items_added} items from DB to the new '{db_name}' index.")
+                sizes.append(f"{db_name.replace('_embeddings', '')} {items_added}")
                 if items_added == 0:
-                    log_service.tts_vector_db(f"Vector Database: '{db_name}' is empty - index will be built once clips exist")
                     continue
 
-                log_service.tts_vector_db(f"Vector Database: Building new Annoy index for {db_name}")
                 new_index.build(10)
 
                 with self.index_lock:
@@ -503,7 +497,6 @@ class VectorDBService:
                         index_2.unload()
                         new_index.save(ann_file_1)
                         new_index.save(ann_file_2)
-                        log_service.tts_vector_db(f"Vector Database: Created new Annoy index files: {ann_file_1} and {ann_file_2}")
                         if not (_verify_file_saved(ann_file_1) and _verify_file_saved(ann_file_2)):
                             raise IOError(f"Failed to verify saved files: {ann_file_1} or {ann_file_2}")
                         new_index.unload()
@@ -517,7 +510,6 @@ class VectorDBService:
 
                         index_to_update.unload()
                         new_index.save(new_ann_file)
-                        log_service.tts_vector_db(f"Vector Database: Updated Annoy index file: {new_ann_file}")
                         if not _verify_file_saved(new_ann_file):
                             raise IOError(f"Failed to verify saved file: {new_ann_file}")
                         new_index.unload()
@@ -529,8 +521,6 @@ class VectorDBService:
                         item for item in self.new_embeddings_log if item[5] != db_name or item[0] > max_row_id
                     ]
                 rebuilt.append(db_name)
-                log_service.tts_vector_db(
-                    f"Vector Database: Total items in the {db_name} index: {items_added} (slot {self.current_slots[db_name]})")
 
             except Exception as e:
                 log_service.error(f"Failed to rebuild/update index for {db_name}: {str(e)}")
@@ -538,13 +528,7 @@ class VectorDBService:
                 if new_index is not None:
                     new_index.unload()
 
-            db_rebuild_end_time = time.perf_counter()
-            log_service.tts_vector_db(f"Rebuilding index for '{db_name}' took {db_rebuild_end_time - db_rebuild_start_time:.4f} seconds.")
-
         self.last_rebuild_time = datetime.datetime.now()
         log_service.tts_vector_db(
-            f"Vector Database: Rebuilt {len(rebuilt)}/{len(self.index_pairs)} indexes ({', '.join(rebuilt) or 'none'}) "
-            f"at {self.last_rebuild_time}")
-
-        rebuild_end_time = time.perf_counter()
-        log_service.tts_vector_db(f"VectorDB full index rebuild took {rebuild_end_time - rebuild_start_time:.4f} seconds.")
+            f"Vector Database: Rebuilt {len(rebuilt)}/{len(self.index_pairs)} clip indexes in "
+            f"{time.perf_counter() - rebuild_start_time:.2f}s ({', '.join(sizes)} clips)")

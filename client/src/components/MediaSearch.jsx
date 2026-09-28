@@ -20,7 +20,7 @@ export const MediaSearch = memo(function MediaSearch({
   onToggleQueue,
   audio
 }) {
-  const { queueState, toastError, interfaceState, openUploadModal, toggleCatalogView } = useUIState()
+  const { queueState, toastError, toastInfo, interfaceState, openUploadModal, toggleCatalogView, audioState } = useUIState()
   const { isLG } = useViewport()
   const compact = isLG
   const currentView = interfaceState.catalogView
@@ -63,6 +63,10 @@ export const MediaSearch = memo(function MediaSearch({
 
   const handleRecordingComplete = async (audioBlob) => {
     if (!audioBlob || audioBlob.size === 0) return
+    if (audioState.offlineMode) {
+      toastInfo('Voice search needs a connection to PLAiR. You can still type to search your downloads.', 4000, 'bottom', 'search')
+      return
+    }
 
     setIsTranscribing(true)
 

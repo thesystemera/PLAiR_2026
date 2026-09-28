@@ -277,6 +277,7 @@ class StationRenderer:
                 await self._wake.wait()
                 continue
             job = min(self._jobs.values())
+            rendered_before = self.rendered
             try:
                 await self.render(job.text, job.category, job.city)
             except asyncio.CancelledError:
@@ -285,6 +286,10 @@ class StationRenderer:
                 log_service.warning(f"[STINGS] Station voice render failed for '{job.text}': {type(e).__name__}: {e}")
             finally:
                 self._jobs.pop(clip_key(job.text), None)
+            if self.rendered != rendered_before and (self.rendered % 25 == 0 or not self._jobs):
+                log_service.tts_generation(
+                    f"[STINGS] Station voice: {self.rendered} part(s) rendered since start, "
+                    f"{len(self._jobs)} still queued, {len(self.store.clips())} cached")
             await asyncio.sleep(settings.STINGS_PRERENDER_SPACING_S)
 
     async def render(self, text: str, category: str, city: Optional[str] = None) -> Optional[StationClip]:
@@ -323,7 +328,7 @@ class StationRenderer:
             clip = await asyncio.to_thread(self.store.save, text, category, samples, rate, city, seed)
             self.rendered += 1
             self._failures.pop(key, None)
-            log_service.tts_generation(f"[STINGS] Station voice cached '{text}' ({clip.duration_s:.2f}s)")
+            log_service.detail(f"[STINGS] Station voice cached '{text}' ({clip.duration_s:.2f}s)", "tts_generation")
             return clip
         self._failures[key] = max(attempts, self._failures.get(key, 0))
         return None

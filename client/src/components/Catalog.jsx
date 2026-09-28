@@ -11,7 +11,7 @@ import { useDynamicTheme, GenreIcon, CatalogIcon } from '../contexts/DynamicThem
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { MediaSearchMatchBadge } from './MediaSearchMatchBadge'
-import { useRadioState, useUIState } from '../contexts/UIStateContext'
+import { useRadioState, useUIState, uiState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { MediaSearch } from './MediaSearch'
 import { Scroller } from './Scroller'
@@ -26,6 +26,8 @@ import { useViewport } from '../contexts/ViewportContext'
 import { MOTION } from '../lib/motion'
 import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
+
+const CATALOG_ERROR_GRACE_MS = 4000
 
 export function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
@@ -382,7 +384,11 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
         }
       } catch (_error) {
         logger.error('[Catalog] Failed to load data after retries:', _error)
-        errorToast('Failed to load tracks. Please check your connection and try again.')
+        setTimeout(() => {
+          if (!uiState.audioState.offlineMode) {
+            errorToast('Failed to load tracks. Please check your connection and try again.', 5000, 'top', 'catalog-load')
+          }
+        }, CATALOG_ERROR_GRACE_MS)
       } finally {
         setLoading(false)
       }
@@ -670,11 +676,19 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
                 onBackToGenres={handleBackToGenres}
                 contentType="catalog"
               />
-              <MediaEmptyState
-                icon={CatalogIcon}
-                title="No tracks found"
-                subtitle="Try adjusting your search or browse the catalog"
-              />
+              {audioState.offlineMode && !isSearchMode ? (
+                <MediaEmptyState
+                  icon={CatalogIcon}
+                  title="No downloads yet"
+                  subtitle="Tracks you like, and tracks you play to the end, are saved on this device. They'll show up here and keep playing when you're offline."
+                />
+              ) : (
+                <MediaEmptyState
+                  icon={CatalogIcon}
+                  title={audioState.offlineMode ? 'No downloaded tracks match' : 'No tracks found'}
+                  subtitle={audioState.offlineMode ? 'Offline search only looks through your downloads' : 'Try adjusting your search or browse the catalog'}
+                />
+              )}
             </div>
           ) : (
             <div ref={measurementRef} className="relative">

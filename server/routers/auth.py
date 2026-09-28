@@ -42,11 +42,12 @@ async def login(request: LoginRequest, http_request: Request, db: AsyncSession =
     try:
         user = await auth_service.authenticate_user(db, request.username, request.password)
         if not user:
-            log_service.error(f"Login failed: Invalid credentials for '{request.username}'")
+            log_service.detail(f"Login failed: Invalid credentials for '{request.username}'", "api")
             raise HTTPException(status_code=401, detail="Invalid username or password")
 
         token = auth_service.create_access_token({"sub": str(user.id)})
-        log_service.api(f"User logged in: {user.username}")
+        log_service.remember_user(user.id, user.username)
+        log_service.listener(f"{log_service.who(user_id=user.id)}: logged in")
         return {
             "user": {"id": user.id, "username": user.username},
             "token": token
@@ -161,7 +162,7 @@ async def manage_user_data(
     if action == "delete_conversations":
         assert services.user_profile_service is not None
         await services.user_profile_service.delete_conversations(int(current_user.id), db)  # type: ignore
-        log_service.api(f"User {current_user.username} deleted conversation history")
+        log_service.listener(f"{log_service.who(user_id=current_user.id)}: deleted their DJ conversation history")
 
         assert services.websocket_service is not None
         await services.websocket_service.broadcast_to_session(str(int(current_user.id)), {  # type: ignore
@@ -174,7 +175,7 @@ async def manage_user_data(
     elif action == "reset_persona":
         assert services.user_profile_service is not None
         await services.user_profile_service.reset_persona(int(current_user.id), db)  # type: ignore
-        log_service.api(f"User {current_user.username} reset persona, profile, and shoutout interests")
+        log_service.listener(f"{log_service.who(user_id=current_user.id)}: reset persona, profile and shoutout interests")
         return {"success": True, "message": "Persona, profile, and shoutout interests reset successfully"}
 
     else:

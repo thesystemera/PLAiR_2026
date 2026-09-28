@@ -12,9 +12,12 @@ import { offlineBackend } from '../lib/offlineAPI'
 import { AudioInteractionManager } from '../lib/audioInteractionManager'
 import { TalkBreakController } from '../lib/talkBreak'
 import { MusicBed } from '../lib/musicBed'
+import { canPlayCachedBlob, usesProgressiveStreaming } from '../lib/mediaSupport'
+import { reportClientEvent } from '../lib/errorReporter'
 import {
   NO_PENDING,
   PENDING_ACK_TIMEOUT_MS,
+  ackedSeq,
   advanceCursor,
   classifySnapshot,
   createSyncCursor,
@@ -58,6 +61,11 @@ const PAGE_LOAD = typeof document === 'undefined'
   : { visible: document.visibilityState === 'visible', at: Date.now() }
 const CACHE_LOOKUP_TIMEOUT_MS = 1500
 const RESTART_THRESHOLD_S = 3
+const STARVED_SKIP_MS = 1500
+const YIELD_END_SLACK_S = 0.3
+const LOCAL_MAX_SKIPS = 5
+const HANDOVER_GUARD_MS = 2 * PENDING_ACK_TIMEOUT_MS
+const OPEN_CLAIM_DEFER_MS = 2 * 60 * 1000
 
 function stepDisplayTrack(prev, direction) {
   const index = prev.queue.findIndex(t => t.id === prev.current_track?.id)
@@ -107,7 +115,7 @@ export function PlaybackProvider({ children }) {
   const [state, setState] = useState(INITIAL_STATE)
   const progressMsRef = useRef(0)
   const { user } = useAuth()
-  const { reportEngineStatus, publishAudioState, publishRadioState, audioState, settingsState, engineState } = useUIState()
+  const { reportEngineStatus, publishAudioState, publishRadioState, audioState, settingsState, engineState, toastInfo } = useUIState()
   const settingsStateRef = useRef(settingsState)
   const { getEffectiveBitrate } = useNetwork()
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
@@ -123,7 +131,21 @@ export function PlaybackProvider({ children }) {
   useEffect(() => { publishAudioStateRef.current = publishAudioState }, [publishAudioState])
 
   const audio = useAudio()
-  const prevIsOnlineRef = useRef(audioState.isOnline)
+
+  const toastInfoRef = useRef(toastInfo)
+  useEffect(() => { toastInfoRef.current = toastInfo }, [toastInfo])
+
+  const localRef = useRef(null)
+  const enteringLocalRef = useRef(false)
+  const serverStashRef = useRef(null)
+  const handoverRef = useRef(null)
+  const starvedTimerRef = useRef(null)
+  const handBackRef = useRef(null)
+  const localSkipRef = useRef(null)
+  const blockedRef = useRef(false)
+  const pauseFromOutsideRef = useRef(null)
+  const claimGestureRef = useRef(null)
+  const retryOnGestureRef = useRef(null)
 
   const serverTalkBreakRef = useRef(null)
   const talkBreakDisplayRef = useRef(null)
@@ -229,14 +251,14 @@ export function PlaybackProvider({ children }) {
   }, [])
 
   const getTrackSource = useCallback(async (trackId, requestedBitrate, trackMetadata = null) => {
-    const isOnline = uiState.audioState.isOnline
+    const isOnline = !uiState.audioState.offlineMode && !localRef.current
     const lookup = cacheManager.getCachedTrack(trackId).catch(() => null)
     const cached = isOnline
       ? await Promise.race([lookup, new Promise(resolve => setTimeout(() => resolve(null), CACHE_LOOKUP_TIMEOUT_MS))])
       : await lookup
     const dataSaverMode = settingsStateRef.current.dataSaverMode
 
-    if (cached) {
+    if (cached && canPlayCachedBlob(cached.audioBlob)) {
       if (dataSaverMode) {
         return { url: URL.createObjectURL(cached.audioBlob), isBlobUrl: true, bitrate: cached.bitrate, fromCache: true }
       }
@@ -251,6 +273,10 @@ export function PlaybackProvider({ children }) {
     }
 
     if (!isOnline) return null
+
+    if (usesProgressiveStreaming()) {
+      return { url: api.getMp3StreamUrl(trackId), isBlobUrl: false, progressive: true, bitrate: '192k', fromCache: false }
+    }
 
     const bitrate = dataSaverMode ? '128k' :
       (requestedBitrate === 'auto' ? getEffectiveBitrateRef.current('auto', !!userRef.current) : requestedBitrate)
@@ -344,6 +370,38 @@ export function PlaybackProvider({ children }) {
     if (isActiveDeviceRef.current) scheduleReconcile()
   }, [audio, scheduleReconcile, setProgressMs])
 
+  const applyLocalState = useCallback((local, { manual = false } = {}) => {
+    if (!local || !localRef.current) return
+    const engine = audio.getEngine()
+    const track = local.current_track || null
+    const engineOnTrack = !!track?.id && !!engine && engine.getCurrentTrackId() === track.id && engine.hasCurrentSource()
+    const element = engineOnTrack ? engine.getCurrentElement() : null
+    const progressMs = element ? Math.floor(element.currentTime * 1000) : (local.progress_ms || 0)
+    const isPlaying = !!local.is_playing && !!track
+    if (manual && !engineOnTrack) manualSwitchRef.current = true
+    forceSeekRef.current = false
+    desiredRef.current = {
+      ...desiredRef.current,
+      track,
+      isPlaying,
+      progressMs,
+      receivedAt: Date.now(),
+      queue: local.queue || [],
+      history: [],
+      crossfadeHint: null,
+    }
+    appliedSeekVersionRef.current = desiredRef.current.seekVersion
+    setState(prev => mergeDisplayState(prev, {
+      ...local,
+      is_playing: isPlaying,
+      history: [],
+      crossfade_hint: null,
+      announcer_hint: null,
+    }, { includePlayState: true }))
+    setProgressMs(progressMs)
+    scheduleReconcile()
+  }, [audio, scheduleReconcile, setProgressMs])
+
   const handlePlaybackState = useCallback((data, { replay = false } = {}) => {
     if (!data) return
 
@@ -353,6 +411,23 @@ export function PlaybackProvider({ children }) {
         return
       }
       cursorRef.current = advanceCursor(data, cursorRef.current)
+    }
+
+    if (localRef.current && !replay) {
+      serverStashRef.current = data
+      if (typeof data.state_epoch === 'string') stateSinceConnectRef.current = true
+      queueMicrotask(() => handBackRef.current?.())
+      return
+    }
+
+    const handover = handoverRef.current
+    if (handover && !replay) {
+      if (ackedSeq(data, deviceId) < handover.seq && Date.now() - handover.at < HANDOVER_GUARD_MS) {
+        deferredRef.current = data
+        armDeferTimer()
+        return
+      }
+      handoverRef.current = null
     }
 
     const weAreActive = !!data.active_device_id && data.active_device_id === deviceId
@@ -376,7 +451,8 @@ export function PlaybackProvider({ children }) {
     reportEngineStatus({
       isActiveDevice: weAreActive,
       activeDeviceId: activeDeviceIdRef.current,
-      activeDeviceOnline: activeDeviceOnlineRef.current
+      activeDeviceOnline: activeDeviceOnlineRef.current,
+      audioNeedsTap: weAreActive && blockedRef.current
     })
 
     serverTalkBreakRef.current = data.talk_break ?? null
@@ -442,20 +518,25 @@ export function PlaybackProvider({ children }) {
     }))
     setProgressMs(0)
 
-    if (uiState.audioState.isOnline) {
-      sendTransport('track_transition', {
-        from_track_id: fromTrackId,
-        to_track_id: nextTrack.id,
-        transition_type: 'crossfade',
-        fade_duration_ms: fadeTimeMs,
-        crossfade_info: info || null
-      })
-      logger.info('[PlaybackContext] 📡 Sent track_transition to backend')
-    } else {
-      logger.info('[PlaybackContext] 🔌 Offline auto-advance to next track')
-      void playTrackRef.current?.(nextTrack.id)
+    const local = localRef.current
+    if (local) {
+      local.used = true
+      logger.info('[PlaybackContext] 🔌 Local auto-advance to the next download')
+      void offlineBackend.advanceTo(nextTrack.id)
+        .then(response => applyLocalState(response?.state))
+        .catch(err => logger.error('[PlaybackContext] Local advance failed:', err))
+      return
     }
-  }, [audio, sendTransport, setProgressMs])
+
+    sendTransport('track_transition', {
+      from_track_id: fromTrackId,
+      to_track_id: nextTrack.id,
+      transition_type: 'crossfade',
+      fade_duration_ms: fadeTimeMs,
+      crossfade_info: info || null
+    })
+    logger.info('[PlaybackContext] 📡 Sent track_transition to backend')
+  }, [audio, sendTransport, setProgressMs, applyLocalState])
 
   const handleCrossfadeStartRef = useRef(handleCrossfadeStart)
   useEffect(() => { handleCrossfadeStartRef.current = handleCrossfadeStart }, [handleCrossfadeStart])
@@ -482,7 +563,28 @@ export function PlaybackProvider({ children }) {
 
     engine.onCrossfadeStart = (...args) => handleCrossfadeStartRef.current?.(...args)
     engine.onHoldReached = (trackId) => talkBreak.onHoldReached(trackId)
+    engine.onPlaybackBlocked = (blocked) => {
+      blockedRef.current = blocked
+      reportEngineStatus({ audioNeedsTap: blocked && isActiveDeviceRef.current })
+      if (blocked) {
+        retryOnGestureRef.current?.()
+        reportClientEvent('audio_blocked', 'Playback was blocked until the listener taps')
+      }
+    }
+    engine.onExternalPause = (reason) => pauseFromOutsideRef.current?.(reason)
   }, [reportEngineStatus, talkBreak])
+
+  useEffect(() => {
+    bindEngine(audio.getEngine())
+    return AudioInteractionManager.addGestureHook(() => {
+      const engine = audio.getEngine()
+      if (!engine) return
+      const desired = desiredRef.current
+      const wantPlay = isActiveDeviceRef.current && desired.isPlaying && !!desired.track?.id &&
+        engine.getCurrentTrackId() === desired.track.id && !talkBreak.isOnAir()
+      engine.unlockFromGesture({ resumeCurrent: wantPlay })
+    })
+  }, [audio, bindEngine, talkBreak])
 
   const ensureEngine = useCallback(async () => {
     const ok = await audio.initializeAudio()
@@ -501,9 +603,20 @@ export function PlaybackProvider({ children }) {
     const currentTrackId = desired.track?.id
     if (!currentTrackId || engine.getCurrentTrackId() !== currentTrackId) return
 
+    const local = localRef.current
+    if (local?.yielding) {
+      engine.dropNext()
+      return
+    }
+
     const currentIndex = desired.queue.findIndex(t => t.id === currentTrackId)
     const nextTrack = currentIndex >= 0 ? desired.queue[currentIndex + 1] : null
-    if (!nextTrack || engine.getNextTrackId() === nextTrack.id) return
+    if (!nextTrack) {
+      if (local) engine.dropNext()
+      return
+    }
+    if (engine.getNextTrackId() === nextTrack.id && (!local || engine.isNextSourceComplete())) return
+    if (local && engine.getNextTrackId()) engine.dropNext()
 
     engine.preloadTrack(nextTrack.id, {
       resolveSource: () => getTrackSource(nextTrack.id, settingsStateRef.current.audioQuality, nextTrack),
@@ -520,6 +633,8 @@ export function PlaybackProvider({ children }) {
       scheduleReconcile()
     })
   }, [scheduleReconcile])
+
+  useEffect(() => { retryOnGestureRef.current = retryOnGesture }, [retryOnGesture])
 
   const recordFailure = useCallback((trackId) => {
     const info = failedTracksRef.current.get(trackId) || { attempts: 0 }
@@ -562,19 +677,22 @@ export function PlaybackProvider({ children }) {
         })
       } catch (error) {
         logger.error('[PlaybackContext] Track load failed:', error)
-        recordFailure(track.id)
+        if (localRef.current) localSkipRef.current?.('failed')
+        else recordFailure(track.id)
         return
       }
 
       if (gen !== reconcileGenRef.current) return
       const status = switchResult?.status
       if (status === 'unavailable') {
-        recordFailure(track.id)
+        if (localRef.current) localSkipRef.current?.('unavailable')
+        else recordFailure(track.id)
         return
       }
       if (status !== 'current' && status !== 'crossfaded' && status !== 'loaded') return
 
       failedTracksRef.current.delete(track.id)
+      if (localRef.current) localRef.current.skips = 0
       const metadata = engine.currentSlot?.metadata
       publishAudioStateRef.current({ isCached: !!metadata?.fromCache, bitrate: metadata?.bitrate || settingsStateRef.current.audioQuality })
     }
@@ -654,7 +772,8 @@ export function PlaybackProvider({ children }) {
     const intent = openIntentRef.current
     if (!intent) return
     const age = Date.now() - intent.at
-    if (age > OPEN_CLAIM_WINDOW_MS || document.visibilityState !== 'visible' ||
+    const claimWindow = claimGestureRef.current ? OPEN_CLAIM_DEFER_MS : OPEN_CLAIM_WINDOW_MS
+    if (age > claimWindow || document.visibilityState !== 'visible' ||
         settingsStateRef.current.autoClaimOnOpen === false) {
       openIntentRef.current = null
       return
@@ -663,8 +782,24 @@ export function PlaybackProvider({ children }) {
       claimTimerRef.current = setTimeout(() => tryOpenClaimRef.current?.(), OPEN_CLAIM_SETTLE_MS - age)
       return
     }
-    if (!stateSinceConnectRef.current || !uiState.audioState.isOnline) return
+    if (!stateSinceConnectRef.current || uiState.audioState.offlineMode || localRef.current) return
     if (typeof document.hasFocus === 'function' && !document.hasFocus()) return
+    if (!AudioInteractionManager.hasSessionInteraction()) {
+      if (!claimGestureRef.current && !isActiveDeviceRef.current && activeDeviceIdRef.current) {
+        logger.info('[PlaybackContext] 📲 Opened on this device - taking over playback at the first tap')
+        claimGestureRef.current = AudioInteractionManager.onUserGesture(() => {
+          claimGestureRef.current = null
+          const pending = openIntentRef.current
+          if (!pending || Date.now() - pending.at > OPEN_CLAIM_DEFER_MS) {
+            openIntentRef.current = null
+            return
+          }
+          openIntentRef.current = { ...pending, at: Date.now() - OPEN_CLAIM_SETTLE_MS }
+          tryOpenClaimRef.current?.()
+        })
+      }
+      return
+    }
     openIntentRef.current = null
     if (isActiveDeviceRef.current || !activeDeviceIdRef.current) return
     logger.info(`[PlaybackContext] 📲 Opened on this device (${intent.reason}) - taking over playback`)
@@ -679,6 +814,10 @@ export function PlaybackProvider({ children }) {
       if (document.visibilityState !== 'visible') {
         if (!hiddenSinceRef.current) hiddenSinceRef.current = { at: Date.now(), fromLoad: false }
         openIntentRef.current = null
+        if (claimGestureRef.current) {
+          claimGestureRef.current()
+          claimGestureRef.current = null
+        }
         return
       }
       const hidden = hiddenSinceRef.current
@@ -719,30 +858,236 @@ export function PlaybackProvider({ children }) {
     }
   }, [clearDeferTimer])
 
-  const initialOfflineRef = useRef({ isOnline: audioState.isOnline, hasTrack: !!state.current_track })
-  useEffect(() => {
-    const initOfflineState = async () => {
-      if (initialOfflineRef.current.isOnline || initialOfflineRef.current.hasTrack) {
-        return
+  const clearStarvedTimer = useCallback(() => {
+    if (starvedTimerRef.current) {
+      clearTimeout(starvedTimerRef.current)
+      starvedTimerRef.current = null
+    }
+  }, [])
+
+  const currentPositionMs = useCallback(() => {
+    const engine = audio.getEngine()
+    const desired = desiredRef.current
+    if (engine && desired.track?.id && engine.getCurrentTrackId() === desired.track.id) {
+      const element = engine.getCurrentElement()
+      if (element) return Math.floor(element.currentTime * 1000)
+    }
+    return Math.floor(expectedProgressMs(desired))
+  }, [audio])
+
+  const enterLocalMode = useCallback(async () => {
+    if (localRef.current || enteringLocalRef.current) return
+    enteringLocalRef.current = true
+    try {
+      const engine = audio.getEngine()
+      const wasActive = isActiveDeviceRef.current
+      const desired = desiredRef.current
+      const track = desired.track
+      const engineHasTrack = wasActive && !!track?.id && !!engine &&
+        engine.getCurrentTrackId() === track.id && engine.hasCurrentSource()
+      const cached = track?.id ? await cacheManager.isCached(track.id).catch(() => false) : false
+      if (localRef.current || !uiState.audioState.offlineMode) return
+
+      const keep = engineHasTrack || cached
+      const isPlaying = wasActive && desired.isPlaying
+      const progressMs = !keep ? 0
+        : engineHasTrack ? currentPositionMs()
+          : (wasActive ? Math.floor(expectedProgressMs(desired)) : progressMsRef.current)
+
+      localRef.current = { used: wasActive, yielding: false, skips: 0 }
+      serverStashRef.current = null
+      handoverRef.current = null
+      pendingRef.current = NO_PENDING
+      optimisticTrackRef.current = false
+      deferredRef.current = null
+      clearDeferTimer()
+      forceSeekRef.current = false
+
+      if (wasActive) talkBreak.onServerState(null, { currentTrackId: track?.id ?? null, isPlaying })
+      serverTalkBreakRef.current = null
+      talkBreak.setActive(false)
+      if (!wasActive) {
+        isActiveDeviceRef.current = true
+        reconcileGenRef.current++
+        audio.setActiveDevice(true)
+      }
+      activeDeviceIdRef.current = deviceId
+      activeDeviceOnlineRef.current = true
+      reportEngineStatus({ isActiveDevice: true, activeDeviceId: deviceId, activeDeviceOnline: true })
+      publishTalkBreak()
+
+      const local = await offlineBackend.startLocalSession({ currentTrack: keep ? track : null, isPlaying, progressMs })
+      if (!localRef.current) return
+      logger.info(`[PlaybackContext] 🔌 Server unreachable - playing from downloads (${keep ? 'keeping the current track' : 'starting a download'}, ${isPlaying ? 'playing' : 'paused'})`)
+
+      if (local) {
+        applyLocalState(local)
+      } else if (engineHasTrack) {
+        desiredRef.current = { ...desiredRef.current, queue: [], history: [] }
+        setState(prev => ({ ...prev, queue: [], history: [] }))
+      } else {
+        desiredRef.current = { ...desiredRef.current, isPlaying: false, queue: [], history: [], receivedAt: Date.now() }
+        setState(prev => ({ ...prev, is_playing: false, queue: [], history: [] }))
+        if (wasActive) audio.pause()
       }
 
-      logger.info('[PlaybackContext] 🔌 Offline cold boot - initializing from cached state')
-
-      try {
-        const offlineState = await offlineBackend.getPlaybackState()
-        if (offlineState) {
-          logger.info('[PlaybackContext] 🔌 Loaded offline state:', offlineState.current_track?.title)
-          handlePlaybackStateRef.current?.(offlineState)
-        } else {
-          logger.info('[PlaybackContext] 🔌 No offline state available')
-        }
-      } catch (err) {
-        logger.error('[PlaybackContext] 🔌 Failed to load offline state:', err)
+      if (engineHasTrack && cached && engine && !engine.isCurrentSourceComplete()) {
+        const result = await engine.handleOfflineTransition(
+          () => desiredRef.current.track?.id,
+          (id) => cacheManager.getCachedTrack(id).then(cached => (cached && canPlayCachedBlob(cached.audioBlob) ? cached : null))
+        )
+        if (result.switched) publishAudioStateRef.current({ isCached: true, bitrate: result.bitrate })
       }
+    } catch (err) {
+      logger.error('[PlaybackContext] Could not start local playback:', err)
+    } finally {
+      enteringLocalRef.current = false
+    }
+  }, [audio, applyLocalState, clearDeferTimer, currentPositionMs, deviceId, publishTalkBreak, reportEngineStatus, talkBreak])
+
+  const localStep = useCallback(async (direction, { manual = true } = {}) => {
+    const local = localRef.current
+    if (!local) return false
+    local.used = true
+    clearStarvedTimer()
+    try {
+      const response = direction > 0 ? await offlineBackend.next() : await offlineBackend.previous()
+      if (!localRef.current) return true
+      if (response?.state) {
+        applyLocalState(response.state, { manual })
+      } else if (direction > 0 && !manual) {
+        desiredRef.current = { ...desiredRef.current, isPlaying: false, receivedAt: Date.now() }
+        setState(prev => ({ ...prev, is_playing: false }))
+        audio.pause()
+      }
+    } catch (err) {
+      logger.error('[PlaybackContext] Local step failed:', err)
+    }
+    return true
+  }, [applyLocalState, audio, clearStarvedTimer])
+
+  const localSkip = useCallback((reason) => {
+    const local = localRef.current
+    if (!local) return
+    local.skips = (local.skips || 0) + 1
+    if (local.skips > LOCAL_MAX_SKIPS) {
+      logger.warn('[PlaybackContext] 🔌 Several downloads failed to load - pausing')
+      local.skips = 0
+      desiredRef.current = { ...desiredRef.current, isPlaying: false, receivedAt: Date.now() }
+      setState(prev => ({ ...prev, is_playing: false }))
+      return
+    }
+    logger.warn(`[PlaybackContext] 🔌 Skipping to the next download (${reason})`)
+    void localStep(1, { manual: false })
+  }, [localStep])
+
+  useEffect(() => { localSkipRef.current = localSkip }, [localSkip])
+
+  const stepAside = useCallback(() => {
+    const data = serverStashRef.current
+    localRef.current = null
+    serverStashRef.current = null
+    clearStarvedTimer()
+    logger.info('[PlaybackContext] 🔁 Server is back - following its playback state')
+    if (data) handlePlaybackStateRef.current?.(data, { replay: true })
+  }, [clearStarvedTimer])
+
+  const handBack = useCallback(({ takeOver = false } = {}) => {
+    const local = localRef.current
+    const data = serverStashRef.current
+    if (!local || !data || !wsConnectedRef.current) return false
+    if (uiState.audioState.offlineMode) return false
+
+    const desired = desiredRef.current
+    const track = desired.track
+    const activeId = data.active_device_id || null
+    const otherActive = !!activeId && activeId !== deviceId &&
+      (data.active_device_online !== undefined ? !!data.active_device_online : true)
+
+    if (!local.used || !track?.id) {
+      stepAside()
+      return true
     }
 
-    void initOfflineState()
-  }, [])
+    if (otherActive && !takeOver) {
+      if (!desired.isPlaying) {
+        stepAside()
+        return true
+      }
+      if (!local.yielding) {
+        local.yielding = true
+        audio.getEngine()?.dropNext()
+        logger.info('[PlaybackContext] 🔁 Server is back and another device is playing - finishing this track first')
+      }
+      return false
+    }
+
+    const positionMs = currentPositionMs()
+    localRef.current = null
+    serverStashRef.current = null
+    clearStarvedTimer()
+    logger.info(`[PlaybackContext] 🔁 Server is back - handing ${track.id.slice(0, 8)} over at ${positionMs}ms`)
+    const firstSeq = activeId !== deviceId
+      ? sendCommand('claim', { reason: 'offline_handback' })
+      : null
+    const playSeq = sendCommand('play', { track_id: track.id })
+    handoverRef.current = { seq: firstSeq ?? playSeq, at: Date.now() }
+    sendCommand('seek', { position_ms: positionMs })
+    if (!desired.isPlaying) sendCommand('pause')
+    talkBreak.setActive(true)
+    return true
+  }, [audio, clearStarvedTimer, currentPositionMs, deviceId, sendCommand, stepAside, talkBreak])
+
+  useEffect(() => { handBackRef.current = handBack }, [handBack])
+
+  const takeOverFromYield = useCallback(() => {
+    if (!localRef.current?.yielding) return
+    handBack({ takeOver: true })
+  }, [handBack])
+
+  const pauseFromOutside = useCallback((reason) => {
+    if (!isActiveDeviceRef.current || !desiredRef.current.isPlaying) return
+    logger.info(`[PlaybackContext] ⏸️ Paused outside the app (${reason}) - reflecting it`)
+    desiredRef.current = { ...desiredRef.current, isPlaying: false, progressMs: currentPositionMs(), receivedAt: Date.now() }
+    setState(prev => (prev.is_playing ? { ...prev, is_playing: false } : prev))
+    if (talkBreak.isOnAir()) {
+      talkBreak.pause()
+      publishTalkBreak()
+    }
+    if (!localRef.current) sendCommand('pause')
+  }, [currentPositionMs, publishTalkBreak, sendCommand, talkBreak])
+
+  useEffect(() => { pauseFromOutsideRef.current = pauseFromOutside }, [pauseFromOutside])
+
+  const offlineMode = audioState.offlineMode
+  useEffect(() => {
+    if (offlineMode) {
+      if (localRef.current) localRef.current.yielding = false
+      void enterLocalMode()
+    } else if (localRef.current) {
+      handBack()
+    }
+  }, [offlineMode, enterLocalMode, handBack])
+
+  useEffect(() => {
+    if (!wsConnected) serverStashRef.current = null
+  }, [wsConnected])
+
+  const buffering = audioState.buffering
+  useEffect(() => {
+    clearStarvedTimer()
+    if (!buffering || !offlineMode) return
+    starvedTimerRef.current = setTimeout(() => {
+      starvedTimerRef.current = null
+      if (!localRef.current || !uiState.audioState.buffering) return
+      const engine = audio.getEngine()
+      if (!engine || engine.isCurrentSourceComplete() || engine.isTransportBusy()) return
+      const element = engine.getCurrentElement()
+      if (!element || element.paused || element.readyState >= 3) return
+      localSkip('stream ran dry')
+    }, STARVED_SKIP_MS)
+    return clearStarvedTimer
+  }, [buffering, offlineMode, audio, clearStarvedTimer, localSkip])
 
   const isActiveDevice = engineState.isActiveDevice
   const currentTrackId = state.current_track?.id
@@ -774,7 +1119,7 @@ export function PlaybackProvider({ children }) {
     if (!wsSend) return
 
     const shouldSkipTick = () => {
-      if (!isActiveDeviceRef.current || !desiredRef.current.track) return true
+      if (!isActiveDeviceRef.current || !desiredRef.current.track || localRef.current) return true
       if (pendingRef.current.seq) return true
       const engine = audio.getEngine()
       if (!engine || engine.isTransportBusy()) return true
@@ -782,7 +1127,7 @@ export function PlaybackProvider({ children }) {
     }
 
     const statusInterval = setInterval(() => {
-      if (shouldSkipTick() || !uiState.audioState.isOnline) return
+      if (shouldSkipTick()) return
 
       const announcer = stateRef.current.announcer_hint
 
@@ -843,7 +1188,20 @@ export function PlaybackProvider({ children }) {
       if (!engine || !trackId || engine.getCurrentTrackId() !== trackId) return
 
       const currentElement = engine.getCurrentElement()
-      if (!currentElement || currentElement.paused) return
+      if (!currentElement) return
+
+      if (localRef.current?.yielding && !engine.isTransportBusy()) {
+        const durationS = Number.isFinite(currentElement.duration) && currentElement.duration > 0
+          ? currentElement.duration
+          : (desiredRef.current.track?.duration_ms || 0) / 1000 || Infinity
+        const remaining = durationS - currentElement.currentTime
+        if (currentElement.ended || remaining <= YIELD_END_SLACK_S) {
+          stepAside()
+          return
+        }
+      }
+
+      if (currentElement.paused) return
 
       const currentTime = Math.floor(currentElement.currentTime * 1000)
 
@@ -853,37 +1211,59 @@ export function PlaybackProvider({ children }) {
     }, 250)
 
     return () => clearInterval(progressInterval)
-  }, [isActiveDevice, audio, setProgressMs])
+  }, [isActiveDevice, audio, setProgressMs, stepAside])
 
   const playTrack = useCallback(async (trackId) => {
-    if (!uiState.audioState.isOnline) {
-      try {
-        logger.info('[Playback] 🔌 Offline mode: Loading cached track', { trackId })
-        manualSwitchRef.current = true
-        const response = await api.play(trackId)
-
-        if (response.offline && response.state) {
-          handlePlaybackStateRef.current?.(response.state)
-          logger.info('[Playback] ✅ Offline: Track loaded from cache')
-          return
-        } else if (response.status === 'error') {
-          logger.error('[Playback] ❌ Offline play failed:', response.error)
-          return
-        }
-      } catch (err) {
-        logger.error('[Playback] ❌ Offline playback error:', err)
-        return
+    takeOverFromYield()
+    if (localRef.current) {
+      localRef.current.used = true
+      const response = await offlineBackend.play(trackId)
+      if (!localRef.current) return
+      if (response?.state) {
+        applyLocalState(response.state, { manual: true })
+      } else {
+        toastInfoRef.current?.("That track isn't downloaded, so it can't play until PLAiR is back online", 4000, 'bottom', 'offline')
       }
+      return
     }
 
     talkBreak.onUserTransport('play')
     manualSwitchRef.current = true
     sendCommand('play', { track_id: trackId })
-  }, [sendCommand, talkBreak])
+  }, [applyLocalState, sendCommand, takeOverFromYield, talkBreak])
 
   useEffect(() => { playTrackRef.current = playTrack }, [playTrack])
 
   const togglePlay = useCallback(async () => {
+    takeOverFromYield()
+    if (isActiveDeviceRef.current && blockedRef.current && stateRef.current.is_playing) {
+      logger.info('[PlaybackContext] ▶️ Tap unlocked audio - keeping playback going')
+      scheduleReconcile()
+      return
+    }
+    const local = localRef.current
+    if (local) {
+      local.used = true
+      if (!desiredRef.current.track) {
+        const response = await offlineBackend.play()
+        if (!localRef.current) return
+        if (response?.state) applyLocalState(response.state, { manual: true })
+        else toastInfoRef.current?.('No downloads yet. Like tracks while online and they download for offline listening.', 5000, 'bottom', 'offline')
+        return
+      }
+      const nowPlaying = !stateRef.current.is_playing
+      desiredRef.current = { ...desiredRef.current, isPlaying: nowPlaying, progressMs: currentPositionMs(), receivedAt: Date.now() }
+      setState(prev => ({ ...prev, is_playing: nowPlaying }))
+      if (nowPlaying) {
+        await ensureEngine()
+        audio.play().catch(err => logger.error('[PlaybackContext] Play failed:', err))
+        scheduleReconcile()
+      } else {
+        audio.pause()
+      }
+      return
+    }
+
     const wasPlaying = stateRef.current.is_playing
     const isActive = isActiveDeviceRef.current
 
@@ -924,23 +1304,23 @@ export function PlaybackProvider({ children }) {
     }
 
     sendCommand(nowPlaying ? 'play' : 'pause')
-  }, [audio, ensureEngine, scheduleReconcile, sendCommand, publishTalkBreak, talkBreak])
+  }, [applyLocalState, audio, currentPositionMs, ensureEngine, scheduleReconcile, sendCommand, publishTalkBreak, takeOverFromYield, talkBreak])
+
+  const resumePlayback = useCallback(async () => {
+    if (!stateRef.current.is_playing || blockedRef.current) await togglePlay()
+  }, [togglePlay])
+
+  const pausePlayback = useCallback(async () => {
+    if (!stateRef.current.is_playing) return
+    blockedRef.current = false
+    await togglePlay()
+  }, [togglePlay])
 
   const next = useCallback(async () => {
-    if (!uiState.audioState.isOnline) {
-      const desired = desiredRef.current
-      const currentTrackId = desired.track?.id
-      if (currentTrackId && desired.queue.length > 0) {
-        const currentIndex = desired.queue.findIndex(t => t.id === currentTrackId)
-        if (currentIndex >= 0 && currentIndex < desired.queue.length - 1) {
-          const nextTrack = desired.queue[currentIndex + 1]
-          logger.info('[Playback] 🔌 Offline next: Playing', nextTrack.id)
-          await playTrack(nextTrack.id)
-          return
-        }
-        logger.warn('[Playback] 🔌 Offline: No next track in queue')
-        return
-      }
+    takeOverFromYield()
+    if (localRef.current) {
+      await localStep(1)
+      return
     }
 
     talkBreak.onUserTransport('next')
@@ -948,9 +1328,17 @@ export function PlaybackProvider({ children }) {
     sendCommand('next', { skip_reason: 'manual_skip' })
     optimisticTrackRef.current = true
     queueMicrotask(() => setState(prev => stepDisplayTrack(prev, 1)))
-  }, [playTrack, sendCommand, talkBreak])
+  }, [localStep, sendCommand, takeOverFromYield, talkBreak])
 
   const seek = useCallback(async (positionMs) => {
+    takeOverFromYield()
+    if (localRef.current) {
+      setProgressMs(positionMs)
+      desiredRef.current = { ...desiredRef.current, progressMs: positionMs, receivedAt: Date.now() }
+      await audio.seek(positionMs / 1000)
+      return
+    }
+
     talkBreak.onUserTransport('seek')
     setProgressMs(positionMs)
 
@@ -960,9 +1348,10 @@ export function PlaybackProvider({ children }) {
     }
 
     sendCommand('seek', { position_ms: positionMs })
-  }, [audio, sendCommand, setProgressMs, talkBreak])
+  }, [audio, sendCommand, setProgressMs, takeOverFromYield, talkBreak])
 
   const previous = useCallback(async () => {
+    takeOverFromYield()
     const engine = audio.getEngine()
     const desired = desiredRef.current
     const settled = !pendingRef.current.seq && (!isActiveDeviceRef.current ||
@@ -980,16 +1369,8 @@ export function PlaybackProvider({ children }) {
       }
     }
 
-    if (!uiState.audioState.isOnline) {
-      const currentTrackId = desired.track?.id
-      const currentIndex = desired.queue.findIndex(t => t.id === currentTrackId)
-      if (currentIndex > 0 && desired.queue[currentIndex - 1]) {
-        const previousTrack = desired.queue[currentIndex - 1]
-        logger.info('[Playback] 🔌 Offline previous: Playing', previousTrack.id)
-        await playTrack(previousTrack.id)
-        return
-      }
-      logger.warn('[Playback] 🔌 Offline: No previous track in queue')
+    if (localRef.current) {
+      await localStep(-1)
       return
     }
 
@@ -998,7 +1379,7 @@ export function PlaybackProvider({ children }) {
     sendCommand('previous')
     optimisticTrackRef.current = true
     queueMicrotask(() => setState(prev => stepDisplayTrack(prev, -1)))
-  }, [audio, seek, playTrack, sendCommand, talkBreak])
+  }, [audio, localStep, seek, sendCommand, takeOverFromYield, talkBreak])
 
   const transferPlayback = useCallback(async (targetDeviceId = null) => {
     const target = targetDeviceId || deviceId
@@ -1010,36 +1391,14 @@ export function PlaybackProvider({ children }) {
 
   const addToQueue = useCallback(async (trackIds) => {
     const response = await api.addToQueue(trackIds)
-
-    if (response.offline && !uiState.audioState.isOnline) {
-      try {
-        const addedTracks = []
-        for (const trackId of (response.added || [])) {
-          const cached = await cacheManager.getCachedTrack(trackId)
-          if (cached) addedTracks.push(cached)
-        }
-
-        setState(prevState => ({ ...prevState, queue: [...prevState.queue, ...addedTracks] }))
-        desiredRef.current = { ...desiredRef.current, queue: [...desiredRef.current.queue, ...addedTracks] }
-      } catch (err) {
-        logger.error('[PlaybackContext] Failed to update offline queue:', err)
-      }
-    }
-
+    if (response?.offline && response.state && localRef.current) applyLocalState(response.state)
     return response
-  }, [])
+  }, [applyLocalState])
 
   const removeFromQueue = useCallback(async (trackId) => {
     const response = await api.removeFromQueue(trackId)
-
-    if (response.offline && !uiState.audioState.isOnline) {
-      setState(prevState => ({
-        ...prevState,
-        queue: prevState.queue.filter(track => track.id !== trackId),
-      }))
-      desiredRef.current = { ...desiredRef.current, queue: desiredRef.current.queue.filter(track => track.id !== trackId) }
-    }
-  }, [])
+    if (response?.offline && response.state && localRef.current) applyLocalState(response.state)
+  }, [applyLocalState])
 
   const seedRadio = useCallback(async (category = 'all', trackId = null) => {
     const currentId = stateRef.current.current_track?.id
@@ -1062,9 +1421,10 @@ export function PlaybackProvider({ children }) {
         }
       }
 
-      if (response.offline && !uiState.audioState.isOnline && response.state) {
-        logger.info('[Playback] 🔌 Offline seedRadio: Loading queue from cache')
-        handlePlaybackStateRef.current?.(response.state)
+      if (response.offline && response.state && localRef.current) {
+        logger.info('[Playback] 🔌 Local radio seeded from the downloads')
+        localRef.current.used = true
+        applyLocalState(response.state, { manual: true })
       }
     } catch (error) {
       console.error('[PlaybackContext.seedRadio] Failed to seed radio:', error)
@@ -1072,47 +1432,13 @@ export function PlaybackProvider({ children }) {
         publishRadioState({ activeSeedMode: null })
       }
     }
-  }, [publishRadioState])
-
-  useEffect(() => {
-    const justWentOffline = prevIsOnlineRef.current && !audioState.isOnline
-    prevIsOnlineRef.current = audioState.isOnline
-
-    const engine = audio.getEngine()
-    const trackId = desiredRef.current.track?.id
-    if (justWentOffline && engine && trackId && isActiveDeviceRef.current) {
-      engine.handleOfflineTransition(
-        () => desiredRef.current.track?.id,
-        async (id) => {
-          const cached = await cacheManager.getCachedTrack(id)
-          if (cached) {
-            logger.info(`[PlaybackContext] 🔌 Offline: Found cached ${cached.bitrate} version for ${id}`)
-          }
-          return cached
-        }
-      ).then(result => {
-        if (result.switched) {
-          publishAudioStateRef.current({ isCached: true, bitrate: result.bitrate })
-          logger.info(`[PlaybackContext] ✅ Switched to offline cached playback at ${result.bitrate}`)
-        } else {
-          logger.warn(`[PlaybackContext] ❌ No cached version available for offline playback`)
-        }
-      }).catch(err => logger.error('[PlaybackContext] Offline switch failed:', err))
-    }
-  }, [audioState.isOnline, audio])
-
-  useEffect(() => {
-    if (audioState.buffering && !audioState.isOnline && !audioState.isCached) {
-        logger.warn('[Playback] 🔌 Buffer starved offline, not cached. Policy: Auto-skip')
-        next().catch(err => logger.error('[Playback] Auto-skip failed:', err))
-    }
-  }, [audioState.buffering, audioState.isOnline, audioState.isCached, next])
+  }, [applyLocalState, publishRadioState])
 
   const reloadCurrentTrackQuality = useCallback(async () => {
     const currentTrack = desiredRef.current.track
     const userQuality = settingsStateRef.current.audioQuality
 
-    if (!currentTrack?.id || !isActiveDeviceRef.current) return
+    if (!currentTrack?.id || !isActiveDeviceRef.current || localRef.current) return
 
     const engine = audio.getEngine()
     if (!engine || engine.getCurrentTrackId() !== currentTrack.id) return
@@ -1143,6 +1469,8 @@ export function PlaybackProvider({ children }) {
     connected,
     playTrack,
     togglePlay,
+    resumePlayback,
+    pausePlayback,
     next,
     previous,
     seek,
@@ -1154,7 +1482,7 @@ export function PlaybackProvider({ children }) {
     audio,
     talkBreak,
   }), [
-    state, connected, playTrack, togglePlay, next, previous,
+    state, connected, playTrack, togglePlay, resumePlayback, pausePlayback, next, previous,
     seek, addToQueue, removeFromQueue, seedRadio,
     reloadCurrentTrackQuality, transferPlayback, audio, talkBreak
   ])

@@ -5,25 +5,25 @@ from services import log_service
 
 class TTSStreamPlanner:
     def split_text_into_sentences(self, text: str) -> List[Dict]:
-        log_service.tts_stream_planner(f"Sentence Splitter: Original text: {text}")
+        log_service.detail(f"Sentence Splitter: Original text: {text}", "tts_stream_planner")
 
         text = re.sub(r'\[(BROADCAST|TXT)]', '', text).strip()
 
         if text.startswith('[IMPULSE]'):
-            current_speaker = random.choice(['terry', 'shaquille'])
-            log_service.tts_stream_planner(f"IMPULSE detected - randomly chose: {current_speaker}")
+            current_speaker = random.choice(['tara', 'leo'])
+            log_service.detail(f"IMPULSE detected - randomly chose: {current_speaker}", "tts_stream_planner")
         else:
-            first_speaker_match = re.search(r'\[(SHAQUILLE|TERRY)]', text)
+            first_speaker_match = re.search(r'\[(LEO|TARA)]', text)
             if not first_speaker_match:
-                error_msg = f"NO SPEAKER TAG FOUND! Text must start with [SHAQUILLE] or [TERRY]. Text: {text[:100]}"
+                error_msg = f"NO SPEAKER TAG FOUND! Text must start with [LEO] or [TARA]. Text: {text[:100]}"
                 log_service.error(error_msg)
                 raise ValueError(error_msg)
 
             current_speaker = first_speaker_match.group(1).lower()
-            log_service.tts_stream_planner(f"Initial speaker extracted from text: {current_speaker}")
+            log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
 
         parts = re.split(
-            r'(\*[^*]+\*|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[SHAQUILLE]|\[TERRY]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
+            r'(\*[^*]+\*|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[TARA]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
             text
         )
 
@@ -61,7 +61,7 @@ class TTSStreamPlanner:
                 current_overlap = overlap
                 continue
 
-            if part in ['[TERRY]', '[SHAQUILLE]']:
+            if part in ['[TARA]', '[LEO]']:
                 if current_sentence:
                     ordered_content.append({
                         'type': 'sentence',
@@ -213,7 +213,7 @@ class TTSStreamPlanner:
                     'audio_process': breath_process
                 })
 
-        log_service.tts_stream_planner(f"Sentence Splitter: Final segments: {final_content}")
+        log_service.detail(f"Sentence Splitter: Final segments: {final_content}", "tts_stream_planner")
 
         return final_content
 

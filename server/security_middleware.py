@@ -3,6 +3,8 @@ import logging
 import re
 from urllib.parse import parse_qs
 
+from starlette.middleware.gzip import GZipMiddleware
+
 GUEST_ID_PATTERN = re.compile(r"^guest_[0-9A-Fa-f-]{8,64}$")
 FORBIDDEN_PATH_PARTS = ("\\", "..", "\x00", ":")
 MULTIPART_OVERHEAD_BYTES = 1024 * 1024
@@ -15,6 +17,17 @@ def is_valid_guest_id(guest_id: str) -> bool:
 SENSITIVE_QUERY_PATTERN = re.compile(r"((?:token|access_token|apikey|api_key|key)=)[^&\s\"']+", re.IGNORECASE)
 
 
+UNCOMPRESSED_PATH_PREFIXES = ("/api/stream", "/api/artwork", "/api/music-beds", "/api/stings")
+
+
+class MediaAwareGZipMiddleware(GZipMiddleware):
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith(UNCOMPRESSED_PATH_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 class RedactSecretsFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -25,8 +38,39 @@ class RedactSecretsFilter(logging.Filter):
         return True
 
 
+ROUTINE_ACCESS_PATTERN = re.compile(r'"(?:GET|HEAD|OPTIONS) \S+ HTTP/[\d.]+" [123]\d\d')
+ROUTINE_WEBSOCKET_MESSAGES = ("connection open", "connection closed")
+
+
+def _verbose_access() -> bool:
+    from services import log_service
+    return log_service.verbose_enabled("access")
+
+
+class QuietAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if " /api/stream/" in message:
+            return False
+        return not ROUTINE_ACCESS_PATTERN.search(message) or _verbose_access()
+
+
+class QuietWebSocketFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        routine = message in ROUTINE_WEBSOCKET_MESSAGES or (
+            '"WebSocket /ws/' in message and message.endswith("[accepted]"))
+        return not routine or _verbose_access()
+
+
 def install_log_redaction():
     redact = RedactSecretsFilter()
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, QuietAccessFilter) for f in access.filters):
+        access.addFilter(QuietAccessFilter())
+    server_log = logging.getLogger("uvicorn.error")
+    if not any(isinstance(f, QuietWebSocketFilter) for f in server_log.filters):
+        server_log.addFilter(QuietWebSocketFilter())
     for name in ("uvicorn.access", "uvicorn.error", "uvicorn"):
         logger = logging.getLogger(name)
         if not any(isinstance(f, RedactSecretsFilter) for f in logger.filters):

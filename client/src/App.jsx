@@ -7,7 +7,7 @@ import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
 import {MOTION, PRESETS} from './lib/motion'
 import {VERTICAL_EDGE_FADE_MASK} from './lib/themeManager'
-import {useArtwork, useUIState} from './contexts/UIStateContext'
+import {useArtwork, useUIState, uiState} from './contexts/UIStateContext'
 import {useProfilePicture} from './hooks/useProfilePicture'
 import {usePlayback} from './contexts/PlaybackContext'
 import {useAuth} from './contexts/AuthContext'
@@ -37,6 +37,8 @@ import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import ToastContainer from './components/Toast'
 import {OnAirFrame} from './components/OnAirBadge'
+import {OfflinePill} from './components/OfflinePill'
+import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
 
@@ -135,6 +137,9 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && !window.__rafDebug) 
   }
 }
 
+const DISCONNECT_NOTICE_GRACE_MS = 4000
+const MEDIA_POSITION_REFRESH_MS = 10000
+
 function App() {
   const [showLogin, setShowLogin] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
@@ -156,7 +161,7 @@ function App() {
     user: true
   })
 
-  const { playTrack, seek, seedRadio, addToQueue, togglePlay, previous, next, reloadCurrentTrackQuality, connected, audio } = usePlayback()
+  const { playTrack, seek, seedRadio, addToQueue, resumePlayback, pausePlayback, previous, next, reloadCurrentTrackQuality, connected, audio } = usePlayback()
   const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
   const { getAccentColor } = useDynamicTheme()
   const { setTrackData, updateShaderRegions, updateShaderRadioButtonPos, engineState, publishSettings, settingsState, toastSuccess, toastInfo, toastError, interfaceState, interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, queueState, uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, setMobilePanel } = useUIState()
@@ -173,7 +178,7 @@ function App() {
   const isFullscreenVisuals = interfaceState.isFullscreenVisuals
   const showUIControls = interfaceState.showUIControls
   const wasConnectedRef = useRef(false)
-  const hasConnectedOnceRef = useRef(false)
+  const disconnectNoticeRef = useRef(false)
 
   const currentTrack = engineState.currentTrack
   const currentTrackArtwork = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
@@ -310,13 +315,18 @@ function App() {
 
   useEffect(() => {
     if (!connected && wasConnectedRef.current) {
-      errorToast('Disconnected from server. Attempting to reconnect...', 8000)
       wasConnectedRef.current = false
+      const timer = setTimeout(() => {
+        if (uiState.audioState.offlineMode) return
+        disconnectNoticeRef.current = true
+        errorToast('Disconnected from server. Attempting to reconnect...', 8000, 'top', 'connection')
+      }, DISCONNECT_NOTICE_GRACE_MS)
+      return () => clearTimeout(timer)
     } else if (connected && !wasConnectedRef.current) {
-      if (hasConnectedOnceRef.current) {
-        success('Connected to server', 4000)
+      if (disconnectNoticeRef.current) {
+        success('Connected to server', 4000, 'top', 'connection')
       }
-      hasConnectedOnceRef.current = true
+      disconnectNoticeRef.current = false
       wasConnectedRef.current = true
     }
   }, [connected, errorToast, success])
@@ -603,20 +613,57 @@ function App() {
       const derivedTags = currentTrack?.derived_tags || {}
 
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: params.title || 'Unknown Track',
-        artist: derivedTags?.inspired_artist || 'PLAiR Radio',
+        title: params.title || currentTrack.title || 'Unknown Track',
+        artist: params.artist_name || currentTrack.artist_name || derivedTags?.inspired_artist || 'PLAiR Radio',
         album: 'PLAiR',
         artwork: currentTrack.has_artwork ? [
-          { src: currentTrackArtwork, sizes: '512x512', type: 'image/jpeg' }
-        ] : []
+          { src: `${window.location.origin}/api/artwork/${currentTrack.id}/thumb/512`, sizes: '512x512', type: 'image/jpeg' }
+        ] : [
+          { src: `${window.location.origin}/images/plair_icon_512.png`, sizes: '512x512', type: 'image/png' }
+        ]
       })
-
-      navigator.mediaSession.setActionHandler('play', () => void togglePlay())
-      navigator.mediaSession.setActionHandler('pause', () => void togglePlay())
-      navigator.mediaSession.setActionHandler('previoustrack', () => void previous())
-      navigator.mediaSession.setActionHandler('nexttrack', () => void next())
     }
-  }, [currentTrack, engineState.is_playing, togglePlay, previous, next, currentTrackArtwork])
+  }, [currentTrack])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    const handlers = {
+      play: () => void resumePlayback(),
+      pause: () => void pausePlayback(),
+      previoustrack: () => void previous(),
+      nexttrack: () => void next(),
+      seekto: (details) => {
+        if (Number.isFinite(details?.seekTime)) void seek(Math.max(0, details.seekTime * 1000))
+      },
+    }
+    Object.entries(handlers).forEach(([action, handler]) => {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler)
+      } catch (error) {
+        logger.warn(`[MediaSession] ${action} not supported:`, error)
+      }
+    })
+  }, [resumePlayback, pausePlayback, previous, next, seek])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.playbackState = currentTrack ? (engineState.is_playing ? 'playing' : 'paused') : 'none'
+    const durationSec = (currentTrack?.duration_ms || 0) / 1000
+    if (!durationSec || typeof navigator.mediaSession.setPositionState !== 'function') return
+    const publishPosition = () => {
+      const element = audio?.getCurrentElement?.()
+      const positionSec = Math.min(Math.max(element?.currentTime || 0, 0), durationSec)
+      try {
+        navigator.mediaSession.setPositionState({ duration: durationSec, position: positionSec, playbackRate: 1 })
+      } catch (error) {
+        logger.warn('[MediaSession] setPositionState failed:', error)
+      }
+    }
+    publishPosition()
+    if (!engineState.is_playing) return
+    const timer = setInterval(publishPosition, MEDIA_POSITION_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [currentTrack, engineState.is_playing, engineState.isCrossfading, audio])
 
   const handleGenerationBatchCompleted = useCallback(async (data) => {
     const trackCount = (data?.tracks) ? data.tracks.length : 0
@@ -875,6 +922,8 @@ function App() {
         </AnimatePresence>
 
         <OnAirFrame />
+        <OfflinePill />
+        <AudioUnlockPrompt />
 
         <AnimatePresence>
           {isFullscreenVisuals && showUIControls && (

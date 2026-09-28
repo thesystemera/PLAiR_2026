@@ -3,6 +3,7 @@ import ctypes
 import logging
 import queue
 import random
+import re
 import threading
 import time
 import uuid
@@ -46,11 +47,25 @@ KV_PAD = 256
 MAX_BATCHED_KV = 512
 MAX_BATCH = 2
 MULTIBYTE_PATTERNS = ((2, 192), (3, 224), (4, 240))
+END_OF_SPEECH = 128258
+AUDIO_TOKENS_PER_S = config.SAMPLE_RATE / 2048 * 7
+TOKEN_OVERHEAD = 30
+_WORD = re.compile(r"[A-Za-z0-9']+")
+_EMOTION_TAG = re.compile(r"<(laugh|chuckle|sigh|gasp|groan|yawn|cough|sniffle)>")
+
+
+def duration_cap_tokens(text: str) -> int:
+    tags = len(_EMOTION_TAG.findall(text))
+    words = len(_WORD.findall(re.sub(r"</?\w+>", " ", text)))
+    seconds = max(config.DURATION_CAP_FLOOR_S, config.DURATION_CAP_BASE_S
+                  + config.DURATION_CAP_PER_WORD_S * words + config.DURATION_CAP_PER_TAG_S * tags)
+    return int(seconds * AUDIO_TOKENS_PER_S) + TOKEN_OVERHEAD
 
 
 class Job:
     __slots__ = ("id", "text", "voice", "temperature", "top_p", "max_tokens", "min_p", "seed",
-                 "out_q", "cancelled", "enqueued_at", "started_at", "first_audio_at", "samples", "slot")
+                 "out_q", "cancelled", "enqueued_at", "started_at", "first_audio_at", "samples", "slot",
+                 "finish")
 
     def __init__(self, text, voice, temperature, top_p, max_tokens, min_p, seed=None):
         self.id = uuid.uuid4().hex[:8]
@@ -68,6 +83,7 @@ class Job:
         self.first_audio_at = None
         self.samples = 0
         self.slot = -1
+        self.finish = "cancelled"
 
 
 class Slot:
@@ -205,7 +221,12 @@ class BatchEngine:
         self.snac_q.put((job, None))
 
     def _accept(self, slot: Slot, token: int):
+        if token == END_OF_SPEECH and config.STOP_ON_END_OF_SPEECH:
+            slot.job.finish = "end_of_speech"
+            self._finish(slot)
+            return
         if llama_cpp.llama_vocab_is_eog(self.vocab, token):
+            slot.job.finish = "eos"
             self._finish(slot)
             return
         slot.completion.append(token)
@@ -221,6 +242,7 @@ class BatchEngine:
             return
         self._emit_text(slot)
         if len(slot.completion) >= slot.max_tokens:
+            slot.job.finish = "max_tokens"
             self._finish(slot)
             return
         slot.last_token = token
@@ -361,10 +383,12 @@ class BatchEngine:
         wait_ms = (job.started_at - job.enqueued_at) * 1000
         ttfa_ms = (job.first_audio_at - job.started_at) * 1000 if job.first_audio_at else 0
         log.info(
-            "[%s] slot=%d %s | voice=%s wait=%.0fms ttfa=%.0fms audio=%.1fs rtf=%.2fx | %s",
+            "[%s] slot=%d %s | voice=%s wait=%.0fms ttfa=%.0fms audio=%.1fs rtf=%.2fx end=%s | %s",
             job.id, job.slot, "cancelled" if job.cancelled else "ok", job.voice, wait_ms, ttfa_ms,
-            audio_s, (gen_s / audio_s) if audio_s else 0, job.text[:60],
+            audio_s, (gen_s / audio_s) if audio_s else 0, job.finish, job.text[:60],
         )
+        if job.finish == "max_tokens" and not job.cancelled:
+            log.warning("[%s] hit the length cap (%d tokens) - runaway take cut short", job.id, job.max_tokens)
 
 
 job_queue: "queue.Queue[Job | None]" = queue.Queue()
@@ -397,6 +421,8 @@ def tts():
         return jsonify({"error": f"unknown voice '{voice}'", "voices": VOICES}), 400
     if job_queue.qsize() >= config.MAX_QUEUE_DEPTH:
         return jsonify({"error": "queue full", "queue_depth": job_queue.qsize()}), 503
+    if config.DURATION_CAP:
+        max_tokens = min(max_tokens, duration_cap_tokens(text)) if max_tokens > 0 else duration_cap_tokens(text)
 
     job = Job(text, voice, temperature, top_p, max_tokens, min_p, seed)
     with _current_jobs_lock:

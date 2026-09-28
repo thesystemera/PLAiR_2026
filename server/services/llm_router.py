@@ -57,6 +57,11 @@ def _circuit_key(spec: str, provider: str, model: str) -> str:
     return f"{provider}:{model}:{spec}"
 
 
+def _err_line(err: Exception) -> str:
+    lines = str(err).strip().splitlines()
+    return f"{type(err).__name__}: {lines[0][:200] if lines else ''}"
+
+
 def _circuit_open(key: str) -> bool:
     state = _circuit_state.get(key)
     if not state:
@@ -148,7 +153,9 @@ async def deepseek_chat(
             timeout=httpx.Timeout(timeout or role_timeout(spec), connect=5.0),
         )
         if response.status_code != 200:
-            log_service.error(f"[LLM] DeepSeek {response.status_code}: {response.text[:300]}")
+            log_service.throttled(
+                f"deepseek_http:{response.status_code}",
+                f"[LLM] DeepSeek HTTP {response.status_code}: {' '.join(response.text[:300].split())}", "error")
             response.raise_for_status()
         data = response.json()
     except LLM_ERRORS:
@@ -272,10 +279,10 @@ async def generate(
         except LLM_ERRORS as err:
             last_err = err
             _record_failure(key, err)
-            log_service.error(f"[LLM] {task or role_label(spec)} {provider}:{model} failed: {type(err).__name__}: {err}")
             if is_last:
+                log_service.error(f"[LLM] {task or role_label(spec)} {provider}:{model} failed: {_err_line(err)}")
                 raise
-            record_fallback(role_label(spec), f"{provider}:{model}", "%s:%s" % candidates[idx + 1], type(err).__name__)
+            record_fallback(role_label(spec), f"{provider}:{model}", "%s:%s" % candidates[idx + 1], _err_line(err))
             continue
         _record_success(key)
         result.update({"provider": provider, "model": model})
@@ -338,10 +345,11 @@ async def generate_structured(
             last_err = err
             if not isinstance(err, LLMInvalidOutput):
                 _record_failure(key, err)
-        log_service.error(f"[LLM] {task or role_label(spec)} structured {provider}:{model} failed: {type(last_err).__name__}: {last_err}")
         if is_last:
+            log_service.error(
+                f"[LLM] {task or role_label(spec)} structured {provider}:{model} failed: {_err_line(last_err)}")
             raise last_err
-        record_fallback(role_label(spec), f"{provider}:{model}", "%s:%s" % candidates[idx + 1], type(last_err).__name__)
+        record_fallback(role_label(spec), f"{provider}:{model}", "%s:%s" % candidates[idx + 1], _err_line(last_err))
     if last_err:
         raise last_err
     return None

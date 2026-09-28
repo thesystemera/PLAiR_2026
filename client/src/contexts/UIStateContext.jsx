@@ -70,6 +70,10 @@ import { UI_FULLSCREEN, FALLBACK_GRADIENT_HEX, getOnAirSegment } from '../lib/th
 import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
+const TILT_STORAGE_KEY = 'tiltEffects'
+const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
+  typeof DeviceOrientationEvent.requestPermission === 'function'
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * UNIFIED GLASS EFFECT CONFIGURATION
@@ -270,6 +274,7 @@ export function UIStateProvider({ children }) {
     queue: [],
     currentIndex: 0,
     talkBreak: null,
+    audioNeedsTap: false,
   })
 
   const engineRef = useRef({
@@ -314,6 +319,22 @@ export function UIStateProvider({ children }) {
 
   const physicsKickRef = useRef(null)
 
+  const [tiltEnabled, setTiltEnabled] = useState(() => !TILT_NEEDS_PERMISSION || safeStorage.get(TILT_STORAGE_KEY) === 'true')
+  const tiltControlsRef = useRef(null)
+
+  const enableTiltEffects = useCallback(async (enabled) => {
+    safeStorage.set(TILT_STORAGE_KEY, String(enabled))
+    if (!enabled) {
+      tiltControlsRef.current?.detach()
+      setTiltEnabled(false)
+      return false
+    }
+    const granted = await (tiltControlsRef.current?.request() ?? Promise.resolve(false))
+    setTiltEnabled(granted)
+    if (!granted) safeStorage.set(TILT_STORAGE_KEY, 'false')
+    return granted
+  }, [])
+
   useEffect(() => {
     let disposed = false
     let cancelGesture = null
@@ -348,18 +369,26 @@ export function UIStateProvider({ children }) {
       mouseRef.current.parallaxY = (e.clientY / window.innerHeight - 0.5) * 2
     }
 
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      cancelGesture = AudioInteractionManager.onUserGesture(() => {
-        DeviceOrientationEvent.requestPermission()
-          .then((permission) => {
-            if (permission === 'granted' && !disposed) {
-              window.addEventListener('deviceorientation', handleOrientation, { passive: true })
-            }
-          })
-          .catch((error) => {
-            logger.error('Gyroscope permission denied', error)
-          })
-      })
+    if (TILT_NEEDS_PERMISSION) {
+      const request = () => DeviceOrientationEvent.requestPermission()
+        .then((permission) => {
+          const granted = permission === 'granted'
+          if (granted && !disposed) {
+            window.addEventListener('deviceorientation', handleOrientation, { passive: true })
+          }
+          return granted
+        })
+        .catch((error) => {
+          logger.warn('Motion permission not granted', error)
+          return false
+        })
+      tiltControlsRef.current = {
+        request,
+        detach: () => window.removeEventListener('deviceorientation', handleOrientation),
+      }
+      if (safeStorage.get(TILT_STORAGE_KEY) === 'true') {
+        cancelGesture = AudioInteractionManager.onUserGesture(() => { void request() })
+      }
     } else {
       window.addEventListener('deviceorientation', handleOrientation, { passive: true })
     }
@@ -803,6 +832,7 @@ export function UIStateProvider({ children }) {
     if (updates.queue !== undefined) stateUpdates.queue = updates.queue
     if (updates.currentIndex !== undefined) stateUpdates.currentIndex = updates.currentIndex
     if (updates.talkBreak !== undefined) stateUpdates.talkBreak = updates.talkBreak
+    if (updates.audioNeedsTap !== undefined) stateUpdates.audioNeedsTap = updates.audioNeedsTap
 
     const keys = Object.keys(stateUpdates)
     if (keys.length > 0) {
@@ -1089,6 +1119,9 @@ export function UIStateProvider({ children }) {
   }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, getThumbArtworkUrl, preloadArtwork, preloadEnrichedArtwork, preloadThumbArtwork])
 
   const value = useMemo(() => ({
+    tiltEnabled,
+    tiltNeedsPermission: TILT_NEEDS_PERMISSION,
+    enableTiltEffects,
     reportEngineStatus,
     visualState,
     radioProgressData,
@@ -1186,6 +1219,7 @@ export function UIStateProvider({ children }) {
 
     setVideoPreviewPlaying,
   }), [
+    tiltEnabled, enableTiltEffects,
     reportEngineStatus, visualState, radioProgressData, visualColorData, engineState,
     setMixerRef, audioState, publishAudioState, queueState, publishQueueState,
     authState, publishAuthState, radioState, publishRadioState, downloadState, publishDownloadState,
@@ -1294,12 +1328,13 @@ export function useEnrichedArtwork(trackId, hasArtwork = true) {
 }
 
 export function useVideoClips(trackId) {
-  const { videoClipsByTrack, fetchVideoClips } = useUIState()
-  const clips = trackId ? videoClipsByTrack[trackId] : EMPTY_CLIPS
+  const { videoClipsByTrack, fetchVideoClips, settingsState } = useUIState()
+  const enabled = settingsState.videoClipsEnabled
+  const clips = enabled && trackId ? videoClipsByTrack[trackId] : EMPTY_CLIPS
 
   useEffect(() => {
-    if (trackId && clips === undefined) void fetchVideoClips(trackId)
-  }, [trackId, clips, fetchVideoClips])
+    if (enabled && trackId && clips === undefined) void fetchVideoClips(trackId)
+  }, [enabled, trackId, clips, fetchVideoClips])
 
   return clips || EMPTY_CLIPS
 }

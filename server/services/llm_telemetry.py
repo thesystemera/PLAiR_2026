@@ -164,7 +164,10 @@ def record_error(role: str, provider: str, model: str, ms: float) -> None:
 def record_fallback(role: str, from_candidate: str, to_candidate: str, reason: str) -> None:
     key = f"{role}:{from_candidate}->{to_candidate}"
     _FALLBACKS[key] = _FALLBACKS.get(key, 0) + 1
-    log_service.warning(f"[LLM] FALLBACK role={role} {from_candidate} -> {to_candidate} ({reason}, count={_FALLBACKS[key]})")
+    log_service.throttled(
+        f"llm_fallback:{key}",
+        f"[LLM] {role}: {from_candidate} failed ({reason}) - using {to_candidate} "
+        f"({_FALLBACKS[key]} fallback(s) since start)")
 
 
 def record_cache_hit(namespace: str) -> None:

@@ -1,7 +1,8 @@
 import { logger } from '../lib/logger'
 import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { getSessionIds } from '../lib/session'
-import { offlineBackend } from '../lib/offlineAPI'
+import { api } from '../lib/api'
+import { reportClientEvent } from '../lib/errorReporter'
 import { uiState } from './UIStateContext'
 
 export const WebSocketContext = createContext(null)
@@ -15,8 +16,17 @@ function browserTimezone() {
 }
 
 const OUTBOX_LIMIT = 32
+const WS_SUBPROTOCOL = 'plair.v1'
+const WS_AUTH_PROTOCOL_PREFIX = 'auth.'
+const HANDSHAKE_FAILURES_BEFORE_LEGACY = 2
+const PING_INTERVAL_MS = 20000
+const PONG_TIMEOUT_MS = 5000
+const RECONNECT_BASE_MS = 1000
+const RECONNECT_MAX_MS = 30000
+const RECONNECT_MAX_ATTEMPTS = 10
+const PING_MESSAGE = JSON.stringify({ type: 'ping', data: {} })
 const OUTBOX_TTL_MS = {
-  playback_command: 60 * 1000,
+  playback_command: 8 * 1000,
   track_transition: 30 * 60 * 1000,
   talk_break_ready: 60 * 1000,
   talk_break_failed: 60 * 1000,
@@ -24,6 +34,14 @@ const OUTBOX_TTL_MS = {
   talk_break_end: 5 * 60 * 1000,
   radio_mode_prefs: 5 * 60 * 1000,
 }
+const OFFLINE_DROPPED_TYPES = new Set([
+  'playback_command',
+  'track_transition',
+  'talk_break_ready',
+  'talk_break_failed',
+  'talk_break_start',
+  'talk_break_end',
+])
 
 export function WebSocketProvider({ children, sessionKey = 'guest', getToken, onSessionInfo }) {
   const ws = useRef(null)
@@ -36,6 +54,7 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
   const reconnectAttemptRef = useRef(0)
   const outboxRef = useRef([])
   const connectRef = useRef(null)
+  const probeRef = useRef(null)
   const subscribersRef = useRef({
     playback_state: [],
     preference_change: [],
@@ -46,6 +65,46 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
   useEffect(() => {
     let isConnecting = false
     let isUnmounting = false
+    let legacyAuth = false
+    let handshakeFailures = 0
+    let pongSupported = false
+    let awaitingPongSince = 0
+    let pongTimer = null
+
+    const clearPongTimer = () => {
+      if (pongTimer) {
+        clearTimeout(pongTimer)
+        pongTimer = null
+      }
+    }
+
+    const dropZombie = (socket, reason) => {
+      if (ws.current !== socket || socket.readyState !== WebSocket.OPEN) return
+      logger.warn(`[WebSocket] No reply from server (${reason}) - reconnecting`)
+      api.reportServerTrouble('ws_silent')
+      reconnectAttemptRef.current = 0
+      socket.close(4000, 'heartbeat timeout')
+    }
+
+    const ping = (reason) => {
+      const socket = ws.current
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false
+      try {
+        socket.send(PING_MESSAGE)
+      } catch {
+        dropZombie(socket, reason)
+        return false
+      }
+      if (!pongSupported) return true
+      if (!awaitingPongSince) awaitingPongSince = Date.now()
+      clearPongTimer()
+      pongTimer = setTimeout(() => {
+        pongTimer = null
+        if (awaitingPongSince) dropZombie(socket, reason)
+      }, PONG_TIMEOUT_MS)
+      return true
+    }
+    probeRef.current = ping
 
     const flushOutbox = (socket) => {
       const now = Date.now()
@@ -94,7 +153,8 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
         })
 
         const sentToken = getTokenRef.current?.() || null
-        if (sentToken) {
+        const useHandshakeAuth = !legacyAuth
+        if (sentToken && !useHandshakeAuth) {
           params.set('token', sentToken)
         }
 
@@ -104,22 +164,38 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
         }
 
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/playback?${params.toString()}`
-        const socket = new WebSocket(wsUrl)
+        const protocols = useHandshakeAuth
+          ? (sentToken ? [WS_SUBPROTOCOL, `${WS_AUTH_PROTOCOL_PREFIX}${sentToken}`] : [WS_SUBPROTOCOL])
+          : null
+        const socket = protocols ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl)
         ws.current = socket
+        let opened = false
 
         socket.onopen = () => {
           if (ws.current !== socket) return
+          opened = true
+          handshakeFailures = 0
+          awaitingPongSince = 0
+          clearPongTimer()
           logger.info('[WebSocket] Connected')
           isConnecting = false
           reconnectAttemptRef.current = 0
           flushOutbox(socket)
           setConnected(true)
+          ping('connect')
         }
 
         socket.onmessage = (event) => {
           if (ws.current !== socket) return
+          awaitingPongSince = 0
+          clearPongTimer()
           try {
             const message = JSON.parse(event.data)
+
+            if (message.type === 'pong') {
+              pongSupported = true
+              return
+            }
 
             if (message.type === 'session_info') {
               try {
@@ -153,6 +229,21 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
           logger.info(`[WebSocket] Disconnected (code: ${event.code}, reason: ${event.reason || 'none'})`)
           setConnected(false)
           isConnecting = false
+          awaitingPongSince = 0
+          clearPongTimer()
+
+          if (!opened && useHandshakeAuth && !isUnmounting) {
+            fetch('/api/health', { cache: 'no-store' })
+              .then(res => {
+                if (!res.ok || legacyAuth) return
+                handshakeFailures++
+                if (handshakeFailures >= HANDSHAKE_FAILURES_BEFORE_LEGACY) {
+                  legacyAuth = true
+                  logger.warn('[WebSocket] Server did not accept the handshake protocol - using the legacy connection')
+                }
+              })
+              .catch(() => {})
+          }
 
           if (event.code === 4401 && sentToken) {
             onSessionInfoRef.current?.({ authenticated: false, token_rejected: true }, sentToken)
@@ -163,16 +254,19 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
             return
           }
 
+          if (event.code !== 1000 && event.code !== 4401) {
+            api.reportServerTrouble('ws_closed')
+            reportClientEvent('ws_close', `WebSocket closed with code ${event.code}${opened ? '' : ' before opening'}`)
+          }
+
           if (!navigator.onLine) {
             logger.info('[WebSocket] Offline - waiting for network to reconnect')
             return
           }
 
-          const baseDelay = 1000
-          const maxDelay = 30000
-          const maxAttempts = 10
-          const delay = Math.min(baseDelay * Math.pow(2, reconnectAttemptRef.current), maxDelay)
-          reconnectAttemptRef.current = Math.min(reconnectAttemptRef.current + 1, maxAttempts)
+          const ceiling = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttemptRef.current), RECONNECT_MAX_MS)
+          const delay = Math.round(ceiling * (0.5 + Math.random() * 0.5))
+          reconnectAttemptRef.current = Math.min(reconnectAttemptRef.current + 1, RECONNECT_MAX_ATTEMPTS)
 
           logger.info(`[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current})`)
 
@@ -190,28 +284,58 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
     connectRef.current = connect
     connect()
 
-    const handleOnline = () => {
-      logger.info('[WebSocket] Network online - attempting to connect')
-      reconnectAttemptRef.current = 0
-      connect()
-    }
-
-    const handleVisible = () => {
-      if (document.visibilityState !== 'visible') return
+    const reviveOrCheck = (reason) => {
       const socket = ws.current
       if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
         reconnectAttemptRef.current = 0
         connect()
+      } else if (socket.readyState === WebSocket.OPEN) {
+        ping(reason)
       }
     }
 
+    const handleOnline = () => {
+      logger.info('[WebSocket] Network online - attempting to connect')
+      reviveOrCheck('online')
+    }
+
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') reviveOrCheck('resume')
+    }
+
+    const handlePageShow = () => reviveOrCheck('pageshow')
+
+    const pingInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') ping('interval')
+    }, PING_INTERVAL_MS)
+
+    const unsubscribeConnectivity = api.onConnectivity((event) => {
+      if (event.type === 'lost') {
+        const dropped = outboxRef.current.length
+        outboxRef.current = outboxRef.current.filter(entry => !OFFLINE_DROPPED_TYPES.has(entry.data?.type))
+        if (dropped !== outboxRef.current.length) logger.info('[WebSocket] Server unreachable - dropped queued playback commands')
+      } else if (event.type === 'recovered') {
+        const socket = ws.current
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return
+        logger.info('[WebSocket] Server reachable again - reconnecting now')
+        reconnectAttemptRef.current = 0
+        connect()
+      }
+    })
+
     window.addEventListener('online', handleOnline)
+    window.addEventListener('pageshow', handlePageShow)
     document.addEventListener('visibilitychange', handleVisible)
 
     return () => {
       isUnmounting = true
       connectRef.current = null
+      probeRef.current = null
+      clearInterval(pingInterval)
+      clearPongTimer()
+      unsubscribeConnectivity()
       window.removeEventListener('online', handleOnline)
+      window.removeEventListener('pageshow', handlePageShow)
       document.removeEventListener('visibilitychange', handleVisible)
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
@@ -262,57 +386,7 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
       return 'sent'
     }
 
-    if (!uiState.audioState.isOnline) {
-      logger.info('[WebSocket] Offline - simulating backend response for:', data.type)
-
-      try {
-        let response = null
-
-        if (data.type === 'playback_command') {
-          const cmd = data.data.command
-          const trackId = data.data.track_id
-          const positionMs = data.data.position_ms
-
-          if (cmd === 'play' && trackId) {
-            response = await offlineBackend['play'](trackId)
-            if (response.state) {
-              logger.info('[WebSocket] Emitting simulated playback_state:', response.state)
-              emit('playback_state', response.state)
-            }
-          } else if (cmd === 'pause') {
-            response = await offlineBackend['pause']()
-          } else if (cmd === 'seek' && positionMs !== undefined) {
-            response = await offlineBackend['seek'](positionMs)
-          } else if (cmd === 'next') {
-            response = await offlineBackend['next']()
-            if (response.state) {
-              logger.info('[WebSocket] Emitting simulated playback_state for next:', response.state)
-              emit('playback_state', response.state)
-            }
-          } else if (cmd === 'previous') {
-            response = await offlineBackend['previous']()
-            if (response.state) {
-              logger.info('[WebSocket] Emitting simulated playback_state for previous:', response.state)
-              emit('playback_state', response.state)
-            }
-          }
-        } else if (data.type === 'track_transition') {
-          logger.info('[WebSocket] Track transition while offline - loading next cached track')
-          response = await offlineBackend['play'](null)
-          if (response.state) {
-            logger.info('[WebSocket] Emitting simulated playback_state for next track:', response.state)
-            emit('playback_state', response.state)
-          }
-        }
-
-        if (response) {
-          logger.info('[WebSocket] Offline simulation complete:', response)
-        }
-      } catch (err) {
-        logger.error('[WebSocket] Offline simulation failed:', err)
-      }
-      return 'offline'
-    }
+    if (uiState.audioState.offlineMode) return 'offline'
 
     if (OUTBOX_TTL_MS[data?.type]) {
       const outbox = outboxRef.current
@@ -325,14 +399,21 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
 
     logger.warn('[WebSocket] Cannot send - socket not open and not offline')
     return 'dropped'
-  }, [emit])
+  }, [])
+
+  const checkConnection = useCallback((reason = 'check') => {
+    if (probeRef.current) return probeRef.current(reason)
+    connectRef.current?.()
+    return false
+  }, [])
 
   const value = useMemo(() => ({
     connected,
     subscribe,
     emit,
-    send
-  }), [connected, subscribe, emit, send])
+    send,
+    checkConnection
+  }), [connected, subscribe, emit, send, checkConnection])
 
   return (
     <WebSocketContext.Provider value={value}>

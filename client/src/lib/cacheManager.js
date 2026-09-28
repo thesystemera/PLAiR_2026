@@ -1,14 +1,21 @@
 import { logger } from './logger'
 import { audioCacheDB, normalizeTrackMetadata } from './offlineStorage'
 import { api } from './api'
+import { canPlayCachedBlob, downloadFormat } from './mediaSupport'
 
 const isIOS = typeof navigator !== 'undefined' &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1))
-const MAX_CACHE_SIZE = isIOS ? 50 * 1024 * 1024 : 2 * 1024 * 1024 * 1024
+const isFirefox = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent)
+const MB = 1024 * 1024
+const CACHE_CAP_BYTES = 2 * 1024 * MB
+const CACHE_FLOOR_BYTES = 200 * MB
+const CACHE_QUOTA_SHARE = 0.5
+const FALLBACK_CACHE_BYTES = isIOS ? 500 * MB : CACHE_CAP_BYTES
 const CLEANUP_THRESHOLD = 0.9
 const TARGET_AFTER_CLEANUP = 0.75
 const CHUNK_SIZE = 256 * 1024
 const MAX_ACTIVE_STREAMS = 3
+const MP3_BITRATE = '192k'
 const TYPICAL_TRACK_BYTES = 8 * 1024 * 1024
 
 class CacheManager {
@@ -20,10 +27,37 @@ class CacheManager {
     this.listPromise = null
     this.evictionGuard = null
     this.changeListeners = new Set()
+    this.cacheLimit = FALLBACK_CACHE_BYTES
+    this.persistRequested = false
   }
 
   get maxCacheSize() {
-    return MAX_CACHE_SIZE
+    return this.cacheLimit
+  }
+
+  async _sizeFromQuota() {
+    try {
+      const estimate = await navigator.storage?.estimate?.()
+      const quota = estimate?.quota || 0
+      if (!quota) return
+      const share = Math.floor(quota * CACHE_QUOTA_SHARE)
+      this.cacheLimit = Math.min(CACHE_CAP_BYTES, Math.max(Math.min(CACHE_FLOOR_BYTES, Math.floor(quota * 0.8)), share))
+      logger.info(`[CacheManager] Download space ${(this.cacheLimit / MB).toFixed(0)} MB (browser quota ${(quota / MB).toFixed(0)} MB)`)
+    } catch (error) {
+      logger.warn('[CacheManager] Storage estimate unavailable:', error)
+    }
+  }
+
+  async requestPersistence() {
+    if (this.persistRequested || isFirefox || !navigator.storage?.persist) return
+    this.persistRequested = true
+    try {
+      const already = await navigator.storage.persisted?.()
+      const granted = already || await navigator.storage.persist()
+      logger.info(`[CacheManager] Persistent storage ${granted ? 'granted' : 'not granted'}`)
+    } catch (error) {
+      logger.warn('[CacheManager] Persistent storage request failed:', error)
+    }
   }
 
   get isAvailable() {
@@ -63,7 +97,7 @@ class CacheManager {
         size: record.size || 0,
         addedAt: record.addedAt,
         lastAccessed: record.lastAccessed,
-        playable: record.audioBlob instanceof Blob && record.audioBlob.size > 0,
+        playable: record.audioBlob instanceof Blob && record.audioBlob.size > 0 && canPlayCachedBlob(record.audioBlob),
         hasArtwork: record.artworkBlob instanceof Blob,
         hasEnrichedArtwork: record.enrichedArtworkBlob instanceof Blob,
         hasAudioFeatures: !!record.audioFeatures,
@@ -86,7 +120,21 @@ class CacheManager {
     if (audioCacheDB.unavailable) return false
     const list = await this.getCachedTrackList()
     const used = list.reduce((sum, track) => sum + track.size, 0)
-    return used + bytes <= MAX_CACHE_SIZE * CLEANUP_THRESHOLD
+    return used + bytes <= this.cacheLimit * CLEANUP_THRESHOLD
+  }
+
+  async canMakeRoomFor(bytes = TYPICAL_TRACK_BYTES) {
+    if (await this.hasRoomFor(bytes)) return true
+    if (audioCacheDB.unavailable) return false
+    let guarded = new Set()
+    try {
+      guarded = new Set(this.evictionGuard?.() || [])
+    } catch {
+      guarded = new Set()
+    }
+    const list = await this.getCachedTrackList()
+    const evictable = list.filter(track => !guarded.has(track.trackId)).reduce((sum, track) => sum + track.size, 0)
+    return evictable >= bytes
   }
 
   async initialize() {
@@ -96,6 +144,7 @@ class CacheManager {
     this._initPromise = (async () => {
       try {
         await audioCacheDB.initialize()
+        await this._sizeFromQuota()
         logger.info('[CacheManager] Initialized')
 
         const totalDownloaded = await audioCacheDB.getMetadata('totalDownloaded') || 0
@@ -248,7 +297,7 @@ class CacheManager {
     }
 
     const existing = await this.getCachedTrack(trackId)
-    if (existing) {
+    if (existing && canPlayCachedBlob(existing.audioBlob)) {
       const existingQuality = this._getBitrateValue(existing.bitrate)
       const requestedQuality = this._getBitrateValue(bitrate)
 
@@ -282,7 +331,8 @@ class CacheManager {
 
     await this.ensureSpace(TYPICAL_TRACK_BYTES, [trackId])
 
-    const url = api.getStreamUrl(trackId, bitrate)
+    const format = downloadFormat()
+    const url = format === 'mp3' ? api.getMp3StreamUrl(trackId, 'download') : api.getStreamUrl(trackId, bitrate, 'download')
 
     const result = await this.downloadChunked(url, { onProgress, signal })
 
@@ -291,7 +341,7 @@ class CacheManager {
       throw new Error(`Incomplete download for ${trackId} (${result.totalBytes}/${result.contentLength} bytes)`)
     }
 
-    const audioBlob = new Blob(result.chunks, { type: 'audio/webm' })
+    const audioBlob = new Blob(result.chunks, { type: format === 'mp3' ? 'audio/mpeg' : 'audio/webm' })
     logger.info(`[CacheManager] Downloaded audio ${trackId}: ${(audioBlob.size / 1024 / 1024).toFixed(2)} MB`)
 
     await this._updateDataUsage(audioBlob.size)
@@ -359,7 +409,7 @@ class CacheManager {
       metadata: fullTrackData,
       audioFeatures,
       lyricTimestamps,
-      bitrate
+      bitrate: format === 'mp3' ? MP3_BITRATE : bitrate
     }
 
     const savedTrack = await audioCacheDB.saveTrack(trackId, trackData)
@@ -422,7 +472,7 @@ class CacheManager {
 
     const list = await this.getCachedTrackList()
     const currentSize = list.reduce((sum, track) => sum + track.size, 0)
-    const threshold = MAX_CACHE_SIZE * CLEANUP_THRESHOLD
+    const threshold = this.cacheLimit * CLEANUP_THRESHOLD
 
     if (currentSize + requiredSpace > threshold) {
       logger.info(`[CacheManager] Cache size (${(currentSize / 1024 / 1024).toFixed(2)} MB) approaching limit, cleaning up...`)
@@ -435,7 +485,7 @@ class CacheManager {
 
     const tracks = (await audioCacheDB.getTracksByLastAccessed()).reverse()
     const currentSize = tracks.reduce((sum, t) => sum + (t.size || 0), 0)
-    const targetSize = Math.max(0, MAX_CACHE_SIZE * TARGET_AFTER_CLEANUP - requiredSpace)
+    const targetSize = Math.max(0, this.cacheLimit * TARGET_AFTER_CLEANUP - requiredSpace)
     const keep = new Set(keepIds)
     let guarded = new Set()
     try {
@@ -471,13 +521,14 @@ class CacheManager {
     const tracks = await this.getCachedTrackList()
     const usedBytes = tracks.reduce((sum, track) => sum + track.size, 0)
 
-    let quota = MAX_CACHE_SIZE
+    let quota = this.cacheLimit
     let usage = usedBytes
+    if (tracks.length) void this.requestPersistence()
 
     if (navigator.storage && navigator.storage.estimate) {
       try {
         const estimate = await navigator.storage.estimate()
-        quota = estimate.quota || MAX_CACHE_SIZE
+        quota = estimate.quota || this.cacheLimit
         usage = estimate.usage || usedBytes
       } catch (error) {
         logger.warn('[CacheManager] Could not get storage estimate:', error)
@@ -486,9 +537,10 @@ class CacheManager {
 
     return {
       usedBytes,
-      maxBytes: MAX_CACHE_SIZE,
-      usedPercentage: (usedBytes / MAX_CACHE_SIZE) * 100,
+      maxBytes: this.cacheLimit,
+      usedPercentage: (usedBytes / this.cacheLimit) * 100,
       trackCount: tracks.length,
+      offlineTrackCount: tracks.filter(track => track.playable).length,
       tracks,
       browserQuota: quota,
       browserUsage: usage

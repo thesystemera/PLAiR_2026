@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from typing import Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,17 @@ ACTIVE_DEVICE_ONLY_MESSAGES = {"track_transition", "playback_heartbeat"} | TALK_
 TRANSPORT_COMMANDS = {"next", "previous", "seek"}
 ORDERED_COMMAND_MESSAGES = {"playback_command", "track_transition"}
 MAX_INFLIGHT_COMMANDS = 32
+WS_SUBPROTOCOL = "plair.v1"
+WS_AUTH_PROTOCOL_PREFIX = "auth."
+PONG_SEND_TIMEOUT_S = 5
+
+
+def _subprotocol_auth(websocket: WebSocket):
+    offered = [p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()]
+    if WS_SUBPROTOCOL not in offered:
+        return None, None
+    token = next((p[len(WS_AUTH_PROTOCOL_PREFIX):] for p in offered if p.startswith(WS_AUTH_PROTOCOL_PREFIX)), None)
+    return WS_SUBPROTOCOL, token or None
 
 _announcer_pending: Dict[str, dict] = {}
 _announcer_workers: Dict[str, asyncio.Task] = {}
@@ -89,7 +101,7 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
     if message_type in ACTIVE_DEVICE_ONLY_MESSAGES and playback_state.active_device_id \
             and playback_state.active_device_id != device_id:
         if message_type == 'track_transition':
-            log_service.playback(f"[WS] Ignoring track_transition from inactive device {device_id[:8]}")
+            log_service.detail(f"[WS] Ignoring track_transition from inactive device {device_id[:8]}", "playback")
             await playback_state.acknowledge_command(device_id, seq, session_callback)
         return
 
@@ -107,27 +119,28 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
         if command == 'play':
             track_id = message_data.get('track_id')
             claim = bool(message_data.get('claim'))
-            log_service.playback(f"[WS] Play: {track_id[:8] if track_id else 'current'}{' (claim)' if claim else ''}")
+            log_service.detail(f"[WS] Play: {track_id[:8] if track_id else 'current'}{' (claim)' if claim else ''}",
+                               "playback")
             await playback_state.play(track_id=track_id, user_id=user_id, notify_callback=session_callback,
                                       device_id=device_id, seq=seq, claim=claim)
 
         elif command == 'pause':
-            log_service.playback("[WS] Pause")
+            log_service.detail("[WS] Pause", "playback")
             await playback_state.pause(notify_callback=session_callback, device_id=device_id, seq=seq)
 
         elif command == 'seek':
             position_ms = message_data.get('position_ms', 0)
-            log_service.playback(f"[WS] Seek: {position_ms}ms")
+            log_service.detail(f"[WS] Seek: {position_ms}ms", "playback")
             await playback_state.seek(position_ms, notify_callback=session_callback, device_id=device_id, seq=seq)
 
         elif command == 'next':
             skip_reason = message_data.get('skip_reason', 'user_skip')
-            log_service.playback(f"[WS] Next: {skip_reason}")
+            log_service.detail(f"[WS] Next: {skip_reason}", "playback")
             await playback_state.next(user_id=user_id, notify_callback=session_callback,
                                       skip_reason=skip_reason, device_id=device_id, seq=seq)
 
         elif command == 'previous':
-            log_service.playback("[WS] Previous")
+            log_service.detail("[WS] Previous", "playback")
             await playback_state.previous(user_id=user_id, notify_callback=session_callback,
                                           device_id=device_id, seq=seq)
 
@@ -136,7 +149,7 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
             if verdict == 'claim' and radio is not None:
                 await radio.on_transfer(session_id, device_id)
             verdict = await playback_state.claim_on_open(device_id, notify_callback=session_callback, seq=seq)
-            log_service.playback(f"[WS] Claim on open from {device_id[:8]}: {verdict}")
+            log_service.detail(f"[WS] Claim on open from {device_id[:8]}: {verdict}", "playback")
 
         elif command == 'transfer':
             target_device_id = message_data.get('device_id') or device_id
@@ -144,7 +157,8 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
                 await playback_state.acknowledge_command(device_id, seq, session_callback)
                 return
             if target_device_id != device_id and not playback_state.is_device_online(target_device_id):
-                log_service.warning(f"[WS] Transfer to offline device {target_device_id[:8]} refused")
+                log_service.warning(
+                    f"{log_service.who(session_id, device_id)}: transfer to offline device {target_device_id[:8]} refused")
                 await playback_state.acknowledge_command(device_id, seq, session_callback)
                 return
             play = message_data.get('play')
@@ -152,7 +166,7 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
                                           notify_callback=session_callback, requester_device_id=device_id, seq=seq)
 
         else:
-            log_service.warning(f"[WS] Unknown command: {command}")
+            log_service.warning(f"{log_service.who(session_id, device_id)}: unknown playback command {command!r}")
             await playback_state.acknowledge_command(device_id, seq)
 
     elif message_type == 'track_transition':
@@ -217,7 +231,9 @@ async def websocket_endpoint(
 ):
     assert services.websocket_service is not None
     assert services.playback_service is not None
-    await websocket.accept()  # noqa: F541
+    subprotocol, header_token = _subprotocol_auth(websocket)
+    token = token or header_token
+    await websocket.accept(subprotocol=subprotocol)
 
     user = None
     if token:
@@ -248,9 +264,13 @@ async def websocket_endpoint(
         return
 
     if token_rejected:
-        log_service.api(f"[WS] Token rejected for device {session_device_id[:8]}; connected as guest")
+        log_service.system(
+            f"{log_service.who(session_id, session_device_id)}: login token rejected - connected as guest")
 
     services.websocket_service.register_connection(session_id, session_device_id, websocket)
+    connected_at = time.monotonic()
+    log_service.playback(f"[WS] Connected {session_device_id[:8]} ({'user' if user else 'guest'}, {session_device_type}, "
+                         f"{'handshake' if header_token else ('query' if token else 'no')} auth)")
     if tz and settings.DJ_GUEST_TIMEZONE_ENABLED:
         content_bank.set_session_timezone(session_id, tz)
     if services.radio_mode_service is not None:
@@ -289,19 +309,24 @@ async def websocket_endpoint(
 
         if not has_existing_playback:
             await services.playback_service.initialize_new_session(session_id, user_id=session_user_id)
-        else:
-            log_service.info(f"Preserving existing playback state for {session_id}")
 
         session_callback = services.playback_service.ensure_broadcast_callback(session_id, _make_session_callback)  # type: ignore
 
         playback_state = services.playback_service.get_session_state(session_id)
         activated = playback_state.device_connected(session_device_id)
         if activated:
-            log_service.api(f"Activated first device for {session_id}: {session_device_id}")
+            role = "playing here"
         elif playback_state.active_device_id == session_device_id:
-            log_service.api(f"Active device reconnected: {session_device_id}")
+            role = "active device reconnected"
         else:
-            log_service.api(f"Device connected as remote: {session_device_id} (active: {str(playback_state.active_device_id)[:8]})")
+            role = f"remote control, playing on device {str(playback_state.active_device_id)[:8]}"
+        total_connections, total_sessions = services.websocket_service.connection_totals()
+        device_label = f" on {session_device_name}" if session_device_name != "Unknown Device" else ""
+        log_service.system(
+            f"{log_service.who(session_id, session_device_id)} connected{device_label} "
+            f"({role}{', existing session' if has_existing_playback else ''}) | "
+            f"{total_connections} connections, {total_sessions} listeners online"
+        )
 
         state = playback_state.get_state()
         if activated or playback_state.active_device_id == session_device_id:
@@ -317,6 +342,9 @@ async def websocket_endpoint(
             try:
                 message = json.loads(raw_data)
                 if not isinstance(message, dict):
+                    continue
+                if message.get('type') == 'ping':
+                    await asyncio.wait_for(websocket.send_text('{"type":"pong","data":{}}'), timeout=PONG_SEND_TIMEOUT_S)
                     continue
                 message_data = message.get('data') or {}
                 if not isinstance(message_data, dict):
@@ -339,7 +367,7 @@ async def websocket_endpoint(
                     await handle_playback_message(**message_kwargs)
 
             except json.JSONDecodeError:
-                log_service.warning(f"Failed to parse WebSocket message from {session_id}/{session_device_id}")
+                log_service.warning(f"{log_service.who(session_id, session_device_id)}: unparseable WebSocket message")
             except Exception as e:
                 log_service.error(f"Error handling WebSocket message: {str(e)}")
                 import traceback
@@ -348,17 +376,20 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        log_service.error(f"WebSocket error for {session_id}/{session_device_id}: {str(e)}")
+        log_service.error(f"WebSocket error for {log_service.who(session_id, session_device_id)}: {str(e)}")
         import traceback
         log_service.error(f"Traceback: {traceback.format_exc()}")
     finally:
+        log_service.playback(f"[WS] Disconnected {session_device_id[:8]} after {int(time.monotonic() - connected_at)}s")
         services.websocket_service.unregister_connection(session_id, session_device_id, websocket)  # type: ignore
         device_still_connected = services.websocket_service.get_connection(session_id, session_device_id) is not None  # type: ignore
         if not device_still_connected and services.playback_service.has_session(session_id):  # type: ignore
             playback_state = services.playback_service.get_session_state(session_id)  # type: ignore
             was_active = playback_state.device_disconnected(session_device_id)
             if was_active and services.websocket_service.has_session(session_id):  # type: ignore
-                log_service.api(f"Active device {session_device_id} disconnected; keeping it active (no auto-transfer)")
+                log_service.detail(
+                    f"{log_service.who(session_id, session_device_id)}: active device went offline; keeping it active",
+                    "playback")
                 try:
                     await services.websocket_service.broadcast_playback_state(session_id, playback_state.get_state())  # type: ignore
                 except Exception as e:

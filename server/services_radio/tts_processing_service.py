@@ -106,7 +106,7 @@ class AudioProcessingService:
             next_segment_start_mix: Optional[float] = None,
             speaker: Optional[str] = None
     ) -> AudioSegment:
-        log_service.tts_processing(f"Processing audio: Speaker={speaker}, Mix={audio_process_mix:.2f}")
+        log_service.detail(f"Processing audio: Speaker={speaker}, Mix={audio_process_mix:.2f}", "tts_processing")
 
         if isinstance(audio_input, (str, bytes)):
             audio = decode_mp3(audio_input)
@@ -132,8 +132,8 @@ class AudioProcessingService:
 
         PAN_NOISE_SCALE = 0.02
         BASE_PAN_POSITIONS = {
-            'terry': -0.1,
-            'shaquille': 0.1,
+            'tara': -0.1,
+            'leo': 0.1,
             'computer': 0
         }
         PAN_VARIATION = 0.08
@@ -242,5 +242,5 @@ class AudioProcessingService:
             crossfade_ms = min(segment_length, previous_length, CROSSFADE_MS)
             final_audio = final_audio.append(segment, crossfade=crossfade_ms)
 
-        log_service.tts_processing(f"Audio processing complete. Duration: {len(final_audio)}ms")
+        log_service.detail(f"Audio processing complete. Duration: {len(final_audio)}ms", "tts_processing")
         return final_audio

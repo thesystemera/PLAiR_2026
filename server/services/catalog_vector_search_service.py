@@ -41,7 +41,7 @@ class CatalogVectorSearchService:
             )
 
         try:
-            log_service.vector_music(f"🔍 Searching: '{query}'")
+            log_service.detail(f"🔍 Searching: '{query}'", "vector_music")
 
             if use_ai_analysis and self.prompt_cache_service:
                 ai_analysis = await self.prompt_cache_service.analyze_query(query)
@@ -49,19 +49,19 @@ class CatalogVectorSearchService:
                     intent_category = ai_analysis.intent_category
                     query_weights = ai_analysis.category_weights.model_dump()
                     cleaned_query = ai_analysis.cleaned_query
-                    log_service.system(f"🤖 AI Intent: {intent_category} (confidence: {ai_analysis.confidence:.2f})")
+                    log_service.detail(f"🤖 AI Intent: {intent_category} (confidence: {ai_analysis.confidence:.2f})", "vector_music")
                 else:
                     log_service.warning("AI analysis failed, falling back to keyword detection")
                     intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
             else:
                 intent_category, query_weights, cleaned_query = self._detect_query_intent(query)
 
-            log_service.vector_music(f"  📊 Category weights: {query_weights}")
+            log_service.detail(f"  📊 Category weights: {query_weights}", "vector_music")
 
             query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
 
             if cleaned_query != query:
-                log_service.vector_music(f"  Cleaned query: '{cleaned_query}'")
+                log_service.detail(f"  Cleaned query: '{cleaned_query}'", "vector_music")
 
             nearest_ids = await asyncio.to_thread(_safe_search, query_embedding, n_results * 2)
 
@@ -70,8 +70,8 @@ class CatalogVectorSearchService:
                     log_service.error("Annoy index is still empty after rebuild!")
                 return []
 
-            log_service.vector_music(
-                f"  Found {len(nearest_ids)} candidates, re-ranking with intent weights..."
+            log_service.detail(
+                f"  Found {len(nearest_ids)} candidates, re-ranking with intent weights...", "vector_music"
             )
 
             track_results = await asyncio.to_thread(
@@ -82,7 +82,7 @@ class CatalogVectorSearchService:
             track_results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
 
             if track_results:
-                log_service.vector_music("  🎯 Top 5 matches:")
+                log_service.detail("  🎯 Top 5 matches:", "vector_music")
                 for i, track in enumerate(track_results[:5], 1):
                     params = track.get('generation_params', {})
                     derived = track.get('derived_tags', {})
@@ -90,14 +90,14 @@ class CatalogVectorSearchService:
                     artist = derived.get('inspired_artist', params.get('artist_name', 'Unknown'))
                     genre = derived.get('primary_genre', 'Unknown')
                     score = track.get('similarity_score', 0)
-                    log_service.vector_music(
-                        f"    {i}. [{score:.3f}] {title} - {artist} ({genre})"
+                    log_service.detail(
+                        f"    {i}. [{score:.3f}] {title} - {artist} ({genre})", "vector_music"
                     )
 
             track_results = track_results[:n_results]
 
-            log_service.vector_music(
-                f"✓ Returning {len(track_results)} results for '{query}' (intent: {intent_category})"
+            log_service.detail(
+                f"✓ Returning {len(track_results)} results for '{query}' (intent: {intent_category})", "vector_music"
             )
             return track_results
 
@@ -319,7 +319,7 @@ class CatalogVectorSearchService:
                 "primary_genre": 0.05, "secondary_genres": 0.02, "mood": 0.03,
                 "style": 0.02, "theme": 0.02, "similar_artists": 0.00, "vocal": 0.01
             }
-            log_service.system("🎯 Query intent: SONG TITLE")
+            log_service.detail("🎯 Query intent: SONG TITLE", "vector_music")
 
         elif detected_category == "genre":
             weights = {
@@ -327,7 +327,7 @@ class CatalogVectorSearchService:
                 "primary_artist": 0.08, "similar_artists": 0.05, "style": 0.07,
                 "vocal": 0.02, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: GENRE")
+            log_service.detail("🎯 Query intent: GENRE", "vector_music")
 
         elif detected_category == "mood":
             weights = {
@@ -335,7 +335,7 @@ class CatalogVectorSearchService:
                 "theme": 0.08, "primary_artist": 0.04, "similar_artists": 0.03,
                 "vocal": 0.02, "lyrics": 0.01, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: MOOD")
+            log_service.detail("🎯 Query intent: MOOD", "vector_music")
 
         elif detected_category == "artist":
             weights = {
@@ -343,7 +343,7 @@ class CatalogVectorSearchService:
                 "secondary_genres": 0.08, "style": 0.10, "mood": 0.04,
                 "vocal": 0.02, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: ARTIST")
+            log_service.detail("🎯 Query intent: ARTIST", "vector_music")
 
         elif detected_category == "style":
             weights = {
@@ -351,7 +351,7 @@ class CatalogVectorSearchService:
                 "primary_artist": 0.05, "similar_artists": 0.03, "vocal": 0.03,
                 "theme": 0.01, "lyrics": 0.01, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: STYLE")
+            log_service.detail("🎯 Query intent: STYLE", "vector_music")
 
         elif detected_category == "theme":
             weights = {
@@ -359,7 +359,7 @@ class CatalogVectorSearchService:
                 "primary_genre": 0.06, "secondary_genres": 0.04, "style": 0.04,
                 "primary_artist": 0.02, "similar_artists": 0.01, "vocal": 0.01, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: THEME")
+            log_service.detail("🎯 Query intent: THEME", "vector_music")
 
         elif detected_category == "vocal":
             weights = {
@@ -367,7 +367,7 @@ class CatalogVectorSearchService:
                 "mood": 0.10, "primary_artist": 0.03, "similar_artists": 0.02,
                 "theme": 0.01, "lyrics": 0.01, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: VOCAL")
+            log_service.detail("🎯 Query intent: VOCAL", "vector_music")
 
         elif detected_category == "secondary_genres":
             weights = {
@@ -375,7 +375,7 @@ class CatalogVectorSearchService:
                 "style": 0.08, "primary_artist": 0.03, "similar_artists": 0.02,
                 "vocal": 0.01, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: SECONDARY GENRES")
+            log_service.detail("🎯 Query intent: SECONDARY GENRES", "vector_music")
 
         elif detected_category == "similar_artists":
             weights = {
@@ -383,7 +383,7 @@ class CatalogVectorSearchService:
                 "secondary_genres": 0.06, "style": 0.06, "mood": 0.02,
                 "vocal": 0.01, "theme": 0.00, "lyrics": 0.00, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: SIMILAR ARTISTS")
+            log_service.detail("🎯 Query intent: SIMILAR ARTISTS", "vector_music")
 
         elif detected_category == "instrumental":
             weights = {
@@ -391,7 +391,7 @@ class CatalogVectorSearchService:
                 "primary_artist": 0.05, "similar_artists": 0.03, "theme": 0.01,
                 "vocal": 0.01, "lyrics": 0.00, "song_title": 0.00
             }
-            log_service.system("🎯 Query intent: INSTRUMENTAL")
+            log_service.detail("🎯 Query intent: INSTRUMENTAL", "vector_music")
 
         else:
             weights = {

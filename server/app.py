@@ -5,9 +5,8 @@ if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from security_middleware import RequestGuardMiddleware, install_log_redaction
+from security_middleware import RequestGuardMiddleware, MediaAwareGZipMiddleware, install_log_redaction
 from usage_middleware import UsageAttributionMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -89,7 +88,8 @@ from config import settings
 
 from service_registry import services
 from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts,
-                     conversation, devices, search, dj, media, generation, user_music, ws, usage, radio)
+                     conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
+                     client_log)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -600,7 +600,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1000)
 app.add_middleware(UsageAttributionMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 
@@ -624,3 +624,4 @@ app.include_router(user_music.router)
 app.include_router(ws.router)
 app.include_router(usage.router)
 app.include_router(radio.router)
+app.include_router(client_log.router)

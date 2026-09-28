@@ -100,7 +100,6 @@ async def search_shoutouts(
     if use_ai_analysis:
         enforce_rate_limit("search_ai_user", f"user:{user_id}")
 
-    log_service.user_content(f"🔍 Shoutout search request from user {user_id}: '{request.query}'")
 
     try:
         user_location = None
@@ -123,7 +122,8 @@ async def search_shoutouts(
 
         results = public_shoutouts(await services.user_content_service.enrich_shoutout_results(results, db))  # type: ignore
 
-        log_service.user_content(f"✓ Found {len(results)} shoutout results for query: '{request.query}'")
+        who = log_service.who(user_id=current_user.id) if current_user else (x_guest_id or "guest")[:14]
+        log_service.listener(f"{who}: searched shoutouts for \"{request.query}\" -> {len(results)} result(s)")
 
         return {
             'results': results,
@@ -191,7 +191,7 @@ async def create_shoutout_reply(
     if not success:
         raise HTTPException(status_code=400, detail="Failed to process reply. Make sure you've recorded audio first.")
 
-    log_service.user_content(f"✅ Reply created to shoutout {parent_id} by user {current_user.id}")
+    log_service.listener(f"{log_service.who(user_id=current_user.id)}: replied to shoutout {parent_id}")
 
     return {
         "status": "success",
@@ -275,7 +275,7 @@ async def upload_shoutout_reply(
     if not success:
         raise HTTPException(status_code=400, detail="Failed to process reply audio")
 
-    log_service.user_content(f"✅ Direct reply uploaded to shoutout {parent_id} by user {current_user.id}")
+    log_service.listener(f"{log_service.who(user_id=current_user.id)}: uploaded a voice reply to shoutout {parent_id}")
 
     return {
         "status": "success",

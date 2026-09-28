@@ -56,6 +56,7 @@ function heuristicTier() {
   const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
   if (memory <= 2 || cores <= 2) return 1
   if (coarse && (memory <= 3 || cores <= 4)) return 2
+  if (coarse && !navigator.deviceMemory) return TOP_TIER - 1
   return TOP_TIER
 }
 

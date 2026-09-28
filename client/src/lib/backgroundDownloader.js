@@ -5,15 +5,26 @@ import { api } from './api'
 import { uiState, updateDownloadState, onAuthStateChange } from '../contexts/UIStateContext'
 import { triggerStorageRefresh } from '../contexts/StorageContext'
 
+const SLOW_CONNECTIONS = new Set(['slow-2g', '2g', '3g'])
+const NO_ROOM_SLEEP_MS = 30 * 60 * 1000
+const MIN_DOWNLOAD_MBPS = 1
+const SLOW_BACKOFF_MS = 15 * 60 * 1000
+
 class BackgroundDownloader {
   constructor() {
     this.isRunning = false
     this.downloadQueue = []
     this.abortController = null
+    this.wakeSleep = null
+    this.slowUntil = 0
     this.dailyDownloadedBytes = parseInt((() => { try { return localStorage.getItem('dailyDownloadedBytes') } catch { return null } })() || '0', 10)
     this.lastResetDate = (() => { try { return localStorage.getItem('lastResetDate') } catch { return null } })() || new Date().toDateString()
 
     this.resetDailyLimitIfNeeded()
+
+    api.onConnectivity((event) => {
+      if (event.type === 'recovered') this.wake()
+    })
 
     onAuthStateChange((authState) => {
       if (authState.isAuthenticated && uiState.downloadState?.isEnabled && !this.isRunning) {
@@ -80,17 +91,23 @@ class BackgroundDownloader {
       return false
     }
 
-    if (!audioState.isOnline) {
+    if (!audioState.isOnline || audioState.offlineMode || !cacheManager.isAvailable) {
       return false
     }
 
-    if (audioState.networkQuality !== 'excellent') {
+    if (safeStorage.get('dataSaverMode') === 'true') {
+      return false
+    }
+
+    if (Date.now() < this.slowUntil) {
       return false
     }
 
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
-    if (connection && connection.effectiveType && !['wifi', '4g'].includes(connection.effectiveType)) {
-      return false
+    if (connection) {
+      if (connection.saveData) return false
+      if (connection.type === 'cellular') return false
+      if (connection.effectiveType && SLOW_CONNECTIONS.has(connection.effectiveType)) return false
     }
 
     this.resetDailyLimitIfNeeded()
@@ -165,6 +182,13 @@ class BackgroundDownloader {
           })
         }
 
+        if (!(await cacheManager.canMakeRoomFor())) {
+          logger.info('[BackgroundDownloader] Download space is full of liked tracks - pausing downloads')
+          this.downloadQueue = []
+          await this.sleep(NO_ROOM_SLEEP_MS)
+          continue
+        }
+
         const item = this.downloadQueue.shift()
         await this.downloadTrack(item.track)
 
@@ -195,6 +219,7 @@ class BackgroundDownloader {
       const bitrate = '192k'
 
       this.abortController = new AbortController()
+      const startedAt = performance.now()
 
       await cacheManager.downloadAndCacheTrack(
         trackId,
@@ -206,6 +231,12 @@ class BackgroundDownloader {
 
       const cached = await cacheManager.getCachedTrack(trackId)
       const downloadedBytes = cached?.audioBlob?.size || 0
+      const seconds = (performance.now() - startedAt) / 1000
+      const mbps = seconds > 0 ? (downloadedBytes * 8) / (seconds * 1024 * 1024) : Infinity
+      if (downloadedBytes && mbps < MIN_DOWNLOAD_MBPS) {
+        this.slowUntil = Date.now() + SLOW_BACKOFF_MS
+        logger.info(`[BackgroundDownloader] Slow connection (${mbps.toFixed(2)} Mbps) - pausing downloads for 15 minutes`)
+      }
 
       this.dailyDownloadedBytes += downloadedBytes
       safeStorage.set('dailyDownloadedBytes', String(this.dailyDownloadedBytes))
@@ -239,8 +270,23 @@ class BackgroundDownloader {
     }
   }
 
+  wake() {
+    this.downloadQueue = []
+    this.wakeSleep?.()
+  }
+
   sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms))
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        this.wakeSleep = null
+        resolve()
+      }, ms)
+      this.wakeSleep = () => {
+        clearTimeout(timer)
+        this.wakeSleep = null
+        resolve()
+      }
+    })
   }
 }
 

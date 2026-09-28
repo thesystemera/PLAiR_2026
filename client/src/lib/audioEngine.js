@@ -6,6 +6,13 @@ const MASTER_GAIN_HEADROOM = 1.0
 const STREAM_CANPLAY_TIMEOUT_MS = 20000
 const SEEK_METADATA_TIMEOUT_MS = 8000
 const SOURCE_RESOLVE_TIMEOUT_MS = 10000
+const CACHED_SWAP_FADE_MS = 120
+const CACHED_SWAP_SEEK_LEAD_S = 0.03
+const STREAM_RETRY_DELAY_MS = 2000
+const STREAM_RETRY_LIMIT = 90
+const SELF_PAUSE_WINDOW_MS = 2000
+const CONTEXT_RESUME_WAIT_MS = 300
+const PROGRESSIVE_READY_TIMEOUT_MS = 4000
 
 function createSlot() {
   return {
@@ -123,6 +130,143 @@ export class AudioEngine {
 
     this.vinylWobbleActive = false
     this._hold = null
+
+    this.onPlaybackBlocked = null
+    this.onExternalPause = null
+    this._blocked = false
+    this._playIntent = false
+    this._selfPauses = new WeakMap()
+    this._createElements()
+  }
+
+  _createElements() {
+    if (typeof Audio === 'undefined') return
+    for (const slot of [this.slots.A, this.slots.B]) {
+      const element = new Audio()
+      element.preload = 'metadata'
+      element.preservesPitch = false
+      element.setAttribute('playsinline', '')
+      slot.element = element
+      this._attachBufferMonitors(slot)
+      this._attachPauseWatch(slot)
+      AudioInteractionManager.registerMediaElement(element)
+    }
+    this.sfxElement = new Audio()
+    this.sfxElement.crossOrigin = 'anonymous'
+    this.sfxElement.setAttribute('playsinline', '')
+    AudioInteractionManager.registerMediaElement(this.sfxElement)
+  }
+
+  _markSelfPause(element) {
+    if (element) this._selfPauses.set(element, Date.now())
+  }
+
+  _attachPauseWatch(slot) {
+    slot.element.addEventListener('pause', () => {
+      const element = slot.element
+      if (this.currentSlot !== slot || !this.isActiveDevice || !this._playIntent || element.ended || this._pauseTimer) return
+      const marked = this._selfPauses.get(element)
+      if (marked && Date.now() - marked < SELF_PAUSE_WINDOW_MS) return
+      logger.info('[AudioEngine] ⏸️ Paused from outside the app (call, other audio, headphones)')
+      this._playIntent = false
+      this.onExternalPause?.('element')
+    })
+  }
+
+  _setBlocked(blocked) {
+    const next = !!blocked
+    if (next === this._blocked) return
+    this._blocked = next
+    logger.info(`[AudioEngine] ${next ? '🔒 Playback needs a tap to start' : '🔓 Playback unblocked'}`)
+    this.onPlaybackBlocked?.(next)
+  }
+
+  isBlocked() {
+    return this._blocked
+  }
+
+  _contextRunning() {
+    return !this.context || this.context.state === 'running'
+  }
+
+  _handleContextState() {
+    const state = this.context?.state
+    if (state === 'running') {
+      const element = this.currentSlot?.element
+      if (element && !element.paused) this._setBlocked(false)
+    } else if (state === 'interrupted' && this._playIntent && this.isActiveDevice) {
+      logger.info('[AudioEngine] ⏸️ Audio interrupted by the system')
+      this._playIntent = false
+      this.onExternalPause?.('interrupted')
+    }
+  }
+
+  _startElementNow(slot) {
+    const element = slot.element
+    if (this._pauseTimer) {
+      clearTimeout(this._pauseTimer)
+      this._pauseTimer = null
+    }
+    this._playIntent = true
+    element.playbackRate = 1.0
+    if (slot.gain && this.context) this._rampGain(slot.gain, 0, 1, this.vinylRapidDuration / 1000)
+    const attempt = element.play()
+    attempt?.then?.(
+      () => {
+        AudioInteractionManager.markUnlocked(element)
+        this._setBlocked(!this._contextRunning())
+      },
+      (err) => {
+        if (err?.name === 'NotAllowedError') this._setBlocked(true)
+      }
+    )
+  }
+
+  _unlockLoadedSlot(slot) {
+    const element = slot.element
+    const gain = slot.gain?.gain
+    const savedGain = gain ? gain.value : null
+    const position = element.currentTime
+    if (gain) {
+      gain.cancelScheduledValues(0)
+      gain.value = 0
+    }
+    const restore = () => {
+      if (slot === this.currentSlot && this._playIntent) return
+      this._markSelfPause(element)
+      element.pause()
+      if (Number.isFinite(position) && element.readyState > 0) element.currentTime = position
+      if (gain && savedGain !== null) gain.value = savedGain
+    }
+    const attempt = element.play()
+    attempt?.then?.(
+      () => {
+        AudioInteractionManager.markUnlocked(element)
+        restore()
+      },
+      () => {
+        if (gain && savedGain !== null && !(slot === this.currentSlot && this._playIntent)) gain.value = savedGain
+      }
+    )
+  }
+
+  unlockFromGesture({ resumeCurrent = false } = {}) {
+    if (!this.context) {
+      if (!this._initPromise) void this.initialize().catch(() => {})
+    } else if (this.context.state === 'suspended' || this.context.state === 'interrupted') {
+      this.context.resume().catch(() => {})
+    }
+    const current = this.currentSlot
+    if (!current) return
+    const canResume = resumeCurrent && this.isActiveDevice && current.loaded && current.element.paused &&
+      !this.isHoldReached(this.currentTrackId)
+    if (canResume) this._startElementNow(current)
+    for (const slot of [this.slots.A, this.slots.B]) {
+      const element = slot.element
+      if (!element || !slot.loaded || !element.paused || AudioInteractionManager.isUnlocked(element)) continue
+      if (slot === current && canResume) continue
+      this._unlockLoadedSlot(slot)
+    }
   }
 
   _scheduleAudioTick(callback) {
@@ -192,10 +336,19 @@ export class AudioEngine {
   }
 
   async _initialize() {
+    if (navigator.audioSession) {
+      try {
+        navigator.audioSession.type = 'playback'
+      } catch (error) {
+        logger.warn('[AudioEngine] Could not set the audio session type:', error)
+      }
+    }
+
     const AudioContext = window.AudioContext || window['webkitAudioContext']
     this.context = new AudioContext({
       latencyHint: 'playback'
     })
+    this.context.addEventListener?.('statechange', () => this._handleContextState())
 
     AudioInteractionManager.audioContexts.add(this.context)
 
@@ -242,18 +395,6 @@ export class AudioEngine {
     this.musicGain.gain.value = 1.0
     this.uiSoundsGain.gain.value = 1.0
 
-    this.slots.A.element = new Audio()
-    this.slots.B.element = new Audio()
-
-    this.slots.A.element.preload = 'metadata'
-    this.slots.B.element.preload = 'metadata'
-
-    this.slots.A.element.preservesPitch = false
-    this.slots.B.element.preservesPitch = false
-
-    this._attachBufferMonitors(this.slots.A)
-    this._attachBufferMonitors(this.slots.B)
-
     this.slots.A.source = this.context.createMediaElementSource(this.slots.A.element)
     this.slots.B.source = this.context.createMediaElementSource(this.slots.B.element)
 
@@ -269,8 +410,6 @@ export class AudioEngine {
     this.slots.A.gain.gain.value = 1.0
     this.slots.B.gain.gain.value = 0.0
 
-    this.sfxElement = new Audio()
-    this.sfxElement.crossOrigin = 'anonymous'
     this.sfxSource = this.context.createMediaElementSource(this.sfxElement)
     this.sfxSource.connect(this.uiSoundsGain)
 
@@ -352,7 +491,7 @@ export class AudioEngine {
   }
 
   async unlockAudio() {
-    if (!this.context || this.context.state !== 'suspended') {
+    if (!this.context || (this.context.state !== 'suspended' && this.context.state !== 'interrupted')) {
       this.removeUnlockGestures()
       return
     }
@@ -398,11 +537,11 @@ export class AudioEngine {
       await this.initialize()
     }
 
-    if (this.context.state === 'suspended') {
-      try {
-        await this.context.resume()
-        logger.info('[AudioEngine] Audio context resumed successfully')
-      } catch {
+    if (this.context.state === 'suspended' || this.context.state === 'interrupted') {
+      const resumed = this.context.resume().then(() => true, () => false)
+      const waited = new Promise(resolve => setTimeout(() => resolve(false), CONTEXT_RESUME_WAIT_MS))
+      await Promise.race([resumed, waited])
+      if (this.context.state !== 'running') {
         this.setupUnlockGesture()
         logger.info('[AudioEngine] Context suspended, waiting for user gesture')
       }
@@ -567,6 +706,7 @@ export class AudioEngine {
     const element = slot.element
     if (element) {
       try {
+        this._markSelfPause(element)
         element.pause()
         element.playbackRate = 1.0
         if (element.getAttribute('src') !== null) {
@@ -599,6 +739,8 @@ export class AudioEngine {
 
   _releaseAll() {
     this._hold = null
+    this._playIntent = false
+    this._setBlocked(false)
     this._abortAllOps()
     this._stopVinylWobble()
     if (this._pauseTimer) {
@@ -663,6 +805,48 @@ export class AudioEngine {
       }
 
       element.addEventListener('canplay', onCanPlay, { once: true })
+      element.addEventListener('error', onError, { once: true })
+      if (signal) {
+        if (signal.aborted) {
+          onAbort()
+          return
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+    })
+  }
+
+  _loadProgressive(element, url, rejectOnError, signal = null) {
+    element.crossOrigin = 'anonymous'
+    element.removeAttribute('data-blob-url')
+    element.preload = 'auto'
+    element.src = url
+    element.load()
+
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        element.removeEventListener('loadedmetadata', onReady)
+        element.removeEventListener('canplay', onReady)
+        element.removeEventListener('error', onError)
+        signal?.removeEventListener('abort', onAbort)
+        clearTimeout(timeout)
+      }
+      const onReady = () => {
+        cleanup()
+        resolve()
+      }
+      const onError = () => {
+        cleanup()
+        if (rejectOnError) reject(element.error || new Error('Progressive stream failed'))
+        else resolve()
+      }
+      const onAbort = () => {
+        cleanup()
+        reject(abortError())
+      }
+      const timeout = setTimeout(onReady, PROGRESSIVE_READY_TIMEOUT_MS)
+      element.addEventListener('loadedmetadata', onReady, { once: true })
+      element.addEventListener('canplay', onReady, { once: true })
       element.addEventListener('error', onError, { once: true })
       if (signal) {
         if (signal.aborted) {
@@ -785,6 +969,8 @@ export class AudioEngine {
     try {
       if (source.isBlobUrl) {
         await this._loadBlobToElement(slot.element, source.url, slot, rejectOnError, signal)
+      } else if (source.progressive) {
+        await this._loadProgressive(slot.element, source.url, waitForCanPlay && rejectOnError, signal)
       } else {
         await this._setupMediaSourceStream(slot.element, source.url, trackId, slot, waitForCanPlay, signal)
       }
@@ -1136,6 +1322,7 @@ export class AudioEngine {
     let isStreamComplete = false
     let hasInitialBuffer = false
     let isBuffering = true
+    let failures = 0
 
     while (bytesDownloaded < contentLength && !signal.aborted) {
       if (!hasInitialBuffer) {
@@ -1198,14 +1385,30 @@ export class AudioEngine {
       const start = bytesDownloaded
       const end = Math.min(bytesDownloaded + CHUNK_SIZE - 1, contentLength - 1)
 
-      const response = await fetch(url, {
-        signal,
-        headers: { 'Range': `bytes=${start}-${end}` }
-      })
-
-      if (!response.ok && response.status !== 206) throw new Error('Network error')
-
-      const chunk = await response.arrayBuffer()
+      let chunk
+      try {
+        const response = await fetch(url, {
+          signal,
+          headers: { 'Range': `bytes=${start}-${end}` }
+        })
+        if (!response.ok && response.status !== 206) throw new Error(`Stream chunk failed (${response.status})`)
+        chunk = await response.arrayBuffer()
+      } catch (error) {
+        if (signal.aborted || isAbortError(error)) throw error
+        failures++
+        if (failures > STREAM_RETRY_LIMIT || slot.sourceBuffer !== sourceBuffer) throw error
+        if (failures === 1) logger.warn(`[Audio] Stream interrupted at ${start} bytes - retrying while the buffer plays`)
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, STREAM_RETRY_DELAY_MS)
+          signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve()
+          }, { once: true })
+        })
+        continue
+      }
+      if (failures) logger.info(`[Audio] Stream resumed after ${failures} failed attempt(s)`)
+      failures = 0
       const value = new Uint8Array(chunk)
       bytesDownloaded += value.byteLength
 
@@ -1251,6 +1454,7 @@ export class AudioEngine {
     if (this.currentSlot.loaded && this.currentSlot.element.getAttribute('src')) {
       const element = this.currentSlot.element
       const rampSec = this.vinylRapidDuration / 1000
+      this._playIntent = true
 
       this._rampGain(this.currentSlot.gain, 0, 1, rampSec)
 
@@ -1259,14 +1463,19 @@ export class AudioEngine {
 
       try {
         await element.play()
+        AudioInteractionManager.markUnlocked(element)
+        this._setBlocked(!this._contextRunning())
       } catch (err) {
-        if (err.name !== 'AbortError') logger.error('[AudioEngine] Play failed:', err)
+        if (err.name === 'NotAllowedError') this._setBlocked(true)
+        else if (err.name !== 'AbortError') logger.error('[AudioEngine] Play failed:', err)
       }
     }
   }
 
   pause() {
     if (!this._enforceActiveDevice('pause')) return
+
+    this._playIntent = false
 
     if (this.currentSlot?.element && this.context) {
       const slot = this.currentSlot
@@ -1280,6 +1489,7 @@ export class AudioEngine {
       if (this._pauseTimer) clearTimeout(this._pauseTimer)
       this._pauseTimer = setTimeout(() => {
         this._pauseTimer = null
+        this._markSelfPause(element)
         element.pause()
         element.playbackRate = 1.0
         slot.gain.gain.cancelScheduledValues(0)
@@ -1355,47 +1565,102 @@ export class AudioEngine {
 
   stopImmediately() {
     this._stopVinylWobble()
+    this._playIntent = false
 
     if (this.currentSlot?.element && this.context) {
       this.currentSlot.gain.gain.cancelScheduledValues(0)
       this.currentSlot.gain.gain.value = 0
+      this._markSelfPause(this.currentSlot.element)
       this.currentSlot.element.pause()
     }
   }
 
-  async handleOfflineTransition(getCurrentTrackId, getCachedVersion) {
-    logger.info('[AudioEngine] 🔌 Handling offline transition')
+  _slotSourceComplete(slot) {
+    if (!slot?.loaded || !slot.element) return false
+    return slot.element.getAttribute('data-blob-url') === 'true' || slot.isComplete
+  }
 
-    if (this.nextSlot?.fetchController) {
-      this.nextSlot.fetchController.abort()
-      logger.info('[AudioEngine] Aborted next slot fetch')
+  isCurrentSourceComplete() {
+    return this.hasCurrentSource() && this._slotSourceComplete(this.currentSlot)
+  }
+
+  isNextSourceComplete() {
+    return this._slotSourceComplete(this.nextSlot)
+  }
+
+  dropNext() {
+    const next = this.nextSlot
+    if (!next || next.isFadingOut || next === this.currentSlot) return
+    if (this._op?.kind === 'preload') this._op.controller.abort()
+    if (this.nextTrackId || next.trackId) {
+      this._resetSlot(next)
+      this.nextTrackId = null
     }
+  }
 
+  async handleOfflineTransition(getCurrentTrackId, getCachedVersion) {
     const trackId = getCurrentTrackId()
-    if (!trackId || trackId !== this.currentTrackId) return { switched: false }
+    if (!trackId || trackId !== this.currentTrackId || !this.hasCurrentSource()) return { switched: false }
+    if (this.isCurrentSourceComplete()) return { switched: false, complete: true }
 
     const cached = await getCachedVersion(trackId)
-    if (!cached) {
-      logger.info('[AudioEngine] No cached version available - buffer will starve')
+    if (!cached?.audioBlob) {
+      logger.info('[AudioEngine] 🔌 No cached copy of the streaming track - it plays until its buffer runs out')
       return { switched: false }
     }
+    if (trackId !== this.currentTrackId || !this.isActiveDevice) return { switched: false }
 
-    const currentElement = this.getCurrentElement()
-    const currentTime = currentElement?.currentTime || 0
-    const wasPlaying = currentElement && !currentElement.paused
+    const url = URL.createObjectURL(cached.audioBlob)
+    const bitrate = cached.bitrate
+    const metadata = { ...(this.currentSlot.metadata || {}), bitrate, fromCache: true }
 
-    const blobUrl = URL.createObjectURL(cached.audioBlob)
+    const result = await this._enqueue('reload', trackId, async (signal) => {
+      if (this.currentTrackId !== trackId) {
+        URL.revokeObjectURL(url)
+        return { status: 'superseded' }
+      }
+      await this._loadIntoSlot(this.nextSlot, trackId, { url, isBlobUrl: true, bitrate, fromCache: true }, metadata, signal, { waitForCanPlay: true })
+      throwIfAborted(signal)
+      if (this.currentTrackId !== trackId) return { status: 'superseded' }
 
-    const result = await this.reloadCurrent(trackId, { url: blobUrl, isBlobUrl: true, bitrate: cached.bitrate, fromCache: true }, {
-      metadata: { ...(cached.metadata || {}), bitrate: cached.bitrate, fromCache: true },
-      positionSeconds: currentTime,
-      shouldPlay: wasPlaying
+      const current = this.currentSlot.element
+      const next = this.nextSlot.element
+      const wasPlaying = !!current && !current.paused && !this._pauseTimer
+      await this._seekElement(next, (current?.currentTime || 0) + (wasPlaying ? CACHED_SWAP_SEEK_LEAD_S : 0), signal)
+      throwIfAborted(signal)
+      if (this.currentTrackId !== trackId) return { status: 'superseded' }
+      if (wasPlaying && current && Math.abs(current.currentTime - next.currentTime) > 0.02) {
+        await this._seekElement(next, current.currentTime + CACHED_SWAP_SEEK_LEAD_S, signal)
+        throwIfAborted(signal)
+      }
+
+      await this._swapToNext(wasPlaying ? CACHED_SWAP_FADE_MS : 0, wasPlaying, 'natural')
+      return { status: 'loaded' }
     })
 
     if (result?.status !== 'loaded') return { switched: false }
+    logger.info(`[AudioEngine] ✅ Now playing the downloaded ${bitrate} copy (seamless)`)
+    return { switched: true, bitrate }
+  }
 
-    logger.info(`[AudioEngine] ✅ Switched to cached ${cached.bitrate} version`)
-    return { switched: true, bitrate: cached.bitrate }
+  _seekElement(element, timeSeconds, signal) {
+    if (!element || !Number.isFinite(timeSeconds)) return Promise.resolve()
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        element.removeEventListener('seeked', done)
+        signal?.removeEventListener('abort', done)
+        resolve()
+      }
+      const timer = setTimeout(done, 1500)
+      element.addEventListener('seeked', done, { once: true })
+      signal?.addEventListener('abort', done, { once: true })
+      try {
+        element.currentTime = Math.max(0, timeSeconds)
+      } catch {
+        done()
+      }
+    })
   }
 
   _scheduleSlotCleanup(slot, actualFadeTime) {
@@ -1449,6 +1714,7 @@ export class AudioEngine {
     logger.info(`[Audio] 🔄 SWAPPED SLOTS: New Current is Slot ${this.currentSlot === this.slots.A ? 'A' : 'B'} (${this.currentTrackId?.slice(0, 8)})`)
 
     if (shouldPlay) {
+      this._playIntent = true
       this._rampGain(next.gain, 0, 1, actualFadeTime)
       if (transitionType === 'user') {
         next.element.playbackRate = 0.85
@@ -1456,7 +1722,10 @@ export class AudioEngine {
       }
       try {
         await next.element.play()
+        AudioInteractionManager.markUnlocked(next.element)
+        this._setBlocked(!this._contextRunning())
       } catch (err) {
+        if (err?.name === 'NotAllowedError') this._setBlocked(true)
         if (err?.name !== 'AbortError') logger.warn('[AudioEngine] Play after swap blocked:', err?.message || err)
       }
     } else {

@@ -65,6 +65,14 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
     rafRef.current = requestAnimationFrame(() => {
       const { scrollTop, scrollHeight, clientHeight } = container
 
+      if (container.dataset.autoScroll) {
+        lastScrollRef.current = { top: scrollTop, time: performance.now() }
+        const scrollable = scrollHeight - clientHeight
+        const pct = scrollable > 0 ? scrollTop / scrollable : 0
+        indicatorY.set(PANEL.headerHeight + pct * (clientHeight - PANEL.headerHeight - 80))
+        return
+      }
+
       triggerEffect('scroll', { scrollTop })
 
       const now = performance.now()

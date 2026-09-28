@@ -27,11 +27,11 @@ def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
 
     for _, entry in enumerate(text_history):
         if not entry.startswith('['):
-            cleaned_entry = entry.replace('[BROADCAST]', '').replace('[TXT]', '').replace('[SHAQUILLE]', '').replace(
-                '[TERRY]', '').strip()
+            cleaned_entry = entry.replace('[BROADCAST]', '').replace('[TXT]', '').replace('[LEO]', '').replace(
+                '[TARA]', '').strip()
 
             if cleaned_entry == last_bot_response:
-                log_service.system(f"[Dedup] Skipping duplicate bot response: {cleaned_entry[:50]}...")
+                log_service.detail(f"[Dedup] Skipping duplicate bot response: {cleaned_entry[:50]}...", "conversation")
                 continue
 
             last_bot_response = cleaned_entry
@@ -40,7 +40,8 @@ def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
 
     removed_count = len(text_history) - len(deduplicated)
     if removed_count > 0:
-        log_service.system(f"[Dedup] Removed {removed_count} duplicate responses from conversation history")
+        log_service.detail(f"[Dedup] Removed {removed_count} duplicate responses from conversation history",
+                           "conversation")
 
     return deduplicated
 
@@ -202,6 +203,11 @@ async def get_conversation_history(
     else:
         return [] if format_type == 'json' else "No user identifier"
 
+def _quote(text: str, limit: int = 160) -> str:
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[:limit - 3] + "..."
+
+
 class ConversationService:
     def __init__(self):
         self.dj_prompt_service = None
@@ -249,7 +255,7 @@ class ConversationService:
         try:
             await self.tts_queue_manager.cancel_session(session_id, user_id)
         except Exception as e:
-            log_service.error(f"[{session_id}] TTS interrupt failed: {e}")
+            log_service.error(f"{log_service.who(session_id)}: TTS interrupt failed: {e}")
 
     def last_turn_at(self, session_id: Optional[str]) -> float:
         return self._turn_started_at.get(session_id or "", 0.0)
@@ -273,7 +279,8 @@ class ConversationService:
             task.cancel()
         if pending:
             await asyncio.wait(pending, timeout=settings.DJ_TURN_CANCEL_TIMEOUT_S)
-            log_service.system(f"[{session_id}] New listener turn - cancelled {len(pending)} task(s) from the previous turn")
+            log_service.listener(
+                f"{log_service.who(session_id)}: new turn replaced the previous one ({len(pending)} task(s) cancelled)")
         return turn_tasks
 
     @staticmethod
@@ -286,6 +293,7 @@ class ConversationService:
         session_dict = {"session_id": session_id, "user_id": user_id}
         usage_tracking.bind_session(session_id, user_id)
 
+        log_service.listener(f"{log_service.who(session_id)}: typed to the DJ: \"{_quote(text)}\"")
         turn_tasks = await self._begin_turn(session_id, session_dict, "text")
         await self._interrupt_session_speech(session_id, user_id)
 
@@ -327,7 +335,7 @@ class ConversationService:
         if not fast_transcription:
             raise ValueError("Transcription failed")
 
-        log_service.api(f"[{session_id}] Fast transcription: {fast_transcription}")
+        log_service.listener(f"{log_service.who(session_id)}: said to the DJ: \"{_quote(fast_transcription)}\"")
 
         if self.broadcast_func:
             await self.broadcast_func(session_id, {
@@ -362,7 +370,7 @@ class ConversationService:
                 return
 
             transcription = result["text"]
-            log_service.api(f"[{session_id}] Quality transcription: {transcription}")
+            log_service.detail(f"{log_service.who(session_id)}: quality transcription: {transcription}", "listener")
 
             words = transcription.split()
             if len(words) == 1 and len(words[0]) < 5:
@@ -370,7 +378,7 @@ class ConversationService:
 
             webm_path = await asyncio.shield(save_task)
             if not webm_path:
-                log_service.error(f"[{session_id}] Failed to save audio file, skipping metadata")
+                log_service.error(f"{log_service.who(session_id)}: failed to save voice recording, skipping metadata")
                 return
 
             timestamp = webm_path.stem
@@ -403,7 +411,7 @@ class ConversationService:
                                                     origin="voice")
 
         except Exception as e:
-            log_service.error(f"[{session_id}] Audio flow failed: {e}")
+            log_service.error(f"{log_service.who(session_id)}: voice turn failed: {e}")
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
 
@@ -497,13 +505,14 @@ class ConversationService:
                                                                            speak_preamble)
             if not result:
                 if not ctx.records and not spoken:
-                    log_service.error(f"[{session_id}] Tool-mode DJ turn failed before acting - falling back to two-pass flow")
+                    log_service.error(
+                        f"{log_service.who(session_id)}: tool-mode DJ turn failed before acting - falling back to two-pass flow")
                     return False
-                log_service.error(f"[{session_id}] Tool-mode DJ turn failed after acting")
+                log_service.error(f"{log_service.who(session_id)}: tool-mode DJ turn failed after acting")
                 return True
 
             if result["status"] == "na":
-                log_service.api(f"[{session_id}] Tool-mode DJ response not applicable")
+                log_service.detail(f"{log_service.who(session_id)}: tool-mode DJ response not applicable", "listener")
                 return True
 
             main_response = result["main"]
@@ -517,7 +526,8 @@ class ConversationService:
             full_response = full_main + "\n" + notes if notes else full_main
 
             for record in ctx.records:
-                log_service.commands(f"[DJ TOOLS] {record['status'].upper()} {record['name']} {record['args']}"
+                log_service.commands(f"{log_service.who(session_id)}: DJ tool {record['status'].upper()} "
+                                     f"{record['name']} {record['args']}"
                                      f"{' -> ' + record['reason'] if record.get('reason') else ''}")
 
             await asyncio.shield(self._publish_turn(transcription, full_response, runtime.commands_for_display(),
@@ -529,7 +539,7 @@ class ConversationService:
     async def _process_gpt_and_orchestrate(self, transcription, user_id, session_id, is_guest, session_dict,
                                            origin="text"):
         try:
-            log_service.system(f"[{session_id}] Orchestrating DJ Response...")
+            log_service.detail(f"{log_service.who(session_id)}: orchestrating DJ response", "listener")
 
             if self.dj_prompt_service is None:
                 raise RuntimeError("dj_prompt_service not initialized")
@@ -540,7 +550,7 @@ class ConversationService:
 
             result = await self.dj_prompt_service.gpt_dj_interactive(transcription, session_dict)
             if not result:
-                log_service.error(f"[{session_id}] GPT response failed")
+                log_service.error(f"{log_service.who(session_id)}: DJ reply generation failed")
                 return
 
             main_response, notes = result
@@ -555,24 +565,23 @@ class ConversationService:
             commands_for_display = None
 
             if commands and commands.strip() and commands.strip() != "{N/A}":
-                log_service.commands(f"[HAL11000 PIPELINE] Formatted Commands:\n{commands}")
+                command_lines = [line.strip() for line in commands.replace('[HAL11000]', '').splitlines() if line.strip()]
+                log_service.commands(f"{log_service.who(session_id)}: DJ commands: {' | '.join(command_lines)}")
                 if self.command_executor:
-                    log_service.commands(f"[HAL11000 PIPELINE] Executing commands for session {session_id}...")
                     await self.command_executor.process_commands(commands, session_dict)
-                    log_service.commands("[HAL11000 PIPELINE] Command execution completed")
 
                 if commands.strip().startswith('[HAL11000]'):
                     commands_for_display = commands
                 else:
                     commands_for_display = f"[HAL11000]{commands}"
             else:
-                log_service.commands("[HAL11000 PIPELINE] No commands extracted")
+                log_service.detail(f"{log_service.who(session_id)}: no DJ commands extracted", "commands")
 
             await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display, user_id, session_id,
                                                     is_guest))
 
         except Exception as e:
-            log_service.error(f"[{session_id}] GPT processing failed: {e}")
+            log_service.error(f"{log_service.who(session_id)}: DJ turn failed: {e}")
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
 

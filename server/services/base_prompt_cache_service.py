@@ -44,7 +44,7 @@ class BasePromptCacheService(SingletonService):
         raise NotImplementedError
 
     def _log(self, message: str):
-        getattr(log_service, self.log_channel)(message)
+        log_service.detail(message, self.log_channel)
 
     def _insert_cache_row(self, conn, params: tuple):
         raise NotImplementedError
@@ -130,7 +130,7 @@ class BasePromptCacheService(SingletonService):
             }
 
         elapsed = time.perf_counter() - start_time
-        self._log(
+        getattr(log_service, self.log_channel)(
             f"✓ Loaded {len(self.query_cache)} cached queries ({elapsed:.2f}s)"
         )
 

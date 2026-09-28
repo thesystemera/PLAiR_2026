@@ -66,7 +66,8 @@ class WebSocketService:
                 activity = self._last_activity.get(session_id, {})
                 oldest_device = min(session_connections, key=lambda did: activity.get(did, 0.0))
                 log_service.warning(
-                    f"WebSocket limit reached for {session_id}; evicting least active device {oldest_device}"
+                    f"{log_service.who(session_id)}: WebSocket limit reached - evicting least active device "
+                    f"{oldest_device[:8]}"
                 )
                 self._evict(session_id, oldest_device, session_connections[oldest_device])
                 session_connections = self._connections.setdefault(session_id, {})
@@ -75,17 +76,17 @@ class WebSocketService:
         session_connections[device_id] = websocket
         self._last_activity[session_id][device_id] = time.time()
 
-        total_connections = sum(len(devices) for devices in self._connections.values())
-        log_service.system(
-            f"WebSocket connected: {session_id}/{device_id} "
-            f"(total: {total_connections} connections, {len(self._connections)} sessions)"
-        )
+        log_service.detail(f"WebSocket registered: {log_service.who(session_id, device_id)}", "system")
+
+    def connection_totals(self) -> Tuple[int, int]:
+        return sum(len(devices) for devices in self._connections.values()), len(self._connections)
 
     def unregister_connection(self, session_id: str, device_id: str, websocket: Optional[WebSocket] = None):
         current = self._connections.get(session_id, {}).get(device_id)
         if websocket is not None and current is not None and current is not websocket:
-            log_service.system(
-                f"WebSocket closed for {session_id}/{device_id} but a newer connection is registered - keeping it"
+            log_service.detail(
+                f"WebSocket closed for {log_service.who(session_id, device_id)} but a newer connection is registered",
+                "system"
             )
             return
 
@@ -99,10 +100,10 @@ class WebSocketService:
             if not self._last_activity[session_id]:
                 del self._last_activity[session_id]
 
-        total_connections = sum(len(devices) for devices in self._connections.values())
+        total_connections, total_sessions = self.connection_totals()
         log_service.system(
-            f"WebSocket disconnected: {session_id}/{device_id} "
-            f"(total: {total_connections} connections, {len(self._connections)} sessions)"
+            f"{log_service.who(session_id, device_id)} disconnected | "
+            f"{total_connections} connections, {total_sessions} listeners online"
         )
 
     def update_activity(self, session_id: str, device_id: str):
@@ -111,6 +112,12 @@ class WebSocketService:
 
     def get_connection(self, session_id: str, device_id: str) -> Optional[WebSocket]:
         return self._connections.get(session_id, {}).get(device_id)
+
+    def session_for_device(self, device_id: str) -> Optional[str]:
+        for session_id, devices in self._connections.items():
+            if device_id in devices:
+                return session_id
+        return None
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self._connections and len(self._connections[session_id]) > 0
@@ -147,10 +154,11 @@ class WebSocketService:
                 await asyncio.wait_for(ws_conn.send_text(text), timeout=WS_SEND_TIMEOUT_S)
                 return None
             except asyncio.TimeoutError:
-                log_service.error(f"Failed to {label} {sess_id}/{dev_id}: send timed out after {WS_SEND_TIMEOUT_S}s")
+                log_service.warning(
+                    f"{log_service.who(sess_id, dev_id)}: dropped WebSocket - {label} timed out after {WS_SEND_TIMEOUT_S}s")
                 return sess_id, dev_id, ws_conn
             except Exception as e:
-                log_service.error(f"Failed to {label} {sess_id}/{dev_id}: {str(e)}")
+                log_service.warning(f"{log_service.who(sess_id, dev_id)}: dropped WebSocket - {label} failed: {e}")
                 return sess_id, dev_id, ws_conn
 
         results = await asyncio.gather(*[send_one(sid, did, ws) for sid, did, ws in targets])
@@ -215,7 +223,7 @@ class WebSocketService:
             "data": settings
         }
         await self.broadcast_to_session(session_id, message)
-        log_service.system(f"📢 Broadcast: User settings updated for user {user_id}")
+        log_service.system(f"{log_service.who(user_id=user_id)}: settings updated")
 
     async def broadcast_content_updated(self, content_type: str, content_id: str, metadata: Optional[Dict[str, Any]] = None):
         message = {
@@ -227,7 +235,7 @@ class WebSocketService:
             }
         }
         await self.broadcast_to_all_users(message)
-        log_service.system(f"📢 Broadcast: New {content_type} added ({content_id})")
+        log_service.system(f"New {content_type} added ({content_id}) - announced to all listeners")
 
     async def _cleanup_stale_connections(self):
         while True:
@@ -242,7 +250,8 @@ class WebSocketService:
                         devices_to_remove.append(device_id)
 
                 for device_id in devices_to_remove:
-                    log_service.warning(f"Cleaning up stale WebSocket: {session_id}/{device_id}")
+                    log_service.warning(
+                        f"{log_service.who(session_id, device_id)}: closing stale WebSocket (no activity)")
                     if session_id in self._connections and device_id in self._connections[session_id]:
                         stale_ws = self._connections[session_id].pop(device_id)
                         spawn(self._close_quietly(stale_ws), name=f"ws_close_stale:{session_id}/{device_id}")

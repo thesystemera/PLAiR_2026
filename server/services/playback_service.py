@@ -75,7 +75,7 @@ class PlaybackService(SingletonService):
                 vector_search_service=self.vector_search,
                 population_service=self.population,
             )
-            log_service.station(f"Created new playback state for session: {session_id}")
+            log_service.detail(f"Created new playback state for {log_service.who(session_id)}", "playback")
 
         return self.sessions[session_id]
 
@@ -236,10 +236,8 @@ class PlaybackService(SingletonService):
             await self._notify_session_change(session_id)
 
         if len(state.queue) > 0:
-            log_service.system(f"[PlaybackService] Session {session_id} already initialized")
+            log_service.detail(f"[PlaybackService] {log_service.who(session_id)} already initialized", "playback")
             return
-
-        log_service.system(f"[PlaybackService] Initializing new session: {session_id}")
 
         if self.catalog and self.catalog.tracks:
             all_track_ids = set(self.catalog.tracks.keys())
@@ -270,23 +268,16 @@ class PlaybackService(SingletonService):
                     else:
                         seed_track = self.catalog.get_track(valid_hits[0])
 
-                    log_service.system(
-                        f"[PlaybackService] Seeding from top hits with {len(history_tracks)} history tracks")
                 else:
                     seed_track_id = valid_hits[0]
                     seed_track = self.catalog.get_track(seed_track_id)
-                    log_service.system(f"[PlaybackService] Seeding from top hits (week) - {len(valid_hits)} available")
 
                 if seed_track:
                     if history_tracks:
                         state.history = history_tracks
-                        log_service.system(f"[PlaybackService] Pre-populated {len(history_tracks)} tracks into history")
 
                     state.queue.append(seed_track)
                     state.current_track_id = seed_track["id"]
-
-                    log_service.success(
-                        f"[PlaybackService] Seeded session {session_id} with: {seed_track.get('generation_params', {}).get('title', 'Unknown')}")
 
                     await state._auto_fill_queue(user_id=user_id, notify_callback=notify)
 
@@ -295,11 +286,13 @@ class PlaybackService(SingletonService):
 
                     await state.play(user_id=user_id, notify_callback=notify)
 
-                    log_service.success(
-                        f"[PlaybackService] Session {session_id} initialized - queue: {len(state.queue)}, index: {state.current_index}, history: {len(state.history)}")
+                    log_service.playback(
+                        f"{log_service.who(session_id)}: new listening session, starting with "
+                        f"{log_service.track_label(seed_track)} from the top hits "
+                        f"({len(state.queue)} queued, {len(state.history)} in history)")
                 else:
-                    log_service.error(f"[PlaybackService] Failed to get seed track for session {session_id}")
+                    log_service.error(f"{log_service.who(session_id)}: new session could not get a seed track")
             else:
-                log_service.warning(f"[PlaybackService] No tracks available to seed session {session_id}")
+                log_service.warning(f"{log_service.who(session_id)}: no tracks available to seed the new session")
         else:
-            log_service.warning(f"[PlaybackService] Catalog not available for session {session_id}")
+            log_service.warning(f"{log_service.who(session_id)}: catalog not available for the new session")

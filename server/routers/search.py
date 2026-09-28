@@ -42,7 +42,11 @@ async def semantic_search(
         await services.playback_service.add_to_queue(session_id, track_ids, user_id=user_id)
         if track_ids:
             await services.playback_service.play(session_id, track_ids[0], user_id=user_id)
-        log_service.api(f"Search → Queue: '{request.query}' - {len(track_ids)} tracks added, playing first")
+        log_service.listener(
+            f"{log_service.who(session_id)}: searched \"{request.query}\" -> {len(track_ids)} track(s) queued, "
+            f"playing {log_service.track_label(results[0])}")
+    else:
+        log_service.listener(f"{log_service.who(session_id)}: searched \"{request.query}\" -> no results")
 
     results = results[:request.n_results]
 

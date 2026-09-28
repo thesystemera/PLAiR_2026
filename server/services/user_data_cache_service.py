@@ -66,7 +66,7 @@ class UserDataCacheService(SingletonService):
                 del self._prefs_cache[user_id]
             if user_id in self._prefs_cache_timestamps:
                 del self._prefs_cache_timestamps[user_id]
-        log_service.system(f"UserDataCache invalidated user {user_id}")
+        log_service.detail(f"UserDataCache invalidated user {user_id}", "system")
 
     async def get_preferences(self, user_id: Optional[int]) -> Dict[str, Set[str]]:
         if user_id is None or user_id == 0:
@@ -104,7 +104,7 @@ class UserDataCacheService(SingletonService):
                 del self._prefs_cache[user_id]
             if user_id in self._prefs_cache_timestamps:
                 del self._prefs_cache_timestamps[user_id]
-        log_service.system(f"UserDataCache invalidated preferences for user {user_id}")
+        log_service.detail(f"UserDataCache invalidated preferences for user {user_id}", "system")
 
     def get_stats(self) -> dict:
         total_user = self._user_hits + self._user_misses
@@ -137,6 +137,7 @@ class UserDataCacheService(SingletonService):
                     user_id = int(user.id)  # type: ignore
                     self._user_cache[user_id] = user
                     self._user_cache_timestamps[user_id] = datetime.now()
+                    log_service.remember_user(user_id, user.username)
 
             log_service.system(f"UserDataCache warmed with {len(users)} users")
     
@@ -152,6 +153,7 @@ class UserDataCacheService(SingletonService):
             user_id = int(user.id)  # type: ignore
             self._user_cache[user_id] = user
             self._user_cache_timestamps[user_id] = datetime.now()
+            log_service.remember_user(user_id, user.username)
     
     def _remove_user_from_cache(self, user_id: int) -> None:
         if user_id in self._user_cache:

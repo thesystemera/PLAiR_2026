@@ -125,7 +125,16 @@ export const useVoiceRecorder = () => {
       const analysisContext = audioContext.current
       if (analysisContext.state !== 'running') analysisContext.resume().catch(() => {})
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+      let stream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+      } catch (error) {
+        const staleDevice = audioConstraints.deviceId && (error?.name === 'OverconstrainedError' || error?.name === 'NotFoundError')
+        if (!staleDevice) throw error
+        safeStorage.remove('preferredMicrophoneId')
+        delete audioConstraints.deviceId
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+      }
 
       if (!isStarting.current || audioContext.current !== analysisContext) {
         stream.getTracks().forEach(track => track.stop())

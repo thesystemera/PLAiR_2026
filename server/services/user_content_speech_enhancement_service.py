@@ -240,7 +240,7 @@ class UserContentSpeechEnhancementService:
         ]
         try:
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            log_service.user_content(f"User Content Processing: Converted WebM to mono WAV @ {target_sample_rate}Hz")
+            log_service.detail(f"User Content Processing: Converted WebM to mono WAV @ {target_sample_rate}Hz", "user_content")
         except subprocess.CalledProcessError as e:
             log_service.error(f"FFmpeg conversion failed: {e.stderr.decode(errors='ignore')}")
             raise
@@ -297,7 +297,7 @@ class UserContentSpeechEnhancementService:
 
     def spectral_balance(self, audio, sr):
 
-        log_service.user_content(f"User Content Processing: Applying spectral balance, shape={np.shape(audio)}, sample_rate={sr}")
+        log_service.detail(f"User Content Processing: Applying spectral balance, shape={np.shape(audio)}, sample_rate={sr}", "user_content")
 
         audio_tensor = torch.as_tensor(np.asarray(audio), dtype=torch.float32)
 
@@ -350,7 +350,7 @@ class UserContentSpeechEnhancementService:
         if max_amplitude > 1.0:
             balanced_audio /= max_amplitude
 
-        log_service.user_content(f"User Content Processing: Spectral balance complete, max amplitude: {max_amplitude:.4f}")
+        log_service.detail(f"User Content Processing: Spectral balance complete, max amplitude: {max_amplitude:.4f}", "user_content")
         return balanced_audio
 
     @staticmethod
@@ -360,11 +360,11 @@ class UserContentSpeechEnhancementService:
         return torchaudio.functional.resample(audio_tensor, orig_sr, target_sr)
 
     def upsample_audio(self, audio_tensor: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
-        log_service.user_content(f"User Content Processing: Upsampling audio from {orig_sr}Hz to {target_sr}Hz")
+        log_service.detail(f"User Content Processing: Upsampling audio from {orig_sr}Hz to {target_sr}Hz", "user_content")
         return self._resample(audio_tensor.detach().float().cpu(), orig_sr, target_sr)
 
     def downsample_audio(self, audio_tensor: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
-        log_service.user_content(f"User Content Processing: Downsampling audio from {orig_sr}Hz to {target_sr}Hz")
+        log_service.detail(f"User Content Processing: Downsampling audio from {orig_sr}Hz to {target_sr}Hz", "user_content")
         return self._resample(audio_tensor.detach().float().cpu(), orig_sr, target_sr)
 
     def _super_resolve(self, audio_48k: torch.Tensor) -> torch.Tensor:
@@ -392,10 +392,10 @@ class UserContentSpeechEnhancementService:
             audio = audio.mean(dim=0, keepdim=True)
 
         audio_48k = self.upsample_audio(audio, sr_input, ENHANCED_SAMPLE_RATE).contiguous()
-        log_service.user_content(f"User Content Processing: Applying DeepFilterNet noise reduction, shape: {tuple(audio_48k.shape)}")
+        log_service.detail(f"User Content Processing: Applying DeepFilterNet noise reduction, shape: {tuple(audio_48k.shape)}", "user_content")
         denoised_48k = enhance(self.df_model, self.df_state, audio_48k).float().cpu()
 
-        log_service.user_content("User Content Processing: Applying SR model to restore high frequencies...")
+        log_service.detail("User Content Processing: Applying SR model to restore high frequencies...", "user_content")
         restored_48k = self._super_resolve(denoised_48k)
 
         target_len = denoised_48k.shape[-1]
@@ -409,7 +409,7 @@ class UserContentSpeechEnhancementService:
 
     def _enhance_file_sync(self, input_wav_mono: str):
         original_audio, sr_input = torchaudio.load(input_wav_mono)
-        log_service.user_content(f"User Content Processing: Loaded mono audio @ {sr_input}Hz, shape: {tuple(original_audio.shape)}")
+        log_service.detail(f"User Content Processing: Loaded mono audio @ {sr_input}Hz, shape: {tuple(original_audio.shape)}", "user_content")
         try:
             with self._gpu_lock:
                 enhanced = self._run_enhancement_chain(original_audio, sr_input)
@@ -585,8 +585,8 @@ class UserContentSpeechEnhancementService:
             if not isinstance(processed_data.get('transcription_metadata'), dict):
                 processed_data['transcription_metadata'] = {}
 
-            log_service.user_content(
-                f"User Content Enhancement: Processed {content_type} with category '{processed_data['transcription_metadata'].get('category', 'N/A')}'")
+            log_service.detail(
+                f"User Content Enhancement: Processed {content_type} with category '{processed_data['transcription_metadata'].get('category', 'N/A')}'", "user_content")
             return processed_data
 
         except Exception as e:
@@ -740,9 +740,9 @@ class UserContentSpeechEnhancementService:
                 await self._write_json_atomic(filtered_json_path, transcript)
                 written.append(filtered_json_path)
 
-            log_service.user_content(
+            log_service.detail(
                 f"User Content Processing: Saved {output_path} ({duration_s:.1f}s, enhanced={enhanced_ok}, "
-                f"sliced={bool(spans)}, filtered={filtered})"
+                f"sliced={bool(spans)}, filtered={filtered})", "user_content"
             )
             return True
 

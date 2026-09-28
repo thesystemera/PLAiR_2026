@@ -22,6 +22,13 @@ RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
 GENERATED_EMBEDDINGS = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings')
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
+TTS_TYPE_LABELS = {
+    'interactive': 'chat reply',
+    'announcer': 'track announcement',
+    'radio_segment': 'talk break',
+    'sting': 'station sting',
+    'shoutouts': 'shoutout segment',
+}
 
 class PrerenderedClip:
     def __init__(self, audio: AudioSegment, marks: Optional[List[Tuple[int, Dict]]] = None, label: str = ""):
@@ -180,8 +187,8 @@ class IncrementalBlend:
             start_time = sorted_times[i]
             end_time = sorted_times[i + 1]
             active_speakers = {
-                'terry': None,
-                'shaquille': None,
+                'tara': None,
+                'leo': None,
                 'computer': None
             }
             for entry in self.timeline:
@@ -219,10 +226,10 @@ class TTSQueueManager:
         self._session_active: Dict[str, asyncio.Task] = {}
         self._turn_seq = itertools.count(1)
 
-        log_service.tts_queue_manager("TTS Request: Initializing TTSQueueManager")
+        log_service.detail("TTS Request: Initializing TTSQueueManager", "tts_queue_manager")
 
     async def start(self):
-        log_service.tts_queue_manager("TTS Request: Per-session TTS queue processors ready")
+        log_service.detail("TTS Request: Per-session TTS queue processors ready", "tts_queue_manager")
 
     @staticmethod
     def _session_key(session_id: Optional[str], user_id: int) -> str:
@@ -255,7 +262,7 @@ class TTSQueueManager:
                 user = await db.get(User, user_id)
                 if user and getattr(user, 'tts_muted', False):
                     log_service.tts_queue_manager(
-                        f"TTS Request: User {user_id} has DJ voice muted - skipping BROADCAST TTS")
+                        f"DJ voice: skipped for {log_service.who(user_id=user_id)} (DJ voice muted)")
                     return False
         return True
 
@@ -273,7 +280,8 @@ class TTSQueueManager:
         if not await self._tts_allowed(user_id, is_broadcast, is_temp_user):
             return False
         self._enqueue((text, user_id, tts_type, is_broadcast, is_temp_user, session_id, stream_id, lead_in))
-        log_service.tts_queue_manager(f"TTS Request: Added TTS request for session {session_id} (user {user_id})")
+        log_service.detail(f"TTS Request: queued {tts_type} for {log_service.who(session_id, user_id=user_id)}",
+                           "tts_queue_manager")
         return True
 
     async def add_clip_request(
@@ -288,8 +296,9 @@ class TTSQueueManager:
         if len(clip.audio) == 0 or not await self._tts_allowed(user_id, True, is_temp_user):
             return False
         self._enqueue((clip, user_id, tts_type, True, is_temp_user, session_id, stream_id, None))
-        log_service.tts_queue_manager(
-            f"TTS Request: Added {tts_type} clip '{clip.label}' ({len(clip.audio) / 1000:.1f}s) for session {session_id}")
+        log_service.detail(
+            f"TTS Request: queued {tts_type} clip '{clip.label}' ({len(clip.audio) / 1000:.1f}s) for "
+            f"{log_service.who(session_id, user_id=user_id)}", "tts_queue_manager")
         return True
 
     async def _process_session_queue(self, key: str, queue: asyncio.Queue):
@@ -304,7 +313,6 @@ class TTSQueueManager:
 
                 text, user_id, tts_type, _is_broadcast, _is_temp_user, session_id, requested_stream_id, lead_in = item
                 stream_id = requested_stream_id or self.current_stream_id or str(uuid.uuid4())
-                log_service.tts_queue_manager(f"TTS Request: Processing request for session {session_id}")
                 if isinstance(text, PrerenderedClip):
                     work = self._stream_clip(text, user_id, tts_type, stream_id, session_id)
                 else:
@@ -317,9 +325,11 @@ class TTSQueueManager:
                     current = asyncio.current_task()
                     if current is not None and current.cancelling():
                         raise
-                    log_service.tts_queue_manager(f"TTS Request: Stream {stream_id} cancelled for session {session_id}")
+                    log_service.tts_queue_manager(
+                        f"DJ voice for {log_service.who(session_id, user_id=user_id)}: stream {stream_id[:8]} cancelled")
                 except Exception as e:
-                    log_service.error(f"TTS Request: Error processing TTS request: {e}")
+                    log_service.error(
+                        f"DJ voice for {log_service.who(session_id, user_id=user_id)}: {tts_type} stream failed: {e}")
                 finally:
                     if self._session_active.get(key) is task:
                         del self._session_active[key]
@@ -356,9 +366,11 @@ class TTSQueueManager:
             await self.tts_generation_service.abort_jobs(key, job_ids)
 
         await self.audio_broadcast_service.broadcast_cancel(room)
-        log_service.tts_queue_manager(
-            f"TTS Interrupt: session {session_id} - active={'yes' if cancelled_active else 'no'}, "
-            f"dropped {dropped} queued, aborted {len(job_ids)} engine job(s)")
+        if cancelled_active or dropped or job_ids:
+            log_service.tts_queue_manager(
+                f"DJ voice for {log_service.who(session_id, user_id=user_id)}: interrupted by a new listener turn "
+                f"({'stopped the current reply, ' if cancelled_active else ''}dropped {dropped} queued, "
+                f"aborted {len(job_ids)} engine job(s))")
 
     async def _generate_tts_stream(
             self,
@@ -374,6 +386,17 @@ class TTSQueueManager:
         stream_plan = self.tts_stream_planner.create_stream_plan(ordered_content)
         owner = self._session_key(session_id, user_id)
         room = session_id or str(user_id)
+        listener = log_service.who(session_id, user_id=user_id)
+        kind = TTS_TYPE_LABELS.get(tts_type, tts_type)
+        spoken = [segment for segment in ordered_content if segment.get('type') == 'sentence']
+        if spoken:
+            voices = "+".join(sorted({segment.get('speaker') or '?' for segment in spoken}))
+            shape = f"{len(spoken)} lines ({voices}), {len(ordered_content)} segments"
+        else:
+            shape = "+".join(sorted({segment.get('type') or '?' for segment in ordered_content})) or "empty"
+        opening = " ".join(segment.get('content', '') for segment in spoken[:2]).strip()
+        quote = f" | \"{opening[:90]}{'...' if len(opening) > 90 else ''}\"" if opening else ""
+        log_service.tts_queue_manager(f"DJ voice for {listener}: {kind} started | {shape}{quote}")
 
         renders = [_SegmentRender(index, segment) for index, segment in enumerate(ordered_content)]
         renders_by_segment = {id(render.segment): render for render in renders}
@@ -434,13 +457,14 @@ class TTSQueueManager:
                     await encoder.cancel()
 
             first_audio = (encoder.first_emit_at - started_at) if encoder.first_emit_at else None
+            outcome = 'done' if completed else 'failed' if encoder.failed else 'cancelled'
             log_service.tts_queue_manager(
-                f"TTS Stream {stream_id}: {'complete' if completed else 'failed' if encoder.failed else 'cancelled'} | "
-                f"first audio {'n/a' if first_audio is None else f'{first_audio:.2f}s'}, "
-                f"total {time.perf_counter() - started_at:.2f}s | {encoder.fed_seconds:.1f}s audio, "
-                f"{len(renders)} segments, {mixer.chunks_mixed} chunks, "
-                f"{self.tts_generation_service.metrics['hits'] - hits_before} hits / "
-                f"{self.tts_generation_service.metrics['misses'] - misses_before} misses"
+                f"DJ voice for {listener}: {kind} {outcome} | {encoder.fed_seconds:.1f}s audio, "
+                f"first audio {'n/a' if first_audio is None else f'{first_audio:.1f}s'}, "
+                f"total {time.perf_counter() - started_at:.1f}s | clips: "
+                f"{self.tts_generation_service.metrics['hits'] - hits_before} from cache, "
+                f"{self.tts_generation_service.metrics['misses'] - misses_before} rendered | "
+                f"stream {stream_id[:8]}, {mixer.chunks_mixed} chunks"
             )
 
     async def _stream_clip(self, clip: PrerenderedClip, user_id: int, tts_type: str, stream_id: str,
@@ -460,8 +484,9 @@ class TTSQueueManager:
             else:
                 await encoder.cancel()
             log_service.tts_queue_manager(
-                f"TTS Stream {stream_id}: {tts_type} clip '{clip.label}' "
-                f"{'complete' if completed else 'cancelled'} | {encoder.fed_seconds:.1f}s audio")
+                f"DJ voice for {log_service.who(session_id, user_id=user_id)}: "
+                f"{TTS_TYPE_LABELS.get(tts_type, tts_type)} '{clip.label}' "
+                f"{'played' if completed else 'cancelled'} ({encoder.fed_seconds:.1f}s)")
 
     async def _feed(self, encoder: LiveStreamEncoder, chunks: List[Tuple[AudioSegment, Dict]], turn: _Turn):
         for audio, intensities in chunks:
@@ -573,8 +598,8 @@ class TTSQueueManager:
                 render.resolve(await generation.clip_rate(file_path) if file_path else NO_AUDIO)
                 if file_path:
                     audio_segment = await asyncio.to_thread(decode_mp3, file_path)
-                    log_service.tts_queue_manager(
-                        f"TTS: Successfully loaded user content: {os.path.basename(file_path)}")
+                    log_service.detail(
+                        f"TTS: Successfully loaded user content: {os.path.basename(file_path)}", "tts_queue_manager")
                 else:
                     log_service.error(f"TTS: User content file not found for input: {segment['content']}")
 
@@ -586,8 +611,8 @@ class TTSQueueManager:
                     )
 
                 speaker_intensities = {
-                    'terry': audio_process_mix if content_voice == 'terry' else None,
-                    'shaquille': audio_process_mix if content_voice == 'shaquille' else None,
+                    'tara': audio_process_mix if content_voice == 'tara' else None,
+                    'leo': audio_process_mix if content_voice == 'leo' else None,
                     'computer': audio_process_mix if content_voice == 'computer' else None
                 }
 

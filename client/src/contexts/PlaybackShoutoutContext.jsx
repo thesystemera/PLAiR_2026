@@ -5,6 +5,15 @@ import { useAuth } from './AuthContext'
 import { useUIState } from './UIStateContext'
 import { usePlayback } from './PlaybackContext'
 import { api } from '../lib/api'
+import { AudioInteractionManager } from '../lib/audioInteractionManager'
+
+function createShoutoutElement() {
+  const element = new Audio()
+  element.crossOrigin = 'anonymous'
+  element.preload = 'auto'
+  element.setAttribute('playsinline', '')
+  return element
+}
 
 const PlaybackShoutoutContext = createContext(null)
 const ShoutoutProgressContext = createContext(0)
@@ -25,6 +34,10 @@ export function PlaybackShoutoutProvider({ children }) {
   const playTokenRef = useRef(0)
 
   const [analyser, setAnalyser] = useState(null)
+  const [initialElement] = useState(() => (typeof Audio !== 'undefined' ? createShoutoutElement() : null))
+  const initialElementBoundRef = useRef(false)
+
+  useEffect(() => AudioInteractionManager.registerMediaElement(initialElement), [initialElement])
 
   useFFTProcessor(
     !!playingShoutout,
@@ -99,9 +112,8 @@ export function PlaybackShoutoutProvider({ children }) {
     if (!ready || !currentEngine?.context || !currentEngine.uiSoundsGain) return null
     if (playerRef.current && playerRef.current.context === currentEngine.context) return playerRef.current
 
-    const element = new Audio()
-    element.crossOrigin = 'anonymous'
-    element.preload = 'auto'
+    const element = initialElement && !initialElementBoundRef.current ? initialElement : createShoutoutElement()
+    initialElementBoundRef.current = true
     const context = currentEngine.context
     const source = context.createMediaElementSource(element)
     const analyserNode = context.createAnalyser()
@@ -114,7 +126,7 @@ export function PlaybackShoutoutProvider({ children }) {
     setAnalyser(analyserNode)
     logger.info('[PlaybackShoutout] ✅ Shoutout output connected to the shared audio engine')
     return playerRef.current
-  }, [audio])
+  }, [audio, initialElement])
 
   const haltElement = useCallback(() => {
     const player = playerRef.current

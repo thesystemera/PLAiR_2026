@@ -1254,7 +1254,7 @@ class AssetIntegrityService:
         shutil.copy2(info["json"], paths["backup_json"])
         os.replace(paths["work_mp3"], info["mp3"])
         os.replace(paths["work_json"], info["json"])
-        log_service.catalog(f"[AssetDoctor] Backed up previous shoutout render to {paths['backup_mp3']}")
+        log_service.detail(f"[AssetDoctor] Backed up previous shoutout render to {paths['backup_mp3']}", "catalog")
 
     async def _repair_shoutout_enhancement(self, subject: Subject, finding: Finding):
         info = subject.info
@@ -1333,18 +1333,33 @@ class AssetIntegrityService:
 
     @staticmethod
     def _summary_line(report: Dict[str, Any]) -> str:
+        actionable = []
+        waiting = {}
+        for key, bucket in sorted(report.get("counts", {}).items()):
+            found = [f"{status} {bucket[status]}" for status in ("missing", "invalid") if bucket.get(status)]
+            if found:
+                actionable.append(f"{key} {', '.join(found)}")
+            for status in ("blocked", "deferred"):
+                if bucket.get(status):
+                    waiting[status] = waiting.get(status, 0) + bucket[status]
+        repairs = report.get("repairs") or {}
+        repair_text = ", ".join(f"{k} {v}" for k, v in sorted(repairs.items())) if repairs else "none"
+        waiting_text = ", ".join(f"{count} {status}" for status, count in sorted(waiting.items()))
+        return (
+            f"[AssetDoctor] {report['reason']} scan: {report['tracks_scanned']} tracks, "
+            f"{report['shoutouts_scanned']} shoutouts in {report.get('duration_s', 0):.0f}s | "
+            f"to fix: {'; '.join(actionable) if actionable else 'nothing'}"
+            f"{f' | not auto-fixable: {waiting_text}' if waiting_text else ''} | repairs: {repair_text}"
+        )
+
+    @staticmethod
+    def _detail_line(report: Dict[str, Any]) -> str:
         parts = []
         for key, bucket in sorted(report.get("counts", {}).items()):
             found = [f"{status} {bucket[status]}" for status in ("missing", "invalid", "blocked", "deferred") if bucket.get(status)]
             uploads = f" ({bucket['uploads']} uploads)" if bucket.get("uploads") else ""
             parts.append(f"{key}: {', '.join(found)}{uploads}")
-        repairs = report.get("repairs") or {}
-        repair_text = ", ".join(f"{k} {v}" for k, v in sorted(repairs.items())) if repairs else "none"
-        return (
-            f"[AssetDoctor] {report['reason']} scan: {report['tracks_scanned']} tracks "
-            f"({report['uploads_scanned']} uploads), {report['shoutouts_scanned']} shoutouts in "
-            f"{report.get('duration_s', 0):.0f}s | issues: {'; '.join(parts) if parts else 'none'} | repairs: {repair_text}"
-        )
+        return f"[AssetDoctor] {report['reason']} scan detail: {'; '.join(parts) if parts else 'no issues'}"
 
     async def run_scan(self, reason: str = "manual", track_ids: Optional[Iterable[str]] = None,
                        repair: Optional[bool] = None, include_shoutouts: bool = True,
@@ -1393,6 +1408,7 @@ class AssetIntegrityService:
                 self._last_report = report
                 await self._save_state(include_cache=True)
             log_service.catalog(self._summary_line(report))
+            log_service.detail(self._detail_line(report), "catalog")
             return report
 
     def notify_tracks_changed(self, track_ids: Iterable[str], reason: str = "event"):

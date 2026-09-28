@@ -6,12 +6,13 @@ import { useFFTProcessor } from './useFFTProcessor'
 import { DJBroadcastChain } from '../lib/djBroadcastChain'
 import { DJStreamPlayer, decodeBase64Chunk } from '../lib/djStreamPlayer'
 import { logger } from '../lib/logger'
+import { AudioInteractionManager } from '../lib/audioInteractionManager'
 
 const DEFAULT_COLOR = { r: 147, g: 51, b: 234 }
 
 const SPEAKER_COLORS = {
-  terry: { r: 0, g: 128, b: 255 },
-  shaquille: { r: 255, g: 0, b: 128 },
+  tara: { r: 0, g: 128, b: 255 },
+  leo: { r: 255, g: 0, b: 128 },
   computer: { r: 0, g: 255, b: 0 },
   station: { r: 255, g: 176, b: 0 }
 }
@@ -48,7 +49,9 @@ function createVoiceElement() {
 }
 
 export function useDJAudioStream() {
-  const { reportEngineStatus, speakerColorRef, engineState, settingsState } = useUIState()
+  const { reportEngineStatus, speakerColorRef, engineState, settingsState, toastInfo } = useUIState()
+  const toastInfoRef = useRef(toastInfo)
+  useEffect(() => { toastInfoRef.current = toastInfo }, [toastInfo])
   const { audio, talkBreak } = usePlayback()
   const isActiveDevice = engineState.isActiveDevice
   const isMicRecording = engineState.isMicRecording
@@ -89,11 +92,19 @@ export function useDJAudioStream() {
       return chain
     }
 
+    const unregisterElement = AudioInteractionManager.registerMediaElement(element)
+    let unsupportedShown = false
     const player = new DJStreamPlayer({
       element,
       getOutput,
       onSpeakingChange: (speaking) => {
         if (!disposed) setIsDJSpeaking(speaking)
+      },
+      onBlocked: (retry) => AudioInteractionManager.onUserGesture(retry),
+      onUnsupported: () => {
+        if (unsupportedShown || disposed) return
+        unsupportedShown = true
+        toastInfoRef.current?.("The DJ's voice can't play in this browser yet. Your music keeps playing.", 5000, 'top', 'dj-unsupported')
       },
       log: logger
     })
@@ -102,6 +113,7 @@ export function useDJAudioStream() {
 
     return () => {
       disposed = true
+      unregisterElement()
       talkBreak?.detachPlayer(player)
       player.destroy()
       chain?.destroy()

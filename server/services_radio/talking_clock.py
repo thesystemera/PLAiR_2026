@@ -52,9 +52,13 @@ def hour_text(hour24: int) -> str:
 def minute_text(minute: int) -> str:
     if minute == 0:
         return "O'clock."
-    if minute < 10:
-        return f"Oh {ONES[minute]}."
-    return f"{number_words(minute).capitalize()}."
+    if minute == 15:
+        return "Quarter past"
+    if minute == 30:
+        return "Half past"
+    if minute == 1:
+        return "One minute past"
+    return f"{number_words(minute).capitalize()} minutes past"
 
 
 def daypart_options(hour24: int, minute: int) -> Tuple[str, ...]:
@@ -94,8 +98,12 @@ class ClockReading:
 
     @property
     def parts(self) -> List[Tuple[str, int]]:
-        parts = [(self.intro, GAP_AFTER_INTRO_MS), (hour_text(self.hour24), GAP_HOUR_MINUTE_MS),
-                 (minute_text(self.minute), GAP_BEFORE_DAYPART_MS if self.daypart else 0)]
+        last_gap = GAP_BEFORE_DAYPART_MS if self.daypart else 0
+        if self.minute == 0:
+            core = [(hour_text(self.hour24), GAP_HOUR_MINUTE_MS), (minute_text(self.minute), last_gap)]
+        else:
+            core = [(minute_text(self.minute), GAP_HOUR_MINUTE_MS), (hour_text(self.hour24), last_gap)]
+        parts = [(self.intro, GAP_AFTER_INTRO_MS)] + core
         if self.daypart:
             parts.append((self.daypart, 0))
         return parts
@@ -132,7 +140,7 @@ def parse_reading(texts: List[str]) -> Tuple[int, int, Optional[str]]:
     for text in texts:
         if hour12 is None and text in words:
             hour12 = words[text]
-        elif hour12 is not None and minute is None and text in minutes:
+        elif minute is None and text in minutes:
             minute = minutes[text]
         elif text in (MORNING, AFTERNOON, EVENING, TONIGHT, AM, PM, MIDNIGHT, MIDDAY):
             daypart = text
