@@ -13,6 +13,7 @@ Usage:
 """
 
 import ast
+import re
 from pathlib import Path
 from collections import defaultdict
 
@@ -38,8 +39,8 @@ IGNORE_PATTERNS = [
 
 # Decorators that indicate the function IS used (via framework)
 USED_DECORATORS = [
-    'app.get', 'app.post', 'app.put', 'app.delete', 'app.patch', 'app.websocket',
-    'router.get', 'router.post', 'router.put', 'router.delete',
+    'app.get', 'app.post', 'app.put', 'app.delete', 'app.patch', 'app.websocket', 'app.api_route',
+    'router.get', 'router.post', 'router.put', 'router.delete', 'router.patch', 'router.websocket', 'router.api_route',
     'registry.register',
     'staticmethod', 'classmethod', 'property',
     'asynccontextmanager', 'contextmanager',
@@ -160,7 +161,7 @@ def find_function_calls(base_path, search_dirs, function_names):
 
                 # Remove definition lines to avoid false matches
                 lines = [line for line in content.split('\n')
-                         if not re.match(r'\s*(async\s+)?def\s+', l)]
+                         if not re.match(r'\s*(async\s+)?def\s+', line)]
                 filtered_content = '\n'.join(lines)
 
                 for name in function_names:

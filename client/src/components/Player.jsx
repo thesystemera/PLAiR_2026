@@ -7,10 +7,35 @@ import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useDevicePicker, DevicePickerButton, DevicePickerBanner, DevicePickerPanel } from './DevicePicker'
 import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './BitratePicker'
 import { GenerationQueuePanel } from './GenerationQueuePanel'
+import { OnAirBadge } from './OnAirBadge'
 import { useArtwork, useUIState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useViewport } from '../contexts/ViewportContext'
 import { api } from '../lib/api'
+import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
+import { artPop, nudge } from '../lib/microMotion'
+
+const PLAYED_WINDOW_STYLE = {
+  transition: CSS_TRANSITION.progress
+}
+
+const PLAYED_CONTENT_STYLE = {
+  transition: CSS_TRANSITION.progress
+}
+
+const progressTranslate = (offsetPercent, width) => (
+  width > 0 ? `translateX(${offsetPercent * width / 100}px)` : `translateX(${offsetPercent}%)`
+)
+
+const PROGRESS_STYLE_WRITERS = {
+  window: (node, percent, width) => { node.style.transform = progressTranslate(percent - 100, width) },
+  content: (node, percent, width) => { node.style.transform = progressTranslate(100 - percent, width) },
+  playhead: (node, percent, width) => { node.style.transform = progressTranslate(percent - 100, width) },
+  bar: (node, percent) => { node.style.transform = `translateX(${percent - 100}%)` },
+}
+
+const PROGRESS_NODE_KEYS = Object.keys(PROGRESS_STYLE_WRITERS)
 
 function hslToRgb(h, s, l) {
   let r, g, b
@@ -68,30 +93,48 @@ function getDynamicSegmentColor(normalizedLoudness, trackEnergy, trackValence, s
   return hslToRgb(finalHue, finalSaturation, finalLightness)
 }
 
-const PlayerIconButton = memo(function PlayerIconButton({ onClick, onMouseEnter, onMouseLeave, title, children, style = {} }) {
+const PREVIOUS_THRESHOLD_MS = 3000
+
+const PLAY_BUTTON_HOVER = PRESETS.hoverPressLarge.whileHover
+
+const PlayerIconButton = memo(function PlayerIconButton({ onClick, onMouseEnter, onMouseLeave, title, children, direction = null, style = {} }) {
+  const handlePointerDown = useCallback((e) => {
+    if (direction) nudge(e.currentTarget.firstElementChild, direction)
+    onClick(e)
+  }, [direction, onClick])
+
   return (
     <button
-      onPointerDown={onClick}
-      className="p-2 rounded-full transition-all hover:scale-110"
+      onPointerDown={handlePointerDown}
+      className="ui-tap ui-hover-lg p-2 rounded-full"
       style={{
         backgroundColor: 'transparent',
-        transition: 'all 700ms ease-in-out, transform 150ms ease-in-out',
+        transition: CSS_TRANSITION.theme,
         ...style
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       title={title}
+      aria-label={title}
     >
       {children}
     </button>
   )
 })
 
-const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick }) {
+const PLAYER_SAFE_AREA_STYLE = {
+  transition: CSS_TRANSITION.themeBorder,
+  paddingBottom: 'var(--safe-bottom)',
+  paddingLeft: 'var(--safe-left)',
+  paddingRight: 'var(--safe-right)'
+}
+
+const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick, sizeClass }) {
   const [layerA, setLayerA] = useState(null)
   const [layerB, setLayerB] = useState(null)
   const [frontLayer, setFrontLayer] = useState('A')
   const previousArtworkUrlRef = useRef(null)
+  const containerRef = useRef(null)
 
   useEffect(() => {
     if (url && url !== previousArtworkUrlRef.current) {
@@ -99,13 +142,17 @@ const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick }) {
         url: url,
         hasArtwork: hasArtwork
       }
+      const swapTo = (layer) => {
+        setFrontLayer(layer)
+        artPop(containerRef.current)
+      }
 
       if (frontLayer === 'A') {
         queueMicrotask(() => setLayerB(newImage))
-        setTimeout(() => setFrontLayer('B'), 50)
+        setTimeout(() => swapTo('B'), 50)
       } else {
         queueMicrotask(() => setLayerA(newImage))
-        setTimeout(() => setFrontLayer('A'), 50)
+        setTimeout(() => swapTo('A'), 50)
       }
 
       previousArtworkUrlRef.current = url
@@ -113,11 +160,12 @@ const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick }) {
   }, [url, hasArtwork, frontLayer])
 
   const renderLayer = (layer, isFront) => (
-    <div className={`absolute inset-0 transition-opacity duration-700 ${isFront ? 'opacity-100' : 'opacity-0'}`}>
+    <div className={`absolute inset-0 transition-opacity duration-theme ${isFront ? 'opacity-100' : 'opacity-0'}`}>
       {layer && (
         <img
           src={layer.url}
           alt="Album art"
+          decoding="async"
           className="w-full h-full object-cover"
         />
       )}
@@ -128,10 +176,12 @@ const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick }) {
 
   return (
     <div
-      className="w-10 h-10 md:w-12 md:h-12 rounded-lg flex-shrink-0 cursor-pointer hover:opacity-80 active:opacity-80 overflow-hidden relative"
+      ref={containerRef}
+      data-player-artwork
+      className={`${sizeClass} rounded-lg flex-shrink-0 cursor-pointer hover:opacity-80 active:opacity-80 overflow-hidden relative`}
       style={{
         border: `1px solid ${getBorder(0.2)}`,
-        transition: 'all 700ms ease-in-out, opacity 150ms ease-in-out'
+        transition: CSS_TRANSITION.themeOpacity
       }}
       onClick={onClick}
     >
@@ -167,62 +217,113 @@ const StaticWaveformLayer = memo(function StaticWaveformLayer({ bars, variant })
   )
 })
 
-export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkClick }) {
+export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playback = usePlayback()
   const { togglePlay, next, previous, audio } = playback
-  const { audioFeatures, audioState, engineState, engineRef, settingsState, publishSettings, toastSuccess, toastError, isScreenVisible } = useUIState()
+  const { audioFeatures, audioState, engineState, engineRef, settingsState, publishSettings, toastSuccess, toastError, isScreenVisible, reportInterfaceState } = useUIState()
   const { currentTrack, is_playing, isCrossfading } = engineState
   const { user, refreshUser } = useAuth()
-  const { getGradient, getAccentColor, getGrey800, getGrey500, getBorder, getWhite, getGrey400, getErrorColor } = useDynamicTheme()
+  const { isPhoneLandscape } = useViewport()
+  const compact = isPhoneLandscape
+  const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
+  const { getGradient, getAccentColor, getGrey800, getGrey500, getWhite, getGrey400, getErrorColor } = useDynamicTheme()
   const artworkUrl = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [bufferedPercent, setBufferedPercent] = useState(0)
-  const [progressPercent, setProgressPercent] = useState(0)
+  const [isPastRestartThreshold, setIsPastRestartThreshold] = useState(false)
+  const progressPercentRef = useRef(0)
+  const progressWidthRef = useRef(0)
+  const progressResizeObserverRef = useRef(null)
+  const progressNodesRef = useRef({ window: null, content: null, playhead: null, bar: null })
+  const writeProgressStyles = useCallback(() => {
+    const nodes = progressNodesRef.current
+    for (let i = 0; i < PROGRESS_NODE_KEYS.length; i++) {
+      const key = PROGRESS_NODE_KEYS[i]
+      if (nodes[key]) PROGRESS_STYLE_WRITERS[key](nodes[key], progressPercentRef.current, progressWidthRef.current)
+    }
+  }, [])
+  const progressRefCallbacks = useMemo(() => {
+    const callbacks = {}
+    PROGRESS_NODE_KEYS.forEach(key => {
+      callbacks[key] = (node) => {
+        progressNodesRef.current[key] = node
+        if (node) PROGRESS_STYLE_WRITERS[key](node, progressPercentRef.current, progressWidthRef.current)
+        if (key !== 'window') return
+        progressResizeObserverRef.current?.disconnect()
+        progressResizeObserverRef.current = null
+        if (!node) {
+          progressWidthRef.current = 0
+          return
+        }
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver((entries) => {
+          const width = entries[entries.length - 1].contentRect.width
+          if (width === progressWidthRef.current) return
+          progressWidthRef.current = width
+          writeProgressStyles()
+        })
+        observer.observe(node)
+        progressResizeObserverRef.current = observer
+      }
+    })
+    return callbacks
+  }, [writeProgressStyles])
+  const progressTimeRef = useRef(null)
+  const progressMsRef = useRef(0)
 
   const devicePicker = useDevicePicker()
   const bitratePicker = useBitratePicker(playback.reloadCurrentTrackQuality)
   const playerRef = useRef(null)
 
   useEffect(() => {
-    if (!playerRef.current || !onHeightChange) return
+    if (!playerRef.current) return
 
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const height = entry.contentRect.height
-        onHeightChange(height)
+        const borderBox = entry.borderBoxSize?.[0]
+        reportInterfaceState({ playerHeight: borderBox ? borderBox.blockSize : entry.target.offsetHeight })
       }
     })
 
     resizeObserver.observe(playerRef.current)
-    onHeightChange(playerRef.current.offsetHeight)
+    reportInterfaceState({ playerHeight: playerRef.current.offsetHeight })
 
     return () => {
       resizeObserver.disconnect()
     }
-  }, [onHeightChange])
+  }, [reportInterfaceState])
 
-  // Progress updates at 10fps - matches 100ms CSS transition
+  const durationMs = currentTrack?.duration_ms || currentTrack?.track_info?.duration || 0
+  const actualDuration = audioFeatures?.duration ? audioFeatures.duration * 1000 : durationMs
+
   useEffect(() => {
     if (!isScreenVisible) return
 
     const updateProgress = () => {
       const progress = engineRef.current.progress_ms || 0
       const duration = currentTrack?.duration_ms || 0
-      const latestProgress = duration > 0 ? Math.min(100, Math.max(0, (progress / duration) * 100)) : 0
-      setProgressPercent(latestProgress)
+      const percent = duration > 0 ? Math.min(100, Math.max(0, (progress / duration) * 100)) : 0
+      const displayMs = actualDuration ? Math.floor((percent / 100) * actualDuration) : 0
+      progressMsRef.current = displayMs
+
+      if (percent !== progressPercentRef.current) {
+        progressPercentRef.current = percent
+        writeProgressStyles()
+      }
+      const timeNode = progressTimeRef.current
+      if (timeNode) {
+        const text = formatDuration(displayMs)
+        if (timeNode.textContent !== text) timeNode.textContent = text
+      }
+      setIsPastRestartThreshold(displayMs >= PREVIOUS_THRESHOLD_MS)
     }
 
     updateProgress()
     const intervalId = setInterval(updateProgress, 100)
 
     return () => clearInterval(intervalId)
-  }, [engineRef, currentTrack, isScreenVisible])
-
-  const durationMs = currentTrack?.duration_ms || currentTrack?.track_info?.duration || 0
-  const actualDuration = audioFeatures?.duration ? audioFeatures.duration * 1000 : durationMs
-  const progress_ms = actualDuration ? Math.floor((progressPercent / 100) * actualDuration) : 0
-  const PREVIOUS_THRESHOLD_MS = 3000
+  }, [engineRef, currentTrack, isScreenVisible, actualDuration, writeProgressStyles])
 
   const handleSeek = useCallback((e) => {
     if (!durationMs) return
@@ -260,19 +361,15 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
       document.removeEventListener('mouseup', handleMouseUp)
     }
 
-    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mousemove', handleMouseMove, { passive: true })
     document.addEventListener('mouseup', handleMouseUp)
   }, [updateVolume])
 
   const handlePrevious = useCallback((e) => {
     e?.preventDefault()
     triggerHaptic('double')
-    if (progress_ms >= PREVIOUS_THRESHOLD_MS) {
-      onSeek(0)
-    } else {
-      previous()
-    }
-  }, [progress_ms, onSeek, previous])
+    previous()
+  }, [previous])
 
   const handleNext = useCallback((e) => {
     e?.preventDefault()
@@ -327,7 +424,7 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
       })
       if (refreshUser) await refreshUser()
       toastSuccess(message)
-    } catch (err) {
+    } catch {
       publishSettings({ ttsMuted: user?.tts_muted ?? false, notificationsMuted: user?.notifications_muted ?? false })
       toastError('Failed to toggle sounds')
     }
@@ -371,7 +468,7 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
           const bufferedEnd = element.buffered.end(element.buffered.length - 1)
           const percent = Math.min(100, (bufferedEnd / (actualDuration / 1000)) * 100)
           setBufferedPercent(percent)
-        } catch (error) {
+        } catch {
           setBufferedPercent(0)
         }
       } else {
@@ -426,6 +523,270 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
       })
   }, [audioFeatures, durationMs])
 
+  const trackInfo = currentTrack ? (
+    <>
+      <TrackArtwork
+        url={artworkUrl}
+        hasArtwork={currentTrack.has_artwork}
+        onClick={onArtworkClick}
+        sizeClass={controlSizeClass}
+      />
+      <button
+        onClick={handleToggleSounds}
+        className={`ui-tap ui-hover relative rounded-lg cursor-pointer flex flex-shrink-0 items-center justify-center ${controlSizeClass}`}
+        style={{
+          background: getGradient(0.2),
+          border: `1px solid ${soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.3)}`,
+          transition: CSS_TRANSITION.theme,
+          color: soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.9)
+        }}
+        title={soundState.title}
+        aria-label={soundState.title}
+      >
+        {soundState.icon === 'volume' && <Volume2 size={16} className={compact ? undefined : 'md:hidden'} />}
+        {soundState.icon === 'bell' && <Bell size={16} className={compact ? undefined : 'md:hidden'} />}
+        {soundState.icon === 'muted' && <VolumeX size={16} className={compact ? undefined : 'md:hidden'} />}
+        {!compact && soundState.icon === 'volume' && <Volume2 size={20} className="hidden md:block" />}
+        {!compact && soundState.icon === 'bell' && <Bell size={20} className="hidden md:block" />}
+        {!compact && soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
+      </button>
+      <div className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
+        <div
+          className={`font-semibold truncate transition-colors duration-theme ${compact ? 'text-sm' : 'text-base'}`}
+          style={{ color: getWhite() }}
+        >
+          {currentTrack.title || currentTrack.generation_params?.title || 'Unknown'}
+        </div>
+        <div
+          className={`truncate transition-colors duration-theme ${compact ? 'text-xs' : 'text-sm'}`}
+          style={{ color: getGrey400() }}
+        >
+          {currentTrack.generation_params?.style_canonical || currentTrack.generation_params?.style || currentTrack.style || ''}
+        </div>
+      </div>
+    </>
+  ) : null
+
+  const transportControls = (
+    <div className={`flex items-center justify-center ${compact ? 'gap-1 flex-shrink-0' : 'gap-2'}`}>
+      <div>
+        <PlayerIconButton
+          onClick={handlePrevious}
+          onMouseEnter={handleMouseEnterButton}
+          onMouseLeave={handleMouseLeaveButton}
+          direction="left"
+          title={isPastRestartThreshold ? 'Restart track' : 'Previous track'}
+        >
+          <SkipBack size={20} />
+        </PlayerIconButton>
+      </div>
+
+      <motion.div
+        animate={isCrossfading ? {
+          scale: [1, 1.05, 1],
+          transition: MOTION.pulse
+        } : { scale: 1 }}
+        whileHover={PLAY_BUTTON_HOVER}
+      >
+      <button
+        onPointerDown={handleTogglePlay}
+        className={`ui-tap ${compact ? 'p-2.5' : 'p-3'} text-black rounded-full shadow-lg`}
+        style={{
+          background: getAccentColor(1),
+          transition: CSS_TRANSITION.themeBackground
+        }}
+        title={is_playing ? 'Pause' : 'Play'}
+        aria-label={is_playing ? 'Pause' : 'Play'}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {is_playing ? (
+            <motion.div
+              key="pause"
+              {...PRESETS.iconSwap}
+            >
+              <Pause size={24} fill="currentColor" />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="play"
+              {...PRESETS.iconSwap}
+            >
+              <Play size={24} fill="currentColor" className="ml-0.5" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </button>
+      </motion.div>
+
+      <div>
+        <PlayerIconButton
+          onClick={handleNext}
+          onMouseEnter={handleMouseEnterButton}
+          onMouseLeave={handleMouseLeaveButton}
+          direction="right"
+          title="Next track"
+        >
+          <SkipForward size={20} />
+        </PlayerIconButton>
+      </div>
+    </div>
+  )
+
+  const progressRow = currentTrack ? (
+    <div className={`relative flex items-center ${compact ? 'gap-1.5 flex-1 min-w-0' : 'gap-2'}`}>
+      <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none px-12">
+        <OnAirBadge variant="bar" />
+      </div>
+      <span
+        ref={progressTimeRef}
+        className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-theme"
+        style={{ color: getGrey400() }}
+      >
+        {formatDuration(0)}
+      </span>
+      {audioFeatures ? (
+        <div
+          className={`flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          onClick={handleSeek}
+        >
+          <div
+            className="absolute inset-0 bg-yellow-500/20 origin-left"
+            style={{ transform: `scaleX(${bufferedPercent / 100})`, transition: CSS_TRANSITION.buffered }}
+          />
+
+          <StaticWaveformLayer bars={waveformBars} variant="unplayed" />
+
+          <div ref={progressRefCallbacks.window} className="absolute inset-0 overflow-hidden will-change-transform" style={PLAYED_WINDOW_STYLE}>
+            <div ref={progressRefCallbacks.content} className="absolute inset-0 will-change-transform" style={PLAYED_CONTENT_STYLE}>
+              <StaticWaveformLayer bars={waveformBars} variant="played" />
+            </div>
+          </div>
+
+          <div ref={progressRefCallbacks.playhead} className="absolute inset-0 pointer-events-none z-20">
+            <div
+              className="absolute right-0 top-0 bottom-0 w-0.5 shadow-lg"
+              style={{
+                backgroundColor: getWhite()
+              }}
+            />
+          </div>
+        </div>
+      ) : (
+        <div
+          className="flex-1 h-1 rounded-full cursor-pointer group relative overflow-hidden"
+          onClick={handleSeek}
+          style={{
+            backgroundColor: getGrey800(),
+            transition: CSS_TRANSITION.themeBackgroundColor
+          }}
+        >
+          <div
+            className="absolute inset-0 rounded-full origin-left"
+            style={{
+              transform: `scaleX(${bufferedPercent / 100})`,
+              backgroundColor: getGrey500(),
+              transition: CSS_TRANSITION.themeBackgroundScale
+            }}
+          />
+          <div
+            ref={progressRefCallbacks.bar}
+            className="absolute inset-0 rounded-full"
+            style={{
+              background: getGradient(1),
+              transition: CSS_TRANSITION.themeBackgroundTransform
+            }}
+          >
+            <div
+              className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition"
+              style={{
+                backgroundColor: getWhite()
+              }}
+            />
+          </div>
+        </div>
+      )}
+      <span
+        className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-theme"
+        style={{ color: getGrey400() }}
+      >
+        {formatDuration(durationMs)}
+      </span>
+    </div>
+  ) : null
+
+  const sideControls = (
+    <div className={`flex items-center justify-end min-w-0 ${compact ? 'gap-1.5 flex-shrink-0' : 'gap-1.5 md:gap-3'}`}>
+      <div className={`${compact ? 'hidden' : 'hidden md:flex'} items-center gap-2 flex-1 max-w-[120px]`}>
+        <PlayerIconButton
+          onClick={handleMuteToggle}
+          onMouseEnter={handleMouseEnterButton}
+          onMouseLeave={handleMouseLeaveButton}
+          title={isMuted ? 'Unmute' : 'Mute'}
+        >
+          {isMuted || volume === 0 ? (
+            <VolumeX size={20} />
+          ) : (
+            <Volume2 size={20} />
+          )}
+        </PlayerIconButton>
+
+        <div
+          className="flex-1 h-1 rounded-full cursor-pointer group relative"
+          onMouseDown={handleVolumeMouseDown}
+          style={{
+            backgroundColor: getGrey800(),
+            transition: CSS_TRANSITION.themeBackgroundColor
+          }}
+        >
+          <div
+            className="h-full rounded-full relative"
+            style={{
+              width: `${isMuted ? 0 : volume * 100}%`,
+              backgroundColor: getWhite(),
+              transition: CSS_TRANSITION.themeBackgroundColor
+            }}
+          >
+            <div
+              className={`absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-lg transition ${
+                isDraggingVolume ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100'
+              }`}
+              style={{
+                backgroundColor: getWhite(),
+                transition: CSS_TRANSITION.themeAll
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="relative">
+        <BitratePickerButton
+          currentBitrate={bitratePicker.currentBitrate}
+          effectiveBitrate={bitratePicker.effectiveBitrate}
+          dataSaverMode={bitratePicker.dataSaverMode}
+          isOpen={bitratePicker.isOpen}
+          setIsOpen={bitratePicker.setIsOpen}
+        />
+        {audioState.isCached && (
+          <div
+            className="absolute -top-1 -right-1 cursor-help z-10 pointer-events-none"
+            title="Playing from local cache"
+          >
+            <div className="w-4 h-4 rounded-full flex items-center justify-center bg-green-500/90 shadow-lg">
+              <HardDrive size={10} className="text-white" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {devicePicker.isAuthenticated && (
+        <DevicePickerButton
+          {...devicePicker}
+        />
+      )}
+    </div>
+  )
+
   return (
     <>
       <DevicePickerBanner
@@ -444,9 +805,7 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
           animate={{ y: 0 }}
           exit={{ y: 100 }}
           className="fixed bottom-0 left-0 right-0 z-50 overflow-hidden"
-          style={{
-            transition: 'border-color 700ms ease-in-out'
-          }}
+          style={PLAYER_SAFE_AREA_STYLE}
           onClick={(e) => e.stopPropagation()}
         >
 
@@ -475,278 +834,33 @@ export const Player = memo(function Player({ onSeek, onHeightChange, onArtworkCl
             isAuthenticated={bitratePicker.isAuthenticated}
           />
           <GenerationQueuePanel />
-          <div className="px-3 py-2 md:px-4 md:py-3">
+          <div className={compact ? 'px-3 py-1.5' : 'px-3 py-2 md:px-4 md:py-3'}>
             <div className="max-w-screen-2xl mx-auto">
               {!currentTrack ? (
-                <div className="flex items-center justify-center text-gray-500 py-2">
+                <div className="ui-fade-in flex items-center justify-center text-gray-500 py-2">
                   Select a track to start playing
+                </div>
+              ) : compact ? (
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 min-w-0 w-[30%] max-w-[16rem] flex-shrink-0">
+                    {trackInfo}
+                  </div>
+                  {transportControls}
+                  {progressRow}
+                  {sideControls}
                 </div>
               ) : (
                 <div className="flex flex-col gap-1 md:gap-2">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-700"
-                      style={{ color: getGrey400() }}
-                    >
-                      {formatDuration(progress_ms)}
-                    </span>
-                    {audioFeatures ? (
-                      <div
-                        className="flex-1 h-8 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50"
-                        onClick={handleSeek}
-                      >
-                        <div
-                          className="absolute inset-0 bg-yellow-500/20"
-                          style={{ width: `${bufferedPercent}%`, transition: 'width 0.3s ease' }}
-                        />
-
-                        <StaticWaveformLayer bars={waveformBars} variant="unplayed" />
-
-                        <div
-                          className="absolute inset-0 will-change-[clip-path]"
-                          style={{
-                            clipPath: `inset(0 ${100 - progressPercent}% 0 0)`,
-                            transition: 'clip-path 0.1s linear'
-                          }}
-                        >
-                           <StaticWaveformLayer bars={waveformBars} variant="played" />
-                        </div>
-
-                          <div className="absolute inset-y-0 left-0 pointer-events-none z-20" style={{ width: `${progressPercent}%` }}>
-                          <div
-                            className="absolute right-0 top-0 bottom-0 w-0.5 shadow-lg"
-                            style={{
-                              backgroundColor: getWhite()
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        className="flex-1 h-1 rounded-full cursor-pointer group relative overflow-hidden"
-                        onClick={handleSeek}
-                        style={{
-                          backgroundColor: getGrey800(),
-                          transition: 'background-color 700ms ease-in-out'
-                        }}
-                      >
-                        <div
-                          className="absolute inset-0 rounded-full"
-                          style={{
-                            width: `${bufferedPercent}%`,
-                            backgroundColor: getGrey500(),
-                            transition: 'all 700ms ease-in-out'
-                          }}
-                        />
-                        <motion.div
-                          className="absolute inset-0 rounded-full"
-                          animate={{
-                            width: `${progressPercent}%`,
-                          }}
-                          style={{
-                            background: getGradient(1),
-                            transition: 'background 700ms ease-in-out'
-                          }}
-                          transition={{
-                            width: { duration: 0.1 }
-                          }}
-                        >
-                          <div
-                            className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition"
-                            style={{
-                              backgroundColor: getWhite()
-                            }}
-                          />
-                        </motion.div>
-                      </div>
-                    )}
-                    <span
-                      className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-700"
-                      style={{ color: getGrey400() }}
-                    >
-                      {formatDuration(durationMs)}
-                    </span>
-                  </div>
+                  {progressRow}
 
                   <div className="grid grid-cols-3 items-center gap-3 md:gap-4">
                     <div className="flex items-center gap-2 min-w-0">
-                      <TrackArtwork
-                        url={artworkUrl}
-                        hasArtwork={currentTrack.has_artwork}
-                        onClick={onArtworkClick}
-                      />
-                      <button
-                        onClick={handleToggleSounds}
-                        className="relative rounded-lg cursor-pointer hover:scale-105 flex items-center justify-center h-10 w-10 md:h-12 md:w-12"
-                        style={{
-                          background: getGradient(0.2),
-                          border: `1px solid ${soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.3)}`,
-                          transition: 'all 700ms ease-in-out, transform 150ms ease-in-out',
-                          color: soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.9)
-                        }}
-                        title={soundState.title}
-                      >
-                        {soundState.icon === 'volume' && <Volume2 size={16} className="md:hidden" />}
-                        {soundState.icon === 'bell' && <Bell size={16} className="md:hidden" />}
-                        {soundState.icon === 'muted' && <VolumeX size={16} className="md:hidden" />}
-                        {soundState.icon === 'volume' && <Volume2 size={20} className="hidden md:block" />}
-                        {soundState.icon === 'bell' && <Bell size={20} className="hidden md:block" />}
-                        {soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
-                      </button>
-                      <div className="hidden md:flex flex-1 min-w-0 flex-col">
-                        <div
-                          className="font-semibold truncate text-base transition-colors duration-700"
-                          style={{ color: getWhite() }}
-                        >
-                          {currentTrack.title || currentTrack.generation_params?.title || 'Unknown'}
-                        </div>
-                        <div
-                          className="text-sm truncate transition-colors duration-700"
-                          style={{ color: getGrey400() }}
-                        >
-                          {currentTrack.generation_params?.style_canonical || currentTrack.generation_params?.style || currentTrack.style || ''}
-                        </div>
-                      </div>
+                      {trackInfo}
                     </div>
 
-                    <div className="flex items-center justify-center gap-2">
-                      <motion.div
-                        animate={isCrossfading ? { scale: 0.85, opacity: 0.6 } : { scale: 1, opacity: 1 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        <PlayerIconButton
-                          onClick={handlePrevious}
-                          onMouseEnter={handleMouseEnterButton}
-                          onMouseLeave={handleMouseLeaveButton}
-                          title={progress_ms >= PREVIOUS_THRESHOLD_MS ? 'Restart track' : 'Previous track'}
-                        >
-                          <SkipBack size={20} />
-                        </PlayerIconButton>
-                      </motion.div>
+                    {transportControls}
 
-                      <motion.button
-                        onPointerDown={handleTogglePlay}
-                        className="p-3 text-black hover:scale-110 rounded-full shadow-lg"
-                        style={{
-                          background: getAccentColor(1),
-                          transition: 'background 700ms ease-in-out'
-                        }}
-                        animate={isCrossfading ? {
-                          scale: [1, 1.05, 1],
-                          transition: { duration: 0.8, repeat: Infinity, ease: "easeInOut" }
-                        } : { scale: 1 }}
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.95 }}
-                        title={is_playing ? 'Pause' : 'Play'}
-                      >
-                        <AnimatePresence mode="wait">
-                          {is_playing ? (
-                            <motion.div
-                              key="pause"
-                              initial={{ scale: 0 }}
-                              animate={{ scale: 1 }}
-                              exit={{ scale: 0 }}
-                            >
-                              <Pause size={24} fill="currentColor" />
-                            </motion.div>
-                          ) : (
-                            <motion.div
-                              key="play"
-                              initial={{ scale: 0 }}
-                              animate={{ scale: 1 }}
-                              exit={{ scale: 0 }}
-                            >
-                              <Play size={24} fill="currentColor" className="ml-0.5" />
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </motion.button>
-
-                      <motion.div
-                        animate={isCrossfading ? { scale: 0.85, opacity: 0.6 } : { scale: 1, opacity: 1 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        <PlayerIconButton
-                          onClick={handleNext}
-                          onMouseEnter={handleMouseEnterButton}
-                          onMouseLeave={handleMouseLeaveButton}
-                          title="Next track"
-                        >
-                          <SkipForward size={20} />
-                        </PlayerIconButton>
-                      </motion.div>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-1.5 md:gap-3 min-w-0">
-                      <div className="hidden md:flex items-center gap-2 flex-1 max-w-[120px]">
-                        <PlayerIconButton
-                          onClick={handleMuteToggle}
-                          onMouseEnter={handleMouseEnterButton}
-                          onMouseLeave={handleMouseLeaveButton}
-                          title={isMuted ? 'Unmute' : 'Mute'}
-                        >
-                          {isMuted || volume === 0 ? (
-                            <VolumeX size={20} />
-                          ) : (
-                            <Volume2 size={20} />
-                          )}
-                        </PlayerIconButton>
-
-                        <div
-                          className="flex-1 h-1 rounded-full cursor-pointer group relative"
-                          onMouseDown={handleVolumeMouseDown}
-                          style={{
-                            backgroundColor: getGrey800(),
-                            transition: 'background-color 700ms ease-in-out'
-                          }}
-                        >
-                          <div
-                            className="h-full rounded-full relative"
-                            style={{
-                              width: `${isMuted ? 0 : volume * 100}%`,
-                              backgroundColor: getWhite(),
-                              transition: 'background-color 700ms ease-in-out'
-                            }}
-                          >
-                            <div
-                              className={`absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full shadow-lg transition ${
-                                isDraggingVolume ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100'
-                              }`}
-                              style={{
-                                backgroundColor: getWhite(),
-                                transition: 'all 700ms ease-in-out'
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="relative">
-                        <BitratePickerButton
-                          currentBitrate={bitratePicker.currentBitrate}
-                          effectiveBitrate={bitratePicker.effectiveBitrate}
-                          dataSaverMode={bitratePicker.dataSaverMode}
-                          isOpen={bitratePicker.isOpen}
-                          setIsOpen={bitratePicker.setIsOpen}
-                        />
-                        {audioState.isCached && (
-                          <div
-                            className="absolute -top-1 -right-1 cursor-help z-10 pointer-events-none"
-                            title="Playing from local cache"
-                          >
-                            <div className="w-4 h-4 rounded-full flex items-center justify-center bg-green-500/90 shadow-lg">
-                              <HardDrive size={10} className="text-white" />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {devicePicker.isAuthenticated && (
-                        <DevicePickerButton
-                          {...devicePicker}
-                        />
-                      )}
-                    </div>
+                    {sideControls}
                   </div>
                 </div>
               )}

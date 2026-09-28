@@ -1,6 +1,8 @@
-const STATIC_CACHE = 'plair-static-v2';
-const DYNAMIC_CACHE = 'plair-dynamic-v2';
+const STATIC_CACHE = 'plair-static-v4';
+const DYNAMIC_CACHE = 'plair-dynamic-v3';
 const AUDIO_CACHE = 'plair-audio-v2';
+const DYNAMIC_CACHE_MAX_ENTRIES = 150;
+const CURRENT_CACHES = [STATIC_CACHE, DYNAMIC_CACHE, AUDIO_CACHE];
 
 const STATIC_ASSETS = [
   '/',
@@ -18,7 +20,7 @@ self.addEventListener('install', (event) => {
     caches.open(STATIC_CACHE).then((cache) => {
       console.log('[SW] Caching static assets');
       return cache.addAll(STATIC_ASSETS);
-    })
+    }).then(() => self.skipWaiting())
   );
 });
 
@@ -28,7 +30,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== STATIC_CACHE && cacheName !== DYNAMIC_CACHE && cacheName !== AUDIO_CACHE) {
+          if (cacheName.startsWith('plair-') && !CURRENT_CACHES.includes(cacheName)) {
             console.log('[SW] Deleting old cache:', cacheName);
             return caches.delete(cacheName);
           }
@@ -50,6 +52,10 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.pathname.startsWith('/api/stream/')) {
+    if (url.searchParams.get('render') === '1') {
+      event.respondWith(fetch(request));
+      return;
+    }
     event.respondWith(handleAudioRequest(event));
     return;
   }
@@ -58,37 +64,89 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+  if (url.origin !== self.location.origin) {
+    return;
+  }
 
-      return fetch(request).then((response) => {
-        if (!response || response.status !== 200 || response.type === 'error') {
-          return response;
-        }
+  if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    event.respondWith(handleNavigationRequest(event));
+    return;
+  }
 
-        const responseToCache = response.clone();
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(handleHashedAssetRequest(event));
+    return;
+  }
 
-        const cacheUpdate = caches.open(DYNAMIC_CACHE).then((cache) => {
-          return cache.put(request, responseToCache);
-        });
-        event.waitUntil(cacheUpdate);
-
-        return response;
-      }).catch(() => {
-        if (request.destination === 'document') {
-          return caches.match('/index.html');
-        }
-        if (request.destination === 'audio' || url.pathname.includes('/audio/')) {
-          return new Response('', { status: 503, statusText: 'Offline' });
-        }
-        return new Response('', { status: 503, statusText: 'Offline' });
-      });
-    })
-  );
+  event.respondWith(handleNetworkFirstRequest(event));
 });
+
+function isCacheableResponse(response) {
+  return response && response.status === 200 && response.type !== 'error' && response.type !== 'opaque';
+}
+
+async function trimCache(cacheName, maxEntries) {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  if (keys.length <= maxEntries) return;
+  await Promise.all(keys.slice(0, keys.length - maxEntries).map((key) => cache.delete(key)));
+}
+
+function putInCache(event, cacheName, request, response) {
+  const cacheUpdate = caches.open(cacheName)
+    .then((cache) => cache.put(request, response))
+    .then(() => (cacheName === DYNAMIC_CACHE ? trimCache(DYNAMIC_CACHE, DYNAMIC_CACHE_MAX_ENTRIES) : undefined))
+    .catch((error) => console.warn('[SW] Cache write failed:', error));
+  event.waitUntil(cacheUpdate);
+}
+
+function offlineResponse() {
+  return new Response('', { status: 503, statusText: 'Offline' });
+}
+
+async function handleNavigationRequest(event) {
+  const { request } = event;
+  try {
+    const response = await fetch(request);
+    if (isCacheableResponse(response)) {
+      putInCache(event, STATIC_CACHE, '/index.html', response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await caches.match('/index.html') || await caches.match('/');
+    return cached || offlineResponse();
+  }
+}
+
+async function handleHashedAssetRequest(event) {
+  const { request } = event;
+  const cached = await caches.match(request);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(request);
+    if (isCacheableResponse(response)) {
+      putInCache(event, STATIC_CACHE, request, response.clone());
+    }
+    return response;
+  } catch {
+    return offlineResponse();
+  }
+}
+
+async function handleNetworkFirstRequest(event) {
+  const { request } = event;
+  try {
+    const response = await fetch(request);
+    if (isCacheableResponse(response)) {
+      putInCache(event, DYNAMIC_CACHE, request, response.clone());
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    return cached || offlineResponse();
+  }
+}
 
 async function handleAudioRequest(event) {
   const request = event.request;

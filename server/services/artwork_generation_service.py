@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 import torch
@@ -6,6 +8,9 @@ from PIL import Image
 from services import log_service
 from services.base_service import SingletonService
 from config import settings
+from models_global import gpu_lease, raise_if_cuda_oom, GPUOutOfMemoryError
+
+Image.MAX_IMAGE_PIXELS = 40_000_000
 
 class ArtworkGenerationService(SingletonService):
 
@@ -19,7 +24,10 @@ class ArtworkGenerationService(SingletonService):
         self._img2img_pipe = None
         self._device = None
         self._model_initialized = False
-        self._model_loading = False
+        self._load_lock = threading.RLock()
+        self._use_lock = asyncio.Lock()
+        self._last_used = time.monotonic()
+        self._idle_task: Optional[asyncio.Task] = None
         self._initialized = True
 
     async def initialize(self):
@@ -30,15 +38,51 @@ class ArtworkGenerationService(SingletonService):
         log_service.system("ArtworkGenerationService initialized (model loads on-demand)")
         self._model_initialized = True
 
+    def _mark_used(self):
+        self._last_used = time.monotonic()
+        if settings.GPU_IDLE_UNLOAD_MINUTES <= 0:
+            return
+        if self._idle_task is not None and not self._idle_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._idle_task = loop.create_task(self._idle_unload_loop())
+
+    async def _idle_unload_loop(self):
+        idle_seconds = settings.GPU_IDLE_UNLOAD_MINUTES * 60
+        while self._pipe is not None:
+            await asyncio.sleep(min(60.0, idle_seconds))
+            if self._pipe is None or self._use_lock.locked():
+                continue
+            if time.monotonic() - self._last_used < idle_seconds:
+                continue
+            async with self._use_lock:
+                if self._pipe is not None and time.monotonic() - self._last_used >= idle_seconds:
+                    log_service.system(f"SDXL idle for {idle_seconds / 60:.0f} min, unloading")
+                    await asyncio.to_thread(self._unload_sync)
+
+    def _unload_sync(self):
+        with self._load_lock:
+            self._img2img_pipe = None
+            self._pipe = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+
+    async def unload(self):
+        async with self._use_lock:
+            await asyncio.to_thread(self._unload_sync)
+
     def _load_model(self):
-        if self._pipe is not None:
-            return
+        with self._load_lock:
+            if self._pipe is not None:
+                return
+            self._load_model_locked()
 
-        if self._model_loading:
-            return
-
-        self._model_loading = True
-
+    def _load_model_locked(self):
         try:
             log_service.system("Loading SDXL Lightning 4-step...")
 
@@ -97,81 +141,30 @@ class ArtworkGenerationService(SingletonService):
         except Exception as e:
             log_service.error(f"Failed to load SDXL Lightning: {str(e)}")
             self._pipe = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             raise
-
-        finally:
-            self._model_loading = False
 
     def _load_img2img_model(self):
-        if self._img2img_pipe is not None:
-            return
+        with self._load_lock:
+            if self._img2img_pipe is not None:
+                return
 
-        if self._model_loading:
-            return
+            self._load_model()
 
-        self._model_loading = True
+            try:
+                from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipeline
 
-        try:
-            log_service.system("Loading SDXL Lightning img2img pipeline...")
+                log_service.system("Building SDXL Lightning img2img pipeline from shared components...")
+                assert self._pipe is not None
+                self._img2img_pipe = StableDiffusionXLImg2ImgPipeline(**self._pipe.components)
 
-            self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                log_service.success(f"SDXL Lightning img2img ready on {self._device}")
 
-            if self._device.type != 'cuda':
-                log_service.warning("CUDA not available - img2img will be slow")
-
-            from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipeline
-            from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
-            from diffusers.schedulers.scheduling_euler_discrete import EulerDiscreteScheduler
-            from huggingface_hub import hf_hub_download
-            from safetensors.torch import load_file
-
-            base_model = "stabilityai/stable-diffusion-xl-base-1.0"
-            lightning_repo = "ByteDance/SDXL-Lightning"
-            checkpoint = "sdxl_lightning_4step_unet.safetensors"
-
-            log_service.info("Loading UNet from SDXL Lightning checkpoint for img2img...")
-
-            unet_config = UNet2DConditionModel.load_config(base_model, subfolder="unet")
-            unet: Any = UNet2DConditionModel.from_config(unet_config)
-
-            ckpt_path = hf_hub_download(lightning_repo, checkpoint)
-            unet.load_state_dict(load_file(ckpt_path, device="cpu"))
-            unet = unet.to(self._device, torch.float16)
-
-            log_service.info("Loading SDXL img2img pipeline...")
-
-            self._img2img_pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-                base_model,
-                unet=unet,
-                torch_dtype=torch.float16,
-                variant="fp16"
-            ).to(self._device)
-
-            self._img2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
-                self._img2img_pipe.scheduler.config,
-                timestep_spacing="trailing"
-            )
-
-            if hasattr(self._img2img_pipe, 'enable_attention_slicing'):
-                self._img2img_pipe.enable_attention_slicing()
-
-            log_service.success(f"SDXL Lightning img2img loaded on {self._device}")
-
-        except ImportError as e:
-            log_service.error(
-                f"Missing dependencies for SDXL Lightning img2img: {str(e)}\n"
-                f"Install with: pip install diffusers transformers accelerate safetensors"
-            )
-            self._img2img_pipe = None
-            raise
-
-        except Exception as e:
-            log_service.error(f"Failed to load SDXL Lightning img2img: {str(e)}")
-            self._img2img_pipe = None
-            raise
-
-        finally:
-            self._model_loading = False
+            except Exception as e:
+                log_service.error(f"Failed to build SDXL Lightning img2img: {str(e)}")
+                self._img2img_pipe = None
+                raise
 
     def _get_negative_prompt(self) -> str:
         return (
@@ -207,55 +200,60 @@ class ArtworkGenerationService(SingletonService):
             log_service.info(f"Artwork already exists: {track_id}")
             return artwork_path
 
+        if not artwork_prompt:
+            log_service.error(f"No artwork_prompt provided for {track_id} - cannot generate artwork")
+            return None
+
+        prompt = self._truncate_prompt(artwork_prompt)
+        negative_prompt = self._get_negative_prompt()
+
         try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._load_model)
+            async with self._use_lock:
+                async with gpu_lease("SDXL"):
+                    await asyncio.to_thread(self._load_model)
 
-            if self._pipe is None:
-                log_service.error("Model not loaded, cannot generate artwork")
-                return None
-
-            if not artwork_prompt:
-                log_service.error(f"No artwork_prompt provided for {track_id} - cannot generate artwork")
-                return None
-
-            prompt = self._truncate_prompt(artwork_prompt)
-            negative_prompt = self._get_negative_prompt()
-
-            log_service.info(f"Generating artwork for: {title} by {artist}")
-
-            generator = None
-            if seed is not None:
-                generator = torch.Generator(device=self._device).manual_seed(seed)
-
-            def generate():
-                with torch.no_grad():
                     if self._pipe is None:
-                        raise RuntimeError("Pipeline not initialized")
-                    result = self._pipe(
-                        prompt=prompt,
-                        negative_prompt=negative_prompt,
-                        num_inference_steps=4,
-                        guidance_scale=0,
-                        generator=generator,
-                        width=1024,
-                        height=1024
-                    )
-                    return result.images[0]  # type: ignore
+                        log_service.error("Model not loaded, cannot generate artwork")
+                        return None
 
-            image = await loop.run_in_executor(None, generate)
+                    log_service.info(f"Generating artwork for: {title} by {artist}")
+
+                    generator = None
+                    if seed is not None:
+                        generator = torch.Generator(device=self._device).manual_seed(seed)
+
+                    def generate():
+                        with torch.no_grad():
+                            if self._pipe is None:
+                                raise RuntimeError("Pipeline not initialized")
+                            result = self._pipe(
+                                prompt=prompt,
+                                negative_prompt=negative_prompt,
+                                num_inference_steps=4,
+                                guidance_scale=0,
+                                generator=generator,
+                                width=1024,
+                                height=1024
+                            )
+                            return result.images[0]  # type: ignore
+
+                    image = await asyncio.to_thread(generate)
+                self._mark_used()
 
             def save():
                 image.save(str(artwork_path), 'JPEG', quality=quality, optimize=True)
 
-            await loop.run_in_executor(None, save)
+            await asyncio.to_thread(save)
 
             log_service.success(f"Generated artwork: {track_id} (1024x1024)")
 
             return artwork_path
 
+        except GPUOutOfMemoryError:
+            raise
         except Exception as e:
             log_service.error(f"Failed to generate artwork for {track_id}: {str(e)}")
+            raise_if_cuda_oom(e, "SDXL")
             return None
 
     async def generate_artwork_for_track(
@@ -311,18 +309,11 @@ class ArtworkGenerationService(SingletonService):
             return None
 
         try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._load_img2img_model)
-
-            if self._img2img_pipe is None:
-                log_service.error("img2img model not loaded, cannot upscale artwork")
-                return None
-
             def load_and_prepare_image():
                 img = Image.open(source_image_path).convert("RGB")
                 return img.resize((output_size, output_size), Image.Resampling.LANCZOS)
 
-            source_image = await loop.run_in_executor(None, load_and_prepare_image)
+            source_image = await asyncio.to_thread(load_and_prepare_image)
 
             if not prompt:
                 prompt = "high quality album cover art, detailed, professional, vibrant colors"
@@ -330,40 +321,52 @@ class ArtworkGenerationService(SingletonService):
             prompt = self._truncate_prompt(prompt)
             negative_prompt = self._get_negative_prompt()
 
-            log_service.info(f"Upscaling artwork for {track_id} (strength={strength})")
+            async with self._use_lock:
+                async with gpu_lease("SDXL img2img"):
+                    await asyncio.to_thread(self._load_img2img_model)
 
-            generator = None
-            if seed is not None:
-                generator = torch.Generator(device=self._device).manual_seed(seed)
-
-            def upscale():
-                with torch.no_grad():
                     if self._img2img_pipe is None:
-                        raise RuntimeError("img2img pipeline not initialized")
-                    result = self._img2img_pipe(
-                        prompt=prompt,
-                        negative_prompt=negative_prompt,
-                        image=source_image,
-                        strength=strength,
-                        num_inference_steps=4,
-                        guidance_scale=0,
-                        generator=generator,
-                    )
-                    return result.images[0]
+                        log_service.error("img2img model not loaded, cannot upscale artwork")
+                        return None
 
-            upscaled_image = await loop.run_in_executor(None, upscale)
+                    log_service.info(f"Upscaling artwork for {track_id} (strength={strength})")
+
+                    generator = None
+                    if seed is not None:
+                        generator = torch.Generator(device=self._device).manual_seed(seed)
+
+                    def upscale():
+                        with torch.no_grad():
+                            if self._img2img_pipe is None:
+                                raise RuntimeError("img2img pipeline not initialized")
+                            result = self._img2img_pipe(
+                                prompt=prompt,
+                                negative_prompt=negative_prompt,
+                                image=source_image,
+                                strength=strength,
+                                num_inference_steps=4,
+                                guidance_scale=0,
+                                generator=generator,
+                            )
+                            return result.images[0]
+
+                    upscaled_image = await asyncio.to_thread(upscale)
+                self._mark_used()
 
             def save():
                 upscaled_image.save(str(artwork_path), 'JPEG', quality=quality, optimize=True)
 
-            await loop.run_in_executor(None, save)
+            await asyncio.to_thread(save)
 
             log_service.success(f"Upscaled artwork: {track_id} ({output_size}x{output_size})")
 
             return artwork_path
 
+        except GPUOutOfMemoryError:
+            raise
         except Exception as e:
             log_service.error(f"Failed to upscale artwork for {track_id}: {str(e)}")
+            raise_if_cuda_oom(e, "SDXL img2img")
             return None
 
     async def batch_upscale_suno_artwork(

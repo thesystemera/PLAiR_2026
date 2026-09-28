@@ -5,6 +5,8 @@ const DialogContext = createContext(null)
 
 export function DialogProvider({ children }) {
   const [dialogState, setDialogState] = useState(null)
+  const [renderedDialog, setRenderedDialog] = useState(null)
+  if (dialogState && dialogState !== renderedDialog) setRenderedDialog(dialogState)
 
   const showConfirm = useCallback((options) => {
     return new Promise((resolve) => {
@@ -80,10 +82,10 @@ export function DialogProvider({ children }) {
     <DialogContext.Provider value={value}>
       {children}
 
-      {dialogState && (
+      {renderedDialog && (
         <ConfirmationModal
           isOpen={!!dialogState}
-          config={dialogState}
+          config={renderedDialog}
         />
       )}
     </DialogContext.Provider>

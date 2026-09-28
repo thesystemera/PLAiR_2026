@@ -9,6 +9,8 @@ The Node System is PLAiR.fm's dynamic context assembly for DJ AI prompts. Instea
 
 **Result:** ~80% token reduction (10,000 → 2,000 tokens per request)
 
+**LLM provider:** Google Gemini via the `google-genai` SDK (`gemini-2.5-flash-lite` for the DJ, command extraction and the Producer AI node router; `gemini-2.5-pro` default; see `server/config/settings.py`). "GPT function" and the `gpt_*` method names are legacy naming only - no OpenAI models are used.
+
 ---
 
 ## Core Components
@@ -27,7 +29,7 @@ async def get_track_title_artist(current_track: Dict = None, **_) -> str:
     return f"CURRENT TRACK: {current_track['name']} by {current_track['artists']}"
 ```
 
-**67 total nodes** across categories:
+**70 total nodes** across categories:
 - **Formatting** (identity, channels, tone, meta-tags, guidelines)
 - **Instruction** (biography, lyrics, news, weather, HAL11000 commands)
 - **Data** (biography text, lyrics text, news report, weather data)
@@ -50,7 +52,7 @@ async def fetch_nodes(self, node_keys: List[str], **kwargs) -> Dict[str, str]:
 **Performance:** Executes 10-15 nodes in ~100-300ms
 
 ### 3. Producer AI (`context_router_service.py`)
-Uses Gemini Flash Lite to select nodes based on user input (Interactive mode only):
+Uses Gemini Flash Lite (`settings.GEMINI_NODE_PRODUCER_MODEL`) to select nodes based on user input (Interactive mode only):
 
 **Flow:**
 1. User: "Tell me about this song"
@@ -109,7 +111,7 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 - 14 Instruction/Data nodes (biography, lyrics, news, weather, events, location, shoutouts)
 - 6 HAL11000 command extraction nodes
 
-**Visible = True (40 nodes):** Content nodes Producer AI can select
+**Visible = True (43 nodes):** Content nodes Producer AI can select
 - Track nodes (title, style, audio features, lyrics, etc.)
 - User nodes (persona, profile, favorites, banned)
 - Queue/History nodes
@@ -226,6 +228,8 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 
 **Key requirement:** Gemini 2.5 Flash supports streaming + function calling ✓
 
+**Status:** Planned, not implemented. The DJ reply is still spoken first, then a second LLM pass (HAL11000, `gpt_command_extraction`) emits brace commands parsed by `dj_command_executor.py`.
+
 **Prime candidate:** Weather - simple, external API, perfect for testing
 
 ---
@@ -294,7 +298,7 @@ All GPT functions save debug prompts to `data/prompt_debug/`:
 - ✅ Future-ready (dynamic announcer, array visibility)
 
 **Files:**
-- `context_nodes.py` - Node definitions (67 nodes)
+- `context_nodes.py` - Node definitions (70 nodes)
 - `context_node_registry.py` - Registry & execution
 - `context_router_service.py` - Producer AI (node selection)
 - `context_service.py` - Data fetching

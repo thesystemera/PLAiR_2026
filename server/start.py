@@ -1,6 +1,12 @@
 import asyncio
+import os
 import platform
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 ENABLE_CONSOLE_TEXT_SELECTION = False
 
@@ -21,8 +27,8 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app:app",
-        host="0.0.0.0",
-        port=8000,
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8000")),
         reload=False,
         loop="asyncio"
     )

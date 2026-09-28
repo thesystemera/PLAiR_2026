@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { useEffect, useRef, useMemo, useCallback } from 'react'
 import { AudioEngine } from '../lib/audioEngine'
 import { AudioMixer } from '../lib/audioMixer'
 import { cacheManager } from '../lib/cacheManager'
@@ -11,64 +11,78 @@ export function useAudio() {
   const { publishAudioState } = useUIState()
   const engineRef = useRef(null)
   const mixerRef = useRef(null)
-  const [playing, setPlaying] = useState(false)
-  const [buffering, setBuffering] = useState(false)
-  const [isCached, setIsCached] = useState(false)
   const audioRef = useRef({ current: null })
   const isInitializedRef = useRef(false)
+  const initPromiseRef = useRef(null)
   const stallTimeouts = useRef(new Map())
+  const storageRefreshRef = useRef({ refreshStorageInfo, refreshDataUsage })
+  const publishAudioStateRef = useRef(publishAudioState)
+
+  useEffect(() => {
+    storageRefreshRef.current = { refreshStorageInfo, refreshDataUsage }
+  }, [refreshStorageInfo, refreshDataUsage])
+
+  useEffect(() => {
+    publishAudioStateRef.current = publishAudioState
+  }, [publishAudioState])
+
+  const isCurrentElement = useCallback((element) => {
+    return !!engineRef.current && engineRef.current.getCurrentElement() === element
+  }, [])
+
+  const publishBuffering = useCallback((element, buffering) => {
+    if (!isCurrentElement(element)) return
+    publishAudioStateRef.current({ buffering })
+  }, [isCurrentElement])
 
   const handleError = useCallback((e) => {
     const element = e.target
     const error = element.error
 
-    if (!error) return
-
-    if (error && error.code === 4) {
-      return
-    }
-
-    if (!element.src) {
-      return
-    }
+    if (!error || error.code === 4 || !element.getAttribute('src')) return
+    if (!isCurrentElement(element)) return
 
     logger.error('Audio error:', error)
-    setBuffering(false)
-    publishAudioState({ buffering: false })
+    publishAudioStateRef.current({ buffering: false })
 
-    if (element && (element.networkState === HTMLMediaElement.NETWORK_NO_SOURCE ||
+    const isBlob = element.getAttribute('data-blob-url') === 'true'
+    if (isBlob && (element.networkState === HTMLMediaElement.NETWORK_NO_SOURCE ||
       element.networkState === HTMLMediaElement.NETWORK_IDLE)) {
       logger.info('Network error detected, retrying in 2 seconds')
+      const src = element.getAttribute('src')
       setTimeout(() => {
-        if (element && element.src) {
+        if (isCurrentElement(element) && element.getAttribute('src') === src) {
           logger.info('Retrying audio load')
           element.load()
         }
       }, 2000)
     }
-  }, [publishAudioState])
+  }, [isCurrentElement])
 
   const handleStalled = useCallback((e) => {
-    setBuffering(true)
-    publishAudioState({ buffering: true })
-    logger.warn('[useAudio] Playback stalled - buffer may be starving')
     const element = e.target
+    if (!isCurrentElement(element)) return
+
+    publishAudioStateRef.current({ buffering: true })
+    logger.warn('[useAudio] Playback stalled - buffer may be starving')
     if (stallTimeouts.current.has(element)) {
       clearTimeout(stallTimeouts.current.get(element))
     }
 
+    const src = element.getAttribute('src')
     const timeout = setTimeout(() => {
+      stallTimeouts.current.delete(element)
+      const isBlob = element.getAttribute('data-blob-url') === 'true'
+      if (!isBlob || !isCurrentElement(element) || element.getAttribute('src') !== src || element.paused) return
       logger.warn('[useAudio] Stalled for 10s, attempting recovery')
-      if (element && element.src && !element.paused) {
-        const currentTime = element.currentTime
-        element.load()
-        element.currentTime = currentTime
-        element.play().catch(err => logger.error('Recovery play failed:', err))
-      }
+      const currentTime = element.currentTime
+      element.load()
+      element.currentTime = currentTime
+      element.play().catch(err => logger.error('Recovery play failed:', err))
     }, 10000)
 
     stallTimeouts.current.set(element, timeout)
-  }, [publishAudioState])
+  }, [isCurrentElement])
 
   const handleProgress = useCallback((e) => {
     const element = e.target
@@ -79,76 +93,78 @@ export function useAudio() {
   }, [])
 
   const attachListeners = useCallback((element) => {
-    element.addEventListener('ended', () => setPlaying(false))
-    element.addEventListener('play', () => setPlaying(true))
-    element.addEventListener('pause', () => setPlaying(false))
-    element.addEventListener('waiting', () => {
-      setBuffering(true)
-      publishAudioState({ buffering: true })
-    })
-    element.addEventListener('canplay', () => {
-      setBuffering(false)
-      publishAudioState({ buffering: false })
-    })
-    element.addEventListener('canplaythrough', () => {
-      setBuffering(false)
-      publishAudioState({ buffering: false })
-    })
+    element.addEventListener('waiting', () => publishBuffering(element, true))
+    element.addEventListener('canplay', () => publishBuffering(element, false))
+    element.addEventListener('canplaythrough', () => publishBuffering(element, false))
     element.addEventListener('stalled', handleStalled)
     element.addEventListener('progress', handleProgress)
     element.addEventListener('error', handleError)
-  }, [handleError, handleStalled, handleProgress, publishAudioState])
+  }, [handleError, handleStalled, handleProgress, publishBuffering])
 
   const initializeAudio = useCallback(async () => {
     if (isInitializedRef.current) {
       return true
     }
+    if (initPromiseRef.current) {
+      return initPromiseRef.current
+    }
     if (!engineRef.current) {
       engineRef.current = new AudioEngine()
     }
 
-    try {
-      await engineRef.current.initialize()
+    const init = (async () => {
+      try {
+        await engineRef.current.initialize()
 
-      if (!mixerRef.current) {
-        mixerRef.current = new AudioMixer(engineRef.current)
-      }
-
-      attachListeners(engineRef.current.slots.A.element)
-      attachListeners(engineRef.current.slots.B.element)
-
-      engineRef.current.onChunkReceived = (trackId, chunk) => {
-        cacheManager.addStreamChunk(trackId, chunk)
-      }
-
-      engineRef.current.onStreamComplete = async (trackId) => {
-        logger.info(`[useAudio] Stream complete for ${trackId}, caching`)
-        try {
-          await cacheManager.finalizeStream(trackId, uiState.audioState.isOnline)
-          setIsCached(true)
-          publishAudioState({ isCached: true })
-          logger.info(`[useAudio] Cached: ${trackId}`)
-          await refreshStorageInfo()
-          await refreshDataUsage()
-        } catch (err) {
-          logger.error(`[useAudio] Cache failed for ${trackId}:`, err)
+        if (!mixerRef.current) {
+          mixerRef.current = new AudioMixer(engineRef.current)
         }
+
+        attachListeners(engineRef.current.slots.A.element)
+        attachListeners(engineRef.current.slots.B.element)
+
+        engineRef.current.onChunkReceived = (trackId, chunk) => {
+          cacheManager.addStreamChunk(trackId, chunk)
+        }
+
+        engineRef.current.onStreamComplete = async (trackId) => {
+          logger.info(`[useAudio] Stream complete for ${trackId}, caching`)
+          try {
+            await cacheManager.finalizeStream(trackId, uiState.audioState.isOnline)
+            if (engineRef.current?.getCurrentTrackId() === trackId) {
+              publishAudioStateRef.current({ isCached: true })
+            }
+            logger.info(`[useAudio] Cached: ${trackId}`)
+            await storageRefreshRef.current.refreshStorageInfo()
+            await storageRefreshRef.current.refreshDataUsage()
+          } catch (err) {
+            logger.error(`[useAudio] Cache failed for ${trackId}:`, err)
+          }
+        }
+
+        window.audioEngine = engineRef.current
+        logger.info('[useAudio] AudioEngine initialized')
+
+        isInitializedRef.current = true
+        return true
+      } catch (error) {
+        logger.error('Failed to initialize audio engine:', error)
+        isInitializedRef.current = false
+        return false
+      } finally {
+        initPromiseRef.current = null
       }
+    })()
 
-      window.audioEngine = engineRef.current
-      logger.info('[useAudio] AudioEngine initialized')
-
-      isInitializedRef.current = true
-      return true
-    } catch (error) {
-      logger.error('Failed to initialize audio engine:', error)
-      isInitializedRef.current = false
-      return false
-    }
-  }, [attachListeners, refreshStorageInfo, refreshDataUsage, publishAudioState])
+    initPromiseRef.current = init
+    return init
+  }, [attachListeners])
 
   useEffect(() => {
+    const stalls = stallTimeouts.current
     return () => {
+      stalls.forEach(timeout => clearTimeout(timeout))
+      stalls.clear()
       if (mixerRef.current) {
         mixerRef.current.destroy()
       }
@@ -195,6 +211,8 @@ export function useAudio() {
     }
   }, [])
 
+  const getVolume = useCallback(() => engineRef.current?.getVolume() || 1, [])
+
   const setMuted = useCallback((muted) => {
     if (engineRef.current && isInitializedRef.current) {
       engineRef.current.setMuted(muted)
@@ -212,6 +230,8 @@ export function useAudio() {
       engineRef.current.setActiveDevice(isActive)
     }
   }, [])
+
+  const getEngine = useCallback(() => engineRef.current, [])
 
   const getCurrentElement = useCallback(() => {
     if (engineRef.current && isInitializedRef.current) {
@@ -241,17 +261,14 @@ export function useAudio() {
     setActiveDevice,
     seek,
     setVolume,
-    getVolume: () => engineRef.current?.getVolume() || 1,
+    getVolume,
     setMuted,
     playSfx,
     stopSfx,
-    playing,
-    buffering,
     audioRef,
     engineRef,
     mixerRef,
     getCurrentElement,
-    isCached,
-    setIsCached,
-  }), [initializeAudio, play, pause, stopImmediately, setActiveDevice, seek, setVolume, setMuted, playSfx, stopSfx, playing, buffering, getCurrentElement, isCached])
+    getEngine,
+  }), [initializeAudio, play, pause, stopImmediately, setActiveDevice, seek, setVolume, getVolume, setMuted, playSfx, stopSfx, getCurrentElement, getEngine])
 }

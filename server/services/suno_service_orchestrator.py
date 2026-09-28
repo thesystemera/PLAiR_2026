@@ -34,8 +34,10 @@ from services.base_service import SingletonService
 from services.audio_apollo_service import AudioApolloService
 from services.audio_demucs_service import AudioDemucsService
 from services.audio_clearvoice_service import AudioClearVoiceService
-from services.audio_sonic_master_service import SonicMasterService
+from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
 from services.audio_master_service import AudioMasterService
+from services.audio_headroom import mix_stems_to_file
+from services.audio_stage_registry import quality_scorer, resolve_bandwidth_stage, resolve_separation_model, stems_dir_for
 from services.audio_features_service import AudioFeaturesService
 from services.audio_lyrical_timestamp_service import LyricalTimestampService
 from services.audio_transcoding_service import AudioTranscodingService
@@ -43,11 +45,14 @@ from services.suno_service import SunoService
 from services.catalog_database_service import CatalogDatabaseService
 from services.suno_artwork_enrichment_service import ArtworkEnrichmentService
 from config import settings
+from services.task_utils import spawn
+from services.asset_integrity_service import asset_integrity_service
 
 import torch
-import torchaudio
 
 LANE_BUFFER = 10
+MASTERING_WAIT_TIMEOUT_S = 1800
+BATCH_CATALOG_RELOAD_TIMEOUT_S = 7200
 
 def _clear_cuda_cache():
     if torch.cuda.is_available():
@@ -74,10 +79,17 @@ class TrackJob:
     clearvoice_complete: bool = False
     sonic_complete: bool = False
     mastering_complete: bool = False
+    mastering_failed: bool = False
     features_complete: bool = False
     lyrics_complete: bool = False
     transcoding_complete: bool = False
     artwork_complete: bool = False
+    failed: bool = False
+    lane6_finished: bool = False
+    lyrics_queued: bool = False
+    defer_catalog_reload: bool = False
+    catalog_ready: bool = False
+    cancelled: bool = False
 
     apollo_wav_path: Optional[Path] = None
     demucs_vocals_path: Optional[Path] = None
@@ -95,6 +107,17 @@ class TrackJob:
             self.artwork_complete
         ])
 
+    def is_finished(self) -> bool:
+        lyrics_done = self.lyrics_complete or not self.lyrics_queued
+        return self.is_complete() or self.failed or (self.lane6_finished and lyrics_done)
+
+    def is_settled(self) -> bool:
+        if not self.is_finished():
+            return False
+        if self.lyrics_queued and not self.lyrics_complete:
+            return False
+        return self.lane6_finished or not self.sonic_complete
+
 class SunoServiceOrchestrator(SingletonService):
 
     def __init__(self):
@@ -103,6 +126,8 @@ class SunoServiceOrchestrator(SingletonService):
 
         self.apollo: Optional[AudioApolloService] = None
         self.demucs: Optional[AudioDemucsService] = None
+        self.bandwidth_stage = "apollo"
+        self.separation_model = "demucs"
         self.clearvoice: Optional[AudioClearVoiceService] = None
         self.sonic_master: Optional[SonicMasterService] = None
         self.master: Optional[AudioMasterService] = None
@@ -130,24 +155,19 @@ class SunoServiceOrchestrator(SingletonService):
         log_service.suno("SUNO SERVICE ORCHESTRATOR - HIGHWAY ARCHITECTURE")
         log_service.suno("=" * 80)
 
-        self.apollo = AudioApolloService()
-        await self.apollo.initialize()
+        self.apollo, self.bandwidth_stage = resolve_bandwidth_stage()
+        if self.apollo is not None:
+            await self.apollo.initialize()
 
         if settings.ENABLE_VOCAL_ENHANCEMENT:
-            self.demucs = AudioDemucsService()
+            self.demucs, self.separation_model = resolve_separation_model()
             await self.demucs.initialize()
 
             self.clearvoice = AudioClearVoiceService()
             await self.clearvoice.initialize()
 
         self.sonic_master = SonicMasterService()
-        self.sonic_master.configure(
-            wet_mix=0.5,
-            num_inference_steps=50,
-            prompt="give the mix more shine and sparkle, clean and dynamic with rich full harmonics",
-            chunk_duration=30,
-            fs=44100
-        )
+        self.sonic_master.configure(**SUNO_SONIC_SETTINGS)
         await self.sonic_master.initialize()
 
         self.master = AudioMasterService()
@@ -227,7 +247,7 @@ class SunoServiceOrchestrator(SingletonService):
         if enhanced_vocal_wav.exists():
             return PipelineState.READY_FOR_SONIC
 
-        stems_dir = settings.DEMUCS_STEMS_DIR / track_id
+        stems_dir = stems_dir_for(track_id, getattr(self, "separation_model", None))
         if stems_dir.exists() and (stems_dir / "vocals.wav").exists():
             return PipelineState.READY_FOR_CLEARVOICE
 
@@ -246,7 +266,8 @@ class SunoServiceOrchestrator(SingletonService):
             mp3_path: Path,
             metadata: Dict[str, Any],
             progress_callback: Optional[Callable] = None,
-            verbose: bool = True
+            verbose: bool = True,
+            defer_catalog_reload: bool = False
     ) -> TrackJob:
         assert self.lane1_queue is not None
         assert self.lane2_queue is not None
@@ -261,7 +282,8 @@ class SunoServiceOrchestrator(SingletonService):
             track_id=track_id,
             mp3_path=mp3_path,
             metadata=metadata,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            defer_catalog_reload=defer_catalog_reload
         )
 
         def log(msg):
@@ -288,6 +310,7 @@ class SunoServiceOrchestrator(SingletonService):
             log(f"🚀 [{track_id[:8]}] Resuming at Lane 6 (Mastering) & Lane 5 (Lyrics)")
             job.sonic_wav_path = settings.SONIC_WAV_DIR / f"{track_id}.wav"
             job.sonic_complete = True
+            job.lyrics_queued = True
             await self.lane6_queue.put(job)
             await self.lane5_queue.put(job)
 
@@ -309,8 +332,9 @@ class SunoServiceOrchestrator(SingletonService):
             log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (ClearVoice)")
             job.apollo_wav_path = settings.WAV_DIR / f"{track_id}.wav"
             job.apollo_complete = True
-            job.demucs_vocals_path = settings.DEMUCS_STEMS_DIR / track_id / "vocals.wav"
-            job.demucs_instrumentals_path = settings.DEMUCS_STEMS_DIR / track_id / "no_vocals.wav"
+            resumed_stems_dir = stems_dir_for(track_id, getattr(self, "separation_model", None))
+            job.demucs_vocals_path = resumed_stems_dir / "vocals.wav"
+            job.demucs_instrumentals_path = resumed_stems_dir / "no_vocals.wav"
             job.demucs_complete = True
             await self.lane3_queue.put(job)
 
@@ -331,9 +355,13 @@ class SunoServiceOrchestrator(SingletonService):
             track_id: str,
             mp3_path: Path,
             metadata: Dict[str, Any],
-            progress_callback: Optional[Callable] = None
+            progress_callback: Optional[Callable] = None,
+            defer_catalog_reload: bool = False
     ) -> TrackJob:
-        return await self.smart_submit(track_id, mp3_path, metadata, progress_callback, verbose=True)
+        return await self.smart_submit(
+            track_id, mp3_path, metadata, progress_callback, verbose=True,
+            defer_catalog_reload=defer_catalog_reload
+        )
 
     async def submit_batch(
             self,
@@ -379,7 +407,9 @@ class SunoServiceOrchestrator(SingletonService):
         log_service.suno("Queuing tracks... (concurrent per-lane distribution)")
 
         async def queue_one(track_id, mp3_path, metadata):
-            job = await self.smart_submit(track_id, mp3_path, metadata, progress_callback, verbose=False)
+            job = await self.smart_submit(
+                track_id, mp3_path, metadata, progress_callback, verbose=False, defer_catalog_reload=True
+            )
             jobs.append(job)
 
         await asyncio.gather(*[
@@ -388,7 +418,36 @@ class SunoServiceOrchestrator(SingletonService):
         ])
 
         log_service.suno(f"✓ All {len(jobs)} tracks successfully queued on Highway.")
+        if jobs:
+            spawn(self._reload_catalog_when_finished(list(jobs)), name="orchestrator_batch_catalog_reload")
         return jobs
+
+    async def _reload_catalog_when_finished(self, jobs: List[TrackJob]):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + BATCH_CATALOG_RELOAD_TIMEOUT_S
+        while any(not j.is_finished() for j in jobs):
+            if loop.time() >= deadline:
+                log_service.warning(
+                    f"[Catalog] Batch still running after {BATCH_CATALOG_RELOAD_TIMEOUT_S}s - reloading with finished tracks"
+                )
+                break
+            await asyncio.sleep(2.0)
+        ready = sum(1 for j in jobs if j.catalog_ready)
+        if ready == 0:
+            return
+        if self.catalog is None:
+            raise RuntimeError("catalog service not initialized")
+        await self.catalog.reload_catalog()
+        log_service.suno(f"[Catalog] ✓ Registered {ready}/{len(jobs)} batch tracks (single reload)")
+
+    @staticmethod
+    def _skip_if_cancelled(job: TrackJob, lane: str) -> bool:
+        if not job.cancelled:
+            return False
+        job.failed = True
+        log_service.suno(f"[{lane}] [{job.track_id[:8]}] Cancelled - skipping remaining stages")
+        _clear_cuda_cache()
+        return True
 
     async def _lane1_consumer(self):
         assert self.lane1_queue is not None
@@ -401,14 +460,23 @@ class SunoServiceOrchestrator(SingletonService):
             try:
                 job = await lane1_queue.get()
                 assert job is not None
+                if self._skip_if_cancelled(job, "Lane 1"):
+                    lane1_queue.task_done()
+                    continue
                 log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Apollo processing...")
                 if job.progress_callback:
                     await job.progress_callback("Apollo")
 
-                if self.apollo is None:
-                    raise RuntimeError("apollo service not initialized")
                 apollo_wav_path = settings.WAV_DIR / f"{job.track_id}.wav"
-                result = await self.apollo.process_audio(job.mp3_path, apollo_wav_path)
+                if self.apollo is None:
+                    if self.transcoding is None:
+                        raise RuntimeError("transcoding service not initialized")
+                    decoded = await self.transcoding.extract_audio_to_wav(
+                        job.mp3_path, apollo_wav_path, sample_rate="44100", codec="pcm_f32le"
+                    )
+                    result = apollo_wav_path if decoded else None
+                else:
+                    result = await self.apollo.process_audio(job.mp3_path, apollo_wav_path)
 
                 if result:
                     job.apollo_complete = True
@@ -430,6 +498,7 @@ class SunoServiceOrchestrator(SingletonService):
                         await lane4_queue.put(job)
                 else:
                     log_service.error(f"[Lane 1] [{job.track_id[:8]}] Apollo FAILED")
+                    job.failed = True
 
                 lane1_queue.task_done()
                 await asyncio.sleep(0.05)
@@ -437,6 +506,8 @@ class SunoServiceOrchestrator(SingletonService):
                 break
             except Exception as e:
                 log_service.error(f"[Lane 1] Error: {str(e)}")
+                if job is not None:
+                    job.failed = True
                 lane1_queue.task_done()
                 await asyncio.sleep(0.05)
 
@@ -447,9 +518,13 @@ class SunoServiceOrchestrator(SingletonService):
         lane4_queue = self.lane4_queue
         log_service.suno("Lane 2 (Demucs) consumer started")
         while self.running:
+            job: Optional[TrackJob] = None
             try:
                 job = await lane2_queue.get()
                 assert job is not None
+                if self._skip_if_cancelled(job, "Lane 2"):
+                    lane2_queue.task_done()
+                    continue
                 log_service.suno(f"[Lane 2] [{job.track_id[:8]}] Demucs processing...")
                 if job.progress_callback:
                     await job.progress_callback("Demucs")
@@ -458,7 +533,7 @@ class SunoServiceOrchestrator(SingletonService):
                     raise RuntimeError("demucs service not initialized")
                 if job.apollo_wav_path is None:
                     raise ValueError("apollo_wav_path is required for Demucs processing")
-                stems_dir = settings.DEMUCS_STEMS_DIR / job.track_id
+                stems_dir = stems_dir_for(job.track_id, self.separation_model)
                 stems = await self.demucs.separate_stems(job.apollo_wav_path, stems_dir)
 
                 if stems:
@@ -480,8 +555,29 @@ class SunoServiceOrchestrator(SingletonService):
                 break
             except Exception as e:
                 log_service.error(f"[Lane 2] Error: {str(e)}")
+                if job is not None:
+                    job.failed = True
                 lane2_queue.task_done()
                 await asyncio.sleep(0.05)
+
+    @staticmethod
+    def _mix_stems_sync(vocals_path: Path, instrumentals_path: Path, output_path: Path):
+        mix_info = mix_stems_to_file(vocals_path, instrumentals_path, output_path)
+        if mix_info["resampled"]:
+            log_service.warning(
+                f"[Lane 3] Vocal stem was {mix_info['vocals_rate']}Hz, resampled to {mix_info['rate']}Hz before mixing"
+            )
+
+    @staticmethod
+    async def _wait_for_mastering(job: TrackJob):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + MASTERING_WAIT_TIMEOUT_S
+        while not job.mastering_complete:
+            if job.mastering_failed:
+                raise RuntimeError("mastering failed")
+            if loop.time() >= deadline:
+                raise TimeoutError(f"mastering did not complete within {MASTERING_WAIT_TIMEOUT_S}s")
+            await asyncio.sleep(0.1)
 
     async def _lane3_consumer(self):
         assert self.lane3_queue is not None
@@ -493,6 +589,9 @@ class SunoServiceOrchestrator(SingletonService):
             try:
                 job = await lane3_queue.get()
                 assert job is not None
+                if self._skip_if_cancelled(job, "Lane 3"):
+                    lane3_queue.task_done()
+                    continue
                 log_service.suno(f"[Lane 3] [{job.track_id[:8]}] ClearVoice processing...")
                 if job.progress_callback:
                     await job.progress_callback("ClearVoice")
@@ -510,13 +609,10 @@ class SunoServiceOrchestrator(SingletonService):
                 if enhanced_vocals:
                     job.clearvoice_complete = True
 
-                    vocals_audio, vocals_sr = torchaudio.load(str(enhanced_vocals))
-                    instrumentals_audio, inst_sr = torchaudio.load(str(job.demucs_instrumentals_path))
-                    min_length = min(vocals_audio.shape[1], instrumentals_audio.shape[1])
-                    mixed_audio = vocals_audio[:, :min_length] + instrumentals_audio[:, :min_length]
-
                     enhanced_path = settings.VOCAL_ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-                    torchaudio.save(str(enhanced_path), mixed_audio, vocals_sr)
+                    await asyncio.to_thread(
+                        self._mix_stems_sync, enhanced_vocals, job.demucs_instrumentals_path, enhanced_path
+                    )
 
                     job.clearvoice_enhanced_path = enhanced_path
                     _clear_cuda_cache()
@@ -547,9 +643,13 @@ class SunoServiceOrchestrator(SingletonService):
         lane6_queue = self.lane6_queue
         log_service.suno("Lane 4 (SonicMaster) consumer started")
         while self.running:
+            job: Optional[TrackJob] = None
             try:
                 job = await lane4_queue.get()
                 assert job is not None
+                if self._skip_if_cancelled(job, "Lane 4"):
+                    lane4_queue.task_done()
+                    continue
                 log_service.suno(f"[Lane 4] [{job.track_id[:8]}] SonicMaster processing...")
                 if job.progress_callback:
                     await job.progress_callback("SonicMaster")
@@ -570,10 +670,12 @@ class SunoServiceOrchestrator(SingletonService):
                     log_service.suno(f"[Lane 4] [{job.track_id[:8]}] Complete -> Lane 5 & 6")
                     assert lane5_queue is not None
                     assert lane6_queue is not None
+                    job.lyrics_queued = True
                     await lane5_queue.put(job)
                     await lane6_queue.put(job)
                 else:
                     log_service.error(f"[Lane 4] [{job.track_id[:8]}] SonicMaster FAILED")
+                    job.failed = True
 
                 lane4_queue.task_done()
                 await asyncio.sleep(0.05)
@@ -581,6 +683,8 @@ class SunoServiceOrchestrator(SingletonService):
                 break
             except Exception as e:
                 log_service.error(f"[Lane 4] Error: {str(e)}")
+                if job is not None:
+                    job.failed = True
                 lane4_queue.task_done()
                 await asyncio.sleep(0.05)
 
@@ -592,6 +696,10 @@ class SunoServiceOrchestrator(SingletonService):
             try:
                 job = await lane5_queue.get()
                 assert job is not None
+                if self._skip_if_cancelled(job, "Lane 5"):
+                    job.lyrics_complete = True
+                    lane5_queue.task_done()
+                    continue
                 log_service.suno(f"[Lane 5] [{job.track_id[:8]}] Whisper processing...")
                 if job.progress_callback:
                     await job.progress_callback("Lyrics")
@@ -614,6 +722,7 @@ class SunoServiceOrchestrator(SingletonService):
                     log_service.error(f"[Lane 5] [{job.track_id[:8]}] Whisper error: {str(e)}")
                     job.lyrics_complete = True
 
+                self._notify_asset_doctor(job)
                 _clear_cuda_cache()
                 lane5_queue.task_done()
                 await asyncio.sleep(0.05)
@@ -633,7 +742,7 @@ class SunoServiceOrchestrator(SingletonService):
             try:
                 job = await lane6_queue.get()
                 assert job is not None
-                asyncio.create_task(self._process_lane6_job(job, lane6_queue))
+                spawn(self._process_lane6_job(job, lane6_queue), name=f"lane6_job:{job.track_id[:8]}")
             except asyncio.CancelledError:
                 break
 
@@ -641,6 +750,8 @@ class SunoServiceOrchestrator(SingletonService):
         if self.cpu_semaphore is None:
             raise RuntimeError("cpu_semaphore not initialized")
         try:
+            if self._skip_if_cancelled(job, "Lane 6"):
+                return
             async with self.cpu_semaphore:
                 log_service.suno(f"[Lane 6] [{job.track_id[:8]}] Processing...")
 
@@ -666,8 +777,18 @@ class SunoServiceOrchestrator(SingletonService):
                     log_service.warning(f"[Lane 6] [{job.track_id[:8]}] Incomplete")
         except Exception as e:
             log_service.error(f"[Lane 6] [{job.track_id[:8]}] Error: {str(e)}")
+            job.failed = True
         finally:
+            job.lane6_finished = True
+            self._notify_asset_doctor(job)
             lane6_queue.task_done()
+
+    @staticmethod
+    def _notify_asset_doctor(job: TrackJob):
+        if job.cancelled:
+            return
+        if job.lane6_finished and (job.lyrics_complete or not job.lyrics_queued):
+            asset_integrity_service.notify_tracks_changed([job.track_id], "suno")
 
     async def _lane6_mastering(self, job: TrackJob):
         try:
@@ -680,18 +801,35 @@ class SunoServiceOrchestrator(SingletonService):
             final_path = settings.ENHANCED_WAV_DIR / f"{job.track_id}.wav"
             result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=-14.0)
             if result:
-                job.mastering_complete = True
                 job.master_wav_path = result
-        except Exception as e:
-            log_service.error(f"[Lane 6 → Mastering] [{job.track_id[:8]}] Error: {str(e)}")
+                job.mastering_complete = True
+                if quality_scorer() is not None:
+                    spawn(self._score_master(job), name=f"quality_score:{job.track_id[:8]}")
+            else:
+                job.mastering_failed = True
+        except BaseException as e:
+            job.mastering_failed = True
+            if isinstance(e, Exception):
+                log_service.error(f"[Lane 6 → Mastering] [{job.track_id[:8]}] Error: {str(e)}")
             raise
+
+    @staticmethod
+    async def _score_master(job: TrackJob):
+        scorer = quality_scorer()
+        if scorer is None or job.master_wav_path is None:
+            return
+        try:
+            scores = await scorer(job.master_wav_path)
+            if scores:
+                log_service.suno(f"[Quality] [{job.track_id[:8]}] {scores}")
+        except Exception as e:
+            log_service.warning(f"[Quality] [{job.track_id[:8]}] Scoring failed: {e}")
 
     async def _lane6_audio_features(self, job: TrackJob):
         try:
             if self.features is None:
                 raise RuntimeError("features service not initialized")
-            while not job.mastering_complete:
-                await asyncio.sleep(0.1)
+            await self._wait_for_mastering(job)
             if job.features_complete:
                 return
             if job.master_wav_path is None:
@@ -709,8 +847,7 @@ class SunoServiceOrchestrator(SingletonService):
         try:
             if self.transcoding is None:
                 raise RuntimeError("transcoding service not initialized")
-            while not job.mastering_complete:
-                await asyncio.sleep(0.1)
+            await self._wait_for_mastering(job)
             if job.transcoding_complete:
                 return
             if job.progress_callback:
@@ -773,6 +910,10 @@ class SunoServiceOrchestrator(SingletonService):
             ]
             if not all(f.exists() for f in required_files):
                 log_service.error(f"[Catalog] [{job.track_id[:8]}] Missing files")
+                return
+            job.catalog_ready = True
+            if job.defer_catalog_reload:
+                log_service.suno(f"[Catalog] [{job.track_id[:8]}] Ready (catalog reload deferred to batch completion)")
                 return
             await self.catalog.reload_catalog()
             log_service.suno(f"[Catalog] [{job.track_id[:8]}] ✓ Registered")

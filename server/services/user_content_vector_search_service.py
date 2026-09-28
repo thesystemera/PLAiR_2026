@@ -1,11 +1,10 @@
 import asyncio
 import re
 import json
-import aiofiles
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from services import log_service
-from config.settings import settings
+from models_global import run_on_gpu_executor
 from math import radians, sin, cos, sqrt, atan2
 
 class UserContentVectorSearchService:
@@ -29,11 +28,7 @@ class UserContentVectorSearchService:
             log_service.warning("No user content indexed for search")
             return []
 
-        current_annoy_index = (
-            self.vector_db.annoy_index_content_1
-            if self.vector_db.current_index == 1
-            else self.vector_db.annoy_index_content_2
-        )
+        current_annoy_index = self.vector_db.current_annoy_index()
 
         def _safe_search(vector_data, num_items):
             with self.vector_db.index_lock:
@@ -59,7 +54,7 @@ class UserContentVectorSearchService:
 
             log_service.user_content(f"Category weights: {query_weights}")
 
-            query_embedding = self.vector_db._generate_embedding(cleaned_query)
+            query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
 
             if cleaned_query != query:
                 log_service.user_content(f"Cleaned query: {cleaned_query}")
@@ -73,19 +68,42 @@ class UserContentVectorSearchService:
 
             log_service.user_content(f"Found {len(nearest_ids)} candidates, re-ranking")
 
-            results = []
-            conn = self.user_content_service._get_connection()
+            results = await asyncio.to_thread(
+                self._rerank_candidates_sync, nearest_ids, query_embedding, query_weights, content_type, user_location
+            )
+
+            results.sort(key=lambda x: x.get('final_score', 0), reverse=True)
+
+            if results:
+                log_service.user_content("Top 5 matches:")
+                for i, item in enumerate(results[:5], 1):
+                    username = item.get('user_data', {}).get('username', 'Unknown')
+                    transcription = item.get('transcription', '')[:50]
+                    score = item.get('final_score', 0)
+                    log_service.user_content(f"  {i}. {score:.3f} {username}: {transcription}...")
+
+            results = results[:n_results]
+
+            log_service.user_content(f"Returning {len(results)} results for {query} intent: {intent_category}")
+            return results
+
+        except Exception as e:
+            log_service.error(f"Vector search error: {str(e)}")
+            import traceback
+            log_service.error(f"Traceback: {traceback.format_exc()}")
+            return []
+
+    def _rerank_candidates_sync(self, nearest_ids, query_embedding, query_weights, content_type,
+                                user_location) -> List[Dict[str, Any]]:
+        results = []
+        conn = self.user_content_service._get_connection()
+        try:
             c = conn.cursor()
 
             for annoy_idx in nearest_ids:
                 rowid = annoy_idx + 1
-                full_data = None
-                content_id = None
-                
-                if hasattr(self.vector_db, '_content_rowid_cache') and rowid in self.vector_db._content_rowid_cache:
-                    content_id = self.vector_db._content_rowid_cache[rowid]
-                    full_data = self.vector_db._content_metadata_cache.get(rowid, {}).copy()
-                
+                content_id, full_data = self.vector_db.lookup_cached_row(rowid)
+
                 if full_data is None:
                     c.execute("SELECT content_id, metadata_json FROM shoutouts WHERE rowid = %s", (rowid,))
                     result = c.fetchone()
@@ -101,48 +119,7 @@ class UserContentVectorSearchService:
 
                 category_texts = self.vector_db._extract_category_texts(full_data)
 
-                category_embeddings = {
-                    "transcription": self.vector_db.get_or_create_embedding(
-                        category_texts["transcription"], "transcription_embeddings",
-                        self.vector_db.transcription_embeddings
-                    ),
-                    "category": self.vector_db.get_or_create_embedding(
-                        category_texts["category"], "category_embeddings",
-                        self.vector_db.category_embeddings
-                    ),
-                    "urgency": self.vector_db.get_or_create_embedding(
-                        category_texts["urgency"], "urgency_embeddings",
-                        self.vector_db.urgency_embeddings
-                    ),
-                    "importance": self.vector_db.get_or_create_embedding(
-                        category_texts["importance"], "importance_embeddings",
-                        self.vector_db.importance_embeddings
-                    ),
-                    "tags": self.vector_db.get_or_create_embedding(
-                        category_texts["tags"], "tags_embeddings",
-                        self.vector_db.tags_embeddings
-                    ),
-                    "username": self.vector_db.get_or_create_embedding(
-                        category_texts["username"], "username_embeddings",
-                        self.vector_db.username_embeddings
-                    ),
-                    "location": self.vector_db.get_or_create_embedding(
-                        category_texts["location"], "location_embeddings",
-                        self.vector_db.location_embeddings
-                    ),
-                    "target_audience": self.vector_db.get_or_create_embedding(
-                        category_texts["target_audience"], "target_audience_embeddings",
-                        self.vector_db.target_audience_embeddings
-                    ),
-                    "sentiment": self.vector_db.get_or_create_embedding(
-                        category_texts["sentiment"], "sentiment_embeddings",
-                        self.vector_db.sentiment_embeddings
-                    ),
-                    "content_theme": self.vector_db.get_or_create_embedding(
-                        category_texts["content_theme"], "content_theme_embeddings",
-                        self.vector_db.content_theme_embeddings
-                    )
-                }
+                category_embeddings = self.vector_db.get_category_embeddings(category_texts)
 
                 reweighted_embedding = self.vector_db._create_weighted_embedding(
                     category_embeddings, query_weights
@@ -192,28 +169,9 @@ class UserContentVectorSearchService:
 
                 results.append(search_result)
 
+        finally:
             conn.close()
-
-            results.sort(key=lambda x: x.get('final_score', 0), reverse=True)
-
-            if results:
-                log_service.user_content("Top 5 matches:")
-                for i, item in enumerate(results[:5], 1):
-                    username = item.get('user_data', {}).get('username', 'Unknown')
-                    transcription = item.get('transcription', '')[:50]
-                    score = item.get('final_score', 0)
-                    log_service.user_content(f"  {i}. {score:.3f} {username}: {transcription}...")
-
-            results = results[:n_results]
-
-            log_service.user_content(f"Returning {len(results)} results for {query} intent: {intent_category}")
-            return results
-
-        except Exception as e:
-            log_service.error(f"Vector search error: {str(e)}")
-            import traceback
-            log_service.error(f"Traceback: {traceback.format_exc()}")
-            return []
+        return results
 
     @staticmethod
     def _construct_audio_url(item: Dict[str, Any]) -> str:
@@ -417,47 +375,3 @@ class UserContentVectorSearchService:
             log_service.user_content("🎯 Query intent: GENERAL")
 
         return detected_category or "general", weights, cleaned_query
-
-    @staticmethod
-    async def load_all_shoutouts() -> List[Dict[str, Any]]:
-        users_directory = settings.USERS_DIR
-        if not users_directory.exists():
-            log_service.warning(f"Users directory not found: {users_directory}")
-            return []
-
-        all_shoutouts = []
-
-        for user_dir in users_directory.iterdir():
-            if not user_dir.is_dir():
-                continue
-
-            try:
-                user_id = int(user_dir.name)
-                shoutouts_dir = settings.get_user_shoutouts_dir(user_id)
-            except ValueError:
-                continue
-
-            if not shoutouts_dir.exists():
-                continue
-
-            for json_file in shoutouts_dir.glob("*.json"):
-                try:
-                    async with aiofiles.open(json_file, 'r', encoding='utf-8') as f:
-                        content = await f.read()
-                        shoutout_data = json.loads(content)
-
-                        timestamp = json_file.stem
-                        shoutout_data['id'] = f"{user_id}_{timestamp}"
-                        shoutout_data['content_type'] = 'shoutout'
-
-                        if 'user_data' in shoutout_data and 'timestamp' in shoutout_data['user_data']:
-                            shoutout_data['date'] = shoutout_data['user_data']['timestamp']
-                        else:
-                            shoutout_data['date'] = ''
-
-                        all_shoutouts.append(shoutout_data)
-                except Exception as e:
-                    log_service.error(f"Error loading shoutout {json_file.name}: {str(e)}")
-
-        log_service.user_content(f"Loaded {len(all_shoutouts)} shoutouts from filesystem")
-        return all_shoutouts

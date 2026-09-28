@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { safeStorage } from './safeStorage'
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     const r = Math.random() * 16 | 0
@@ -57,45 +58,45 @@ export function getDeviceInfo() {
 }
 
 export function getGuestId() {
-  let guestId = localStorage.getItem('guest_id')
+  let guestId = safeStorage.get('guest_id')
   if (!guestId) {
     guestId = `guest_${generateUUID()}`
-    localStorage.setItem('guest_id', guestId)
+    safeStorage.set('guest_id', guestId)
     logger.info('[Session] Created new guest ID:', guestId)
   }
   return guestId
 }
 
 export function getDeviceId() {
-  let deviceId = localStorage.getItem('device_id')
+  let deviceId = safeStorage.get('device_id')
   if (!deviceId) {
     deviceId = generateUUID()
-    localStorage.setItem('device_id', deviceId)
+    safeStorage.set('device_id', deviceId)
     logger.info('[Session] Created new device ID:', deviceId)
 
     const deviceInfo = getDeviceInfo()
-    localStorage.setItem('device_name', deviceInfo.name)
-    localStorage.setItem('device_type', deviceInfo.type)
+    safeStorage.set('device_name', deviceInfo.name)
+    safeStorage.set('device_type', deviceInfo.type)
   }
   return deviceId
 }
 
 export function getDeviceName() {
-  let deviceName = localStorage.getItem('device_name')
+  let deviceName = safeStorage.get('device_name')
   if (!deviceName) {
     const deviceInfo = getDeviceInfo()
     deviceName = deviceInfo.name
-    localStorage.setItem('device_name', deviceName)
+    safeStorage.set('device_name', deviceName)
   }
   return deviceName
 }
 
 export function getDeviceType() {
-  let deviceType = localStorage.getItem('device_type')
+  let deviceType = safeStorage.get('device_type')
   if (!deviceType) {
     const deviceInfo = getDeviceInfo()
     deviceType = deviceInfo.type
-    localStorage.setItem('device_type', deviceType)
+    safeStorage.set('device_type', deviceType)
   }
   return deviceType
 }

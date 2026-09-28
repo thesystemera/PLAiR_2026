@@ -9,17 +9,8 @@ PLAYLIST_MODES = frozenset([
     "top_hits_all", "top_hits_week", "top_hits_day",
 ])
 
-SEED_MODES = frozenset([
-    "all", "primary_genre", "secondary_genres", "mood",
-    "primary_artist", "similar_artists",
-    "style", "theme", "lyrics", "vocal",
-])
-
 def is_playlist_mode(mode: str) -> bool:
     return mode in PLAYLIST_MODES
-
-def is_seed_mode(mode: str) -> bool:
-    return mode in SEED_MODES
 
 async def _get_user_preferences(user_id: Optional[int] = None):
     if not user_id:
@@ -231,7 +222,9 @@ class PlaybackPopulationService:
         log_service.playback(f"[{session_id}] Filling queue with {period} top hits")
 
         try:
-            top_hits = await analytics_service.get_top_hits(period=period, limit=needed + 10)
+            top_hits = await analytics_service.get_top_hits(
+                period=period, limit=needed + len(existing_ids) + len(banned_ids) + 10,
+            )
         except Exception as e:
             log_service.error(f"[{session_id}] Failed to fetch top hits: {e}")
             return []

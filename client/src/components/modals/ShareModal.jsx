@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Modal, ModalProgress, ModalErrorState } from './Modal'
+import { FadeSwap } from '../Motion'
+import { PRESETS } from '../../lib/motion'
 import { useUIState } from '../../contexts/UIStateContext'
 import { triggerHaptic } from '../../lib/haptics'
 import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
-import { renderVideo } from '../../lib/offlineVideoRenderer'
 import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
@@ -16,13 +17,25 @@ export function ShareModal({ isOpen, onClose, track }) {
   const [progress, setProgress] = useState(0)
   const [videoBlob, setVideoBlob] = useState(null)
   const [videoUrl, setVideoUrl] = useState(null)
+  const [publishedVideoUrl, setPublishedVideoUrl] = useState(null)
   const [error, setError] = useState(null)
   const [linkCopied, setLinkCopied] = useState(false)
+  const [videoLinkCopied, setVideoLinkCopied] = useState(false)
 
   const includeVideoClips = settingsState.videoClipsEnabled
 
   const abortRef = useRef(false)
   const videoRef = useRef(null)
+  const videoUrlRef = useRef(null)
+
+  const releaseVideoUrl = useCallback(() => {
+    if (videoUrlRef.current) {
+      URL.revokeObjectURL(videoUrlRef.current)
+      videoUrlRef.current = null
+    }
+  }, [])
+
+  useEffect(() => releaseVideoUrl, [releaseVideoUrl])
 
   const trackTitle = currentTrack?.generation_params?.title || 'Untitled'
   const trackArtist = currentTrack?.generation_params?.artist_name || 'Unknown Artist'
@@ -34,24 +47,22 @@ export function ShareModal({ isOpen, onClose, track }) {
       setStatusText('')
       setProgress(0)
       setVideoBlob(null)
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl)
-      }
+      releaseVideoUrl()
       setVideoUrl(null)
+      setPublishedVideoUrl(null)
       setError(null)
       setLinkCopied(false)
+      setVideoLinkCopied(false)
       abortRef.current = false
     } else {
       setIsOfflineRendering(false)
       setVideoPreviewPlaying(false)
       abortRef.current = true
+      setVideoBlob(null)
+      releaseVideoUrl()
+      setVideoUrl(null)
     }
-    return () => {
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl)
-      }
-    }
-  }, [isOpen, setIsOfflineRendering, setVideoPreviewPlaying])
+  }, [isOpen, setIsOfflineRendering, setVideoPreviewPlaying, releaseVideoUrl])
 
   const getShareLink = useCallback(() => {
     return `https://plair.live/track/${trackId}`
@@ -124,13 +135,17 @@ export function ShareModal({ isOpen, onClose, track }) {
         ? `${window.location.origin}/api/artwork/${trackId}`
         : null
 
-      const audioUrl = `${window.location.origin}${api.getStreamUrl(trackId)}`
+      const audioUrl = `${window.location.origin}${api.getRenderAudioUrl(trackId)}`
 
       if (!artworkUrl) {
         throw new Error('Track has no artwork')
       }
 
       setStatus('rendering')
+
+      const { renderVideo } = await import('../../lib/offlineVideoRenderer')
+
+      if (abortRef.current) return
 
       const blob = await renderVideo({
         trackId,
@@ -158,9 +173,27 @@ export function ShareModal({ isOpen, onClose, track }) {
 
       if (abortRef.current) return
 
+      releaseVideoUrl()
       const url = URL.createObjectURL(blob)
+      videoUrlRef.current = url
       setVideoBlob(blob)
       setVideoUrl(url)
+
+      setStatusText('Publishing video to PLAiR...')
+      try {
+        const published = await api.uploadShareVideo({
+          trackId,
+          title: trackTitle,
+          artist: trackArtist,
+          blob
+        })
+        setPublishedVideoUrl(published.page_url)
+        setError(null)
+      } catch (publishErr) {
+        logger.warn('[ShareModal] Hosted publish failed, keeping local video share available:', publishErr)
+        setPublishedVideoUrl(null)
+        setError('Video rendered. Sign in to publish a hosted PLAiR link, or use Share Video to send the MP4 directly.')
+      }
       setStatus('complete')
       setIsOfflineRendering(false)
       triggerHaptic('success')
@@ -171,7 +204,7 @@ export function ShareModal({ isOpen, onClose, track }) {
       setError(err.message || 'Failed to generate video')
       setIsOfflineRendering(false)
     }
-  }, [currentTrack, trackId, includeVideoClips, setIsOfflineRendering])
+  }, [currentTrack, trackId, includeVideoClips, setIsOfflineRendering, trackTitle, trackArtist, releaseVideoUrl])
 
   const handleDownload = useCallback(() => {
     if (!videoUrl) return
@@ -186,25 +219,57 @@ export function ShareModal({ isOpen, onClose, track }) {
   }, [videoUrl, trackTitle])
 
   const handleShareVideo = useCallback(async () => {
-    if (!videoBlob || !navigator.share) return
+    if (!navigator.share) return
 
     setError(null)
     triggerHaptic('light')
 
     try {
-      const file = new File([videoBlob], `${trackTitle.replace(/[^a-z0-9]/gi, '_')}_plair.mp4`, { type: 'video/mp4' })
+      if (publishedVideoUrl) {
+        await navigator.share({
+          title: trackTitle,
+          text: `Watch "${trackTitle}" by ${trackArtist} on PLAiR`,
+          url: publishedVideoUrl
+        })
+        return
+      }
 
-      await navigator.share({
-        title: trackTitle,
-        text: `Listen to "${trackTitle}" by ${trackArtist} on plair.live`,
-        files: [file]
-      })
+      if (videoBlob) {
+        const file = new File(
+          [videoBlob],
+          `${trackTitle.replace(/[^a-z0-9]/gi, '_')}_plair.mp4`,
+          { type: 'video/mp4' }
+        )
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: trackTitle,
+            text: `Watch "${trackTitle}" by ${trackArtist} on PLAiR`,
+            files: [file]
+          })
+          return
+        }
+      }
+
+      setError('This browser cannot share the MP4 directly. Download the MP4 or sign in to publish a hosted link.')
     } catch (err) {
       if (err.name === 'AbortError') return
       logger.error('[ShareModal] Share video failed:', err)
-      setError(`Sharing failed. Download and share manually.`)
+      setError(publishedVideoUrl ? 'Sharing failed. Copy the video link instead.' : 'Sharing failed. Download the MP4 instead.')
     }
-  }, [videoBlob, trackTitle, trackArtist])
+  }, [publishedVideoUrl, videoBlob, trackTitle, trackArtist])
+
+  const handleCopyVideoLink = useCallback(async () => {
+    if (!publishedVideoUrl) return
+
+    try {
+      await navigator.clipboard.writeText(publishedVideoUrl)
+      setVideoLinkCopied(true)
+      triggerHaptic('success')
+      setTimeout(() => setVideoLinkCopied(false), 2000)
+    } catch (err) {
+      logger.error('[ShareModal] Failed to copy video link:', err)
+    }
+  }, [publishedVideoUrl])
 
   const handleCancel = useCallback(() => {
     abortRef.current = true
@@ -226,7 +291,7 @@ export function ShareModal({ isOpen, onClose, track }) {
       <div className="space-y-6">
         <div className="flex items-center gap-4">
           {currentTrack?.has_artwork && (
-            <img
+            <img decoding="async"
               src={`/api/artwork/${trackId}`}
               alt={trackTitle}
               className="w-16 h-16 rounded-lg object-cover"
@@ -239,14 +304,16 @@ export function ShareModal({ isOpen, onClose, track }) {
         </div>
 
         <div>
-          <div className="text-sm text-gray-400 mb-2">Share Link</div>
+          <div className="text-sm text-gray-400 mb-2">Track Link</div>
           <div className="flex gap-2">
             <div className="flex-1 bg-white/5 rounded-lg px-3 py-2 text-sm text-gray-300 truncate">
               {getShareLink()}
             </div>
             <button
               onClick={handleCopyLink}
-              className="px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+              title="Copy track link"
+              aria-label="Copy track link"
+              className="ui-press px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
             >
               {linkCopied ? (
                 <Check className="w-4 h-4 text-green-400" />
@@ -257,7 +324,9 @@ export function ShareModal({ isOpen, onClose, track }) {
             {navigator.share && (
               <button
                 onClick={handleNativeShare}
-                className="px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                title="Share track link"
+                aria-label="Share track link"
+                className="ui-press px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
               >
                 <Share2 className="w-4 h-4 text-white" />
               </button>
@@ -268,80 +337,101 @@ export function ShareModal({ isOpen, onClose, track }) {
         <div>
           <div className="text-sm text-gray-400 mb-2">Share as Video</div>
 
-          {status === 'idle' && (
-            <div className="space-y-3">
-              <button
-                onClick={handleGenerateVideo}
-                disabled={!currentTrack}
-                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors font-medium"
-              >
-                <Video className="w-5 h-5" />
-                Generate Video{includeVideoClips ? ' + Clips' : ''}
-              </button>
-            </div>
-          )}
-
-          {isRendering && (
-            <ModalProgress
-              progress={progress}
-              statusText={statusText || (status === 'loading' ? 'Loading...' : 'Rendering...')}
-              showSpinner={false}
-              showCancel={true}
-              onCancel={handleCancel}
-            />
-          )}
-
-          {status === 'complete' && videoUrl && (
-            <div className="space-y-3">
-              <div className="relative aspect-[9/16] max-h-64 mx-auto rounded-lg overflow-hidden bg-black">
-                <video
-                  ref={videoRef}
-                  src={videoUrl}
-                  controls
-                  className="w-full h-full object-contain"
-                  onPlay={() => setVideoPreviewPlaying(true)}
-                  onPause={() => setVideoPreviewPlaying(false)}
-                  onEnded={() => setVideoPreviewPlaying(false)}
-                />
-              </div>
-              {videoBlob && (
-                <div className="text-xs text-gray-400 text-center">
-                  {(videoBlob.size / (1024 * 1024)).toFixed(1)} MB
-                </div>
-              )}
-              {error && (
-                <div className="text-amber-400 text-sm bg-amber-500/10 rounded-lg px-3 py-2">
-                  {error}
-                </div>
-              )}
-              <div className="flex gap-2">
+          <FadeSwap swapKey={isRendering ? 'rendering' : status} mode="wait" preset={PRESETS.stepSwap}>
+            {status === 'idle' && (
+              <div className="space-y-3">
                 <button
-                  onClick={handleDownload}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-lg transition-colors font-medium"
+                  onClick={handleGenerateVideo}
+                  disabled={!currentTrack}
+                  className="ui-press-soft w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors font-medium"
                 >
-                  <Download className="w-5 h-5" />
-                  Download
+                  <Video className="w-5 h-5" />
+                  Generate Video{includeVideoClips ? ' + Clips' : ''}
                 </button>
-                {navigator.share && navigator.canShare?.({ files: [new File([], 'test.mp4', { type: 'video/mp4' })] }) && (
-                  <button
-                    onClick={handleShareVideo}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors font-medium"
-                  >
-                    <Share2 className="w-5 h-5" />
-                    Share
-                  </button>
-                )}
               </div>
-            </div>
-          )}
+            )}
 
-          {status === 'error' && (
-            <ModalErrorState
-              title="Generation Failed"
-              message={error || 'Failed to generate video'}
-              onRetry={handleGenerateVideo}
-            />
-          )}
+            {isRendering && (
+              <ModalProgress
+                progress={progress}
+                statusText={statusText || (status === 'loading' ? 'Loading...' : 'Rendering...')}
+                showSpinner={false}
+                showCancel={true}
+                onCancel={handleCancel}
+              />
+            )}
+
+            {status === 'complete' && videoUrl && (
+              <div className="space-y-3">
+                <div className="relative aspect-[9/16] max-h-64 mx-auto rounded-lg overflow-hidden bg-black">
+                  <video
+                    ref={videoRef}
+                    src={videoUrl}
+                    controls
+                    className="w-full h-full object-contain"
+                    onPlay={() => setVideoPreviewPlaying(true)}
+                    onPause={() => setVideoPreviewPlaying(false)}
+                    onEnded={() => setVideoPreviewPlaying(false)}
+                  />
+                </div>
+                {videoBlob && (
+                  <div className="text-xs text-gray-400 text-center">
+                    {publishedVideoUrl ? 'Hosted MP4 ready' : 'MP4 ready'} - {(videoBlob.size / (1024 * 1024)).toFixed(1)} MB
+                  </div>
+                )}
+                {publishedVideoUrl && (
+                  <div className="flex gap-2">
+                    <div className="flex-1 bg-white/5 rounded-lg px-3 py-2 text-sm text-gray-300 truncate">
+                      {publishedVideoUrl}
+                    </div>
+                    <button
+                      onClick={handleCopyVideoLink}
+                      title="Copy hosted video link"
+                      aria-label="Copy hosted video link"
+                      className="ui-press px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                    >
+                      {videoLinkCopied ? (
+                        <Check className="w-4 h-4 text-green-400" />
+                      ) : (
+                        <Copy className="w-4 h-4 text-white" />
+                      )}
+                    </button>
+                  </div>
+                )}
+                {error && (
+                  <div className="text-amber-400 text-sm bg-amber-500/10 rounded-lg px-3 py-2">
+                    {error}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleDownload}
+                    className="ui-press flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-lg transition-colors font-medium"
+                  >
+                    <Download className="w-5 h-5" />
+                    Download MP4
+                  </button>
+                  {navigator.share && (publishedVideoUrl || videoBlob) && (
+                    <button
+                      onClick={handleShareVideo}
+                      className="ui-press flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors font-medium"
+                    >
+                      <Share2 className="w-5 h-5" />
+                      Share Video
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {status === 'error' && (
+              <ModalErrorState
+                title="Generation Failed"
+                message={error || 'Failed to generate video'}
+                onRetry={handleGenerateVideo}
+              />
+            )}
+          </FadeSwap>
         </div>
       </div>
     </Modal>

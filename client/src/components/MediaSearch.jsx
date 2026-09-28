@@ -8,6 +8,8 @@ import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from 
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUIState } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
+import { MOTION } from '../lib/motion'
+import { useViewport } from '../contexts/ViewportContext'
 
 export const MediaSearch = memo(function MediaSearch({
   type = 'track',
@@ -16,11 +18,12 @@ export const MediaSearch = memo(function MediaSearch({
   searchIntent,
   onGenerate,
   onToggleQueue,
-  audio,
-  onToggleView,
-  currentView
+  audio
 }) {
-  const { queueState, toastError, interfaceState, openUploadModal } = useUIState()
+  const { queueState, toastError, interfaceState, openUploadModal, toggleCatalogView } = useUIState()
+  const { isLG } = useViewport()
+  const compact = isLG
+  const currentView = interfaceState.catalogView
   const showError = toastError
   const isGenerating = queueState?.hasActiveJobs
   const [query, setQuery] = useState('')
@@ -42,9 +45,13 @@ export const MediaSearch = memo(function MediaSearch({
 
   const badgeOpacity = query.length <= 20 ? 1 : Math.max(0, 1 - (query.length - 20) / 20)
 
-  const placeholderText = type === 'track'
-    ? 'Search tracks or speak...'
-    : 'Search shoutouts or speak...'
+  const placeholderText = compact
+    ? 'Search...'
+    : type === 'track'
+      ? 'Search tracks or speak...'
+      : 'Search shoutouts or speak...'
+
+  const actionButtonSize = compact ? 'w-8 h-8' : 'w-9 h-9'
 
   useEffect(() => {
     return () => {
@@ -129,10 +136,10 @@ export const MediaSearch = memo(function MediaSearch({
       transition={TRANSITIONS.fade}
     >
       <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.searchBar} />
-      <form onSubmit={handleSubmit} className="relative z-10 h-full px-4 md:px-6 flex items-center gap-2 w-full">
-        <div className="relative flex-grow">
+      <form onSubmit={handleSubmit} className={`relative z-10 h-full flex items-center w-full ${compact ? 'px-3 gap-1.5' : 'px-4 md:px-6 gap-2'}`}>
+        <div className="relative flex-1 min-w-0">
           <Search
-            className={`absolute left-3 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
+            className={`absolute ${compact ? 'left-2.5' : 'left-3'} top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
               isFocused ? 'text-purple-400' : 'text-gray-400'
             }`}
             size={16}
@@ -145,20 +152,20 @@ export const MediaSearch = memo(function MediaSearch({
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
             placeholder={placeholderText}
-            className={`w-full pl-10 pr-10 py-2 bg-dark-card border rounded-full text-sm text-white placeholder-gray-500 focus:outline-none transition-all ${
+            className={`w-full ${compact ? 'pl-8 pr-7' : 'pl-10 pr-10'} py-2 bg-dark-card border rounded-full text-sm text-white placeholder-gray-500 focus:outline-none transition ${
               isFocused ? 'border-purple-500 shadow-lg shadow-purple-500/20' : 'border-gray-700'
             }`}
           />
 
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+          <div className={`absolute ${compact ? 'right-2' : 'right-3'} top-1/2 -translate-y-1/2 flex items-center gap-2`}>
             <AnimatePresence>
-              {query && intentMeta && !isGenerating && (
+              {query && intentMeta && !isGenerating && !compact && (
                 (IntentIcon) => (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.8, x: 5 }}
                     animate={{ opacity: badgeOpacity, scale: 1, x: 0 }}
                     exit={{ opacity: 0, scale: 0.8, x: 5 }}
-                    transition={{ opacity: { duration: 0.2 } }}
+                    transition={MOTION.quickOpacity}
                     className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-opacity-20 backdrop-blur-sm pointer-events-none select-none"
                     style={{ backgroundColor: `${intentMeta.color}30` }}
                   >
@@ -178,7 +185,7 @@ export const MediaSearch = memo(function MediaSearch({
               <button
                 type="button"
                 onClick={handleClear}
-                className="text-gray-400 hover:text-white transition-colors"
+                className="ui-press ui-pop-in text-gray-400 hover:text-white transition-colors"
               >
                 <X size={16} />
               </button>
@@ -200,7 +207,7 @@ export const MediaSearch = memo(function MediaSearch({
               triggerHaptic('light')
               openUploadModal()
             }}
-            className="flex-shrink-0 w-9 h-9 bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center"
+            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
             title="Upload your music"
           >
             <Upload className="w-4 h-4" />
@@ -212,13 +219,13 @@ export const MediaSearch = memo(function MediaSearch({
             type="button"
             onClick={isGenerating ? onToggleQueue : handleGenerate}
             disabled={!isGenerating && !query.trim()}
-            className="flex-shrink-0 w-9 h-9 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
             title={isGenerating ? 'View generation queue' : 'Generate tracks'}
           >
             {isGenerating ? (
               <motion.div
                 animate={{ rotate: 360 }}
-                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                transition={MOTION.spin}
               >
                 <Loader className="w-4 h-4" />
               </motion.div>
@@ -228,11 +235,11 @@ export const MediaSearch = memo(function MediaSearch({
           </button>
         )}
 
-        {onToggleView && (
+        {(
           <button
             type="button"
-            onClick={onToggleView}
-            className="flex-shrink-0 w-9 h-9 bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center"
+            onClick={toggleCatalogView}
+            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
             title={currentView === 'tracks' ? 'View Shoutouts' : 'View Catalog'}
           >
             {currentView === 'tracks' ? (

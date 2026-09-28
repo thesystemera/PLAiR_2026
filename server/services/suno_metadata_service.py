@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 import asyncio
 import aiofiles
@@ -62,7 +63,7 @@ class MusicMetadata(SingletonService):
                 "title": music_params.get("title"),
                 "artist_name": music_params.get("artist_name"),
                 "instrumental": music_params.get("instrumental", False),
-                "model": music_params.get("model", "V5"),
+                "model": music_params.get("model", settings.SUNO_MODEL_VERSION),
                 "negative_tags": music_params.get("negative_tags"),
                 "vocal_gender": music_params.get("vocal_gender"),
                 "style_weight": music_params.get("style_weight"),
@@ -141,23 +142,21 @@ class MusicMetadata(SingletonService):
             try:
                 async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
                     content = await f.read()
-                    if not content or content.strip() == "":
-                        log_service.warning(f"Corrupt metadata: {filepath.name} is empty - deleting")
-                        try:
-                            filepath.unlink()
-                        except Exception as e:
-                            log_service.error(f"Failed to delete {filepath.name}: {e}")
-                        return None
-                    return json.loads(content)
+                if not content or content.strip() == "":
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+                        continue
+                    self._quarantine_metadata(filepath, "is empty")
+                    return None
+                return json.loads(content)
 
             except FileNotFoundError:
                 return None
             except json.JSONDecodeError:
-                log_service.warning(f"Corrupt metadata: {filepath.name} has invalid JSON - deleting")
-                try:
-                    filepath.unlink()
-                except Exception as e:
-                    log_service.error(f"Failed to delete {filepath.name}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    continue
+                self._quarantine_metadata(filepath, "has invalid JSON")
                 return None
             except PermissionError:
                 if attempt < max_retries - 1:
@@ -175,6 +174,21 @@ class MusicMetadata(SingletonService):
                     return None
 
         return None
+
+    def _quarantine_metadata(self, filepath: Path, reason: str) -> Optional[Path]:
+        corrupt_dir = self.metadata_dir / "_corrupt"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        target = corrupt_dir / f"{filepath.stem}.{timestamp}{filepath.suffix}"
+        try:
+            corrupt_dir.mkdir(parents=True, exist_ok=True)
+            os.replace(str(filepath), str(target))
+        except FileNotFoundError:
+            return None
+        except Exception as e:
+            log_service.error(f"Corrupt metadata: {filepath.name} {reason} and could not be quarantined: {e}")
+            return None
+        log_service.warning(f"Corrupt metadata: {filepath.name} {reason} - quarantined to _corrupt/{target.name}")
+        return target
 
     def get_audio_path(self, unique_id: str) -> Path:
         return self.audio_dir / f"{unique_id}.mp3"

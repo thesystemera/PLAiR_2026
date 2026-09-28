@@ -1,5 +1,5 @@
 import { logger } from '../lib/logger'
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { cacheManager } from '../lib/cacheManager'
 import { useUIState } from './UIStateContext'
 import { useNetwork } from './NetworkContext'
@@ -40,21 +40,6 @@ export function StorageProvider({ children }) {
   const [loading, setLoading] = useState(true)
   const updateTimeoutRef = useRef(null)
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        await cacheManager.initialize()
-        await refreshStorageInfo()
-        await refreshDataUsage()
-        setLoading(false)
-      } catch (err) {
-        logger.error('[Storage] Initialization failed:', err)
-        setLoading(false)
-      }
-    }
-    void init()
-  }, [])
-
   const refreshStorageInfo = useCallback(async () => {
     try {
       const info = await cacheManager.getStorageInfo()
@@ -72,6 +57,21 @@ export function StorageProvider({ children }) {
       logger.error('[Storage] Failed to refresh data usage:', err)
     }
   }, [])
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await cacheManager.initialize()
+        await refreshStorageInfo()
+        await refreshDataUsage()
+        setLoading(false)
+      } catch (err) {
+        logger.error('[Storage] Initialization failed:', err)
+        setLoading(false)
+      }
+    }
+    void init()
+  }, [refreshStorageInfo, refreshDataUsage])
 
   const scheduleStorageUpdate = useCallback(() => {
     if (updateTimeoutRef.current) {
@@ -145,14 +145,16 @@ export function StorageProvider({ children }) {
     }
   }, [refreshDataUsage])
 
-  const value = {
+  const isOnline = audioState.isOnline
+
+  const value = useMemo(() => ({
     storageInfo,
     dataUsage,
     refreshStorageInfo,
     refreshDataUsage,
     loading,
 
-    isOnline: audioState.isOnline,
+    isOnline,
     networkQuality,
 
     cacheTrack,
@@ -162,7 +164,10 @@ export function StorageProvider({ children }) {
     clearAllCache,
 
     resetSessionUsage,
-  }
+  }), [
+    storageInfo, dataUsage, refreshStorageInfo, refreshDataUsage, loading, isOnline, networkQuality,
+    cacheTrack, isCached, getCachedTrack, deleteTrack, clearAllCache, resetSessionUsage,
+  ])
 
   return (
     <StorageContext.Provider value={value}>

@@ -2,46 +2,7 @@ import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
-function useMaskOffset(scrollerRef, playerHeight) {
-  const [offset, setOffset] = useState(0)
-
-  useEffect(() => {
-    const calculateOffset = () => {
-      if (!scrollerRef.current) return
-      
-      const scrollerRect = scrollerRef.current.getBoundingClientRect()
-      const viewportHeight = window.innerHeight
-      
-      // Button container spans from header to player+64
-      const buttonContainerTop = PANEL.headerHeight
-      const buttonContainerBottom = viewportHeight - playerHeight - 64
-      const buttonCenterY = (buttonContainerTop + buttonContainerBottom) / 2
-      
-      // Where is that relative to the scroller?
-      const buttonCenterRelativeToScroller = buttonCenterY - scrollerRect.top
-      const scrollerCenter = scrollerRect.height / 2
-      
-      setOffset(buttonCenterRelativeToScroller - scrollerCenter)
-    }
-
-    calculateOffset()
-    
-    const resizeObserver = new ResizeObserver(calculateOffset)
-    if (scrollerRef.current) {
-      resizeObserver.observe(scrollerRef.current)
-    }
-    window.addEventListener('resize', calculateOffset)
-    
-    return () => {
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', calculateOffset)
-    }
-  }, [scrollerRef, playerHeight])
-
-  return offset
-}
 import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
-import { useDJAudioStream } from '../hooks/useDJAudioStream'
 import { useRadioUI, useUIState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
@@ -51,19 +12,57 @@ import { useViewport } from '../contexts/ViewportContext'
 import { Conversation } from './Conversation'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
+import { OnAirBadge } from './OnAirBadge'
 import { registerKeyboardRecordingCallback } from './KeyboardControls'
 import { PanelHeader } from './Panel'
 import { Scroller } from './Scroller'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
+import { CSS_TRANSITION } from '../lib/motion'
 
-export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
+const RADIO_BUTTON_SIZE = 240
+const RADIO_SIDE_WIDTH = 'min(18rem, 40vw)'
+
+function useRadioAnchor(scrollerRef, anchorRef) {
+  const [anchor, setAnchor] = useState({ offset: 0, scale: 1 })
+
+  useEffect(() => {
+    const measure = () => {
+      const scroller = scrollerRef.current
+      const anchorNode = anchorRef.current
+      if (!scroller || !anchorNode) return
+      const scrollerRect = scroller.getBoundingClientRect()
+      const anchorRect = anchorNode.getBoundingClientRect()
+      const offset = (anchorRect.top + anchorRect.height / 2) - (scrollerRect.top + scrollerRect.height / 2)
+      const fit = Math.min(anchorRect.width, anchorRect.height) - 16
+      const scale = Math.max(0.5, Math.min(1, fit / RADIO_BUTTON_SIZE))
+      setAnchor(prev => (Math.abs(prev.offset - offset) < 0.5 && Math.abs(prev.scale - scale) < 0.005) ? prev : { offset, scale })
+    }
+
+    measure()
+    const resizeObserver = new ResizeObserver(measure)
+    if (scrollerRef.current) resizeObserver.observe(scrollerRef.current)
+    if (anchorRef.current) resizeObserver.observe(anchorRef.current)
+    window.addEventListener('resize', measure)
+
+    return () => {
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [scrollerRef, anchorRef])
+
+  return anchor
+}
+
+export function Radio() {
   const playback = usePlayback()
-  const { isMobile } = useViewport()
+  const { isMobile, isPhoneLandscape } = useViewport()
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
-  const { reportEngineStatus, reportInterfaceState, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
+  const { reportEngineStatus, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
   const { interfaceState } = useUIState()
+  const mobilePanel = interfaceState.currentMobilePanel
+  const playerHeight = interfaceState.playerHeight
 
   const [messageFilter, setMessageFilter] = useState('all')
   const [filterCounts, setFilterCounts] = useState({
@@ -75,27 +74,17 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
     system: 0
   })
 
-  const audioElementRef = useRef(null)
   const conversationScrollRef = useRef(null)
   const scrollerRef = useRef(null)
-  const maskOffset = useMaskOffset(scrollerRef, playerHeight)
+  const anchorRef = useRef(null)
+  const { offset: maskOffset, scale: anchorScale } = useRadioAnchor(scrollerRef, anchorRef)
 
   const { toastError } = useUIState()
   const errorToast = toastError
   const uiSound = useUISound(window.audioEngine)
   const emitWebSocketEvent = useWebSocketEmit()
 
-  useDJAudioStream(audioElementRef)
-
   const isMusicPlaying = engineState.isMusicPlaying
-
-  useEffect(() => {
-    if (isMobile) {
-      reportInterfaceState({
-        currentMobilePanel: mobilePanel
-      })
-    }
-  }, [isMobile, mobilePanel, reportInterfaceState])
 
   const sendToDJ = useCallback(async (audioBlob) => {
     if (!audioBlob) return
@@ -140,22 +129,19 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
   }, [])
 
   const isPanelActive = !interfaceState.isFullscreenVisuals && (!isMobile || mobilePanel === 2)
-  const showButtonMask = buttonOpacity > 0.5
-  
-  // Button is w-60 h-60 = 240px, mask ratios are fractions of button size
+  const showButtonMask = buttonOpacity > 0.5 && !isPhoneLandscape
+
   const buttonScale = buttonInteraction?.scale || 1
-  const buttonVisualRadius = (240 * buttonScale) / 2
-  // Mask ratios: inner hole ~92% of button radius, outer fade ~112% of button radius
+  const buttonVisualRadius = (RADIO_BUTTON_SIZE * buttonScale * anchorScale) / 2
   const maskInnerRadius = buttonVisualRadius * 0.92
   const maskOuterRadius = buttonVisualRadius * 1.12
 
   return (
     <div className="h-full w-full relative overflow-hidden flex flex-col">
-      <audio ref={audioElementRef} style={{ display: 'none' }} />
       <GestureGuide />
 
-      <PanelHeader title="Radio">
-        <div className="flex gap-2">
+      <PanelHeader title={<h2 className="text-lg md:text-xl font-bold flex items-center gap-2 min-w-0">Radio<OnAirBadge compact /></h2>}>
+        <div className="flex flex-wrap justify-end gap-1 min-w-0 ml-3">
            {['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
              const hasConversations = filterCounts[filter] > 0
              const isDisabled = !hasConversations
@@ -164,7 +150,9 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
                  key={filter}
                  onClick={() => !isDisabled && setMessageFilter(filter)}
                  disabled={isDisabled}
-                 className="p-2 rounded transition-colors border"
+                 aria-label={`Show ${filter} messages`}
+                 title={`Show ${filter} messages`}
+                 className="ui-press p-1.5 rounded transition-colors border"
                  style={
                    isDisabled
                      ? { backgroundColor: 'rgba(128, 128, 128, 0.1)', borderColor: 'rgba(128, 128, 128, 0.2)', color: 'rgba(128, 128, 128, 0.4)', cursor: 'not-allowed' }
@@ -196,10 +184,13 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
             WebkitMaskImage: showButtonMask
               ? `radial-gradient(circle at 50% calc(50% + ${maskOffset}px), transparent ${maskInnerRadius}px, black ${maskOuterRadius}px)`
               : 'none',
-            transition: 'mask-image 0.5s ease, -webkit-mask-image 0.5s ease'
+            transition: CSS_TRANSITION.mask
           }}
         >
-          <div className="w-full max-w-3xl mx-auto px-4 pt-2">
+          <div
+            className={isPhoneLandscape ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
+            style={isPhoneLandscape ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
+          >
             <Conversation
               isOpen={true}
               messageFilter={messageFilter}
@@ -212,17 +203,27 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
 
       {createPortal(
         <div
-          className="fixed inset-x-0 flex items-center justify-center pointer-events-none"
-          style={{
-            top: `${PANEL.headerHeight}px`,
+          ref={anchorRef}
+          className="fixed flex items-center justify-center pointer-events-none"
+          style={isPhoneLandscape ? {
+            top: `calc(var(--safe-top) + ${PANEL.headerHeight}px)`,
+            bottom: `${playerHeight}px`,
+            right: 'var(--safe-right)',
+            width: RADIO_SIDE_WIDTH,
+            zIndex: 50
+          } : {
+            top: isMobile ? `calc(var(--safe-top) + ${PANEL.headerHeight}px)` : `${PANEL.headerHeight}px`,
             bottom: `${playerHeight + 64}px`,
+            left: 0,
+            right: 0,
             zIndex: 50
           }}
         >
-          <div 
-            className="transition-opacity duration-500"
-            style={{ 
+          <div
+            className="transition-opacity duration-fade"
+            style={{
               opacity: buttonForegroundOpacity,
+              transform: anchorScale < 1 ? `scale(${anchorScale})` : undefined,
               pointerEvents: buttonForegroundOpacity > 0.9 ? 'auto' : 'none'
             }}
           >
@@ -234,7 +235,6 @@ export function Radio({ mobilePanel = 2, playerHeight = 80 }) {
               onSwipeDown={handleSwipeDown}
               uiSound={uiSound}
               onRecordingComplete={sendToDJ}
-              audioElementRef={audioElementRef}
             />
           </div>
         </div>,

@@ -1,8 +1,12 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
+import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {api} from './lib/api'
+import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
 import {cacheManager} from './lib/cacheManager'
 import {logger} from './lib/logger'
+import {safeStorage} from './lib/safeStorage'
+import {MOTION, PRESETS} from './lib/motion'
+import {VERTICAL_EDGE_FADE_MASK} from './lib/themeManager'
 import {useArtwork, useUIState} from './contexts/UIStateContext'
 import {useProfilePicture} from './hooks/useProfilePicture'
 import {usePlayback} from './contexts/PlaybackContext'
@@ -10,6 +14,7 @@ import {useAuth} from './contexts/AuthContext'
 import {TRANSITIONS, UI_FULLSCREEN, useDynamicTheme} from './contexts/DynamicThemeContext'
 import {useWebSocketSubscribe} from './contexts/WebSocketContext'
 import {VoiceRecordingProvider} from './contexts/VoiceRecordingContext'
+import {DJVoiceEngine} from './hooks/useDJAudioStream'
 import {DialogProvider} from './contexts/DialogContext'
 import {useGeolocation} from './hooks/useGeolocation'
 import {useViewport} from './contexts/ViewportContext'
@@ -26,26 +31,70 @@ import {
     Panel,
     PANEL_CONFIG,
     PANEL_FADE_TRANSITION,
-    PANEL_IDS,
-    PanelHeader
+    PANEL_IDS
 } from './components/Panel'
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import ToastContainer from './components/Toast'
-import {AudioReactiveCanvas} from './components/AudioReactiveCanvas'
-import {SeedRadioModal} from './components/modals/SeedRadioModal'
-import {TrackAnalyticsModal} from './components/modals/TrackAnalyticsModal'
-import {ShoutoutModal} from './components/modals/ShoutoutModal'
-import {GenerationModal} from './components/modals/GenerationModal'
-import {CompatibilityWarningModal} from './components/modals/CompatibilityWarningModal'
-import {DemoModeModal} from './components/modals/DemoModeModal'
-import {ShareModal} from './components/modals/ShareModal'
-import {UploadMusicModal} from './components/modals/UploadMusicModal'
+import {OnAirFrame} from './components/OnAirBadge'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
 
-// DEBUG: Global RAF counter - components register and report
-if (typeof window !== 'undefined' && !window.__rafDebug) {
+const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
+
+const LAZY_MODULE_LOADERS = [
+  () => import('./components/AudioReactiveCanvas'),
+  () => import('./components/modals/SeedRadioModal'),
+  () => import('./components/modals/TrackAnalyticsModal'),
+  () => import('./components/modals/ShoutoutModal'),
+  () => import('./components/modals/GenerationModal'),
+  () => import('./components/modals/CompatibilityWarningModal'),
+  () => import('./components/modals/DemoModeModal'),
+  () => import('./components/modals/ShareModal'),
+  () => import('./components/modals/UploadMusicModal'),
+]
+
+const [
+  loadAudioReactiveCanvas,
+  loadSeedRadioModal,
+  loadTrackAnalyticsModal,
+  loadShoutoutModal,
+  loadGenerationModal,
+  loadCompatibilityWarningModal,
+  loadDemoModeModal,
+  loadShareModal,
+  loadUploadMusicModal,
+] = LAZY_MODULE_LOADERS
+
+const AudioReactiveCanvas = lazyNamed(loadAudioReactiveCanvas, 'AudioReactiveCanvas')
+const SeedRadioModal = lazyNamed(loadSeedRadioModal, 'SeedRadioModal')
+const TrackAnalyticsModal = lazyNamed(loadTrackAnalyticsModal, 'TrackAnalyticsModal')
+const ShoutoutModal = lazyNamed(loadShoutoutModal, 'ShoutoutModal')
+const GenerationModal = lazyNamed(loadGenerationModal, 'GenerationModal')
+const CompatibilityWarningModal = lazyNamed(loadCompatibilityWarningModal, 'CompatibilityWarningModal')
+const DemoModeModal = lazyNamed(loadDemoModeModal, 'DemoModeModal')
+const ShareModal = lazyNamed(loadShareModal, 'ShareModal')
+const UploadMusicModal = lazyNamed(loadUploadMusicModal, 'UploadMusicModal')
+const UsageStatsModal = lazyNamed(() => import('./components/modals/UsageStatsModal'), 'UsageStatsModal')
+const CostTicker = lazyNamed(() => import('./components/CostTicker'), 'CostTicker')
+
+const canvasFallback = <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
+
+const MOBILE_NAV_MASK = VERTICAL_EDGE_FADE_MASK('4px')
+const MOBILE_NAV_MASK_STYLE = { maskImage: MOBILE_NAV_MASK, WebkitMaskImage: MOBILE_NAV_MASK }
+const MOBILE_RAIL_STYLE = { ...MOBILE_NAV_MASK_STYLE, width: 'calc(4.5rem + var(--safe-left))', paddingLeft: 'var(--safe-left)' }
+const MOBILE_NAV_CLASS = 'flex-shrink-0 bg-black/25 border-t border-gray-800/50 flex justify-around items-center h-16 z-20'
+const MOBILE_RAIL_CLASS = 'order-first flex-shrink-0 bg-black/25 border-r border-gray-800/50 flex flex-col justify-around items-stretch h-full py-1 z-20'
+const FULLSCREEN_EXIT_STYLE = { top: 'max(1.5rem, calc(var(--safe-top) + 0.75rem))', right: 'max(1.5rem, calc(var(--safe-right) + 0.75rem))' }
+
+function LazyMount({ when, children }) {
+  const [hasMounted, setHasMounted] = useState(when)
+  if (when && !hasMounted) setHasMounted(true)
+  if (!hasMounted) return null
+  return <Suspense fallback={null}>{children}</Suspense>
+}
+
+if (import.meta.env.DEV && typeof window !== 'undefined' && !window.__rafDebug) {
   window.__rafDebug = {
     count: 0,
     lastLog: Date.now(),
@@ -87,7 +136,6 @@ if (typeof window !== 'undefined' && !window.__rafDebug) {
 }
 
 function App() {
-  const [playerHeight, setPlayerHeight] = useState(80)
   const [showLogin, setShowLogin] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [showSeedModal, setShowSeedModal] = useState(false)
@@ -95,11 +143,10 @@ function App() {
   const [showAnalyticsModal, setShowAnalyticsModal] = useState(false)
   const [showGenerationModal, setShowGenerationModal] = useState(false)
   const [generationModalTrack, setGenerationModalTrack] = useState(null)
-  const [showCompatibilityWarning, setShowCompatibilityWarning] = useState(false)
-  const [showDemoModal, setShowDemoModal] = useState(false)
+  const [compatibilityWarningDismissed, setCompatibilityWarningDismissed] = useState(() => !!safeStorage.get('plair_compatibility_warning_dismissed'))
+  const [demoModalDismissed, setDemoModalDismissed] = useState(() => !!safeStorage.get('plair_demo_mode_modal_seen'))
   const [showShareModal, setShowShareModal] = useState(false)
   const [shareModalTrack, setShareModalTrack] = useState(null)
-  const [mobilePanel, setMobilePanel] = useState(2)
   const [isPanelAnimating, setIsPanelAnimating] = useState(false)
   const [panelStates, setPanelStates] = useState({
     queue: true,
@@ -109,16 +156,15 @@ function App() {
     user: true
   })
 
-  const playback = usePlayback()
-  const { user, isAuthenticated, logout } = useAuth()
+  const { playTrack, seek, seedRadio, addToQueue, togglePlay, previous, next, reloadCurrentTrackQuality, connected, audio } = usePlayback()
+  const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
   const { getAccentColor } = useDynamicTheme()
-  const { setTrackData, updateShaderRegions, updateShaderRadioButtonPos, engineState, publishSettings, settingsState, toastSuccess, toastInfo, toastError, interfaceState, reportInterfaceState, shoutoutModalState, closeShoutoutModal, queueState, uploadModalOpen, closeUploadModal } = useUIState()
+  const { setTrackData, updateShaderRegions, updateShaderRadioButtonPos, engineState, publishSettings, settingsState, toastSuccess, toastInfo, toastError, interfaceState, interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, queueState, uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, setMobilePanel } = useUIState()
   const { addJob, setIsOpen: setQueueOpen } = useGenerationQueue()
 
   const catalogView = interfaceState.catalogView
-  const toggleCatalogView = useCallback(() => {
-    reportInterfaceState({ catalogView: catalogView === 'tracks' ? 'shoutouts' : 'tracks' })
-  }, [catalogView, reportInterfaceState])
+  const mobilePanel = interfaceState.currentMobilePanel
+  const playerHeight = interfaceState.playerHeight
 
   const success = toastSuccess
   const info = toastInfo
@@ -126,12 +172,19 @@ function App() {
 
   const isFullscreenVisuals = interfaceState.isFullscreenVisuals
   const showUIControls = interfaceState.showUIControls
-  const [wasConnected, setWasConnected] = useState(false)
+  const wasConnectedRef = useRef(false)
+  const hasConnectedOnceRef = useRef(false)
 
   const currentTrack = engineState.currentTrack
   const currentTrackArtwork = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
 
-  useGeolocation(isAuthenticated)
+  useGeolocation(isAuthenticated, { periodicCheck: true })
+
+  useEffect(() => {
+    if (!sessionExpiredCount) return
+    setShowRegister(false)
+    setShowLogin(true)
+  }, [sessionExpiredCount])
 
   useEffect(() => {
     if (user) {
@@ -146,12 +199,41 @@ function App() {
     }
   }, [user?.tts_muted, user?.notifications_muted, user?.audio_quality, user?.fps_enabled, user?.video_clips_enabled, user?.visual_quality, publishSettings])
 
-  // Sync FPS debug flag
   useEffect(() => {
     if (window.__rafDebug) {
       window.__rafDebug.enabled = settingsState.fpsEnabled
     }
   }, [settingsState.fpsEnabled])
+
+  useEffect(() => {
+    const warmLazyModules = () => {
+      LAZY_MODULE_LOADERS.forEach(loader => {
+        loader().catch(err => logger.warn('[App] Failed to prefetch module:', err))
+      })
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(warmLazyModules, { timeout: 10000 })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timeoutId = setTimeout(warmLazyModules, 5000)
+    return () => clearTimeout(timeoutId)
+  }, [])
+
+  useEffect(() => {
+    if (!currentTrackArtwork || currentTrackArtwork.startsWith('data:')) return
+    let cancelled = false
+    const warmModalArtwork = () => {
+      import('./components/modals/Modal')
+        .then(module => { if (!cancelled) return module.prewarmModalAssets(currentTrackArtwork) })
+        .catch(err => logger.warn('[App] Failed to prewarm modal artwork:', err))
+    }
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(warmModalArtwork, { timeout: 6000 })
+      return () => { cancelled = true; window.cancelIdleCallback(idleId) }
+    }
+    const timeoutId = setTimeout(warmModalArtwork, 3000)
+    return () => { cancelled = true; clearTimeout(timeoutId) }
+  }, [currentTrackArtwork])
 
   const sharedTrackHandled = useRef(false)
   useEffect(() => {
@@ -168,7 +250,7 @@ function App() {
 
       const playSharedTrack = async () => {
         try {
-          await playback.playTrack(trackId)
+          await playTrack(trackId)
           logger.info(`[App] Started playing shared track: ${trackId}`)
 
           window.history.replaceState({}, '', '/')
@@ -181,41 +263,66 @@ function App() {
 
       setTimeout(playSharedTrack, 500)
     }
-  }, [playback, toastError])
+  }, [playTrack, toastError])
 
-  const { isMobile, isCompatible } = useViewport()
+  const billingReturnHandled = useRef(false)
+  useEffect(() => {
+    if (billingReturnHandled.current || authLoading) return
+    const params = new URLSearchParams(window.location.search)
+    const billing = params.get('billing')
+    if (!billing) return
+    billingReturnHandled.current = true
+    const checkoutSessionId = params.get('session_id')
+    window.history.replaceState({}, '', window.location.pathname)
+
+    if (billing === 'cancelled') {
+      info('Checkout cancelled. You have not been charged.', 5000)
+      return
+    }
+    if (billing !== 'success' || !isAuthenticated) return
+
+    const confirmPremium = async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const status = await api.getBillingStatus(attempt === 0 ? checkoutSessionId : null)
+          if (status.tier === 'premium') {
+            await refreshUser()
+            success('Welcome to PLAiR Premium! Your subscription is active.', 6000)
+            return
+          }
+        } catch (err) {
+          logger.warn('[App] Billing status check failed:', err)
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+      await refreshUser()
+      info('Payment received. Premium will activate in a moment.', 6000)
+    }
+    void confirmPremium()
+  }, [authLoading, isAuthenticated, refreshUser, success, info])
+
+  const { isMobile, isPhoneLandscape, isCompatible } = useViewport()
+  const navIconClass = isPhoneLandscape ? 'w-5 h-5 mb-0.5' : 'w-6 h-6 mb-1'
   const userProfilePicture = useProfilePicture(user?.id, !!user?.profile_picture)
 
-  useEffect(() => {
-    const STORAGE_KEY = 'plair_compatibility_warning_dismissed'
-    const hasSeenWarning = localStorage.getItem(STORAGE_KEY)
-
-    if (!isCompatible && !hasSeenWarning) {
-      setShowCompatibilityWarning(true)
-    }
-  }, [isCompatible])
+  const showCompatibilityWarning = !isCompatible && !compatibilityWarningDismissed
+  const showDemoModal = !authLoading && !user && !demoModalDismissed
 
   useEffect(() => {
-    const STORAGE_KEY = 'plair_demo_mode_modal_seen'
-    const hasSeenDemo = localStorage.getItem(STORAGE_KEY)
-    const isGuest = !user
-
-    if (isGuest && !hasSeenDemo) {
-      setShowDemoModal(true)
-    }
-  }, [user])
-
-  useEffect(() => {
-    if (!playback.connected && wasConnected) {
+    if (!connected && wasConnectedRef.current) {
       errorToast('Disconnected from server. Attempting to reconnect...', 8000)
-      setWasConnected(false)
-    } else if (playback.connected && !wasConnected) {
-      success('Connected to server', 4000)
-      setWasConnected(true)
+      wasConnectedRef.current = false
+    } else if (connected && !wasConnectedRef.current) {
+      if (hasConnectedOnceRef.current) {
+        success('Connected to server', 4000)
+      }
+      hasConnectedOnceRef.current = true
+      wasConnectedRef.current = true
     }
-  }, [playback.connected, wasConnected, errorToast, success])
+  }, [connected, errorToast, success])
 
   useEffect(() => {
+    let cancelled = false
     if (engineState.currentTrack?.id) {
       const trackId = engineState.currentTrack.id
 
@@ -245,20 +352,38 @@ function App() {
             }
           }
 
-          setTrackData(features, lyrics)
+          if (!cancelled) setTrackData(features, lyrics)
 
         } catch (err) {
           logger.warn(`[App] Cache lookup failed for ${trackId}:`, err)
-          setTrackData(null, null)
+          if (!cancelled) setTrackData(null, null)
         }
       }
       void loadFeatures()
     } else {
       setTrackData(null, null)
     }
+    return () => { cancelled = true }
   }, [engineState.currentTrack?.id, setTrackData])
 
   const calculatePanelRegion = useCallback((panelId, windowWidth, windowHeight) => {
+    if (isMobile && panelId !== 'player') {
+      const mobileViewport = panelId === 'radio' ? document.querySelector('[data-mobile-viewport]') : null
+      if (!mobileViewport || mobileViewport.offsetWidth === 0) {
+        return { region: { x: 0, y: 0, z: 0, w: 0 }, opacity: 0 }
+      }
+      const viewportRect = mobileViewport.getBoundingClientRect()
+      return {
+        region: {
+          x: (viewportRect.left + viewportRect.width / 2) / windowWidth,
+          y: 1.0 - ((viewportRect.top + viewportRect.height / 2) / windowHeight),
+          z: viewportRect.width / windowWidth,
+          w: viewportRect.height / windowHeight
+        },
+        opacity: isFullscreenVisuals ? 0.0 : 1.0
+      }
+    }
+
     const findVisiblePanel = () => {
       const panels = document.querySelectorAll(`[data-shader-panel="${panelId}"]`)
       let visiblePanel = null
@@ -289,9 +414,7 @@ function App() {
 
     const rect = visiblePanel.getBoundingClientRect()
 
-    const centerX = (isMobile && panelId === 'radio')
-      ? 0.5
-      : (rect.left + rect.width / 2) / windowWidth
+    const centerX = (rect.left + rect.width / 2) / windowWidth
 
     const centerY = 1.0 - ((rect.top + rect.height / 2) / windowHeight)
     const width = rect.width / windowWidth
@@ -345,12 +468,23 @@ function App() {
             const baseWidth = radioButton.offsetWidth
             const baseHeight = radioButton.offsetHeight
 
-            const centerX = (rect.left + rect.width / 2) / windowWidth
+            let slideOffset = 0
+            if (isMobile) {
+              const radioPanel = radioButton.closest('[data-shader-panel="radio"]')
+              const mobileViewport = document.querySelector('[data-mobile-viewport]')
+              if (radioPanel && mobileViewport) {
+                slideOffset = radioPanel.getBoundingClientRect().left - mobileViewport.getBoundingClientRect().left
+              }
+            }
+
+            const centerX = (rect.left - slideOffset + rect.width / 2) / windowWidth
             const centerY = 1.0 - ((rect.top + rect.height / 2) / windowHeight)
 
+            const host = radioButton.parentElement
+            const hostScale = host && host.offsetWidth > 0 ? host.getBoundingClientRect().width / host.offsetWidth : 1
             const borderWidth = 4
-            const innerWidth = baseWidth - borderWidth
-            const innerHeight = baseHeight - borderWidth
+            const innerWidth = (baseWidth - borderWidth) * hostScale
+            const innerHeight = (baseHeight - borderWidth) * hostScale
 
             const radiusX = (innerWidth / 2) / windowWidth
             const radiusY = (innerHeight / 2) / windowHeight
@@ -379,7 +513,7 @@ function App() {
       resizeObserver.disconnect()
       window.removeEventListener('resize', updateShaderPositions)
     }
-  }, [panelStates, playerHeight, isFullscreenVisuals, showUIControls, isMobile, calculatePanelRegion, updateShaderRegions, updateShaderRadioButtonPos])
+  }, [panelStates, playerHeight, isFullscreenVisuals, showUIControls, isMobile, isPhoneLandscape, mobilePanel, calculatePanelRegion, updateShaderRegions, updateShaderRadioButtonPos])
 
   const { contentUpdates, publishContentUpdate } = useUIState()
 
@@ -411,8 +545,10 @@ function App() {
   const uiHideTimeoutRef = useRef(null)
 
   const handleMouseMove = useCallback(() => {
-    if (interfaceState.isFullscreenVisuals) {
-      reportInterfaceState({ showUIControls: true })
+    if (interfaceRef.current.isFullscreenVisuals) {
+      if (!interfaceRef.current.showUIControls) {
+        reportInterfaceState({ showUIControls: true })
+      }
 
       if (uiHideTimeoutRef.current) {
         clearTimeout(uiHideTimeoutRef.current)
@@ -422,7 +558,7 @@ function App() {
         reportInterfaceState({ showUIControls: false })
       }, UI_FULLSCREEN.autoHideDelay)
     }
-  }, [interfaceState, reportInterfaceState])
+  }, [interfaceRef, reportInterfaceState])
 
   useEffect(() => {
     return () => {
@@ -444,23 +580,22 @@ function App() {
   }, [interfaceState, reportInterfaceState])
 
   const handlePlayNow = useCallback(async (trackId) => {
-    await playback.playTrack(trackId)
-  }, [playback])
+    await playTrack(trackId)
+  }, [playTrack])
 
   const handleSeek = useCallback(async (positionMs) => {
-    await playback.seek(positionMs)
-  }, [playback])
+    await seek(positionMs)
+  }, [seek])
 
-  const { radioState } = useUIState()
   const { getCategoryMetadata } = useDynamicTheme()
 
   const handleSeedFromTrack = useCallback(async (trackId, seedMode) => {
     const metadata = getCategoryMetadata(seedMode)
     const modeLabel = metadata?.label || 'All Categories'
 
-    await playback.seedRadio(seedMode, trackId)
+    await seedRadio(seedMode, trackId)
     success(`Seeded ${modeLabel} playlist from track`)
-  }, [playback, success, radioState, getCategoryMetadata])
+  }, [seedRadio, success, getCategoryMetadata])
 
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
@@ -476,12 +611,12 @@ function App() {
         ] : []
       })
 
-      navigator.mediaSession.setActionHandler('play', () => void playback.togglePlay())
-      navigator.mediaSession.setActionHandler('pause', () => void playback.togglePlay())
-      navigator.mediaSession.setActionHandler('previoustrack', () => void playback.previous())
-      navigator.mediaSession.setActionHandler('nexttrack', () => void playback.next())
+      navigator.mediaSession.setActionHandler('play', () => void togglePlay())
+      navigator.mediaSession.setActionHandler('pause', () => void togglePlay())
+      navigator.mediaSession.setActionHandler('previoustrack', () => void previous())
+      navigator.mediaSession.setActionHandler('nexttrack', () => void next())
     }
-  }, [currentTrack, engineState.is_playing, playback.togglePlay, playback.previous, playback.next, currentTrackArtwork])
+  }, [currentTrack, engineState.is_playing, togglePlay, previous, next, currentTrackArtwork])
 
   const handleGenerationBatchCompleted = useCallback(async (data) => {
     const trackCount = (data?.tracks) ? data.tracks.length : 0
@@ -489,12 +624,12 @@ function App() {
     if (data?.tracks && data.tracks.length > 0) {
       const trackIds = data.tracks.map(t => t.id || t.track_id).filter(Boolean)
       if (trackIds.length > 0) {
-        await playback.addToQueue(trackIds)
+        await addToQueue(trackIds)
       }
     }
 
     success(`${trackCount} new track${trackCount > 1 ? 's' : ''} added to queue!`, 4000, 'top')
-  }, [success, playback])
+  }, [success, addToQueue])
 
   const handleGenerationRetrying = useCallback((data) => {
     const maxAttempts = data?.max_attempts ?? '??'
@@ -502,7 +637,9 @@ function App() {
   }, [info])
 
   const handleGenerationBatchFailed = useCallback((data) => {
-    errorToast(`Generation batch failed: ${data.error}`, 5000, 'top')
+    if (data?.cancelled || data?.status?.status !== 'processing') return
+    const refund = data.refunded ? ' Your generation credit was refunded.' : ''
+    errorToast(`One song in your batch failed: ${data.error}${refund}`, 6000, 'top')
   }, [errorToast])
 
   const handleGenerationJobCompleted = useCallback((data) => {
@@ -516,44 +653,54 @@ function App() {
   const handleCloseAnalyticsModal = useCallback(() => setShowAnalyticsModal(false), [])
   const handleCloseGenerationModal = useCallback(() => setShowGenerationModal(false), [])
   const handleCloseCompatibilityWarning = useCallback(() => {
-    localStorage.setItem('plair_compatibility_warning_dismissed', 'true')
-    setShowCompatibilityWarning(false)
+    safeStorage.set('plair_compatibility_warning_dismissed', 'true')
+    setCompatibilityWarningDismissed(true)
   }, [])
 
   const handleCloseDemoModal = useCallback(() => {
-    localStorage.setItem('plair_demo_mode_modal_seen', 'true')
-    setShowDemoModal(false)
+    safeStorage.set('plair_demo_mode_modal_seen', 'true')
+    setDemoModalDismissed(true)
   }, [])
 
   const handleOpenSeedModal = useCallback(() => {
     const currentTrack = engineState.queue.find(t => t.id === engineState.currentTrack?.id)
-    setSeedModalTrack(currentTrack)
-    setShowSeedModal(true)
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => {
+      setSeedModalTrack(currentTrack)
+      setShowSeedModal(true)
+    })
   }, [engineState.queue, engineState.currentTrack])
 
   const handleOpenAnalyticsModal = useCallback(() => {
-    setShowAnalyticsModal(true)
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setShowAnalyticsModal(true))
   }, [])
 
   const handleOpenGenerationModal = useCallback((track) => {
-    setGenerationModalTrack(track)
-    setShowGenerationModal(true)
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => {
+      setGenerationModalTrack(track)
+      setShowGenerationModal(true)
+    })
   }, [])
 
   const handleOpenShareModal = useCallback((track) => {
-    setShareModalTrack(track)
-    setShowShareModal(true)
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => {
+      setShareModalTrack(track)
+      setShowShareModal(true)
+    })
   }, [])
 
   const handleSeedRadioSelect = useCallback(async (category) => {
-    await playback.seedRadio(category)
+    await seedRadio(category)
     handleCloseSeedModal()
-  }, [playback, handleCloseSeedModal])
+  }, [seedRadio, handleCloseSeedModal])
 
   const handleAnalyticsSelect = useCallback(async (category) => {
-    await playback.seedRadio(category)
+    await seedRadio(category)
     handleCloseAnalyticsModal()
-  }, [playback, handleCloseAnalyticsModal])
+  }, [seedRadio, handleCloseAnalyticsModal])
 
   const handleGenerateJobs = useCallback(async (jobs) => {
     if (!generationModalTrack || queueState.hasActiveJobs || jobs.length === 0) {
@@ -660,27 +807,16 @@ function App() {
     <Catalog
       onPlayNow={handlePlayNow}
       onSeedFromTrack={handleSeedFromTrack}
-      contentUpdateCounter={contentUpdates.tracks}
-      onToggleView={toggleCatalogView}
-      currentView={catalogView}
     />
-  ), [handlePlayNow, handleSeedFromTrack, contentUpdates.tracks, toggleCatalogView, catalogView])
+  ), [handlePlayNow, handleSeedFromTrack])
 
-  const NowPlayingPanel = useMemo(() => engineState.currentTrack ? (
+  const NowPlayingPanel = useMemo(() => (
     <NowPlaying
-      track={engineState.currentTrack}
       onToggleFullscreen={handleToggleFullscreenVisuals}
       onOpenGenerationModal={handleOpenGenerationModal}
       onOpenShareModal={handleOpenShareModal}
     />
-  ) : (
-    <div className="flex flex-col h-full">
-      <PanelHeader title="Now Playing" />
-      <div className="flex-1 flex items-center justify-center text-gray-400">
-        No track playing
-      </div>
-    </div>
-  ), [engineState.currentTrack, handleToggleFullscreenVisuals, handleOpenGenerationModal, handleOpenShareModal])
+  ), [handleToggleFullscreenVisuals, handleOpenGenerationModal, handleOpenShareModal])
 
   const UserPanel = useMemo(() => (
     <User
@@ -688,30 +824,20 @@ function App() {
       onRegister={() => setShowRegister(true)}
       onLogout={handleLogout}
       onPlayTrack={handlePlayNow}
-      onReloadTrackQuality={playback.reloadCurrentTrackQuality}
+      onReloadTrackQuality={reloadCurrentTrackQuality}
     />
-  ), [handleLogout, handlePlayNow, playback.reloadCurrentTrackQuality])
+  ), [handleLogout, handlePlayNow, reloadCurrentTrackQuality])
 
-  const handlePlayerHeightChange = useCallback((height) => {
-    setPlayerHeight(height)
-  }, [])
+  const RadioPanel = useMemo(() => <Radio />, [])
 
-  const RadioPanel = useMemo(() => (
-    <Radio
-      mobilePanel={mobilePanel}
-      playerHeight={playerHeight}
-    />
-  ), [mobilePanel, playerHeight])
-
-  const ShoutoutsPanel = useMemo(() => (
-    <Shoutouts
-      onToggleView={toggleCatalogView}
-      currentView={catalogView}
-    />
-  ), [toggleCatalogView, catalogView])
+  const ShoutoutsPanel = useMemo(() => <Shoutouts />, [])
 
   const CatalogPanel = useMemo(() => (
-    catalogView === 'tracks' ? LibraryPanel : ShoutoutsPanel
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div key={catalogView} className="h-full" {...PRESETS.panelSwap}>
+        {catalogView === 'tracks' ? LibraryPanel : ShoutoutsPanel}
+      </motion.div>
+    </AnimatePresence>
   ), [catalogView, LibraryPanel, ShoutoutsPanel])
 
   const panelStructure = useMemo(() => {
@@ -726,7 +852,8 @@ function App() {
 
   return (
     <DialogProvider>
-      <VoiceRecordingProvider mixerRef={playback.audio?.mixerRef}>
+      <VoiceRecordingProvider mixerRef={audio?.mixerRef}>
+        <DJVoiceEngine />
         <KeyboardControls
         showLogin={showLogin}
         showRegister={showRegister}
@@ -734,19 +861,20 @@ function App() {
         onCloseRegister={() => setShowRegister(false)}
       />
       <div
-        className="h-screen flex flex-col overflow-hidden bg-dark-bg relative"
-        style={{
-          maxWidth: isMobile && !isFullscreenVisuals ? '100vh' : 'none',
-          margin: isMobile && !isFullscreenVisuals ? '0 auto' : '0'
-        }}
+        className="h-full flex flex-col overflow-hidden bg-dark-bg relative"
+        data-layout={isPhoneLandscape ? 'phone-landscape' : isMobile ? 'mobile' : 'desktop'}
         onMouseMove={handleMouseMove}
         onClick={handleFullscreenClick}
       >
-        <AudioReactiveCanvas />
+        <Suspense fallback={canvasFallback}>
+          <AudioReactiveCanvas />
+        </Suspense>
 
         <AnimatePresence>
           {!isFullscreenVisuals && <ToastContainer />}
         </AnimatePresence>
+
+        <OnAirFrame />
 
         <AnimatePresence>
           {isFullscreenVisuals && showUIControls && (
@@ -755,11 +883,15 @@ function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.8 }}
               transition={TRANSITIONS.fade}
+              whileHover={PRESETS.hoverPress.whileHover}
+              whileTap={PRESETS.hoverPress.whileTap}
               onClick={handleToggleFullscreenVisuals}
-              className="fixed top-6 right-6 z-50 bg-black/80 hover:bg-black/90 text-white p-4 rounded-full shadow-2xl transition-all hover:scale-110"
+              className={`fixed z-50 bg-black/80 hover:bg-black/90 text-white rounded-full shadow-2xl transition-colors ${isPhoneLandscape ? 'p-3' : 'p-4'}`}
+              style={FULLSCREEN_EXIT_STYLE}
               title="Exit fullscreen visuals"
+              aria-label="Exit fullscreen visuals"
             >
-              <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <svg className={isPhoneLandscape ? 'h-6 w-6' : 'h-8 w-8'} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </motion.button>
@@ -800,18 +932,20 @@ function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: isFullscreenVisuals ? 0 : 1 }}
               transition={PANEL_FADE_TRANSITION}
-              className="fixed inset-x-0 top-0 flex flex-col z-10"
+              className={`fixed inset-x-0 top-0 flex z-10 ${isPhoneLandscape ? 'flex-row' : 'flex-col'}`}
               style={{
                 bottom: `${playerHeight}px`,
+                paddingTop: 'var(--safe-top)',
+                paddingRight: isPhoneLandscape ? 'var(--safe-right)' : undefined,
                 ...getPanelPointerEvents(!isFullscreenVisuals)
               }}
             >
-              <div className="flex-1 overflow-hidden relative">
+              <div className="flex-1 min-w-0 min-h-0 overflow-hidden relative" data-mobile-viewport>
                 <motion.div
                   key="mobile-panel-slider"
                   className="flex h-full"
-                  animate={{ x: `-${mobilePanel * 100}vw` }}
-                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                  animate={{ x: `-${mobilePanel * 100}%` }}
+                  transition={MOTION.spring}
                   onAnimationStart={() => setIsPanelAnimating(true)}
                   onAnimationComplete={() => setIsPanelAnimating(false)}
                 >
@@ -819,7 +953,7 @@ function App() {
                     <div
                       key={id}
                       data-shader-panel={stateKey}
-                      className={`w-screen h-full flex-shrink-0 border-x border-white/10 ${mobileClass || 'overflow-hidden'}`}
+                      className={`w-full h-full flex-shrink-0 border-x border-white/10 ${mobileClass || 'overflow-hidden'}`}
                     >
                       <div className="h-full overflow-y-auto">
                         {content}
@@ -829,12 +963,11 @@ function App() {
                 </motion.div>
               </div>
 
-              <div
-                className="flex-shrink-0 bg-black/25 border-t border-gray-800/50 flex justify-around items-center h-16 z-20"
-                style={{
-                  maskImage: 'linear-gradient(to bottom, transparent 0%, black 4px, black calc(100% - 4px), transparent 100%)',
-                  WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 4px, black calc(100% - 4px), transparent 100%)'
-                }}
+              <nav
+                data-mobile-nav
+                aria-label="Panels"
+                className={isPhoneLandscape ? MOBILE_RAIL_CLASS : MOBILE_NAV_CLASS}
+                style={isPhoneLandscape ? MOBILE_RAIL_STYLE : MOBILE_NAV_MASK_STYLE}
               >
                 {panelStructure.map(({ id }, index) => {
                   const config = PANEL_CONFIG[id]
@@ -855,37 +988,43 @@ function App() {
                       key={id}
                       onClick={handleClick}
                       disabled={isPanelAnimating}
-                      className={`flex flex-col items-center justify-center flex-1 h-full transition ${
-                        isPanelAnimating ? 'opacity-50 cursor-not-allowed' : ''
-                      }`}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={`ui-tap relative flex flex-col items-center justify-center flex-1 min-h-0 transition-colors ${isPhoneLandscape ? 'w-full' : 'h-full'}`}
                       style={{
                         color: isActive ? 'white' : getAccentColor(0.85),
                         textShadow: isActive ? 'none' : `0 0 8px ${getAccentColor(0.6)}`,
                         filter: isActive ? 'none' : 'brightness(1.3)'
                       }}
                     >
+                      {isActive && (
+                        <motion.span
+                          layoutId="mobile-nav-indicator"
+                          className={`absolute rounded-full pointer-events-none bg-current opacity-80 ${isPhoneLandscape ? 'left-1 top-1/2 -mt-3 h-6 w-0.5' : 'top-1 left-1/2 -ml-3 w-6 h-0.5'}`}
+                          transition={MOTION.spring}
+                        />
+                      )}
                       {id === PANEL_IDS.USER && isAuthenticated ? (
                         <>
                           {userProfilePicture ? (
-                            <img
+                            <img decoding="async"
                               src={userProfilePicture}
                               alt={user?.username || 'User'}
-                              className="w-6 h-6 mb-1 rounded-full object-cover"
+                              className={`${navIconClass} rounded-full object-cover`}
                             />
                           ) : (
-                            <div className="w-6 h-6 mb-1 rounded-full bg-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                            <div className={`${navIconClass} rounded-full bg-purple-600 flex items-center justify-center text-white text-xs font-bold`}>
                               {user?.username?.charAt(0).toUpperCase() || 'U'}
                             </div>
                           )}
-                          <span className="text-xs truncate max-w-[60px]">{user?.username || 'User'}</span>
+                          <span className={`truncate max-w-[60px] ${isPhoneLandscape ? 'text-[10px]' : 'text-xs'}`}>{user?.username || 'User'}</span>
                         </>
                       ) : (
                         <>
                           {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
-                            ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon()
-                            : config.mobileIcon()
+                            ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon(navIconClass)
+                            : config.mobileIcon(navIconClass)
                           }
-                          <span className="text-xs">
+                          <span className={isPhoneLandscape ? 'text-[10px] leading-tight' : 'text-xs'}>
                             {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
                               ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileLabel
                               : config.mobileLabel
@@ -896,7 +1035,7 @@ function App() {
                     </button>
                   )
                 })}
-              </div>
+              </nav>
             </motion.div>
           )}
         </AnimatePresence>
@@ -912,79 +1051,110 @@ function App() {
         >
           <Player
             onSeek={handleSeek}
-            onHeightChange={handlePlayerHeightChange}
             onArtworkClick={handleToggleFullscreenVisuals}
           />
         </motion.div>
 
-        {showLogin && (
-          <Login
-            onClose={handleCloseLogin}
-            onSwitchToRegister={() => {
-              handleCloseLogin()
-              setShowRegister(true)
-            }}
+        <AnimatePresence>
+          {showLogin && (
+            <Login
+              key="login"
+              onClose={handleCloseLogin}
+              onSwitchToRegister={() => {
+                handleCloseLogin()
+                setShowRegister(true)
+              }}
+            />
+          )}
+
+          {showRegister && (
+            <Register
+              key="register"
+              onClose={handleCloseRegister}
+              onSwitchToLogin={() => {
+                handleCloseRegister()
+                setShowLogin(true)
+              }}
+            />
+          )}
+        </AnimatePresence>
+
+        <LazyMount when={showSeedModal}>
+          <SeedRadioModal
+            isOpen={showSeedModal}
+            onClose={handleCloseSeedModal}
+            onSelect={handleSeedRadioSelect}
+            track={seedModalTrack}
           />
-        )}
+        </LazyMount>
 
-        {showRegister && (
-          <Register
-            onClose={handleCloseRegister}
-            onSwitchToLogin={() => {
-              handleCloseRegister()
-              setShowLogin(true)
-            }}
+        <LazyMount when={showAnalyticsModal}>
+          <TrackAnalyticsModal
+            isOpen={showAnalyticsModal}
+            onClose={handleCloseAnalyticsModal}
+            onSelect={handleAnalyticsSelect}
           />
-        )}
+        </LazyMount>
 
-        <SeedRadioModal
-          isOpen={showSeedModal}
-          onClose={handleCloseSeedModal}
-          onSelect={handleSeedRadioSelect}
-          track={seedModalTrack}
-        />
+        <LazyMount when={shoutoutModalState.isOpen}>
+          <ShoutoutModal
+            isOpen={shoutoutModalState.isOpen}
+            onClose={closeShoutoutModal}
+            shoutout={shoutoutModalState.shoutout}
+          />
+        </LazyMount>
 
-        <TrackAnalyticsModal
-          isOpen={showAnalyticsModal}
-          onClose={handleCloseAnalyticsModal}
-          onSelect={handleAnalyticsSelect}
-        />
+        <LazyMount when={showGenerationModal}>
+          <GenerationModal
+            isOpen={showGenerationModal}
+            onClose={handleCloseGenerationModal}
+            track={generationModalTrack}
+            onGenerate={handleGenerateJobs}
+          />
+        </LazyMount>
 
-        <ShoutoutModal
-          isOpen={shoutoutModalState.isOpen}
-          onClose={closeShoutoutModal}
-          shoutout={shoutoutModalState.shoutout}
-        />
+        <LazyMount when={showCompatibilityWarning}>
+          <CompatibilityWarningModal
+            isOpen={showCompatibilityWarning}
+            onClose={handleCloseCompatibilityWarning}
+          />
+        </LazyMount>
 
-        <GenerationModal
-          isOpen={showGenerationModal}
-          onClose={handleCloseGenerationModal}
-          track={generationModalTrack}
-          onGenerate={handleGenerateJobs}
-        />
+        <LazyMount when={showDemoModal}>
+          <DemoModeModal
+            isOpen={showDemoModal}
+            onClose={handleCloseDemoModal}
+          />
+        </LazyMount>
 
-        <CompatibilityWarningModal
-          isOpen={showCompatibilityWarning}
-          onClose={handleCloseCompatibilityWarning}
-        />
+        <LazyMount when={showShareModal}>
+          <ShareModal
+            isOpen={showShareModal}
+            onClose={() => setShowShareModal(false)}
+            track={shareModalTrack}
+          />
+        </LazyMount>
 
-        <DemoModeModal
-          isOpen={showDemoModal}
-          onClose={handleCloseDemoModal}
-        />
+        <LazyMount when={uploadModalOpen}>
+          <UploadMusicModal
+            isOpen={uploadModalOpen}
+            onClose={closeUploadModal}
+            onLogin={() => setShowLogin(true)}
+          />
+        </LazyMount>
 
-        <ShareModal
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          track={shareModalTrack}
-        />
-
-        <UploadMusicModal
-          isOpen={uploadModalOpen}
-          onClose={closeUploadModal}
-        />
+        <LazyMount when={usageModalOpen && Boolean(user?.is_admin || user?.usage_stats_visible)}>
+          <UsageStatsModal
+            isOpen={usageModalOpen}
+            onClose={closeUsageModal}
+            isAdmin={Boolean(user?.is_admin)}
+          />
+        </LazyMount>
 
         {settingsState.fpsEnabled && <FPSCounter />}
+        <LazyMount when={settingsState.costTickerEnabled && Boolean(user?.is_admin)}>
+          {settingsState.costTickerEnabled && user?.is_admin && <CostTicker />}
+        </LazyMount>
       </div>
       </VoiceRecordingProvider>
     </DialogProvider>

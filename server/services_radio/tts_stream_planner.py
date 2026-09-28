@@ -206,6 +206,7 @@ class TTSStreamPlanner:
                 final_content.append({
                     'type': 'breath',
                     'content': 'breath',
+                    'context': item['content'],
                     'speaker': item['speaker'],
                     'overlap': 0,
                     'char_count': 2,

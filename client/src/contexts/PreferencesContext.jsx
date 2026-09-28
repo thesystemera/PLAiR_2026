@@ -1,17 +1,64 @@
 import { logger } from '../lib/logger'
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api } from '../lib/api'
+import { safeStorage } from '../lib/safeStorage'
 import { useAuth } from './AuthContext'
-import { useWebSocketSubscribe } from './WebSocketContext'
-import { useUIState } from './UIStateContext'
+import { useWebSocketSubscribe, WebSocketContext } from './WebSocketContext'
+import { useUIActions, useUIState } from './UIStateContext'
 
 const PreferencesContext = createContext(null)
 
+const RADIO_MODE_STORAGE_KEY = 'radioMode'
+const RADIO_MODE_TOGGLES = ['enabled', 'news', 'city', 'local', 'community', 'features', 'stings']
+export const DEFAULT_RADIO_MODE = Object.freeze({
+  enabled: false,
+  news: true,
+  city: true,
+  local: true,
+  community: true,
+  features: true,
+  stings: true,
+  feature_interval_min: 20,
+})
+const DEFAULT_RADIO_OPTIONS = Object.freeze({ feature_intervals_min: [15, 20, 30], stings_outside_radio_mode: true })
+
+function normalizeRadioMode(raw, intervals = DEFAULT_RADIO_OPTIONS.feature_intervals_min) {
+  const next = { ...DEFAULT_RADIO_MODE }
+  if (!raw || typeof raw !== 'object') return next
+  RADIO_MODE_TOGGLES.forEach(key => {
+    if (typeof raw[key] === 'boolean') next[key] = raw[key]
+  })
+  const interval = Number(raw.feature_interval_min)
+  if (Number.isFinite(interval) && intervals.length) {
+    next.feature_interval_min = intervals.reduce((best, value) => (
+      Math.abs(value - interval) < Math.abs(best - interval) ? value : best
+    ), intervals[0])
+  }
+  return next
+}
+
+function loadGuestRadioMode() {
+  try {
+    return normalizeRadioMode(JSON.parse(safeStorage.get(RADIO_MODE_STORAGE_KEY) || 'null'))
+  } catch {
+    return { ...DEFAULT_RADIO_MODE }
+  }
+}
+
 export function PreferencesProvider({ children }) {
   const { isAuthenticated, user } = useAuth()
-  const { toastSuccess, toastError } = useUIState()
+  const { toastSuccess, toastError } = useUIActions()
+  const { settingsState } = useUIState()
+  const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
   const success = toastSuccess
   const error = toastError
+
+  const [radioMode, setRadioModeState] = useState(() => loadGuestRadioMode())
+  const [radioOptions, setRadioOptions] = useState(DEFAULT_RADIO_OPTIONS)
+  const [radioModeSaving, setRadioModeSaving] = useState(false)
+  const radioModeRef = useRef(radioMode)
+  useEffect(() => { radioModeRef.current = radioMode }, [radioMode])
+  const ttsMuted = !!settingsState.ttsMuted
 
   const [preferencesByType, setPreferencesByType] = useState({
     track: {
@@ -35,6 +82,8 @@ export function PreferencesProvider({ children }) {
     track: new Set(),
     shoutout: new Set()
   })
+  const opsRef = useRef(new Map())
+  const inflightByTypeRef = useRef({ track: 0, shoutout: 0 })
 
   const preferenceMaps = useMemo(() => {
     const buildMaps = (prefs) => {
@@ -104,11 +153,63 @@ export function PreferencesProvider({ children }) {
     }
   }, [isAuthenticated, loadPreferences])
 
+  useEffect(() => {
+    let cancelled = false
+    if (!isAuthenticated) {
+      setRadioModeState(loadGuestRadioMode())
+      return
+    }
+    api.getRadioMode()
+      .then(data => {
+        if (cancelled || !data?.settings) return
+        const intervals = data.options?.feature_intervals_min?.length ? data.options.feature_intervals_min : DEFAULT_RADIO_OPTIONS.feature_intervals_min
+        setRadioOptions({
+          feature_intervals_min: intervals,
+          stings_outside_radio_mode: data.options?.stings_outside_radio_mode !== false
+        })
+        setRadioModeState(normalizeRadioMode(data.settings, intervals))
+      })
+      .catch(err => logger.warn('[Preferences] Radio Mode settings unavailable:', err))
+    return () => { cancelled = true }
+  }, [isAuthenticated, user?.id])
+
+  useEffect(() => {
+    if (isAuthenticated || !wsConnected || !wsSend) return
+    void wsSend({
+      type: 'radio_mode_prefs',
+      data: { ...radioMode, enabled: radioMode.enabled && !ttsMuted }
+    })
+  }, [isAuthenticated, wsConnected, wsSend, radioMode, ttsMuted])
+
+  const updateRadioMode = useCallback(async (patch) => {
+    const previous = radioModeRef.current
+    const next = normalizeRadioMode({ ...previous, ...patch }, radioOptions.feature_intervals_min)
+    setRadioModeState(next)
+    if (!isAuthenticated) {
+      safeStorage.set(RADIO_MODE_STORAGE_KEY, JSON.stringify(next))
+      return next
+    }
+    setRadioModeSaving(true)
+    try {
+      const data = await api.updateRadioMode(patch)
+      const saved = normalizeRadioMode(data?.settings || next, radioOptions.feature_intervals_min)
+      setRadioModeState(saved)
+      return saved
+    } catch (err) {
+      logger.error('[Preferences] Failed to save Radio Mode settings:', err)
+      setRadioModeState(previous)
+      error('Could not save Radio Mode settings')
+      return previous
+    } finally {
+      setRadioModeSaving(false)
+    }
+  }, [isAuthenticated, radioOptions, error])
+
   const handlePreferenceChange = useCallback((data) => {
     if (isAuthenticated && user && data.user_id === user.id) {
       logger.info('Preference changed via WebSocket, refreshing:', data)
-      void loadPreferences('track')
-      void loadPreferences('shoutout')
+      if (!inflightByTypeRef.current.track) void loadPreferences('track')
+      if (!inflightByTypeRef.current.shoutout) void loadPreferences('shoutout')
     }
   }, [isAuthenticated, user, loadPreferences])
 
@@ -160,65 +261,72 @@ export function PreferencesProvider({ children }) {
     })
   }, [])
 
-  const setPreference = useCallback(async (type, id, preferenceType) => {
-    setPendingByType(prev => ({
-      ...prev,
-      [type]: new Set(prev[type]).add(id)
-    }))
+  const setItemPending = useCallback((type, id, pending) => {
+    setPendingByType(prev => {
+      const current = prev[type] || new Set()
+      if (current.has(id) === pending) return prev
+      const nextSet = new Set(current)
+      if (pending) nextSet.add(id)
+      else nextSet.delete(id)
+      return { ...prev, [type]: nextSet }
+    })
+  }, [])
 
-    updatePreferenceOptimistic(type, id, preferenceType)
+  const runPreferenceOp = useCallback(async (type, id, preferenceType) => {
+    const key = `${type}:${id}`
+    const entry = opsRef.current.get(key) || { chain: Promise.resolve(), version: 0 }
+    const version = entry.version + 1
+    entry.version = version
+    opsRef.current.set(key, entry)
 
+    if (preferenceType) updatePreferenceOptimistic(type, id, preferenceType)
+    else removePreferenceOptimistic(type, id)
+    setItemPending(type, id, true)
+    inflightByTypeRef.current[type] = (inflightByTypeRef.current[type] || 0) + 1
+
+    const run = entry.chain.then(async () => {
+      if (entry.version !== version) return false
+      if (preferenceType) await api.setPreference(type, id, preferenceType)
+      else await api.removePreference(type, id)
+      return true
+    })
+    entry.chain = run.catch(() => {})
+
+    let failed = false
     try {
-      await api.setPreference(type, id, preferenceType)
-      await loadPreferences(type)
-
-      const messages = {
-        like: `${type === 'track' ? 'Track' : 'Shoutout'} liked!`,
-        super_like: `${type === 'track' ? 'Track' : 'Shoutout'} super liked!`,
-        ban: `${type === 'track' ? 'Track' : 'Shoutout'} banned`
+      const sent = await run
+      if (sent && entry.version === version) {
+        const label = type === 'track' ? 'Track' : 'Shoutout'
+        const messages = {
+          like: `${label} liked!`,
+          super_like: `${label} super liked!`,
+          ban: `${label} banned`
+        }
+        success(preferenceType ? (messages[preferenceType] || 'Preference updated') : 'Preference removed')
       }
-      success(messages[preferenceType] || 'Preference updated')
     } catch (err) {
-      logger.error(`Failed to set ${type} preference:`, err)
-      error('Failed to update preference. Please try again.')
-      await loadPreferences(type)
+      failed = true
+      logger.error(`Failed to update ${type} preference:`, err)
+      if (entry.version === version) error('Failed to update preference. Please try again.')
     } finally {
-      setPendingByType(prev => {
-        const next = { ...prev }
-        const newSet = new Set(prev[type])
-        newSet.delete(id)
-        next[type] = newSet
-        return next
-      })
+      inflightByTypeRef.current[type] -= 1
+      if (entry.version === version) {
+        opsRef.current.delete(key)
+        setItemPending(type, id, false)
+      }
+      if (inflightByTypeRef.current[type] === 0 || failed) {
+        await loadPreferences(type)
+      }
     }
-  }, [updatePreferenceOptimistic, loadPreferences, success, error])
+  }, [updatePreferenceOptimistic, removePreferenceOptimistic, setItemPending, loadPreferences, success, error])
 
-  const removePreference = useCallback(async (type, id) => {
-    setPendingByType(prev => ({
-      ...prev,
-      [type]: new Set(prev[type]).add(id)
-    }))
+  const setPreference = useCallback((type, id, preferenceType) => {
+    return runPreferenceOp(type, id, preferenceType)
+  }, [runPreferenceOp])
 
-    removePreferenceOptimistic(type, id)
-
-    try {
-      await api.removePreference(type, id)
-      await loadPreferences(type)
-      success('Preference removed')
-    } catch (err) {
-      logger.error(`Failed to remove ${type} preference:`, err)
-      error('Failed to update preference. Please try again.')
-      await loadPreferences(type)
-    } finally {
-      setPendingByType(prev => {
-        const next = { ...prev }
-        const newSet = new Set(prev[type])
-        newSet.delete(id)
-        next[type] = newSet
-        return next
-      })
-    }
-  }, [removePreferenceOptimistic, loadPreferences, success, error])
+  const removePreference = useCallback((type, id) => {
+    return runPreferenceOp(type, id, null)
+  }, [runPreferenceOp])
 
   const isPending = useCallback((type, id) => {
     return pendingByType[type]?.has(id) || false
@@ -232,18 +340,23 @@ export function PreferencesProvider({ children }) {
     return loadingByType[type] || false
   }, [loadingByType])
 
+  const value = useMemo(() => ({
+    getPreference,
+    setPreference,
+    removePreference,
+    isPending,
+    loadPreferences,
+    getPreferences,
+    isLoading,
+    radioMode,
+    radioOptions,
+    radioModeSaving,
+    updateRadioMode
+  }), [getPreference, setPreference, removePreference, isPending, loadPreferences, getPreferences, isLoading,
+    radioMode, radioOptions, radioModeSaving, updateRadioMode])
+
   return (
-    <PreferencesContext.Provider
-      value={{
-        getPreference,
-        setPreference,
-        removePreference,
-        isPending,
-        loadPreferences,
-        getPreferences,
-        isLoading
-      }}
-    >
+    <PreferencesContext.Provider value={value}>
       {children}
     </PreferencesContext.Provider>
   )

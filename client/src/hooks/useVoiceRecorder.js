@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger'
+import { safeStorage } from '../lib/safeStorage'
 import { useRef, useState, useEffect, useCallback } from 'react'
 
 const getSupportedAudioMimeType = () => {
@@ -113,21 +114,26 @@ export const useVoiceRecorder = () => {
         channelCount: 1
       }
 
-      const preferredMicrophoneId = localStorage.getItem('preferredMicrophoneId')
+      const preferredMicrophoneId = safeStorage.get('preferredMicrophoneId')
       if (preferredMicrophoneId) {
         audioConstraints.deviceId = { exact: preferredMicrophoneId }
       }
 
+      if (!audioContext.current || audioContext.current.state === 'closed') {
+        audioContext.current = new (window.AudioContext || window.webkitAudioContext)()
+      }
+      const analysisContext = audioContext.current
+      if (analysisContext.state !== 'running') analysisContext.resume().catch(() => {})
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
 
-      if (!isStarting.current) {
+      if (!isStarting.current || audioContext.current !== analysisContext) {
         stream.getTracks().forEach(track => track.stop())
         return false
       }
 
       streamRef.current = stream
 
-      audioContext.current = new (window.AudioContext || window.webkitAudioContext)()
       const audioSource = audioContext.current.createMediaStreamSource(stream)
       analyserRef.current = audioContext.current.createAnalyser()
       analyserRef.current.fftSize = 1024

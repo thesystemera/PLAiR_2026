@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from functools import lru_cache
@@ -11,6 +12,7 @@ from services import log_service
 from services.user_data_cache_service import user_data_cache
 
 MAX_PASSWORD_BYTES = 72
+_DUMMY_PASSWORD_HASH: Optional[str] = None
 
 def validate_password_length(password: str) -> tuple[bool, Optional[str]]:
     password_bytes = password.encode('utf-8')
@@ -47,6 +49,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except Exception as e:
         log_service.warning(f"Password verification failed: {str(e)}")
         return False
+
+def _dummy_password_hash() -> str:
+    global _DUMMY_PASSWORD_HASH
+    if _DUMMY_PASSWORD_HASH is None:
+        _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"plair-dummy-password", bcrypt.gensalt()).decode("utf-8")
+    return _DUMMY_PASSWORD_HASH
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
@@ -90,7 +98,7 @@ async def register_user(db: AsyncSession, username: str, password: str) -> Optio
         log_service.warning(f"Registration failed: Username '{username}' already exists")
         return None
 
-    hashed_password = hash_password(password)
+    hashed_password = await asyncio.to_thread(hash_password, password)
     new_user = User(username=username, password_hash=hashed_password)
     db.add(new_user)
     await db.commit()
@@ -102,9 +110,10 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
     if not user:
+        await asyncio.to_thread(verify_password, password, _dummy_password_hash())
         log_service.warning(f"Login failed: User '{username}' not found")
         return None
-    if not verify_password(password, user.password_hash):
+    if not await asyncio.to_thread(verify_password, password, user.password_hash):
         log_service.warning(f"Login failed: Invalid password for user '{username}'")
         return None
     log_service.info(f"User authenticated: {username} (ID: {user.id})")

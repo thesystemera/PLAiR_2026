@@ -1,10 +1,20 @@
+import time
 from typing import Dict, Optional, List, cast
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytz
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database.models import User, TrackPreference, PreferenceType, WeatherData
 from services import log_service
+from services.user_content_database_service import coarse_location
+from services_radio.external_news_service import resolve_country, resolve_city
+from services_radio.dj_content_bank import content_bank
+from services_radio import listener_location as location_resolver
+from services_radio.listener_location import ListenerLocation
+
+AUDIO_FEATURES_CACHE_TTL_S = 3600
+AUDIO_FEATURES_CACHE_MAX = 512
+_audio_features_cache: Dict[str, tuple] = {}
 
 def _format_release_date(iso_date_str: str) -> str:
     if not iso_date_str or iso_date_str == 'N/A':
@@ -28,11 +38,26 @@ def _format_duration(duration_ms: int) -> str:
     except (ValueError, TypeError):
         return 'N/A'
 
-def format_user_time_str(user: Optional[User]) -> str:
+def listener_timezone(user: Optional[User], session_id: Optional[str] = None) -> Optional[str]:
+    tz_name = getattr(user, 'timezone', None) if user is not None else None
+    if not tz_name and user is None:
+        guest = location_resolver.guest_locations.get(session_id)
+        tz_name = guest.timezone if guest is not None else None
+    return tz_name or content_bank.session_timezone(session_id)
+
+async def listener_location(user: Optional[User], session_id: Optional[str] = None, geocode: bool = True,
+                            geocode_wait_s: Optional[float] = None) -> ListenerLocation:
+    return await location_resolver.resolve(user, session_id, geocode=geocode, geocode_wait_s=geocode_wait_s)
+
+async def _listener(listener: Optional[ListenerLocation], user, session_id: Optional[str]) -> ListenerLocation:
+    return listener if listener is not None else await listener_location(user, session_id)
+
+def format_user_time_str(user: Optional[User], tz_name: Optional[str] = None) -> str:
     try:
-        if user is not None and user.timezone is not None:
+        tz_name = tz_name or (user.timezone if user is not None else None)
+        if tz_name is not None:
             server_time = datetime.now(timezone.utc)
-            local_time = server_time.astimezone(pytz.timezone(cast(str, user.timezone)))
+            local_time = server_time.astimezone(pytz.timezone(cast(str, tz_name)))
             return f"Local Time: {local_time.strftime('%I:%M %p')}"
         else:
             utc_time = datetime.now(timezone.utc)
@@ -41,7 +66,16 @@ def format_user_time_str(user: Optional[User]) -> str:
         log_service.error(f"[Context] Error formatting user local time: {e}")
         return "Time: Unknown"
 
-def get_show_details() -> tuple[str | None, str, str | None]:
+def _listener_now(user: Optional[User] = None, tz_name: Optional[str] = None) -> datetime:
+    tz_name = tz_name or (getattr(user, 'timezone', None) if user is not None else None)
+    if tz_name:
+        try:
+            return datetime.now(pytz.timezone(cast(str, tz_name))).replace(tzinfo=None)
+        except pytz.UnknownTimeZoneError:
+            pass
+    return datetime.now()
+
+def get_show_details(user: Optional[User] = None, tz_name: Optional[str] = None) -> tuple[str | None, str, str | None]:
     schedule = {
         "06:00 AM": "The Early Bird Show",
         "09:00 AM": "The Morning Vibes Show",
@@ -57,7 +91,7 @@ def get_show_details() -> tuple[str | None, str, str | None]:
     schedule_times = [(datetime.strptime(time_str, "%I:%M %p"), show) for time_str, show in schedule.items()]
     schedule_times.sort()
 
-    current_time = datetime.now()
+    current_time = _listener_now(user, tz_name)
 
     previous_show = None
     current_show = None
@@ -166,9 +200,9 @@ async def get_db_weather(user_id: int, db: AsyncSession) -> str:
             .where(WeatherData.user_id == user_id)
             .order_by(WeatherData.timestamp.desc())
         )
-        weather_data = result.scalar_one_or_none()
+        weather_data = result.scalars().first()
 
-        if weather_data:
+        if weather_data and weather_data.timestamp and datetime.now(timezone.utc) - weather_data.timestamp < timedelta(hours=3):
             return f"CURRENT WEATHER: {weather_data.description}"
         return "CURRENT WEATHER: Unknown"
     except Exception as e:
@@ -195,9 +229,12 @@ async def gather_raw_dependencies(
         playback_service,
         audio_features_service
     )
+    location = await listener_location(user, session_id)
 
     return {
         'user': user,
+        'listener_location': location,
+        'listener_timezone': location.timezone or listener_timezone(user, session_id),
         'async_session_maker': async_session_maker,
         'user_id': user_id,
         'session_id': session_id,
@@ -235,7 +272,7 @@ async def get_track_context(session_id: str, playback_service, audio_features_se
         current_track = playback_state.get('current_track')
         if current_track:
             current_track_data = await _format_track(current_track, audio_features_service)
-            current_track_data['progress_seconds'] = playback_state.get('position_ms', 0) // 1000
+            current_track_data['progress_seconds'] = playback_state.get('progress_ms', 0) // 1000
             if current_track_data['duration_seconds'] > 0:
                 current_track_data['progress_percentage'] = (
                     current_track_data['progress_seconds'] / current_track_data['duration_seconds']
@@ -265,41 +302,56 @@ async def get_track_context(session_id: str, playback_service, audio_features_se
             'upcoming_track': _empty_track()
         }
 
+def _summarize_audio_features(features: Optional[Dict]) -> Dict:
+    if not features:
+        return {}
+    dynamic_range = features.get('dynamic_range', 0)
+    overall_loudness = features.get('overall_loudness', -30)
+
+    energy = min(1.0, max(0.0, (overall_loudness + 30) / 40 + dynamic_range / 80))
+
+    tempo = features.get('tempo', 120)
+    if 115 <= tempo <= 135:
+        danceability = 1.0
+    elif 90 <= tempo <= 160:
+        danceability = 0.7
+    elif 60 <= tempo <= 180:
+        danceability = 0.5
+    else:
+        danceability = 0.3
+
+    return {
+        'tempo': features.get('tempo', 0),
+        'energy': round(energy, 2),
+        'danceability': round(danceability, 2),
+        'loudness': features.get('overall_loudness', 0),
+        'dynamic_range': features.get('dynamic_range', 0),
+        'time_signature': features.get('time_signature', 4),
+        'key': features.get('key', 'N/A'),
+        'mode': features.get('mode', 'N/A'),
+        'valence': round(features.get('valence', 0), 2),
+        'beat_count': features.get('beat_count', 0)
+    }
+
+async def _track_audio_features(track_id: str, audio_features_service) -> Dict:
+    now = time.monotonic()
+    cached = _audio_features_cache.get(track_id)
+    if cached and now - cached[0] < AUDIO_FEATURES_CACHE_TTL_S:
+        return cached[1]
+    audio_features = _summarize_audio_features(await audio_features_service.load_features(track_id))
+    _audio_features_cache.pop(track_id, None)
+    _audio_features_cache[track_id] = (now, audio_features)
+    while len(_audio_features_cache) > AUDIO_FEATURES_CACHE_MAX:
+        _audio_features_cache.pop(next(iter(_audio_features_cache)))
+    return audio_features
+
 async def _format_track(track: Dict, audio_features_service) -> Dict:
     try:
         track_id = track.get('id', 'N/A')
 
         audio_features = {}
-        if track_id != 'N/A':
-            features = await audio_features_service.load_features(track_id)
-            if features:
-                dynamic_range = features.get('dynamic_range', 0)
-                overall_loudness = features.get('overall_loudness', -30)
-
-                energy = min(1.0, max(0.0, (overall_loudness + 30) / 40 + dynamic_range / 80))
-
-                tempo = features.get('tempo', 120)
-                if 115 <= tempo <= 135:
-                    danceability = 1.0
-                elif 90 <= tempo <= 160:
-                    danceability = 0.7
-                elif 60 <= tempo <= 180:
-                    danceability = 0.5
-                else:
-                    danceability = 0.3
-
-                audio_features = {
-                    'tempo': features.get('tempo', 0),
-                    'energy': round(energy, 2),
-                    'danceability': round(danceability, 2),
-                    'loudness': features.get('overall_loudness', 0),
-                    'dynamic_range': features.get('dynamic_range', 0),
-                    'time_signature': features.get('time_signature', 4),
-                    'key': features.get('key', 'N/A'),
-                    'mode': features.get('mode', 'N/A'),
-                    'valence': round(features.get('valence', 0), 2),
-                    'beat_count': features.get('beat_count', 0)
-                }
+        if track_id != 'N/A' and audio_features_service is not None:
+            audio_features = dict(await _track_audio_features(track_id, audio_features_service))
 
         title = (track.get('track_info', {}).get('title') or
                  track.get('generation_params', {}).get('title') or
@@ -329,6 +381,7 @@ async def _format_track(track: Dict, audio_features_service) -> Dict:
             'id': track_id,
             'name': title,
             'artists': artist,
+            'credited_artist': (track.get('generation_params', {}).get('artist_name') or '').strip(),
             'duration': duration_formatted,
             'duration_seconds': duration_seconds,
             'release_date': release_date_formatted,
@@ -361,16 +414,16 @@ async def get_shoutouts_data(
     dj_service,
     user,
     query: Optional[str] = None,
-    n_results: int = 5
+    n_results: int = 5,
+    session_id: Optional[str] = None,
+    listener: Optional[ListenerLocation] = None
 ) -> str:
 
     if not dj_service or not dj_service.user_content_vector_search_service:
         return ""
 
     try:
-        user_location = None
-        if user and user.latitude and user.longitude:
-            user_location = (float(user.latitude), float(user.longitude))
+        user_location = (await _listener(listener, user, session_id)).coords
 
         search_query = query if query else "Recent community messages and shoutouts"
 
@@ -388,7 +441,7 @@ async def get_shoutouts_data(
         for i, shoutout in enumerate(shoutouts, 1):
             user_data = shoutout.get('user_data', {})
             username = user_data.get('username') or shoutout.get('username', 'Unknown Listener')
-            location = user_data.get('location') or shoutout.get('location', 'Unknown Location')
+            location = coarse_location(user_data.get('location') or shoutout.get('location')) or 'Unknown Location'
             score = shoutout.get('final_score', 0)
             transcription = shoutout.get('transcription', '').strip()
             audio_url = shoutout.get('audio_url', '')
@@ -413,7 +466,7 @@ async def get_biography_data(dj_service, artist_name: Optional[str] = None, curr
 
     try:
         biography = await dj_service.web_service.retrieve_artist_biography(artist_name)
-        if "Error" in biography:
+        if not biography:
             return ""
         return f"ARTIST: {artist_name}\n\nBIOGRAPHY:\n{biography}"
     except Exception as e:
@@ -426,36 +479,65 @@ async def get_news_data(
     query: Optional[str] = None,
     is_topic: bool = False,
     categories: Optional[List] = None,
-    location: Optional[str] = None
+    location: Optional[str] = None,
+    session_id: Optional[str] = None,
+    listener: Optional[ListenerLocation] = None
 ) -> str:
-
-    if not location and user:
-        location = user.location
 
     if not dj_service or not dj_service.news_service:
         return ""
 
+    news_service = dj_service.news_service
+    scope = (location or "WORLD").upper()
+    general = not query or query == "general news"
+
     try:
-        country = 'US' if location == 'US' else None
-        _, news_report = await dj_service.news_service.get_top_news(query=query, is_topic=is_topic, country=country)
-        if not news_report:
+        home_country = (await _listener(listener, user, session_id)).country_code or None
+        local_city = None
+        if scope == "WORLD":
+            country = home_country
+            if general:
+                query, is_topic = "WORLD", True
+        elif scope in ("NATIONAL", "US"):
+            country = home_country if scope == "NATIONAL" else "US"
+            if general:
+                query, is_topic = "NATION", True
+        else:
+            country = resolve_country(location) or home_country
+            city = resolve_city(location)
+            if city:
+                if general or is_topic:
+                    local_city, query = city, city
+                else:
+                    query = f"{query} {city}"
+                is_topic = False
+        if local_city and hasattr(news_service, "get_local_news"):
+            articles, news_report = await news_service.get_local_news(local_city, country=country, subject=session_id)
+        else:
+            articles, news_report = await news_service.get_top_news(query=query, is_topic=is_topic, country=country,
+                                                                    subject=session_id)
+        if not articles or not news_report:
             return ""
+        if session_id and hasattr(news_service, "mark_aired"):
+            await news_service.mark_aired(session_id, articles)
         cat_str = ', '.join(categories) if categories else 'N/A'
         return f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\nLOCATION: {location}"
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch news: {e}")
         return ""
 
-async def get_weather_data(dj_service, user, forecast_type: str = "current") -> str:
-
-    if not user or not user.latitude or not user.longitude:
-        return ""
+async def get_weather_data(dj_service, user, forecast_type: str = "current", session_id: Optional[str] = None,
+                           listener: Optional[ListenerLocation] = None) -> str:
 
     if not dj_service or not dj_service.web_service:
         return ""
 
+    coords = (await _listener(listener, user, session_id)).coords
+    if not coords:
+        return ""
+
     try:
-        weather_data = await dj_service.web_service.retrieve_weather_data(user.latitude, user.longitude, forecast_type)
+        weather_data = await dj_service.web_service.retrieve_weather_data(coords[0], coords[1], forecast_type)
         if not weather_data:
             return ""
         return f"WEATHER REPORT ({forecast_type.upper()}):\n{weather_data}"
@@ -463,11 +545,12 @@ async def get_weather_data(dj_service, user, forecast_type: str = "current") -> 
         log_service.warning(f"[Context] Failed to fetch weather: {e}")
         return ""
 
-async def get_location_data(dj_service, user, query: Optional[str] = None) -> str:
-    if not query or not user or not dj_service or not dj_service.location_service:
+async def get_location_data(dj_service, user, query: Optional[str] = None, session_id: Optional[str] = None,
+                            listener: Optional[ListenerLocation] = None) -> str:
+    if not query or not dj_service or not dj_service.location_service:
         return ""
 
-    user_location = (float(user.latitude), float(user.longitude)) if user.latitude and user.longitude else None
+    user_location = (await _listener(listener, user, session_id)).coords
     if not user_location:
         return ""
 
@@ -480,22 +563,82 @@ async def get_location_data(dj_service, user, query: Optional[str] = None) -> st
         log_service.warning(f"[Context] Failed to fetch location: {e}")
         return ""
 
+def format_regional_events(scored_items) -> str:
+    lines = []
+    for _, item in scored_items:
+        tags = " / ".join(item.tags[1:] or item.tags)
+        lines.append(f"- {item.title} ({' | '.join(part for part in (item.text, tags) if part)})")
+    return "\n".join(lines)
+
+async def get_regional_events_data(
+    dj_service,
+    user,
+    user_id: Optional[int],
+    session_id: Optional[str],
+    tz_name: Optional[str],
+    async_session_maker,
+    catalog_service,
+    location: Optional[str] = None,
+    country_code: Optional[str] = None,
+    start_date=None,
+    end_date=None,
+    keyword: Optional[str] = None,
+    listener: Optional[ListenerLocation] = None
+) -> str:
+    from services_radio.regional_knowledge import KIND_EVENT, TicketmasterEventsCollector, get_regional_knowledge, resolve_region
+    from services_radio.external_events_service import GENERIC_EVENT_WORDS
+    from services_radio.dj_bank_sources import listener_taste
+
+    listener = await _listener(listener, user, session_id)
+    regional = get_regional_knowledge()
+    region = resolve_region(user, tz_name, location=listener) if regional is not None else None
+    needle = (keyword or "").strip()
+    if needle.lower() in GENERIC_EVENT_WORDS:
+        needle = ""
+    if region is not None and start_date and end_date:
+        taste = await listener_taste(user, user_id, session_id, async_session_maker, catalog_service)
+        pooled = await regional.query(region, (KIND_EVENT,), taste, window=(start_date, end_date), limit=12,
+                                      text_query=needle or None, record_hit=True)
+        if len(pooled) >= (1 if needle else 3):
+            log_service.external(f"[Context] Events served from the {region.name} pool ({len(pooled)})")
+            return f"EVENTS DATA:\n{format_regional_events(pooled)}"
+
+    if location is None and country_code is None:
+        location = listener.query_point() or listener.city or None
+        country_code = listener.country_code or None
+    if location is None and country_code is None:
+        return ""
+
+    async def feed_pool(events):
+        if regional is None or region is None:
+            return
+        now = datetime.now(timezone.utc)
+        items = [item for item in (TicketmasterEventsCollector.to_item(region, event, now) for event in events) if item]
+        await regional.ingest(region, items)
+
+    return await get_events_data(dj_service, location, country_code, start_date, end_date, keyword, feed_pool)
+
 async def get_events_data(
     dj_service,
     location: Optional[str] = None,
     country_code: Optional[str] = None,
     start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    end_date: Optional[str] = None,
+    keyword: Optional[str] = None,
+    on_events=None
 ) -> str:
 
     if not dj_service or not dj_service.events_service:
         return ""
 
     try:
-        events_data = await dj_service.events_service.get_ticketmaster_events(location, country_code, start_date, end_date)
+        events_data = await dj_service.events_service.get_ticketmaster_events(location, country_code, start_date,
+                                                                              end_date, keyword)
         if not events_data:
             return ""
-        return f"EVENTS DATA:\n{events_data}"
+        if on_events is not None:
+            await on_events(events_data)
+        return f"EVENTS DATA:\n{dj_service.events_service.format_events(events_data)}"
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch events: {e}")
         return ""

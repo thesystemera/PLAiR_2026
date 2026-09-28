@@ -3,6 +3,22 @@ import { memo, useState, useCallback } from 'react'
 import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { Play, Pause } from 'lucide-react'
 import { formatDuration } from '../lib/utils'
+import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
+import { MOTION, PRESETS, staggerDelay } from '../lib/motion'
+import { useViewport } from '../contexts/ViewportContext'
+
+export function useMediaGridColumns() {
+  const { isMobile, isLandscape } = useViewport()
+  const itemsPerRow = isMobile && isLandscape ? 4 : 2
+  return {
+    itemsPerRow,
+    gridClassName: `grid ${itemsPerRow === 4 ? 'grid-cols-4' : 'grid-cols-2'} gap-3 md:gap-4 px-3 md:px-6`
+  }
+}
+
+const CARD_ENTRANCE_LIMIT = 16
+
+export const isCardEntering = (index, shouldAnimate) => shouldAnimate && index < CARD_ENTRANCE_LIMIT
 
 export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
   type = 'track', // 'track' or 'shoutout'
@@ -22,8 +38,8 @@ export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
   })()
 
   return (
-    <div 
-      className="absolute inset-0 flex items-center justify-center"
+    <div
+      className="ui-fade-in absolute inset-0 flex items-center justify-center"
       style={offsetHeader ? { paddingTop: '72px' } : undefined}
     >
       <motion.div
@@ -31,11 +47,7 @@ export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
           scale: [1, 1.15, 1],
           opacity: [0.7, 1, 0.7]
         }}
-        transition={{
-          duration: 1.5,
-          repeat: Infinity,
-          ease: 'easeInOut'
-        }}
+        transition={MOTION.breathe}
         className="w-20 h-20 md:w-24 md:h-24 rounded-full flex items-center justify-center"
         style={{
           backgroundColor: getCardBackground(),
@@ -61,8 +73,9 @@ export const MediaEmptyState = memo(function MediaEmptyState({
   const { getGrey400, getGrey300 } = useDynamicTheme()
 
   return (
-    <div
-      className="flex flex-col items-center justify-center h-64 transition-colors duration-700"
+    <motion.div
+      {...PRESETS.emptyState}
+      className="flex flex-col items-center justify-center h-64 transition-colors duration-theme"
       style={{ color: getGrey400() }}
     >
       <div className="mb-4">
@@ -76,7 +89,7 @@ export const MediaEmptyState = memo(function MediaEmptyState({
       <div className="text-sm mt-2" style={{ color: getGrey300() }}>
         {subtitle}
       </div>
-    </div>
+    </motion.div>
   )
 })
 
@@ -85,7 +98,7 @@ export const MediaPlayingOverlay = memo(function MediaPlayingOverlay() {
     <motion.div
       className="absolute inset-0 bg-gradient-to-br from-purple-600/50 to-blue-600/50 z-10"
       animate={{ opacity: [0.3, 0.5, 0.3] }}
-      transition={{ duration: 2, repeat: Infinity }}
+      transition={MOTION.shimmer}
     />
   )
 })
@@ -106,10 +119,11 @@ export const MediaStatusBadge = memo(function MediaStatusBadge({
     queued: 'Queued',
     new: 'NEW'
   }[variant]
+  const popClass = variant === 'new' ? '' : 'ui-pop'
 
   return (
     <div
-      className={`px-2 py-1 text-xs rounded-full font-semibold z-40 ${variantStyles[variant]} ${className}`}
+      className={`px-2 py-1 text-xs rounded-full font-semibold z-40 ${popClass} ${variantStyles[variant]} ${className}`}
     >
       {displayText}
     </div>
@@ -121,18 +135,19 @@ export const MediaCardAnimation = memo(function MediaCardAnimation({
   shouldAnimate = true,
   children,
   className = '',
-  ...motionProps
+  style,
+  ...props
 }) {
+  const animateEntrance = isCardEntering(index, shouldAnimate)
+
   return (
-    <motion.div
-      initial={shouldAnimate ? { opacity: 0, y: 20 } : { opacity: 1, y: 0 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={shouldAnimate ? { delay: Math.min(index * 0.03, 0.3) } : { duration: 0 }}
-      className={className}
-      {...motionProps}
+    <div
+      className={animateEntrance ? `ui-fade-in ${className}` : className}
+      style={animateEntrance ? { ...style, animationDelay: `${Math.round(staggerDelay(index) * 1000)}ms` } : style}
+      {...props}
     >
       {children}
-    </motion.div>
+    </div>
   )
 })
 
@@ -141,7 +156,8 @@ export const MediaGrid = memo(function MediaGrid({
   className = '',
   withAnimation = false
 }) {
-  const gridClasses = `grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-3 md:gap-4 px-3 md:px-6 pb-3 md:pb-6 ${className}`
+  const { gridClassName } = useMediaGridColumns()
+  const gridClasses = `${gridClassName} pb-3 md:pb-6 ${className}`
 
   if (withAnimation) {
     return (
@@ -232,21 +248,19 @@ export const MediaCardPlayOverlay = memo(function MediaCardPlayOverlay({
 
   return (
     <div className={BUTTON.card.playOverlay}>
-      <motion.button
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.95 }}
+      <button
         onClick={(e) => {
           e.stopPropagation()
           onPlayPause(e)
         }}
-        className={BUTTON.card.play}
+        className={`ui-tap ui-hover ${BUTTON.card.play}`}
       >
         {isPlaying ? (
           <Pause fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
         ) : (
           <Play fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
         )}
-      </motion.button>
+      </button>
     </div>
   )
 })
@@ -265,38 +279,20 @@ export const MediaCardActionButton = memo(function MediaCardActionButton({
   }
 
   return (
-    <motion.button
-      whileHover={{ scale: 1.1 }}
-      whileTap={{ scale: 0.9 }}
+    <button
       onClick={(e) => {
         e.stopPropagation()
         onClick(e)
       }}
-      className={`p-1.5 rounded-lg shadow-lg transition ${variantStyles[variant]} ${className}`}
+      className={`ui-tap ui-hover p-1.5 rounded-lg shadow-lg transition-colors ${variantStyles[variant]} ${className}`}
       title={title}
+      aria-label={title}
     >
       <Icon className="w-4 h-4" />
-    </motion.button>
+    </button>
   )
 })
 
-const CATEGORY_FALLBACK_COLORS = [
-  '#8b5cf6',
-  '#ec4899',
-  '#06b6d4',
-  '#10b981',
-  '#f59e0b',
-]
-
-function getCategoryColorIndex(category) {
-  if (!category) return 0
-  let hash = 0
-  for (let i = 0; i < category.length; i++) {
-    hash = ((hash << 5) - hash) + category.charCodeAt(i)
-    hash = hash & hash
-  }
-  return Math.abs(hash) % CATEGORY_FALLBACK_COLORS.length
-}
 
 export const MediaCardCategoryBadge = memo(function MediaCardCategoryBadge({
   category,
@@ -339,7 +335,7 @@ export const MediaCardTags = memo(function MediaCardTags({
       {tags.slice(0, maxDisplay).map((tag, i) => (
         <span
           key={i}
-          className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 transition-colors duration-700"
+          className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 transition-colors duration-theme"
           style={{ color: getGrey400() }}
         >
           #{tag}
@@ -347,7 +343,7 @@ export const MediaCardTags = memo(function MediaCardTags({
       ))}
       {tags.length > maxDisplay && (
         <span
-          className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 transition-colors duration-700"
+          className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 transition-colors duration-theme"
           style={{ color: getGrey400() }}
         >
           +{tags.length - maxDisplay}
@@ -367,7 +363,7 @@ export const MediaCardMetadata = memo(function MediaCardMetadata({
 
   return (
     <p
-      className={`text-[10px] md:text-xs truncate w-full transition-colors duration-700 ${className}`}
+      className={`text-[10px] md:text-xs truncate w-full transition-colors duration-theme ${className}`}
       style={{ color: getGrey400() }}
     >
       {text}

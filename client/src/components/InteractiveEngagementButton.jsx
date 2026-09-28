@@ -3,10 +3,31 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Mic, Loader } from 'lucide-react'
 import { triggerHaptic } from '../lib/haptics'
 import { useRadioUI } from '../contexts/UIStateContext'
+import { useQuality } from '../contexts/QualityContext'
 import { useVoiceRecording } from '../contexts/VoiceRecordingContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
+import { MOTION, CSS_TRANSITION } from '../lib/motion'
+
+const SPIN_ROTATE_TRANSITION = { rotate: MOTION.spin }
+const SILENT_FFT = new Array(32).fill(0)
 
 const numPoints = 32
+
+const SEARCH_SIZE_CONFIG = {
+  containerSize: 'w-10 h-10',
+  scale: { normal: 1, hover: 1.1, recording: 1.15 },
+  iconSize: 'w-5 h-5',
+  baseRadius: 15,
+  maxRadius: 30
+}
+
+const RADIO_SIZE_CONFIG = {
+  containerSize: 'w-60 h-60',
+  scale: { normal: 1, hover: 1.08, recording: 0.92 },
+  iconSize: 'w-24 h-24',
+  baseRadius: 50,
+  maxRadius: 100
+}
 
 export function InteractiveEngagementButton({
   onSwipeLeft = null,
@@ -14,18 +35,21 @@ export function InteractiveEngagementButton({
   onSwipeUp = null,
   onSwipeDown = null,
   onRecordingComplete = null,
-  audioElementRef = null,
   swipeThreshold = 50,
   uiSound = null,
   buttonType = 'radio',
   title = 'Hold to record voice'
 }) {
   const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef } = useRadioUI()
+  const { isTopTier } = useQuality()
+  const blobDprCap = isTopTier ? Infinity : 2
   const { isRecording, recordingSource: activeRecordingSource, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { getRadioButtonBaseRgb } = useDynamicTheme()
 
   const [isHovered, setIsHovered] = useState(false)
   const [isPressed, setIsPressed] = useState(false)
+
+  const sizeConfig = buttonType === 'search' ? SEARCH_SIZE_CONFIG : RADIO_SIZE_CONFIG
 
   useEffect(() => {
     const currentScale = isPressed
@@ -36,29 +60,16 @@ export function InteractiveEngagementButton({
     if (buttonType === 'radio') {
       updateButtonInteraction({ isHovered, isPressed, scale: currentScale })
     }
-  }, [isPressed, isHovered, buttonType, updateButtonInteraction])
+  }, [isPressed, isHovered, buttonType, updateButtonInteraction, sizeConfig])
 
-  useEffect(() => {
+  const [prevVisualState, setPrevVisualState] = useState(visualState)
+  if (visualState !== prevVisualState) {
+    setPrevVisualState(visualState)
     if (visualState === 4) {
       setIsPressed(false)
       setIsHovered(false)
     }
-  }, [visualState])
-
-  const wasPlayingBeforeRecordRef = useRef(false)
-
-  useEffect(() => {
-    if (!audioElementRef?.current) return
-    const isOwn = isRecording && activeRecordingSource === buttonType
-
-    if (isOwn) {
-      wasPlayingBeforeRecordRef.current = !audioElementRef.current.paused
-      if (!audioElementRef.current.paused) audioElementRef.current.pause()
-    } else if (wasPlayingBeforeRecordRef.current) {
-      audioElementRef.current.play().catch(() => {})
-      wasPlayingBeforeRecordRef.current = false
-    }
-  }, [isRecording, activeRecordingSource, audioElementRef, buttonType])
+  }
 
   const interactionStateRef = useRef({
     startTime: 0,
@@ -76,20 +87,6 @@ export function InteractiveEngagementButton({
   const isRunningRef = useRef(false)
   const currentBlobColorRef = useRef({ r: 147, g: 51, b: 234, a: 0.6 })
   const pulsePhaseRef = useRef(0)
-
-  const sizeConfig = buttonType === 'search' ? {
-    containerSize: 'w-10 h-10',
-    scale: { normal: 1, hover: 1.1, recording: 1.15 },
-    iconSize: 'w-5 h-5',
-    baseRadius: 15,
-    maxRadius: 30
-  } : {
-    containerSize: 'w-60 h-60',
-    scale: { normal: 1, hover: 1.08, recording: 0.92 },
-    iconSize: 'w-24 h-24',
-    baseRadius: 50,
-    maxRadius: 100
-  }
 
   // Register RAF source for debugging
   useEffect(() => {
@@ -118,7 +115,7 @@ export function InteractiveEngagementButton({
       
       // Draw one static frame
       const ctx = canvas.getContext('2d')
-      const dpr = window.devicePixelRatio || 1
+      const dpr = Math.min(window.devicePixelRatio || 1, blobDprCap)
       const logicalSize = buttonType === 'search' ? 80 : 240
       canvas.width = logicalSize * dpr
       canvas.height = logicalSize * dpr
@@ -155,7 +152,7 @@ export function InteractiveEngagementButton({
 
     // Animation is needed - start RAF loop
     const ctx = canvas.getContext('2d')
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, blobDprCap)
     const logicalSize = buttonType === 'search' ? 80 : 240
     canvas.width = logicalSize * dpr
     canvas.height = logicalSize * dpr
@@ -164,7 +161,7 @@ export function InteractiveEngagementButton({
     const centerY = logicalSize / 2
 
     const renderBlob = () => {
-      let currentFFT = new Array(32).fill(0)
+      let currentFFT = SILENT_FFT
 
       if (isRecording && activeRecordingSource === buttonType) {
         currentFFT = micFftDataRef.current
@@ -257,7 +254,7 @@ export function InteractiveEngagementButton({
       isRunningRef.current = false
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
     }
-  }, [visualState, sizeConfig, buttonType, isRecording, activeRecordingSource, micFftDataRef, djFftDataRef, isPressed, isHovered, visualColorData, speakerColorRef, getRadioButtonBaseRgb])
+  }, [visualState, sizeConfig, buttonType, isRecording, activeRecordingSource, micFftDataRef, djFftDataRef, isPressed, isHovered, visualColorData, speakerColorRef, getRadioButtonBaseRgb, blobDprCap])
 
   const getSwipeDirection = useCallback((startX, startY, endX, endY, threshold) => {
     const diffX = startX - endX
@@ -432,7 +429,7 @@ export function InteractiveEngagementButton({
             : isHovered
               ? `scale(${sizeConfig.scale.hover})`
               : `scale(${sizeConfig.scale.normal})`,
-          transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
+          transition: CSS_TRANSITION.springyPress,
           background: buttonType === 'search' ? 'rgba(0,0,0,0.2)' : 'transparent',
           WebkitTapHighlightColor: 'transparent',
           touchAction: 'none'
@@ -451,7 +448,7 @@ export function InteractiveEngagementButton({
               initial={{ opacity: 0, scale: 0.5 }}
               animate={{ opacity: 1, scale: 1, rotate: 360 }}
               exit={{ opacity: 0, scale: 0.5 }}
-              transition={{ rotate: { duration: 1, repeat: Infinity, ease: 'linear' } }}
+              transition={SPIN_ROTATE_TRANSITION}
               className="relative z-10"
             >
               <Loader className={`${sizeConfig.iconSize} text-white pointer-events-none`} />
@@ -465,7 +462,7 @@ export function InteractiveEngagementButton({
                 scale: isHovered ? 1.1 : 1
               }}
               exit={{ opacity: 0, scale: 0.5 }}
-              transition={{ scale: { duration: 0.2 } }}
+              transition={MOTION.quickScale}
               className="relative z-10"
             >
               <Mic className={`${sizeConfig.iconSize} text-white pointer-events-none`} />

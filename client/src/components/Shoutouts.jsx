@@ -17,25 +17,11 @@ import { triggerHaptic } from '../lib/haptics'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { formatDateShort } from '../lib/utils'
+import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
+import { FadeSwap } from './Motion'
+import { PRESETS } from '../lib/motion'
 import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
 
-const CATEGORY_FALLBACK_COLORS = [
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#06b6d4', // cyan
-  '#10b981', // green
-  '#f59e0b', // orange
-]
-
-function getCategoryColorIndex(category) {
-  if (!category) return 0
-  let hash = 0
-  for (let i = 0; i < category.length; i++) {
-    hash = ((hash << 5) - hash) + category.charCodeAt(i)
-    hash = hash & hash
-  }
-  return Math.abs(hash) % CATEGORY_FALLBACK_COLORS.length
-}
 
 const CategoryCard = memo(function CategoryCard({ category, count, onSelectCategory, index }) {
   const { getWhite, getGrey400, getCategoryMetadata } = useDynamicTheme()
@@ -60,13 +46,13 @@ const CategoryCard = memo(function CategoryCard({ category, count, onSelectCateg
     <MediaCardAnimation
       index={index}
       onClick={() => onSelectCategory(category)}
-      className="bg-dark-card rounded-lg p-4 hover:bg-dark-hover active:bg-dark-card transition-all duration-200 cursor-pointer group/card"
+      className={`bg-dark-card rounded-lg p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card`}
     >
-      <div className="aspect-square rounded-lg mb-2 flex flex-col items-center justify-center relative overflow-hidden group-hover/card:scale-105 transition-transform duration-200"
+      <div className="aspect-square rounded-lg mb-2 flex flex-col items-center justify-center relative overflow-hidden group-hover/card:scale-105 transition-transform duration-quick"
            style={{ background: `linear-gradient(135deg, ${gradient1} 0%, ${gradient2} 100%)` }}>
         <motion.div
           className="relative z-10 mb-2"
-          whileHover={{ scale: 1.1 }}
+          whileHover={PRESETS.hoverPressLarge.whileHover}
         >
           <ShoutoutsIcon className="w-10 h-10 text-white/80" />
         </motion.div>
@@ -74,10 +60,10 @@ const CategoryCard = memo(function CategoryCard({ category, count, onSelectCateg
           {count}
         </div>
       </div>
-      <h3 className="font-semibold text-sm mb-1 text-center transition-colors duration-700" style={{ color: getWhite() }}>
+      <h3 className="font-semibold text-sm mb-1 text-center transition-colors duration-theme" style={{ color: getWhite() }}>
         {getCategoryLabel(category)}
       </h3>
-      <p className="text-xs text-center transition-colors duration-700" style={{ color: getGrey400() }}>
+      <p className="text-xs text-center transition-colors duration-theme" style={{ color: getGrey400() }}>
         {count} {count === 1 ? 'shoutout' : 'shoutouts'}
       </p>
     </MediaCardAnimation>
@@ -127,7 +113,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
   return (
     <MediaCardAnimation
       index={index}
-      className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card transition-all duration-200 cursor-pointer group/card ${
+      className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card ${
         isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
       }`}
     >
@@ -202,7 +188,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
         matchWeights={shoutout.match_weights}
       />
 
-      <h3 className="font-semibold text-xs md:text-sm mb-1 line-clamp-2 transition-colors duration-700" style={{ color: getWhite() }}>
+      <h3 className="font-semibold text-xs md:text-sm mb-1 line-clamp-2 transition-colors duration-theme" style={{ color: getWhite() }}>
         &ldquo;{shoutout.transcription}&rdquo;
       </h3>
 
@@ -219,7 +205,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
   )
 })
 
-export function Shoutouts({ onToggleView, currentView }) {
+export function Shoutouts() {
   const [shoutouts, setShoutouts] = useState([])
   const [loading, setLoading] = useState(true)
   const [removingIds, setRemovingIds] = useState(new Set())
@@ -320,16 +306,9 @@ export function Shoutouts({ onToggleView, currentView }) {
       triggerHaptic('medium')
       setRemovingIds(prev => new Set(prev).add(id))
 
-      const response = await fetch(
-        `/api/user_content/shoutouts/${id}`,
-        {
-          method: 'DELETE',
-          headers: api.getHeaders(),
-          credentials: 'include'
-        }
-      )
+      const deleted = await api.deleteShoutout(id)
 
-      if (!response.ok) {
+      if (!deleted) {
         errorToast('Failed to delete shoutout')
         setRemovingIds(prev => {
           const next = new Set(prev)
@@ -488,6 +467,8 @@ export function Shoutouts({ onToggleView, currentView }) {
   }, [stats, displayShoutouts, isSearchMode, searchResults.length, sortMode, selectedCategory, categories.length])
 
   const showingCategories = sortMode === 'genre' && !selectedCategory && categories.length > 0
+  const isLoadingContent = loading || searchLoading
+  const contentState = isLoadingContent ? 'loading' : showingCategories ? 'categories' : visibleShoutouts.length === 0 ? 'empty' : 'shoutouts'
 
   return (
     <div className="flex flex-col h-full relative">
@@ -496,74 +477,74 @@ export function Shoutouts({ onToggleView, currentView }) {
         onSearch={handleSearch}
         onClear={handleClearSearch}
         searchIntent={searchIntent}
-        onToggleView={onToggleView}
-        currentView={currentView}
       />
       <Scroller ref={scrollContainerRef} className="flex-1 relative">
-        {(loading || searchLoading) ? (
-          <MediaLoadingSpinner type="shoutout" offsetHeader />
-        ) : showingCategories ? (
-          <>
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={handleSortChange}
-              selectedGenre={selectedCategory}
-              onBackToGenres={handleBackToCategories}
-              contentType="shoutouts"
-            />
-            <MediaGrid withAnimation>
-              {categories.map((categoryData, index) => (
-                <CategoryCard
-                  key={categoryData.category}
-                  category={categoryData.category}
-                  count={categoryData.count}
-                  onSelectCategory={handleSelectCategory}
-                  index={index}
-                />
-              ))}
-            </MediaGrid>
-          </>
-        ) : visibleShoutouts.length === 0 ? (
-          <>
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={handleSortChange}
-              selectedGenre={selectedCategory}
-              onBackToGenres={handleBackToCategories}
-              contentType="shoutouts"
-            />
-            <MediaEmptyState
-              icon={ShoutoutsIcon}
-              title={isSearchMode ? 'No shoutouts found' : selectedCategory ? `No ${selectedCategory} shoutouts` : 'No shoutouts yet!'}
-              subtitle={isSearchMode ? 'Try adjusting your search' : selectedCategory ? 'Try selecting a different category' : 'Use voice recording to create one.'}
-            />
-          </>
-        ) : (
-          <>
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={handleSortChange}
-              selectedGenre={selectedCategory}
-              onBackToGenres={handleBackToCategories}
-              contentType="shoutouts"
-            />
-            <MediaGrid withAnimation>
-              {visibleShoutouts.map((shoutout, index) => (
-                <ShoutoutCard
-                  key={shoutout.id}
-                  shoutout={shoutout}
-                  isPlaying={playingShoutout?.id === shoutout.id}
-                  onPlayPause={handlePlayPause}
-                  onDelete={handleDelete}
-                  index={index}
-                />
-              ))}
-            </MediaGrid>
-          </>
-        )}
+        <FadeSwap swapKey={contentState} className={contentState === 'loading' ? 'absolute inset-0' : undefined}>
+          {isLoadingContent ? (
+            <MediaLoadingSpinner type="shoutout" offsetHeader />
+          ) : showingCategories ? (
+            <>
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={handleSortChange}
+                selectedGenre={selectedCategory}
+                onBackToGenres={handleBackToCategories}
+                contentType="shoutouts"
+              />
+              <MediaGrid withAnimation>
+                {categories.map((categoryData, index) => (
+                  <CategoryCard
+                    key={categoryData.category}
+                    category={categoryData.category}
+                    count={categoryData.count}
+                    onSelectCategory={handleSelectCategory}
+                    index={index}
+                  />
+                ))}
+              </MediaGrid>
+            </>
+          ) : visibleShoutouts.length === 0 ? (
+            <>
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={handleSortChange}
+                selectedGenre={selectedCategory}
+                onBackToGenres={handleBackToCategories}
+                contentType="shoutouts"
+              />
+              <MediaEmptyState
+                icon={ShoutoutsIcon}
+                title={isSearchMode ? 'No shoutouts found' : selectedCategory ? `No ${selectedCategory} shoutouts` : 'No shoutouts yet!'}
+                subtitle={isSearchMode ? 'Try adjusting your search' : selectedCategory ? 'Try selecting a different category' : 'Use voice recording to create one.'}
+              />
+            </>
+          ) : (
+            <>
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={handleSortChange}
+                selectedGenre={selectedCategory}
+                onBackToGenres={handleBackToCategories}
+                contentType="shoutouts"
+              />
+              <MediaGrid withAnimation>
+                {visibleShoutouts.map((shoutout, index) => (
+                  <ShoutoutCard
+                    key={shoutout.id}
+                    shoutout={shoutout}
+                    isPlaying={playingShoutout?.id === shoutout.id}
+                    onPlayPause={handlePlayPause}
+                    onDelete={handleDelete}
+                    index={index}
+                  />
+                ))}
+              </MediaGrid>
+            </>
+          )}
+        </FadeSwap>
       </Scroller>
     </div>
   )

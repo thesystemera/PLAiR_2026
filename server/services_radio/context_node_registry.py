@@ -104,44 +104,6 @@ class ContextNodeRegistry:
 
         return "\n".join(menu_items)
 
-    def get_available_nodes(self) -> List[str]:
-        return list(self._nodes.keys())
-
-    def get_node_stats(self) -> Dict[str, Dict]:
-        return self._stats.copy()
-
-    def get_registry_info(self) -> Dict:
-        cost_breakdown = {"low": 0, "medium": 0, "high": 0}
-        for cost in self._costs.values():
-            cost_breakdown[cost] = cost_breakdown.get(cost, 0) + 1
-
-        total_requests = sum(s["times_requested"] for s in self._stats.values())
-        total_failures = sum(s["failures"] for s in self._stats.values())
-
-        sorted_by_usage = sorted(
-            self._stats.items(),
-            key=lambda x: x[1]["times_requested"],
-            reverse=True
-        )
-        most_used = sorted_by_usage[:5] if sorted_by_usage else []
-
-        sorted_by_speed = sorted(
-            [(k, v) for k, v in self._stats.items() if v["times_requested"] > 0],
-            key=lambda x: x[1]["avg_execution_time"],
-            reverse=True
-        )
-        slowest = sorted_by_speed[:5] if sorted_by_speed else []
-
-        return {
-            "total_nodes": len(self._nodes),
-            "cost_breakdown": cost_breakdown,
-            "total_requests": total_requests,
-            "total_failures": total_failures,
-            "failure_rate": total_failures / total_requests if total_requests > 0 else 0,
-            "most_used_nodes": [(k, v["times_requested"]) for k, v in most_used],
-            "slowest_nodes": [(k, f"{v['avg_execution_time']*1000:.1f}ms") for k, v in slowest]
-        }
-
 node_registry = ContextNodeRegistry()
 
 # Import context_nodes to trigger decorator registrations

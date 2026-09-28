@@ -414,17 +414,18 @@ E:/AI_RADIO/.venv/Scripts/python.exe utils/test_human_upload.py
 
 Set in environment or config:
 ```
-GOOGLE_API_KEY=your_gemini_api_key
+GEMINI_API_KEY=your_gemini_api_key
 ```
 
 ### File Paths
 
+Catalog media lives outside the repo: `CATALOG_DIR` is set in `.env` (currently `D:/catalog`); `settings.CATALOG_DIR` defaults to `server/catalog`. Subdirectories (see `server/config/settings.py`):
+
 ```python
-CATALOG_DIR = "server/catalog"
-AUDIO_DIR = f"{CATALOG_DIR}/audio"
-ARTWORK_DIR = f"{CATALOG_DIR}/artwork"
-METADATA_DIR = f"{CATALOG_DIR}/metadata"
-ORIGINALS_DIR = f"{CATALOG_DIR}/originals"  # Human upload originals
+AUDIO_DIR = CATALOG_DIR / "mp3"
+ARTWORK_DIR = CATALOG_DIR / "artwork"
+METADATA_DIR = CATALOG_DIR / "metadata"
+USERS_DIR = CATALOG_DIR / "users"  # Per-user uploads
 ```
 
 ---

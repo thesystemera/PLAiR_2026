@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Pointer } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 const STORAGE_KEY = 'gesture_guide_seen'
@@ -116,11 +117,11 @@ export function GestureGuide() {
               justifyContent: 'center'
             }}
           >
-            <i
-              className="fas fa-hand-pointer"
+            <Pointer
+              size={36}
+              aria-hidden="true"
               style={{
                 position: 'absolute',
-                fontSize: '36px',
                 color: '#ffffff',
                 filter: 'drop-shadow(0 0 12px rgba(255,255,255,0.6))',
                 animation: `swipe${gesture.direction.charAt(0).toUpperCase() + gesture.direction.slice(1)} 2s ease-in-out forwards`,

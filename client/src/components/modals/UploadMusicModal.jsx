@@ -1,14 +1,19 @@
 import { useState, useRef, useCallback, memo } from 'react'
-import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, Image, Gauge } from 'lucide-react'
+import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useWebSocketSubscribe } from '../../contexts/WebSocketContext'
+import { useAuth } from '../../contexts/AuthContext'
 import Modal, { ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
 
-const SUPPORTED_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
-const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
+const VIDEO_FORMATS = ['mp4', 'mov', 'm4v', 'mkv', 'avi']
+const SUPPORTED_FORMATS = [...AUDIO_FORMATS, ...VIDEO_FORMATS]
+const MAX_AUDIO_FILE_SIZE = 100 * 1024 * 1024
+const MAX_VIDEO_FILE_SIZE = 10 * 1024 * 1024 * 1024
 
 const UploadStage = {
   SELECT: 'select',
@@ -59,8 +64,8 @@ const MetadataField = memo(function MetadataField({
           />
         )}
         <div className="flex gap-2">
-          <button onClick={onSave} className="px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30">Save</button>
-          <button onClick={onCancel} className="px-2 py-1 bg-gray-500/20 text-gray-400 rounded text-xs hover:bg-gray-500/30">Cancel</button>
+          <button onClick={onSave} className="ui-press px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30">Save</button>
+          <button onClick={onCancel} className="ui-press px-2 py-1 bg-gray-500/20 text-gray-400 rounded text-xs hover:bg-gray-500/30">Cancel</button>
         </div>
       </div>
     )
@@ -74,7 +79,7 @@ const MetadataField = memo(function MetadataField({
         {onEdit && (
           <button
             onClick={onEdit}
-            className="opacity-0 group-hover:opacity-100 p-1 hover:text-white transition"
+            className="ui-press opacity-0 group-hover:opacity-100 p-1 hover:text-white transition"
             style={{ color: getGrey400() }}
           >
             <Edit2 size={12} />
@@ -165,7 +170,7 @@ const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork, artwo
         style={{ borderColor: getBorder(0.3), backgroundColor: 'rgba(0,0,0,0.3)' }}
       >
         {artworkUrl ? (
-          <img
+          <img decoding="async"
             src={artworkUrl}
             alt="Track artwork"
             className="w-full h-full object-cover"
@@ -202,7 +207,7 @@ const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork, artwo
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
+          className="ui-press px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
           style={{
             backgroundColor: 'rgba(255,255,255,0.1)',
             color: getWhite(),
@@ -261,8 +266,9 @@ const AudioFeaturesDisplay = memo(function AudioFeaturesDisplay({ features }) {
   )
 })
 
-export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete }) {
+export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin }) {
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
+  const { isAuthenticated } = useAuth()
   const categoryColor = getCategoryMetadata('all')?.color || '#6366f1'
 
   const [stage, setStage] = useState(UploadStage.SELECT)
@@ -278,16 +284,19 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
 
   const fileInputRef = useRef(null)
   const dragCounterRef = useRef(0)
+  const uploadIdRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
 
   useWebSocketSubscribe('upload_progress', useCallback((data) => {
+    if (!uploadIdRef.current || data?.upload_id !== uploadIdRef.current) return
     if (data?.stage && data?.percent !== undefined) {
-      setProgress(data.percent)
+      setProgress(prev => Math.max(prev, data.percent))
       setStageText(data.stage)
     }
   }, []))
 
   const resetState = useCallback(() => {
+    uploadIdRef.current = null
     setStage(UploadStage.SELECT)
     setFile(null)
     setProgress(0)
@@ -304,16 +313,29 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     onClose()
   }, [onClose, resetState])
 
+  const handleLoginRequired = useCallback(() => {
+    handleClose()
+    onLogin?.()
+  }, [handleClose, onLogin])
+
   const validateFile = (file) => {
     const ext = file.name.split('.').pop()?.toLowerCase()
     if (!SUPPORTED_FORMATS.includes(ext)) {
       return `Unsupported format. Supported: ${SUPPORTED_FORMATS.join(', ')}`
     }
-    if (file.size > MAX_FILE_SIZE) {
-      return `File too large. Maximum size: ${MAX_FILE_SIZE / (1024 * 1024)}MB`
+    const isVideo = VIDEO_FORMATS.includes(ext) || file.type?.startsWith('video/')
+    const maxFileSize = isVideo ? MAX_VIDEO_FILE_SIZE : MAX_AUDIO_FILE_SIZE
+    if (file.size > maxFileSize) {
+      const maxLabel = isVideo ? '10GB' : `${maxFileSize / (1024 * 1024)}MB`
+      return `File too large. Maximum size: ${maxLabel}`
     }
     return null
   }
+
+  const isSelectedVideo = file && (
+    VIDEO_FORMATS.includes(file.name.split('.').pop()?.toLowerCase()) ||
+    file.type?.startsWith('video/')
+  )
 
   const handleFileSelect = (selectedFile) => {
     const validationError = validateFile(selectedFile)
@@ -365,14 +387,15 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const handleUpload = async () => {
     if (!file) return
 
+    uploadIdRef.current = `up_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
     setStage(UploadStage.UPLOADING)
-    setProgress(10)
+    setProgress(0)
+    setStageText('')
 
     try {
-      setProgress(20)
       setStage(UploadStage.ANALYZING)
 
-      const result = await api.uploadMusic(file)
+      const result = await api.uploadMusic(file, uploadIdRef.current)
 
       setProgress(100)
       setMetadata(result.metadata)
@@ -381,8 +404,8 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
 
       triggerHaptic('success')
 
-    } catch {
-      setError('Upload failed. Please try again.')
+    } catch (err) {
+      setError(err.message || 'Upload failed. Please try again.')
       setStage(UploadStage.ERROR)
       triggerHaptic('error')
     }
@@ -439,14 +462,27 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       categoryOverride="all"
     >
       <AnimatePresence mode="wait">
-        {stage === UploadStage.SELECT && (
+        {!isAuthenticated && (
+          <motion.div
+            key="auth-required"
+            {...PRESETS.stepSwap}
+            className="py-8"
+          >
+            <ModalErrorState
+              title="Login Required"
+              message="Sign in before uploading music or video."
+              onRetry={handleLoginRequired}
+              retryText="Login"
+            />
+          </motion.div>
+        )}
+
+        {isAuthenticated && stage === UploadStage.SELECT && (
           <motion.div
             key="select"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            {...PRESETS.stepSwap}
           >
-            <ModalSection title="Select Audio File">
+            <ModalSection title="Select Audio or Video File">
               <div
                 onPointerDown={(e) => e.stopPropagation()}
                 onPointerUp={(e) => {
@@ -458,7 +494,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 onDragLeave={handleDragLeave}
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
-                className={`relative block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
+                className={`relative block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition ${
                   isDragging
                     ? 'border-purple-500 bg-purple-500/10'
                     : file
@@ -480,7 +516,11 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 {file ? (
                   <div className="flex items-center justify-center gap-3">
                     <div className="p-2 rounded-lg bg-green-500/20">
-                      <FileAudio size={24} className="text-green-400" />
+                      {isSelectedVideo ? (
+                        <FileVideo size={24} className="text-green-400" />
+                      ) : (
+                        <FileAudio size={24} className="text-green-400" />
+                      )}
                     </div>
                     <div className="text-left flex-1 min-w-0">
                       <p className="font-medium truncate" style={{ color: getWhite() }}>{file.name}</p>
@@ -488,7 +528,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleClearFile() }}
-                      className="p-2 rounded-lg hover:bg-red-500/20 transition"
+                      className="ui-press p-2 rounded-lg hover:bg-red-500/20 transition"
                     >
                       <X size={18} className="text-gray-400 hover:text-red-400" />
                     </button>
@@ -499,10 +539,13 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                       <Upload size={28} className={isDragging ? 'text-purple-400' : 'text-gray-400'} />
                     </div>
                     <p style={{ color: getWhite() }}>
-                      {isDragging ? 'Drop your audio file here' : 'Drag & drop or click to select'}
+                      {isDragging ? 'Drop your media file here' : 'Drag & drop or click to select'}
                     </p>
                     <p className="mt-2 text-xs" style={{ color: getGrey400() }}>
-                      {SUPPORTED_FORMATS.join(', ').toUpperCase()} • Max 100MB
+                      Audio preferred: {AUDIO_FORMATS.join(', ').toUpperCase()}
+                    </p>
+                    <p className="mt-1 text-xs" style={{ color: getGrey400() }}>
+                      Video accepted: {VIDEO_FORMATS.join(', ').toUpperCase()} | Audio max 100MB | Video max 10GB
                     </p>
                   </>
                 )}
@@ -524,12 +567,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
           </motion.div>
         )}
 
-        {(stage === UploadStage.UPLOADING || stage === UploadStage.ANALYZING) && (
+        {isAuthenticated && (stage === UploadStage.UPLOADING || stage === UploadStage.ANALYZING) && (
           <motion.div
             key="uploading"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            {...PRESETS.stepSwap}
             className="py-8"
           >
             <ModalProgress
@@ -539,14 +580,28 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
           </motion.div>
         )}
 
-        {stage === UploadStage.PREVIEW && metadata && (
+        {isAuthenticated && stage === UploadStage.PREVIEW && metadata && (
           <motion.div
             key="preview"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            {...PRESETS.stepSwap}
           >
             <ModalSuccessBanner message="Ready! Review and edit details if needed." className="mb-4" />
+
+            {metadata.audio_extracted_from_video && (
+              <ModalSection title="Source Media">
+                <ModalCard>
+                  <div className="flex items-center gap-2 text-sm mb-2" style={{ color: getWhite() }}>
+                    <FileVideo size={16} />
+                    <span>Audio extracted from video for radio playback.</span>
+                  </div>
+                  {metadata.artwork_generation_deferred && (
+                    <p className="text-xs" style={{ color: getGrey400() }}>
+                      Cover artwork can be added after upload.
+                    </p>
+                  )}
+                </ModalCard>
+              </ModalSection>
+            )}
 
             {metadata.source_quality && (
               <ModalSection title="Source Quality">
@@ -816,12 +871,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
           </motion.div>
         )}
 
-        {stage === UploadStage.ERROR && (
+        {isAuthenticated && stage === UploadStage.ERROR && (
           <motion.div
             key="error"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
+            {...PRESETS.stepSwap}
             className="py-8"
           >
             <ModalErrorState

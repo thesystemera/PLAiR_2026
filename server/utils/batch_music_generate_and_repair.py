@@ -679,7 +679,7 @@ async def batch_upscale_suno_artwork() -> None:
         return
 
     await asyncio.sleep(0.5)
-    strength_input = input(f"Strength (0.25-0.50, default 0.35, lower = more faithful): ").strip()
+    strength_input = input("Strength (0.25-0.50, default 0.35, lower = more faithful): ").strip()
     strength = 0.35
     if strength_input:
         try:

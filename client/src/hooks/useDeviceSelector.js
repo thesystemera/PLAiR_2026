@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { logger } from '../lib/logger'
+import { safeStorage } from '../lib/safeStorage'
 
 export function useDeviceSelector() {
   const [devices, setDevices] = useState({ microphones: [], speakers: [] })
@@ -40,8 +41,8 @@ export function useDeviceSelector() {
   }
 
   const loadPreferences = () => {
-    const preferredMic = localStorage.getItem('preferredMicrophoneId')
-    const preferredSpeaker = localStorage.getItem('preferredSpeakerId')
+    const preferredMic = safeStorage.get('preferredMicrophoneId')
+    const preferredSpeaker = safeStorage.get('preferredSpeakerId')
 
     if (preferredMic) setSelectedMicrophone(preferredMic)
     if (preferredSpeaker) setSelectedSpeaker(preferredSpeaker)
@@ -49,12 +50,12 @@ export function useDeviceSelector() {
 
   const selectMicrophone = (deviceId) => {
     setSelectedMicrophone(deviceId)
-    localStorage.setItem('preferredMicrophoneId', deviceId)
+    safeStorage.set('preferredMicrophoneId', deviceId)
   }
 
   const selectSpeaker = async (deviceId) => {
     setSelectedSpeaker(deviceId)
-    localStorage.setItem('preferredSpeakerId', deviceId)
+    safeStorage.set('preferredSpeakerId', deviceId)
 
     return new Promise((resolve, reject) => {
       const requestId = Math.random().toString(36).slice(2)

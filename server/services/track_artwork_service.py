@@ -1,4 +1,5 @@
 import io
+import asyncio
 import aiofiles
 import aiofiles.os
 from typing import Dict
@@ -6,8 +7,11 @@ from PIL import Image
 from pathlib import Path
 
 from services import log_service
+from services import track_asset_stages
 from services.base_service import SingletonService
 from config import settings
+
+Image.MAX_IMAGE_PIXELS = 40_000_000
 
 class TrackArtworkService(SingletonService):
 
@@ -44,6 +48,34 @@ class TrackArtworkService(SingletonService):
 
         log_service.system("✓ TrackArtworkService initialized")
 
+    def _render_artwork_jpeg(self, file_contents: bytes) -> bytes:
+        image = Image.open(io.BytesIO(file_contents))
+
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        elif image.mode == 'P':
+            image = image.convert('RGBA')
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        width, height = image.size
+        min_dim = min(width, height)
+
+        left = (width - min_dim) // 2
+        top = (height - min_dim) // 2
+        image = image.crop((left, top, left + min_dim, top + min_dim))
+
+        image = image.resize(self.target_size, Image.Resampling.LANCZOS)
+
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=self.jpeg_quality, optimize=True)
+        return output.getvalue()
+
     async def upload_artwork(
         self,
         track_id: str,
@@ -68,36 +100,11 @@ class TrackArtworkService(SingletonService):
             raise ValueError("File too large. Maximum size is 10MB")
 
         try:
-            image = Image.open(io.BytesIO(file_contents))
-
-            if image.mode == 'RGBA':
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[3])
-                image = background
-            elif image.mode == 'P':
-                image = image.convert('RGBA')
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[3])
-                image = background
-            elif image.mode != 'RGB':
-                image = image.convert('RGB')
-
-            width, height = image.size
-            min_dim = min(width, height)
-
-            left = (width - min_dim) // 2
-            top = (height - min_dim) // 2
-            image = image.crop((left, top, left + min_dim, top + min_dim))
-
-            image = image.resize(self.target_size, Image.Resampling.LANCZOS)
-
-            output = io.BytesIO()
-            image.save(output, format='JPEG', quality=self.jpeg_quality, optimize=True)
-            output.seek(0)
+            jpeg_bytes = await asyncio.to_thread(self._render_artwork_jpeg, file_contents)
 
             artwork_path = self.artwork_dir / f"{track_id}.jpeg"
             async with aiofiles.open(artwork_path, 'wb') as f:
-                await f.write(output.read())
+                await f.write(jpeg_bytes)
 
             log_service.success(f"[TrackArtwork] Uploaded artwork for {track_id}")
 
@@ -107,7 +114,6 @@ class TrackArtworkService(SingletonService):
                     if track_id in self.catalog_db_service.tracks:
                         self.catalog_db_service.tracks[track_id]["has_artwork"] = True
 
-                    import asyncio
                     await asyncio.to_thread(
                         self.catalog_db_service.update_track_artwork_status,
                         track_id,
@@ -166,7 +172,6 @@ class TrackArtworkService(SingletonService):
                 if track_id in self.catalog_db_service.tracks:
                     self.catalog_db_service.tracks[track_id]["has_artwork"] = False
 
-                import asyncio
                 await asyncio.to_thread(
                     self.catalog_db_service.update_track_artwork_status,
                     track_id,
@@ -205,31 +210,14 @@ class TrackArtworkService(SingletonService):
         if artwork_path.exists():
             raise ValueError("Track already has artwork. Delete it first to regenerate.")
 
-        gen_params = track.get("generation_params", {})
-        derived_tags = track.get("derived_tags", {})
-        track_info = track.get("track_info", {})
-
-        mood_keywords = derived_tags.get("mood_keywords") or []
-        style_keywords = derived_tags.get("style_keywords") or []
-
-        metadata = {
-            "title": gen_params.get("title", "Untitled"),
-            "primary_artist": track_info.get("artist", "Unknown"),
-            "primary_genre": derived_tags.get("primary_genre"),
-            "mood": mood_keywords[0] if mood_keywords else None,
-            "style": style_keywords[0] if style_keywords else None,
-            "artwork_prompt": track.get("artwork_prompt"),
-        }
-
         generated_path = await self.artwork_generation_service.generate_artwork_for_track(
             track_id=track_id,
-            metadata=metadata
+            metadata=track_asset_stages.artwork_request(track)
         )
 
         if not generated_path or not generated_path.exists():
             raise ValueError("Artwork generation failed")
 
-        import asyncio
         await asyncio.to_thread(
             self.catalog_db_service.update_track_artwork_status,
             track_id,

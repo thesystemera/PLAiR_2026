@@ -23,7 +23,8 @@ class TTSDatabaseMigrationService:
             "tts_embeddings": settings.TTS_AUDIO_DIR,
             "meta_embeddings": settings.META_AUDIO_DIR,
             "impulse_embeddings": settings.IMPULSE_AUDIO_DIR,
-            "audio_embeddings": settings.AUDIO_EFFECT_DIR
+            "audio_embeddings": settings.AUDIO_EFFECT_DIR,
+            "breath_embeddings": settings.BREATH_AUDIO_DIR
         }
 
     def _get_connection(self):
@@ -71,12 +72,14 @@ class TTSDatabaseMigrationService:
         for i in range(0, len(texts), batch_size):
             batch_texts = texts[i:i + batch_size]
 
+            longest = max(len(ids) for ids in self.tokenizer.batch_encode_plus(
+                batch_texts, truncation=True, max_length=512)["input_ids"])
             inputs = self.tokenizer.batch_encode_plus(
                 batch_texts,
                 return_tensors='pt',
-                padding=True,
+                padding='max_length',
                 truncation=True,
-                max_length=512
+                max_length=min(512, longest + 128)
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
@@ -280,6 +283,8 @@ class TTSDatabaseMigrationService:
         log_service.tts_vector_db(f"\n🔨 Migrating {db_type}")
         log_service.tts_vector_db(f"  Directory: {directory}")
 
+        os.makedirs(directory, exist_ok=True)
+
         log_service.tts_vector_db("\n📝 Step 1: Cleaning up deleted files...")
         cleaned = self.remove_deleted_files_from_db(db_type, str(directory))
 
@@ -319,6 +324,14 @@ class TTSDatabaseMigrationService:
             return 0, cleaned
 
     def migrate_all_databases(self, validate_only: bool = True, force_rebuild: bool = False) -> Dict[str, Tuple[int, int]]:
+        return self.migrate_databases(list(self.directory_map), validate_only, force_rebuild)
+
+    def migrate_databases(
+        self,
+        db_types: List[str],
+        validate_only: bool = True,
+        force_rebuild: bool = False
+    ) -> Dict[str, Tuple[int, int]]:
 
         log_service.tts_vector_db("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         log_service.tts_vector_db("🔨 TTS DATABASE MIGRATION - SCANNING DISK")
@@ -328,7 +341,7 @@ class TTSDatabaseMigrationService:
         total_new = 0
         total_cleaned = 0
 
-        for db_type in ["tts_embeddings", "meta_embeddings", "impulse_embeddings", "audio_embeddings"]:
+        for db_type in db_types:
             new, cleaned = self.migrate_database(db_type, validate_only, force_rebuild)
             results[db_type] = (new, cleaned)
             total_new += new

@@ -8,6 +8,9 @@ from services import log_service
 from services.base_service import SingletonService
 from config import settings
 from config.settings import BASE_DIR
+from models_global import gpu_lease, raise_if_cuda_oom, GPUOutOfMemoryError
+
+Image.MAX_IMAGE_PIXELS = 40_000_000
 
 class ArtworkEnrichmentService(SingletonService):
     def __init__(self):
@@ -105,20 +108,21 @@ class ArtworkEnrichmentService(SingletonService):
         artwork_path = self.artwork_dir / f"{unique_id}.jpeg"
         enriched_path = self.enriched_dir / f"{unique_id}.jpeg"
 
-        if enriched_path.exists():
-            return enriched_path
-
         if not artwork_path.exists():
             log_service.warning(f"Original artwork not found: {artwork_path}")
             return None
 
+        if enriched_path.exists() and enriched_path.stat().st_mtime >= artwork_path.stat().st_mtime:
+            return enriched_path
+
         try:
             loop = asyncio.get_event_loop()
-            image = await loop.run_in_executor(None, Image.open, str(artwork_path))
+            image = await loop.run_in_executor(None, lambda: Image.open(str(artwork_path)).convert('RGB'))
 
             log_service.info(f"Processing artwork: {unique_id} ({image.size[0]}x{image.size[1]})")
 
-            depth_map = await loop.run_in_executor(None, self._generate_depth_map, image)
+            async with gpu_lease("Depth-Anything"):
+                depth_map = await loop.run_in_executor(None, self._generate_depth_map, image)
 
             sbs_image = await loop.run_in_executor(
                 None,
@@ -139,8 +143,11 @@ class ArtworkEnrichmentService(SingletonService):
 
             return enriched_path
 
+        except GPUOutOfMemoryError:
+            raise
         except Exception as e:
             log_service.error(f"Failed to enrich artwork {unique_id}: {str(e)}")
+            raise_if_cuda_oom(e, "Depth-Anything")
             return None
 
     async def batch_enrich_catalog(

@@ -1,6 +1,6 @@
-import re
-from typing import Optional, Tuple
 from services import log_service
+from services.llm_router import LLM_LIVE, LLM_BACKGROUND
+from services.llm_result_cache import breath_script_cache, cache_key, meta_script_cache
 from config.settings import settings
 
 def gpt_error_handler(func):
@@ -19,13 +19,11 @@ class DJPromptSystemService:
         self.config = {
             'dj_model': settings.GEMINI_DJ_MODEL,
             'dj_temperature': settings.GEMINI_DJ_TEMPERATURE,
-            'dj_tokens': settings.GEMINI_DJ_MAX_TOKENS,
-            'audio_model': settings.GEMINI_AUDIO_MODEL,
-            'audio_temperature': settings.GEMINI_AUDIO_TEMPERATURE,
-            'audio_tokens': settings.GEMINI_AUDIO_MAX_TOKENS
+            'dj_tokens': settings.GEMINI_DJ_MAX_TOKENS
         }
 
-    async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list) -> str:
+    async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list,
+                                  role: str = LLM_LIVE) -> str:
         system_content = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         user_content = messages[1]["content"] if len(messages) > 1 and messages[1]["role"] == "user" else messages[0][
             "content"]
@@ -35,7 +33,8 @@ class DJPromptSystemService:
             system_instruction=system_content,
             model=model,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            role=role
         )
         return response or ""
 
@@ -75,7 +74,7 @@ class DJPromptSystemService:
 
         impulse_response = await self._execute_gpt_stream(
             model=self.config['dj_model'],
-            max_tokens=self.config['dj_tokens'],
+            max_tokens=settings.DJ_MICRO_MAX_TOKENS,
             temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -94,35 +93,39 @@ class DJPromptSystemService:
 
     @gpt_error_handler
     async def generate_meta_data_gpt_response(self, meta_tag):
+        meta_key = cache_key(meta_tag.strip().lower())
+        cached_script = meta_script_cache.get(meta_key)
+        if cached_script:
+            log_service.gpt(f"Meta: {meta_tag} -> {cached_script} (cached)")
+            return meta_tag, cached_script
+
         system_prompt = (
-            "You are a language model responsible for converting meta tags or action descriptions into phonetic or "
-            "onomatopoeic prompts suitable for text-to-speech synthesis.\n"
-            "Your task is to take the provided meta tag or action description and generate a concise prompt that represents "
-            "the intended action or sound using only phonetic transcriptions or onomatopoeic words, without including any "
-            "English words, the original meta tag/action description, or any meta tag syntax such as asterisks (*).\n"
-            "When generating the prompt, focus solely on capturing the verbal sounds or noises associated with the action, "
-            "rather than providing descriptive phrases.\n\n"
+            "You convert a radio DJ's stage direction (a meta tag describing a non-verbal reaction) into a very short "
+            "script for the Orpheus text-to-speech engine.\n\n"
+            "Orpheus renders these inline emotion tags as real vocal sounds: "
+            "<laugh> <chuckle> <sigh> <gasp> <groan> <yawn> <cough> <sniffle>.\n\n"
+            "Rules:\n"
+            "1. Use one or two emotion tags, optionally with a short natural interjection "
+            "(e.g. 'Mm-hmm.', 'Ooh.', 'Ha!', 'Whoa.', 'Ugh.', 'Hmm.').\n"
+            "2. Never write phonetic spellings of sounds (no 'hahaha', 'aarrgg', 'phhth').\n"
+            "3. Never repeat the stage direction itself. Maximum six words plus tags.\n\n"
             "Examples:\n"
-            "- For the meta tag 'scratches head', the prompt could be 'aahha-aha-mmm'\n"
-            "- For 'pauses briefly', the prompt could be '.......oooo......'\n"
-            "- For 'laughs hysterically', the prompt could be 'phhaaahhhaahhaahahaha...'\n"
-            "- For 'clears throat', the prompt could be '---h-hm---'\n"
-            "- For 'pleasure', the prompt could be '....aaooowwwhwhwh....'\n"
-            "- For 'laughs sincerely', the prompt could be 'hhhhaaaahhhaaahhaahaha'\n"
-            "- For 'approves', the prompt could be 'mmmnnn-mmnn-mn'\n"
-            "- For 'annoyed', the prompt could be 'aarrrgg....'\n"
-            "- For 'shocked', the prompt could be 'ffaarrrkk'\n"
-            "- For 'disgusted', the prompt could be '....eeeeaak...'\n"
-            "- For 'nods', the prompt could be 'mm-hmm'\n"
-            "- For 'playful', the prompt could be '--phhth--'\n"
-            "- For 'smirks', the prompt could be 'hmph'\n"
-            "Do not use any English words, meta tag syntax, or the original meta tag/action description in the generated prompt. "
-            "Respond with the generated prompt only, without any additional context or explanation."
+            "- 'laughs hysterically' -> '<laugh> Oh man! <laugh>'\n"
+            "- 'laughs sincerely' -> '<chuckle> Ha!'\n"
+            "- 'sighs' -> '<sigh>'\n"
+            "- 'clears throat' -> '<cough> Right.'\n"
+            "- 'nods' -> 'Mm-hmm.'\n"
+            "- 'shocked' -> '<gasp> Whoa!'\n"
+            "- 'annoyed' -> '<groan> Ugh.'\n"
+            "- 'tired' -> '<yawn>'\n"
+            "- 'approves' -> 'Mmm, yeah.'\n"
+            "- 'smirks' -> '<chuckle> Hmm.'\n\n"
+            "Respond with the script only."
         )
 
         meta_data_prompt = await self._execute_gpt_stream(
             model=self.config['dj_model'],
-            max_tokens=self.config['dj_tokens'],
+            max_tokens=settings.DJ_MICRO_MAX_TOKENS,
             temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -130,74 +133,63 @@ class DJPromptSystemService:
             ]
         )
 
-        meta_data_prompt = meta_data_prompt.strip() if meta_data_prompt else ""
-        if meta_data_prompt:
-            log_service.info(f"Meta: Input meta tag: {meta_tag}")
-            log_service.gpt(f"Meta: Generated prompt: {meta_data_prompt}")
-        else:
+        meta_data_prompt = meta_data_prompt.strip().strip("'\"") if meta_data_prompt else ""
+        if not meta_data_prompt:
             log_service.gpt(f"Meta: No prompt generated for meta tag: {meta_tag}")
             return None
+        log_service.gpt(f"Meta: {meta_tag} -> {meta_data_prompt}")
+        meta_script_cache.set(meta_key, meta_data_prompt)
         return meta_tag, meta_data_prompt
 
     @gpt_error_handler
-    async def generate_audio_effects_gpt_response(self, audio_tag: str) -> Tuple[
-        Optional[str], Optional[str], Optional[float]]:
-        MAX_DESCRIPTION_LENGTH = 425
+    async def generate_breath_gpt_response(self, context):
+        breath_key = cache_key((context or "").strip())
+        cached_breath = breath_script_cache.get(breath_key)
+        if cached_breath:
+            log_service.gpt(f"Breath: {(context or '')[:60]} -> {cached_breath} (cached)")
+            return context, cached_breath
+
         system_prompt = (
-            "You are an audio description specialist for PLAiR.fm, our radio station. Provide brief, vivid descriptions "
-            "for two distinct categories of audio. Radio style sound-effects and natural studio environment noises.\n\n"
-            "1. Radio Stabs, Stingers (Sound Effects):\n"
-            "   - Short, attention-grabbing sounds used for emphasis or transitions\n"
-            "   - Incorporate the audio tag naturally into the description\n"
-            "   - Describe in 5-10 words\n"
-            "   - Duration: 1-3 seconds\n\n"
-            "2. In-Studio Activity (Environmental Noise):\n"
-            "   - Natural, ambient sounds that occur in a radio studio environment\n"
-            "   - Incorporate the audio tag naturally into the description\n"
-            "   - Describe concisely in 10-15 words\n"
-            "   - Duration: 2-6 seconds\n\n"
-            f"CRITICAL: Keep all descriptions under {MAX_DESCRIPTION_LENGTH} characters.\n\n"
-            "Format: 'Description naturally incorporating the audio tag. Duration: X seconds.'\n\n"
-            "Examples of Radio Stabs, Stingers (Sound Effects):\n"
-            "- '%news alert%': 'Sharp tones signal breaking news alert. Duration: 1 second.'\n"
-            "- '%record scratch%': 'Abrupt vinyl record scratch interrupts music. Duration: 1 second.'\n"
-            "- '%laser zap%': 'Futuristic laser zap effect for sci-fi segment. Duration: 2 seconds.'\n"
-            "- '%crowd cheer%': 'Enthusiastic crowd cheer erupts suddenly. Duration: 3 seconds.'\n"
-            "- '%cash register%': 'Classic ka-ching of cash register. Duration: 1 second.'\n\n"
-            "Examples of In-Studio Activity (Environmental Noise):\n"
-            "- '%chair squeaking%': 'Leather chair squeaks as someone shifts position in radio studio. Duration: 2 seconds.'\n"
-            "- '%typing on keyboard%': 'Rhythmic typing on computer keyboard echoes in quiet studio space. Duration: 3 seconds.'\n"
-            "- '%coffee sipping%': 'Quietly sipping hot coffee while reading the news script. Duration: 2 seconds.'\n"
-            "- 'hair brushing%': 'Hair subtly brushing against microphone. Duration: 2 seconds.'\n"
-            "- '%paper rustling%': 'Gentle rustling of script papers being organized before broadcast. Duration: 4 seconds.'\n"
-            "- '%phone vibrating%': 'Muffled vibration of silenced phone on studio desk. Duration: 3 seconds.'"
+            "You generate the micro-sound a radio DJ makes BETWEEN sentences - the tiniest inhale, "
+            "a barely-audible lip part, a quarter-second breath. This is NOT a word. It is the "
+            "sound of someone catching a micro-beat before their next sentence. Almost subliminal.\n\n"
+            "The sentence the DJ just spoke is provided in the user message. Match the emotional tone:\n"
+            "- Solemn or delivering difficult news -> a heavier exhale, a weighted pause\n"
+            "- Light or matter-of-fact -> barely-there, a flicker\n"
+            "- Excited or upbeat -> a quick energetic inhale\n"
+            "- Sympathetic or gentle -> a soft, warm breath\n\n"
+            "All breaths include a subtle vocalisation - ...m  ..ah  -hff\n\n"
+            "Examples:\n"
+            "- ...hh\n"
+            "- --hm\n"
+            "- ..mm\n"
+            "- -hff\n"
+            "- ..ah\n"
+            "CRITICAL: All breaths include a subtle sound - never bare punctuation alone. "
+            "No English words. Barely there.\n"
+            "Respond with the prompt only, no additional text."
         )
 
-        audio_description = await self._execute_gpt_stream(
-            model=self.config['audio_model'],
-            max_tokens=self.config['audio_tokens'],
-            temperature=self.config['audio_temperature'],
+        user_message = (
+            f"Sentence: \"{context}\"\nGenerate a breath sound that matches the emotional tone of this sentence."
+            if context else "generate a between-sentence breath sound"
+        )
+
+        breath_prompt = await self._execute_gpt_stream(
+            model=self.config['dj_model'],
+            max_tokens=settings.DJ_MICRO_MAX_TOKENS,
+            temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": audio_tag}
-            ]
+                {"role": "user", "content": user_message}
+            ],
+            role=LLM_BACKGROUND
         )
 
-        audio_description = audio_description.strip() if audio_description else ""
-        if audio_description:
-            if len(audio_description) > MAX_DESCRIPTION_LENGTH:
-                audio_description = audio_description[:MAX_DESCRIPTION_LENGTH - 3] + '...'
-            log_service.info(
-                f"Audio Effects: Input audio tag: '{audio_tag}', Generated description: '{audio_description}'")
-            duration_match = re.search(r'Duration: (\d+(?:\.\d+)?) seconds?\.', audio_description)
-            if duration_match:
-                duration_seconds = float(duration_match.group(1))
-                audio_description = re.sub(r'\s*Duration: \d+(?:\.\d+)? seconds?\.', '', audio_description).strip()
-            else:
-                duration_seconds = None
-                log_service.warning(
-                    f"Audio Effects: Warning: No duration found in description for audio tag: {audio_tag}")
-            return audio_tag, audio_description, duration_seconds
-        else:
-            log_service.info(f"Audio Effects: No description generated for audio tag: {audio_tag}")
-            return None, None, None
+        breath_prompt = breath_prompt.strip().strip("'\"") if breath_prompt else ""
+        if not breath_prompt or any(ch.isalpha() and ch not in "hmaeoufsp" for ch in breath_prompt.lower()):
+            log_service.gpt(f"Breath: Rejected breath prompt for context: {context[:60]} -> {breath_prompt[:40]}")
+            return None
+        log_service.gpt(f"Breath: {context[:60]} -> {breath_prompt}")
+        breath_script_cache.set(breath_key, breath_prompt)
+        return context, breath_prompt

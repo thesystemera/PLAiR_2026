@@ -1,8 +1,12 @@
 import asyncio
 import os
 import tempfile
+import time
+
+import numpy as np
 from typing import Optional, Dict, Any
 from services import log_service
+from services import usage_tracking
 from services.base_service import SingletonService
 from config.settings import settings
 
@@ -91,6 +95,26 @@ class WhisperDualService(SingletonService):
                 log_service.error(f"Failed to load Whisper models on CPU: {str(cpu_error)}")
                 self.models_loaded = False
 
+    def warmup(self):
+        if not self.models_loaded:
+            return
+        silence = np.zeros(16000, dtype=np.float32)
+        for model in (self.fast_model, self.quality_model):
+            if model:
+                list(model.transcribe(silence, language="en")[0])
+
+    def _transcribe_fast_sync(self, audio_path: str, language: str) -> str:
+        segments, _ = self.fast_model.transcribe(audio_path, language=language)
+        return "".join(segment.text for segment in segments).strip()
+
+    def _transcribe_quality_sync(self, audio_path: str, language: str):
+        segments, info = self.quality_model.transcribe(
+            audio_path,
+            language=language,
+            word_timestamps=True
+        )
+        return list(segments), info
+
     async def transcribe_fast(
         self,
         audio_data: bytes,
@@ -113,16 +137,16 @@ class WhisperDualService(SingletonService):
 
             log_service.system(f"Fast transcribing ({len(audio_data)} bytes)...")
 
-            segments, _ = await asyncio.wait_for(
+            started = time.perf_counter()
+            transcription = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.fast_model.transcribe,
+                    self._transcribe_fast_sync,
                     temp_file_path,
-                    language=language
+                    language
                 ),
                 timeout=timeout_seconds
             )
-
-            transcription = "".join(segment.text for segment in segments).strip()
+            usage_tracking.record_gpu("whisper.fast", time.perf_counter() - started, model=settings.WHISPER_FAST_MODEL)
 
             if not transcription:
                 log_service.error("Fast transcription produced empty result")
@@ -172,12 +196,12 @@ class WhisperDualService(SingletonService):
 
             log_service.system(f"Quality transcribing ({len(audio_data)} bytes)...")
 
+            started = time.perf_counter()
             segments, info = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.quality_model.transcribe,
+                    self._transcribe_quality_sync,
                     temp_file_path,
-                    language=language,
-                    word_timestamps=True
+                    language
                 ),
                 timeout=timeout_seconds
             )
@@ -204,6 +228,8 @@ class WhisperDualService(SingletonService):
                         })
 
             full_text = full_text.strip()
+            usage_tracking.record_gpu("whisper.quality", time.perf_counter() - started,
+                                      audio_seconds=float(info.duration or 0.0), model=settings.WHISPER_QUALITY_MODEL)
 
             if not full_text:
                 log_service.error("Quality transcription produced empty result")

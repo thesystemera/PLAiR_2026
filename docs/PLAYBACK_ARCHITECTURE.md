@@ -65,7 +65,7 @@ Communication = Event-driven WebSocket messages
 **Key Files:**
 - `server/services/playback_state.py` - **CRITICAL** - Playback state machine, queue carousel
 - `server/services/playback_service.py` - Session-level playback management
-- `server/services/announcer_service.py` - DJ timing analysis, monitoring, TTS triggers
+- `server/services_radio/announcer_service.py` - DJ timing analysis, monitoring, TTS triggers
 - `server/app.py` - WebSocket handlers (lines ~2000-2600)
 
 ---
@@ -1216,7 +1216,7 @@ if self.queue:
 - `server/services/playback_state.py` - **CRITICAL** - State machine, queue carousel
 - `server/services/playback_service.py` - Session management
 - `server/services/device_management_service.py` - Device registration/activation
-- `server/services/announcer_service.py` - DJ timing analysis, monitoring
+- `server/services_radio/announcer_service.py` - DJ timing analysis, monitoring
 - `server/app.py` - WebSocket handlers (lines ~2000-2600)
 - `server/services/audio_features_service.py` - Audio analysis
 - `server/services/catalog_vector_search_service.py` - Similarity search

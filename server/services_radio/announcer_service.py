@@ -5,6 +5,10 @@ import numpy as np
 from typing import Dict, Optional, List, Tuple
 from collections import deque
 from services import log_service
+from services import usage_tracking
+from services.task_utils import spawn
+from services_radio.dj_content_bank import content_bank
+from services_radio.sting_service import midtrack_max_len
 from config.settings import settings
 
 class AnnouncerService:
@@ -15,6 +19,8 @@ class AnnouncerService:
     PENDING_THRESHOLD_MS = settings.ANNOUNCER_PENDING_THRESHOLD_MS
     MAX_GPT_GENERATION_SAMPLES = 10
     CROSSFADE_DEDUCTION_RATIO = 0.5
+    MAX_TRANSITION_CACHE_PER_SESSION = 64
+    IDLE_EVICTION_INTERVAL_S = 600
 
     def __init__(
             self,
@@ -40,19 +46,59 @@ class AnnouncerService:
         self.avg_gpt_generation_time = 3.0
 
         self.active_announcements: Dict[str, str] = {}
+        self._last_activity: Dict[str, float] = {}
+        self._eviction_task: Optional[asyncio.Task] = None
 
         log_service.announcer("🎙️ AnnouncerService initialized")
 
-    @staticmethod
-    async def start():
+    async def start(self):
+        if self._eviction_task is None or self._eviction_task.done():
+            self._eviction_task = spawn(self._evict_idle_sessions_loop(), name="announcer-idle-eviction")
         log_service.announcer("🎙️ AnnouncerService started - will monitor playback for announcement opportunities")
 
     async def stop(self):
         log_service.announcer("🎙️ AnnouncerService stopping - cancelling all scheduled announcements")
+        if self._eviction_task is not None and not self._eviction_task.done():
+            self._eviction_task.cancel()
         for session_id in list(self.session_tasks.keys()):
             await self._cleanup_session(session_id)
 
+    def _tracked_session_ids(self) -> set:
+        return (
+            set(self.session_tasks) | set(self.last_announcement_time) | set(self.transition_cache)
+            | set(self.analyzed_pair) | set(self.scheduled_announcements) | set(self.last_countdown_log)
+            | set(self.active_announcements) | set(self._last_activity)
+        )
+
+    async def _evict_idle_sessions_loop(self):
+        while True:
+            await asyncio.sleep(self.IDLE_EVICTION_INTERVAL_S)
+            try:
+                from service_registry import services
+                websocket_service = services.websocket_service
+                is_connected = websocket_service.has_session if websocket_service else (lambda _sid: False)
+                await self.evict_idle_sessions(is_connected, settings.PLAYBACK_SESSION_IDLE_TIMEOUT_S)
+            except Exception as e:
+                log_service.error(f"[Announcer] Idle session eviction failed: {e}")
+
+    async def evict_idle_sessions(self, is_connected, max_idle_s: float) -> int:
+        now = time.time()
+        evicted = 0
+        for session_id in self._tracked_session_ids():
+            if is_connected(session_id):
+                self._last_activity[session_id] = now
+                continue
+            if now - self._last_activity.get(session_id, now) < max_idle_s:
+                self._last_activity.setdefault(session_id, now)
+                continue
+            await self._cleanup_session(session_id)
+            evicted += 1
+        if evicted:
+            log_service.announcer(f"🎙️ Evicted {evicted} idle announcer sessions ({len(self.session_tasks)} remaining)")
+        return evicted
+
     def monitor_session(self, session_id: str):
+        self._last_activity[session_id] = time.time()
         if session_id in self.session_tasks:
             return
         log_service.announcer(f"🎙️ Announcer monitoring session {session_id}")
@@ -78,10 +124,14 @@ class AnnouncerService:
             del self.last_announcement_time[session_id]
         if session_id in self.active_announcements:
             del self.active_announcements[session_id]
+        self._last_activity.pop(session_id, None)
+        content_bank.forget_session(session_id)
 
         log_service.announcer(f"🎙️ [{session_id}] Session cleaned up")
 
     async def on_playback_state_update(self, session_id: str, state: dict):
+        usage_tracking.bind_session(session_id)
+        self._last_activity[session_id] = time.time()
         try:
             current_track = state.get('current_track')
             queue = state.get('queue', [])
@@ -165,6 +215,7 @@ class AnnouncerService:
 
                 if current_pair and next_track_id:
                     self.analyzed_pair[session_id] = current_pair
+                    self._prefetch_next_artist(session_id, next_track_id)
 
                     transition_window = await self._analyze_transition(
                         current_track_id,
@@ -179,11 +230,34 @@ class AnnouncerService:
                             transition_window,
                             state
                         )
+                    if is_playing:
+                        await self._schedule_midtrack_sting(session_id, current_track_id, state)
 
         except Exception as e:
             log_service.error(f"Announcer: Error in playback change handler: {e}")
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
+
+    def _existing_session_state(self, session_id: str):
+        return self.playback_service.sessions.get(session_id)
+
+    @staticmethod
+    def _radio_break_holds(session_id: str) -> bool:
+        from service_registry import services
+        radio = services.radio_mode_service
+        return bool(radio is not None and radio.blocks_announcer(session_id))
+
+    def _prefetch_next_artist(self, session_id: str, next_track_id: str):
+        if not settings.DJ_TRIVIA_PREFETCH_ENABLED:
+            return
+        try:
+            playback_state = self._existing_session_state(session_id)
+            catalog = getattr(playback_state, 'catalog', None)
+            track = catalog.get_track(next_track_id) if catalog else None
+            artist = ((track or {}).get('generation_params') or {}).get('artist_name')
+            content_bank.prefetch_artist(getattr(self.dj_prompt_service, 'web_service', None), artist)
+        except Exception as e:
+            log_service.warning(f"Announcer: trivia prefetch skipped: {type(e).__name__}: {e}")
 
     async def _analyze_transition(
             self,
@@ -198,8 +272,9 @@ class AnnouncerService:
             if cached is not None:
                 if 'crossfade_timing' in cached:
                     try:
-                        playback_state = self.playback_service.get_session_state(session_id)
-                        playback_state.set_crossfade_timing(current_track_id, next_track_id, cached['crossfade_timing'])
+                        playback_state = self._existing_session_state(session_id)
+                        if playback_state is not None:
+                            playback_state.set_crossfade_timing(current_track_id, next_track_id, cached['crossfade_timing'])
                     except Exception:
                         pass
                 return cached
@@ -207,8 +282,8 @@ class AnnouncerService:
         current_name = "Unknown"
         next_name = "Unknown"
         try:
-            playback_state = self.playback_service.get_session_state(session_id)
-            if playback_state.catalog:
+            playback_state = self._existing_session_state(session_id)
+            if playback_state is not None and playback_state.catalog:
                 current_track = playback_state.catalog.get_track(current_track_id)
                 next_track = playback_state.catalog.get_track(next_track_id)
                 if current_track:
@@ -230,8 +305,9 @@ class AnnouncerService:
 
             if crossfade_timing:
                 try:
-                    playback_state = self.playback_service.get_session_state(session_id)
-                    playback_state.set_crossfade_timing(current_track_id, next_track_id, crossfade_timing)
+                    playback_state = self._existing_session_state(session_id)
+                    if playback_state is not None:
+                        playback_state.set_crossfade_timing(current_track_id, next_track_id, crossfade_timing)
                 except Exception as e:
                     log_service.warning(f"Failed to push crossfade timing: {e}")
 
@@ -266,8 +342,9 @@ class AnnouncerService:
                 }
 
                 try:
-                    playback_state = self.playback_service.get_session_state(session_id)
-                    playback_state.set_announcer_timing(current_track_id, next_track_id, result_window)
+                    playback_state = self._existing_session_state(session_id)
+                    if playback_state is not None:
+                        playback_state.set_announcer_timing(current_track_id, next_track_id, result_window)
                 except Exception as e:
                     log_service.warning(f"Failed to push announcer timing: {e}")
 
@@ -448,13 +525,172 @@ class AnnouncerService:
             return max(suitable, key=lambda w: w['duration_ms'])
 
     def _cache_transition(self, session_id: str, cache_key: Tuple[str, str], window: Optional[Dict]):
-        if session_id not in self.transition_cache:
-            self.transition_cache[session_id] = {}
-        self.transition_cache[session_id][cache_key] = window
+        session_cache = self.transition_cache.setdefault(session_id, {})
+        session_cache.pop(cache_key, None)
+        session_cache[cache_key] = window
+        while len(session_cache) > self.MAX_TRANSITION_CACHE_PER_SESSION:
+            del session_cache[next(iter(session_cache))]
+
+    @staticmethod
+    def _sting_service():
+        from service_registry import services
+        return services.sting_service
+
+    @staticmethod
+    def _state_user_id(session_id: str, state: dict) -> Optional[int]:
+        user_id = state.get('user_id')
+        if user_id is None:
+            try:
+                user_id = int(session_id)
+            except ValueError:
+                user_id = None
+        return user_id
+
+    async def _schedule_sting_for_transition(
+            self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
+    ) -> bool:
+        stings = self._sting_service()
+        if stings is None:
+            return False
+        trigger_time_ms = transition_window['start_ms'] - settings.STINGS_TRIGGER_EARLY_MS
+        wait_time_ms = trigger_time_ms - state.get('progress_ms', 0)
+        if wait_time_ms < settings.STINGS_BUILD_LEAD_MS:
+            return False
+        window_s = transition_window['duration_ms'] / 1000.0
+        try:
+            kind = await stings.plan_between_tracks(
+                session_id, self._state_user_id(session_id, state), window_s, wait_time_ms / 1000.0)
+        except Exception as e:
+            log_service.warning(f"Announcer: sting planning failed: {type(e).__name__}: {e}")
+            return False
+        if not kind:
+            return False
+        self.scheduled_announcements[session_id] = {
+            'trigger_time_ms': trigger_time_ms,
+            'track_id': current_track_id,
+            'window': transition_window,
+            'sting': kind
+        }
+        task = asyncio.create_task(
+            self._execute_sting(session_id, current_track_id, trigger_time_ms, window_s, kind, state)
+        )
+        self.session_tasks.setdefault(session_id, []).append(task)
+        log_service.announcer(f"🎙️ [{session_id[:8]}] 🟣 Sting scheduled: {kind} in {wait_time_ms / 1000:.1f}s")
+        return True
+
+    async def _wait_for_trigger(self, session_id: str, current_track_id: str, trigger_time_ms: float,
+                                follow_crossfade: bool = True) -> bool:
+        last_log_time = 0
+        while True:
+            session_state = self._existing_session_state(session_id)
+            if not session_state:
+                log_service.announcer(f"🎙️ [{session_id[:8]}] ❌ Session state is None, cancelling")
+                return False
+            current_state = session_state.get_state()
+            current_progress = current_state.get('progress_ms', 0)
+            current_track = current_state.get('current_track', {}).get('id')
+            is_playing = current_state.get('is_playing', False)
+            last_skip_reason = current_state.get('last_skip_reason')
+
+            if current_track != current_track_id:
+                if last_skip_reason == 'auto_crossfade' and follow_crossfade:
+                    log_service.announcer(
+                        f"🎙️ [{session_id[:8]}] 🔄 Auto-crossfade completed, announcement continues")
+                    return True
+                log_service.announcer(
+                    f"🎙️ [{session_id[:8]}] ❌ Track changed (user action) during wait, cancelling")
+                return False
+
+            if not is_playing:
+                await asyncio.sleep(1.0)
+                continue
+
+            time_until_trigger = trigger_time_ms - current_progress
+
+            current_time = time.time()
+            if current_time - last_log_time >= 10.0:
+                log_service.announcer(
+                    f"🎙️ [{session_id[:8]}] ⏳ Countdown: {time_until_trigger / 1000:.1f}s "
+                    f"(progress: {current_progress / 1000:.1f}s / trigger: {trigger_time_ms / 1000:.1f}s)")
+                last_log_time = current_time
+
+            if time_until_trigger <= 0:
+                return True
+            elif time_until_trigger > 10000:
+                await asyncio.sleep(5.0)
+            else:
+                await asyncio.sleep(min(1.0, time_until_trigger / 1000.0))
+
+    async def _execute_sting(self, session_id: str, current_track_id: str, trigger_time_ms: float,
+                             window_s: float, kind: str, state: dict, midtrack: bool = False):
+        usage_tracking.bind_session(session_id)
+        stings = self._sting_service()
+        user_id = self._state_user_id(session_id, state)
+        try:
+            if not await self._wait_for_trigger(session_id, current_track_id,
+                                                trigger_time_ms - settings.STINGS_BUILD_LEAD_MS, not midtrack):
+                return
+            if not midtrack and self._radio_break_holds(session_id):
+                log_service.announcer(f"🎙️ [{session_id[:8]}] 📻 Sting skipped: Radio Mode talk break at this boundary")
+                return
+            if not midtrack:
+                self.active_announcements[session_id] = current_track_id
+            render = await stings.build(session_id, user_id, kind, window_s, midtrack=midtrack,
+                                        lead_s=settings.STINGS_BUILD_LEAD_MS / 1000.0)
+            if render is None:
+                log_service.announcer(f"🎙️ [{session_id[:8]}] Sting {kind} unavailable, staying quiet")
+                return
+            if not await self._wait_for_trigger(session_id, current_track_id, trigger_time_ms, not midtrack):
+                return
+            if await stings.play(session_id, user_id, render, midtrack=midtrack):
+                self.last_announcement_time[session_id] = time.time()
+        except asyncio.CancelledError:
+            log_service.announcer(f"🎙️ [{session_id}] Sting task cancelled")
+        except Exception as e:
+            log_service.error(f"Announcer sting error: {type(e).__name__}: {e}")
+        finally:
+            if not midtrack:
+                self._cleanup_scheduled(session_id)
+
+    async def _schedule_midtrack_sting(self, session_id: str, current_track_id: str, state: dict):
+        stings = self._sting_service()
+        if stings is None or not settings.STINGS_ENABLED or not settings.STINGS_MIDTRACK_ENABLED:
+            return
+        try:
+            if not stings.midtrack_possible(session_id):
+                return
+            features = await self.orchestrator.features.load_features(current_track_id)
+            if not features:
+                return
+            lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
+            quiet = await self._get_quiet_segments(features, lyrics, start_pct=0.2, end_pct=0.8)
+            progress_ms = state.get('progress_ms', 0)
+            ahead = [seg for seg in quiet
+                     if seg['start_ms'] - progress_ms > settings.STINGS_BUILD_LEAD_MS + 5000
+                     and seg['duration_ms'] >= settings.STINGS_MIDTRACK_MIN_WINDOW_S * 1000]
+            if not ahead:
+                return
+            window = max(ahead, key=lambda seg: seg['duration_ms'])
+            quiet_s = window['duration_ms'] / 1000.0
+            kind = await stings.plan_midtrack(session_id, self._state_user_id(session_id, state), quiet_s)
+            if not kind:
+                return
+            trigger_time_ms = window['start_ms'] + 500
+            max_len_s = min(midtrack_max_len(quiet_s), quiet_s - 1.0)
+            task = asyncio.create_task(self._execute_sting(
+                session_id, current_track_id, trigger_time_ms, max_len_s, kind, state, midtrack=True))
+            self.session_tasks.setdefault(session_id, []).append(task)
+            log_service.announcer(f"🎙️ [{session_id[:8]}] 🟣 Mid-track sting {kind} at "
+                                  f"{trigger_time_ms / 1000:.1f}s ({quiet_s:.1f}s quiet, lyric-free)")
+        except Exception as e:
+            log_service.warning(f"Announcer: mid-track sting planning failed: {type(e).__name__}: {e}")
 
     async def _schedule_announcement_for_transition(
             self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
     ):
+        if await self._schedule_sting_for_transition(session_id, current_track_id, transition_window, state):
+            return
+
         last_announcement = self.last_announcement_time.get(session_id, 0)
         time_since_last = time.time() - last_announcement
 
@@ -494,50 +730,16 @@ class AnnouncerService:
     async def _execute_transition_announcement(
             self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
     ):
+        usage_tracking.bind_session(session_id)
         try:
             trigger_time_ms = transition_window['start_ms'] - self.TRIGGER_EARLY_MS
-            last_log_time = 0
+            if not await self._wait_for_trigger(session_id, current_track_id, trigger_time_ms):
+                return
 
-            while True:
-                session_state = self.playback_service.get_session_state(session_id)
-                if not session_state:
-                    log_service.announcer(f"🎙️ [{session_id[:8]}] ❌ Session state is None, cancelling")
-                    return
-                current_state = session_state.get_state()
-                current_progress = current_state.get('progress_ms', 0)
-                current_track = current_state.get('current_track', {}).get('id')
-                is_playing = current_state.get('is_playing', False)
-                last_skip_reason = current_state.get('last_skip_reason')
-
-                if current_track != current_track_id:
-                    if last_skip_reason == 'auto_crossfade':
-                        log_service.announcer(
-                            f"🎙️ [{session_id[:8]}] 🔄 Auto-crossfade completed, announcement continues")
-                        break
-                    else:
-                        log_service.announcer(
-                            f"🎙️ [{session_id[:8]}] ❌ Track changed (user action) during wait, cancelling")
-                        return
-
-                if not is_playing:
-                    await asyncio.sleep(1.0)
-                    continue
-
-                time_until_trigger = trigger_time_ms - current_progress
-
-                current_time = time.time()
-                if current_time - last_log_time >= 10.0:
-                    log_service.announcer(
-                        f"🎙️ [{session_id[:8]}] ⏳ Countdown: {time_until_trigger / 1000:.1f}s "
-                        f"(progress: {current_progress / 1000:.1f}s / trigger: {trigger_time_ms / 1000:.1f}s)")
-                    last_log_time = current_time
-
-                if time_until_trigger <= 0:
-                    break
-                elif time_until_trigger > 10000:
-                    await asyncio.sleep(5.0)
-                else:
-                    await asyncio.sleep(min(1.0, time_until_trigger / 1000.0))
+            if self._radio_break_holds(session_id):
+                log_service.announcer(f"🎙️ [{session_id[:8]}] 📻 Skipped: Radio Mode talk break at this boundary")
+                self._cleanup_scheduled(session_id)
+                return
 
             self.active_announcements[session_id] = current_track_id
 
@@ -580,6 +782,7 @@ class AnnouncerService:
             )
 
             self.last_announcement_time[session_id] = time.time()
+            content_bank.record_airing(session_id, announcement_text)
             target_ms = int(transition_window['duration_ms'])
             actual_chars = len(announcement_text)
             log_service.announcer(

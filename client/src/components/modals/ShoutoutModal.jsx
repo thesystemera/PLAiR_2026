@@ -3,7 +3,7 @@ import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Me
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
-import { usePlaybackShoutout } from '../../contexts/PlaybackShoutoutContext'
+import { usePlaybackShoutout, useShoutoutProgress } from '../../contexts/PlaybackShoutoutContext'
 import { useUIState } from '../../contexts/UIStateContext'
 import { useVoiceRecording } from '../../contexts/VoiceRecordingContext'
 import { useAuth } from '../../contexts/AuthContext'
@@ -12,6 +12,10 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import MediaActions from '../MediaActions'
 import Modal, { ModalSection, ModalMetadataField, ModalCard } from './Modal'
+import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
+
+const NO_TRANSITION = {}
+const FFT_FADE_TRANSITION = CSS_TRANSITION.fadeOpacity
 
 const NUM_BARS = 32
 
@@ -33,21 +37,38 @@ const FFTVisualizer = memo(function FFTVisualizer({ fftData, isPlaying, category
     if (!canvas) return
 
     const ctx = canvas.getContext('2d')
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+
+    const rect = { width: 0, height: 0 }
 
     const resizeCanvas = () => {
-      const rect = canvas.getBoundingClientRect()
-      canvas.width = rect.width * dpr
-      canvas.height = rect.height * dpr
+      const bounds = canvas.getBoundingClientRect()
+      rect.width = bounds.width
+      rect.height = bounds.height
+      canvas.width = bounds.width * dpr
+      canvas.height = bounds.height * dpr
       ctx.scale(dpr, dpr)
     }
 
     resizeCanvas()
-    window.addEventListener('resize', resizeCanvas)
+    window.addEventListener('resize', resizeCanvas, { passive: true })
 
     let animId
+    let cleared = false
     const draw = () => {
-      const rect = canvas.getBoundingClientRect()
+      const samples = fftDataRef.current
+      let silent = true
+      for (let i = 0; i < NUM_BARS; i++) {
+        if (samples[i]) {
+          silent = false
+          break
+        }
+      }
+      if (silent && cleared) {
+        animId = requestAnimationFrame(draw)
+        return
+      }
+      cleared = silent
       ctx.clearRect(0, 0, rect.width, rect.height)
 
       const barWidth = rect.width / NUM_BARS
@@ -108,7 +129,7 @@ const FFTVisualizer = memo(function FFTVisualizer({ fftData, isPlaying, category
       className="fixed bottom-0 left-0 right-0 h-12 pointer-events-none overflow-hidden z-[60]"
       style={{
         opacity: displayOpacity,
-        transition: 'opacity 0.3s ease'
+        transition: FFT_FADE_TRANSITION
       }}
     >
       <canvas
@@ -163,15 +184,15 @@ const SyncedTranscription = memo(function SyncedTranscription({ words, progress,
 
         if (isActive) {
           if (!node.classList.contains('text-white')) {
-            node.className = 'px-1 rounded transition-colors duration-150 text-white font-bold bg-white/20'
+            node.className = 'px-1 rounded transition-colors duration-micro text-white font-bold bg-white/20'
           }
         } else if (isPast) {
           if (!node.classList.contains('text-gray-500')) {
-            node.className = 'px-1 rounded transition-colors duration-150 text-gray-500'
+            node.className = 'px-1 rounded transition-colors duration-micro text-gray-500'
           }
         } else {
           if (!node.classList.contains('text-gray-400')) {
-            node.className = 'px-1 rounded transition-colors duration-150 text-gray-400'
+            node.className = 'px-1 rounded transition-colors duration-micro text-gray-400'
           }
         }
       })
@@ -201,7 +222,7 @@ const SyncedTranscription = memo(function SyncedTranscription({ words, progress,
             if (el) wordRefs.current.set(wordIndex, el)
             else wordRefs.current.delete(wordIndex)
           }}
-          className="px-1 rounded transition-colors duration-150 text-gray-400"
+          className="px-1 rounded transition-colors duration-micro text-gray-400"
         >
           {word.word}
         </span>
@@ -239,13 +260,12 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
+      {...PRESETS.listItem}
       className="flex items-start gap-3 p-3 rounded-lg transition-colors"
       style={{ backgroundColor: isPlaying ? getBorder(0.15) : getBorder(0.05) }}
     >
       {profilePictureUrl ? (
-        <img
+        <img decoding="async"
           src={profilePictureUrl}
           alt={reply.username || 'User'}
           className="w-10 h-10 rounded-full object-cover flex-shrink-0"
@@ -273,8 +293,8 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
       </div>
 
       <motion.button
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
+        whileHover={PRESETS.hoverPressLarge.whileHover}
+        whileTap={PRESETS.hoverPressLarge.whileTap}
         onClick={() => isPlaying ? onStop() : onPlay(reply)}
         className="p-2 rounded-full flex-shrink-0"
         style={{ backgroundColor: isPlaying ? 'rgba(139, 92, 246, 0.3)' : getBorder(0.1) }}
@@ -293,13 +313,37 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
   )
 })
 
-export function ShoutoutModal({ isOpen, onClose, shoutout }) {
+const ShoutoutProgressBar = memo(function ShoutoutProgressBar({ durationSeconds, isPlaying, trackColor, barColor }) {
+  const progress = useShoutoutProgress()
+  return (
+    <div className="relative h-1" style={{ backgroundColor: trackColor }}>
+      <div
+        className="h-full w-full origin-left transition-[transform,opacity] duration-progress"
+        style={{
+          backgroundColor: barColor,
+          opacity: isPlaying ? 0.6 : 0.3,
+          transform: `scaleX(${Math.min(1, Math.max(0, progress / durationSeconds))})`
+        }}
+      />
+    </div>
+  )
+})
+
+const LiveSyncedTranscription = memo(function LiveSyncedTranscription({ words, isPlaying }) {
+  const progress = useShoutoutProgress()
+  return <SyncedTranscription words={words} progress={progress} isPlaying={isPlaying} />
+})
+
+export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
+  const [retainedShoutout, setRetainedShoutout] = useState(activeShoutout)
+  if (activeShoutout && activeShoutout !== retainedShoutout) setRetainedShoutout(activeShoutout)
+  const shoutout = activeShoutout || retainedShoutout
   const [analytics, setAnalytics] = useState(null)
   const [replies, setReplies] = useState([])
   const [repliesLoading, setRepliesLoading] = useState(false)
   const [replySortBy, setReplySortBy] = useState('popularity')
   const [isSubmittingReply, setIsSubmittingReply] = useState(false)
-  const { playingShoutout, playShoutout, stopShoutout, progress } = usePlaybackShoutout()
+  const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const { getWhite, getGrey300, getGrey400, getBorder, getCategoryMetadata } = useDynamicTheme()
   const { shoutoutFftDataRef, contentUpdates, toastSuccess, toastError } = useUIState()
   const { isRecording, startRecording, stopRecording, abortRecording } = useVoiceRecording()
@@ -410,7 +454,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
     onClose()
   }
 
-  if (!isOpen || !shoutout) return null
+  if (!shoutout) return null
 
   const getCategoryLabel = (category) => {
     if (!category) return 'General'
@@ -501,11 +545,13 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
 
   return (
     <>
-      <FFTVisualizer
-        fftData={fftData}
-        isPlaying={isPlaying}
-        categoryColor={categoryColor}
-      />
+      {isOpen && (
+        <FFTVisualizer
+          fftData={fftData}
+          isPlaying={isPlaying}
+          categoryColor={categoryColor}
+        />
+      )}
 
       <Modal
         isOpen={isOpen}
@@ -518,7 +564,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
           <div className="relative pb-6 border-b mb-6" style={{ borderColor: getBorder(0.1) }}>
             <div className="flex items-start gap-4">
               {profilePictureUrl ? (
-                <img
+                <img decoding="async"
                   src={profilePictureUrl}
                   alt={shoutout.username || 'User'}
                   className="w-16 h-16 rounded-full object-cover shadow-lg flex-shrink-0"
@@ -531,13 +577,13 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
 
               <div className="flex-1 min-w-0">
                 <h2
-                  className="text-xl font-bold mb-1 transition-colors duration-700"
+                  className="text-xl font-bold mb-1 transition-colors duration-theme"
                   style={{ color: getWhite() }}
                 >
                   Shoutout
                 </h2>
                 <p
-                  className="text-sm transition-colors duration-700"
+                  className="text-sm transition-colors duration-theme"
                   style={{ color: getGrey300() }}
                 >
                   {shoutout.username || 'Anonymous'}
@@ -545,8 +591,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
               </div>
 
               <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
+                whileHover={PRESETS.hoverPressLarge.whileHover}
+                whileTap={PRESETS.hoverPressLarge.whileTap}
                 onClick={handleClose}
                 className="p-2 rounded-full transition-colors flex-shrink-0"
                 style={{
@@ -560,16 +606,12 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
           </div>
 
           {durationSeconds > 0 && (
-            <div className="relative h-1" style={{ backgroundColor: getBorder(0.1) }}>
-              <div
-                className="h-full transition-all duration-100"
-                style={{
-                  backgroundColor: getWhite(),
-                  opacity: isPlaying ? 0.6 : 0.3,
-                  width: `${Math.min(100, (progress / durationSeconds) * 100)}%`
-                }}
-              />
-            </div>
+            <ShoutoutProgressBar
+              durationSeconds={durationSeconds}
+              isPlaying={isPlaying}
+              trackColor={getBorder(0.1)}
+              barColor={getWhite()}
+            />
           )}
 
           <div className="flex-1 overflow-y-auto space-y-4">
@@ -579,10 +621,10 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                   <motion.button
                     onClick={() => isPlaying ? stopShoutout() : playShoutout(shoutout, { showModal: false })}
                     className="p-1 rounded hover:bg-white/10 transition-colors cursor-pointer"
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
+                    whileHover={PRESETS.hoverPressLarge.whileHover}
+                    whileTap={PRESETS.hoverPressLarge.whileTap}
                     animate={isPlaying ? { scale: [1, 1.2, 1] } : {}}
-                    transition={isPlaying ? { duration: 0.8, repeat: Infinity } : {}}
+                    transition={isPlaying ? MOTION.pulse : NO_TRANSITION}
                   >
                     <Volume2 size={14} />
                   </motion.button>
@@ -593,15 +635,14 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
             }>
               {shoutout.word_level_transcription?.length > 0 ? (
                 <div className="text-lg leading-relaxed">
-                  <SyncedTranscription
+                  <LiveSyncedTranscription
                     words={shoutout.word_level_transcription}
-                    progress={progress}
                     isPlaying={isPlaying}
                   />
                 </div>
               ) : (
                 <p
-                  className="text-lg leading-relaxed transition-colors duration-700"
+                  className="text-lg leading-relaxed transition-colors duration-theme"
                   style={{ color: getWhite() }}
                 >
                   &ldquo;{shoutout.transcription}&rdquo;
@@ -732,7 +773,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                     {replies.length > 1 && (
                       <button
                         onClick={() => setReplySortBy(prev => prev === 'popularity' ? 'recent' : 'popularity')}
-                        className="text-xs px-2 py-1 rounded transition-colors"
+                        className="ui-press text-xs px-2 py-1 rounded transition-colors"
                         style={{ backgroundColor: getBorder(0.1), color: getGrey400() }}
                       >
                         {replySortBy === 'popularity' ? '🔥 Top' : '🕐 Recent'}
@@ -742,8 +783,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                       isRecording ? (
                         <div className="flex items-center gap-2">
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
+                            whileHover={PRESETS.hoverPress.whileHover}
+                            whileTap={PRESETS.hoverPress.whileTap}
                             onClick={handleCancelRecording}
                             className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-full font-medium"
                             style={{ backgroundColor: getBorder(0.2), color: getGrey400() }}
@@ -751,8 +792,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                             <X size={12} />
                           </motion.button>
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
+                            whileHover={PRESETS.hoverPress.whileHover}
+                            whileTap={PRESETS.hoverPress.whileTap}
                             onClick={handleStopRecording}
                             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
                             style={{
@@ -760,7 +801,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                               color: getWhite()
                             }}
                             animate={{ scale: [1, 1.05, 1] }}
-                            transition={{ duration: 1, repeat: Infinity }}
+                            transition={MOTION.beat}
                           >
                             <Square size={12} fill="currentColor" />
                             Stop
@@ -768,8 +809,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout }) {
                         </div>
                       ) : (
                         <motion.button
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
+                          whileHover={PRESETS.hoverPress.whileHover}
+                          whileTap={PRESETS.hoverPress.whileTap}
                           onClick={handleStartRecording}
                           className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
                           style={{

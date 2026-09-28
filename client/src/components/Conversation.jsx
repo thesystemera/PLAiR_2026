@@ -6,6 +6,11 @@ import { useAuth } from '../contexts/AuthContext'
 import { useUIState } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { api } from '../lib/api'
+import { messageMotion } from '../lib/motion'
+import { FadeSwap } from './Motion'
+
+const USER_MESSAGE_MOTION = messageMotion(true)
+const DJ_MESSAGE_MOTION = messageMotion(false)
 import {
   MessageCircle,
   User,
@@ -790,71 +795,46 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
 
   if (!isOpen) return null
 
-  return (
-    <div className="w-full space-y-3 pb-3">
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="text-gray-400">Loading conversation...</div>
-        </div>
-      ) : filteredConversations.length === 0 ? (
-        <div className="w-full min-h-[60vh] flex items-end justify-center pb-24 sm:pb-32">
-          <div className="text-center text-gray-400 max-w-xs mx-auto px-4">
-            <MessageCircle className="w-8 h-8 sm:w-10 sm:h-10 mx-auto mb-2 opacity-30" />
-            {conversations.length === 0 ? (
-              <>
-                <p className="text-xs sm:text-sm font-medium">No conversations yet</p>
-                <p className="text-[10px] sm:text-xs mt-1 opacity-70">Start talking with the DJs!</p>
-              </>
-            ) : (
-              <>
-                <p className="text-xs sm:text-sm font-medium">No {messageFilter} messages</p>
-                <p className="text-[10px] sm:text-xs mt-1 opacity-70">Try selecting a different filter</p>
-              </>
-            )}
-          </div>
-        </div>
-      ) : (
-        <AnimatePresence initial={false}>
-          {filteredConversations.map((conv, idx) => {
-            const isUserMessage = conv.type === 'user'
-            const randomX = (Math.random() - 0.5) * 40
-            const randomY = 30 + Math.random() * 30
-            const randomRotate = (Math.random() - 0.5) * 8
-            const randomScale = 0.2 + Math.random() * 0.3
-            const damping = 12 + Math.random() * 8
+  const contentState = loading ? 'loading' : filteredConversations.length === 0 ? 'empty' : `messages-${messageFilter}`
 
-            return (
+  return (
+    <div className="w-full relative pb-3">
+      <FadeSwap swapKey={contentState} className="space-y-3">
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="text-gray-400">Loading conversation...</div>
+          </div>
+        ) : filteredConversations.length === 0 ? (
+          <div className="w-full min-h-[60vh] flex items-end justify-center pb-24 sm:pb-32">
+            <div className="text-center text-gray-400 max-w-xs mx-auto px-4">
+              <MessageCircle className="w-8 h-8 sm:w-10 sm:h-10 mx-auto mb-2 opacity-30" />
+              {conversations.length === 0 ? (
+                <>
+                  <p className="text-xs sm:text-sm font-medium">No conversations yet</p>
+                  <p className="text-[10px] sm:text-xs mt-1 opacity-70">Start talking with the DJs!</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-xs sm:text-sm font-medium">No {messageFilter} messages</p>
+                  <p className="text-[10px] sm:text-xs mt-1 opacity-70">Try selecting a different filter</p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
+          <AnimatePresence initial={false}>
+            {filteredConversations.map((conv, idx) => (
               <motion.div
                 key={conv.id || idx}
-                initial={{
-                  opacity: 0,
-                  scale: randomScale,
-                  y: randomY,
-                  x: isUserMessage ? randomX : -randomX,
-                  rotateZ: randomRotate
-                }}
-                animate={{
-                  opacity: 1,
-                  scale: 1,
-                  y: 0,
-                  x: 0,
-                  rotateZ: 0
-                }}
-                exit={{ opacity: 0, scale: 0.85, y: -10 }}
-                transition={{
-                  type: "spring",
-                  stiffness: 500,
-                  damping,
-                  mass: 0.6
-                }}
+                {...(conv.type === 'user' ? USER_MESSAGE_MOTION : DJ_MESSAGE_MOTION)}
               >
                 {renderMessage(conv, idx)}
               </motion.div>
-            )
-          })}
-          <div ref={chatEndRef} />
-        </AnimatePresence>
-      )}
+            ))}
+            <div ref={chatEndRef} />
+          </AnimatePresence>
+        )}
+      </FadeSwap>
     </div>
   )
 }

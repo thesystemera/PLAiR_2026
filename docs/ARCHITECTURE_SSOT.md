@@ -459,7 +459,6 @@ if (!trackChanged && !playingChanged && !indexChanged && !queueChanged && !isSee
 - `client/src/components/Radio.jsx` - Panel container
 - `client/src/components/InteractiveEngagementButton.jsx` - Recording button
 - `client/src/components/AudioReactiveCanvas.jsx` - Visual canvas
-- `client/src/components/ShaderPanel.jsx` - Shader effects
 
 ---
 

@@ -9,6 +9,7 @@ from demucs.apply import apply_model
 from services import log_service
 from services.base_service import SingletonService
 from config import settings
+from models_global import gpu_lease, raise_if_cuda_oom
 
 class AudioDemucsService(SingletonService):
 
@@ -116,6 +117,7 @@ class AudioDemucsService(SingletonService):
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
+            raise_if_cuda_oom(e, "Demucs")
             return None
 
     async def separate_stems(
@@ -130,11 +132,12 @@ class AudioDemucsService(SingletonService):
 
             log_service.upscaling(f"Demucs: Processing {input_path.name}")
 
-            result = await asyncio.to_thread(
-                self._separate_stems_sync,
-                input_path,
-                output_dir
-            )
+            async with gpu_lease("Demucs"):
+                result = await asyncio.to_thread(
+                    self._separate_stems_sync,
+                    input_path,
+                    output_dir
+                )
 
             if result:
                 log_service.upscaling("Demucs separation complete")

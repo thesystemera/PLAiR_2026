@@ -1,12 +1,116 @@
 import { X, Loader2, Check, AlertCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useEffect, useState, useRef, memo, useCallback, createContext, useContext } from 'react'
+import { startTransition, useDeferredValue, useEffect, useState, useRef, memo, useCallback, createContext, useContext } from 'react'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../../hooks/usePointerInteraction'
 import { useUIState, useArtwork } from '../../contexts/UIStateContext'
+import { DURATION, MOTION, PRESETS, SPRING, TWEEN } from '../../lib/motion'
+import { useViewport } from '../../contexts/ViewportContext'
+import { useQuality } from '../../contexts/QualityContext'
+import { MODAL_CLOSE_PAUSE_MS, MODAL_OPEN_PAUSE_MS } from '../../lib/renderPause'
+
+const MODAL_BACKDROP_SAFE_STYLE = {
+  backgroundColor: 'rgba(0,0,0,0.75)',
+  paddingTop: 'max(0.5rem, var(--safe-top))',
+  paddingBottom: 'max(0.5rem, var(--safe-bottom))',
+  paddingLeft: 'max(0.5rem, var(--safe-left))',
+  paddingRight: 'max(0.5rem, var(--safe-right))',
+}
+
+const MODAL_BACKDROP_STYLE = {
+  backgroundColor: 'rgba(0,0,0,0.75)',
+}
+
+const MODAL_GRADIENT_TRANSITION = { ...MOTION.fade, delay: 0.1 }
+const MODAL_TITLE_TRANSITION = { ...PRESETS.fadeSlide.animate.transition, delay: 0.08 }
+const MODAL_CLOSE_TRANSITION = { ...PRESETS.fadeSlide.animate.transition, delay: 0.12 }
+
+const REST_TRANSFORM = 'translateY(0px) scale(1)'
+const HOVER_SPRING = SPRING.hover
+
+const DIALOG_MOTION = {
+  initial: { opacity: 0, transform: 'translateY(18px) scale(0.94)' },
+  animate: { opacity: 1, transform: REST_TRANSFORM, transition: { ...SPRING.dialog, opacity: { duration: DURATION.quick } } },
+  exit: { opacity: 0, transform: 'translateY(10px) scale(0.96)', transition: TWEEN.exit },
+}
+
+const CONTENT_VARIANTS = {
+  hidden: {},
+  show: { transition: { staggerChildren: 0.035, delayChildren: 0.04 } },
+}
+
+const ITEM_VARIANTS = {
+  hidden: { opacity: 0, transform: 'translateY(10px) scale(1)' },
+  show: { opacity: 1, transform: REST_TRANSFORM, transition: TWEEN.enter },
+}
+
+const SECTION_VARIANTS = {
+  hidden: { opacity: 0, transform: 'translateY(10px) scale(1)' },
+  show: { opacity: 1, transform: REST_TRANSFORM, transition: { ...TWEEN.enter, staggerChildren: 0.03, delayChildren: 0.02 } },
+}
+
+const OPTION_HOVER = { transform: 'translateY(-2px) scale(1.02)', transition: HOVER_SPRING }
+const OPTION_TAP = { transform: 'translateY(0px) scale(0.98)', transition: HOVER_SPRING }
+
+const TITLE_MOTION = {
+  initial: { opacity: 0, transform: 'translateX(-10px)' },
+  animate: { opacity: 1, transform: 'translateX(0px)' },
+}
+
+const CLOSE_MOTION = {
+  initial: { opacity: 0, transform: 'rotate(-90deg) scale(1)' },
+  animate: { opacity: 1, transform: 'rotate(0deg) scale(1)' },
+  whileHover: { transform: 'rotate(0deg) scale(1.1)', transition: HOVER_SPRING },
+  whileTap: { transform: 'rotate(0deg) scale(0.9)', transition: HOVER_SPRING },
+}
+
+const ARTWORK_MOTION = {
+  initial: { opacity: 0, transform: 'scale(1.1)' },
+  animate: { opacity: 1, transform: 'scale(1)' },
+}
 
 const blurCache = new Map()
+const decodedArtwork = new Map()
+const BLUR_RADII = [18, 10, 5]
+const ENTRANCE_MS = 650
+const ARTWORK_DIM_OVERLAY = { backgroundColor: 'rgba(0, 0, 0, 0.7)' }
+
+let noiseTileUrl = null
+
+function getNoiseTileUrl() {
+  if (noiseTileUrl) return noiseTileUrl
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  const image = ctx.createImageData(size, size)
+  for (let i = 0; i < image.data.length; i += 4) {
+    image.data[i] = Math.random() * 255
+    image.data[i + 1] = Math.random() * 255
+    image.data[i + 2] = Math.random() * 255
+    image.data[i + 3] = 128 + Math.random() * 127
+  }
+  ctx.putImageData(image, 0, 0)
+  noiseTileUrl = `url(${canvas.toDataURL('image/png')})`
+  return noiseTileUrl
+}
+
+function scheduleIdle(callback, delay) {
+  let idleId = null
+  const timeoutId = setTimeout(() => {
+    if ('requestIdleCallback' in window) {
+      idleId = window.requestIdleCallback(callback, { timeout: 1000 })
+    } else {
+      callback()
+    }
+  }, delay)
+  return () => {
+    clearTimeout(timeoutId)
+    if (idleId !== null) window.cancelIdleCallback?.(idleId)
+  }
+}
 
 function createBlurredImage(src, blurRadius) {
   const key = `${src}_${blurRadius}`
@@ -26,50 +130,122 @@ function createBlurredImage(src, blurRadius) {
       const w = img.width * scale
       const h = img.height * scale
       ctx.drawImage(img, (size - w) / 2 - blurRadius, (size - h) / 2 - blurRadius, w + blurRadius * 2, h + blurRadius * 2)
-      const url = canvas.toDataURL('image/jpeg', 0.8)
-      blurCache.set(key, url)
-      resolve(url)
+      canvas.toBlob((blob) => {
+        const url = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/jpeg', 0.8)
+        blurCache.set(key, url)
+        resolve(url)
+      }, 'image/jpeg', 0.8)
     }
     img.onerror = () => resolve(null)
     img.src = src
   })
 }
 
-function createAllBlurs(src) {
-  return Promise.all([
-    createBlurredImage(src, 18),
-    createBlurredImage(src, 10),
-    createBlurredImage(src, 5),
-  ]).then(([heavy, medium, light]) => ({ heavy, medium, light }))
+function decodeUrl(url) {
+  if (!url) return Promise.resolve(null)
+  const pending = decodedArtwork.get(url)
+  if (pending) return pending.promise
+  const img = new Image()
+  img.decoding = 'async'
+  img.src = url
+  const entry = { img, ready: false, promise: null }
+  const loaded = typeof img.decode === 'function'
+    ? img.decode()
+    : new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+    })
+  entry.promise = loaded.then(() => {
+    entry.ready = true
+    return url
+  }, () => {
+    decodedArtwork.delete(url)
+    return null
+  })
+  decodedArtwork.set(url, entry)
+  return entry.promise
+}
+
+function isDecoded(url) {
+  return !!url && decodedArtwork.get(url)?.ready === true
+}
+
+function getCachedBlurs(src) {
+  if (!src) return null
+  const [heavy, medium, light] = BLUR_RADII.map(radius => blurCache.get(`${src}_${radius}`))
+  if (!heavy || !medium || !light || !isDecoded(heavy) || !isDecoded(medium) || !isDecoded(light)) return null
+  return { heavy, medium, light }
+}
+
+async function createAllBlurs(src, betweenSteps) {
+  const urls = []
+  for (const radius of BLUR_RADII) {
+    const url = await createBlurredImage(src, radius)
+    await decodeUrl(url)
+    urls.push(url)
+    if (betweenSteps) await betweenSteps()
+  }
+  const [heavy, medium, light] = urls
+  return { heavy, medium, light }
+}
+
+const nextIdle = () => new Promise(resolve => {
+  if ('requestIdleCallback' in window) window.requestIdleCallback(() => resolve(), { timeout: 1500 })
+  else setTimeout(resolve, 50)
+})
+
+export function prewarmModalAssets(artworkUrl) {
+  if (!artworkUrl) return Promise.resolve(null)
+  return decodeUrl(artworkUrl).then(() => createAllBlurs(artworkUrl, nextIdle))
 }
 
 const ModalBlurContext = createContext(null)
 
-const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ trackId, hasArtwork, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
-  const artworkUrl = useArtwork(trackId, hasArtwork)
-  const [imageLoaded, setImageLoaded] = useState(false)
-  const imageRef = useRef(null)
+const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artworkUrl, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
+  const [loadedUrl, setLoadedUrl] = useState(() => (isDecoded(artworkUrl) ? artworkUrl : null))
+  const mountedAtRef = useRef(0)
+  const imageLoaded = !!artworkUrl && (loadedUrl === artworkUrl || isDecoded(artworkUrl))
+
+  useEffect(() => {
+    mountedAtRef.current = performance.now()
+  }, [])
 
   useEffect(() => {
     if (!artworkUrl) {
-      queueMicrotask(() => setImageLoaded(false))
       onBlurReady?.(null)
       return
     }
 
-    const img = new Image()
-    img.onload = () => setImageLoaded(true)
-    img.onerror = () => setImageLoaded(false)
-    img.src = artworkUrl
-    imageRef.current = img
+    let cancelled = false
+    const cancels = []
+    const afterEntrance = (callback) => {
+      const remaining = Math.max(0, ENTRANCE_MS - (performance.now() - mountedAtRef.current))
+      cancels.push(scheduleIdle(callback, remaining))
+    }
 
-    createAllBlurs(artworkUrl).then(onBlurReady)
+    if (!isDecoded(artworkUrl)) {
+      decodeUrl(artworkUrl).then((url) => {
+        if (cancelled || !url) return
+        afterEntrance(() => {
+          if (!cancelled) setLoadedUrl(url)
+        })
+      })
+    }
+
+    const cachedBlurs = getCachedBlurs(artworkUrl)
+    if (cachedBlurs) {
+      onBlurReady?.(cachedBlurs)
+    } else {
+      afterEntrance(() => {
+        createAllBlurs(artworkUrl).then((result) => {
+          if (!cancelled) onBlurReady?.(result)
+        })
+      })
+    }
 
     return () => {
-      if (imageRef.current) {
-        imageRef.current.onload = null
-        imageRef.current.onerror = null
-      }
+      cancelled = true
+      cancels.forEach(cancel => cancel())
     }
   }, [artworkUrl, onBlurReady])
 
@@ -87,23 +263,23 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ trackI
   return (
     <>
       <motion.div
-        initial={{ opacity: 0, scale: 1.1 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.6, ease: 'easeOut' }}
+        {...ARTWORK_MOTION}
+        transition={MOTION.settle}
         className="absolute inset-0"
         style={{
           backgroundImage: `url(${artworkUrl})`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
-          filter: 'brightness(0.3)',
           transform: 'scale(1.2)',
         }}
-      />
+      >
+        <div className="absolute inset-0" style={ARTWORK_DIM_OVERLAY} />
+      </motion.div>
 
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: gradientOpacity * 0.6 }}
-        transition={{ duration: 0.5, delay: 0.1 }}
+        transition={MODAL_GRADIENT_TRANSITION}
         className="absolute inset-0"
         style={{
           background: `radial-gradient(ellipse at 50% 30%, ${categoryColor}40 0%, ${categoryColor}25 30%, ${categoryColor}15 50%, transparent 80%)`,
@@ -113,7 +289,7 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ trackI
       <div
         className="absolute inset-0 opacity-[0.03]"
         style={{
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")',
+          backgroundImage: getNoiseTileUrl(),
         }}
       />
     </>
@@ -126,7 +302,7 @@ const AnimatedBorder = memo(function AnimatedBorder({ categoryColor }) {
       className="absolute inset-0 rounded-2xl pointer-events-none"
       initial={{ opacity: 0.3 }}
       animate={{ opacity: [0.3, 0.6, 0.3] }}
-      transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+      transition={MOTION.glow}
       style={{
         border: `1px solid ${categoryColor}60`,
         boxShadow: `0 0 30px ${categoryColor}20, inset 0 0 30px ${categoryColor}10`,
@@ -148,31 +324,52 @@ export function Modal({
   gradientOpacity = 0.85,
 }) {
   const { engineState, radioState } = useUIState()
+  const { isShortViewport } = useViewport()
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
+  const { registerOverlay, pauseRendering } = useQuality()
   const [isClosing, setIsClosing] = useState(false)
-  const [blurs, setBlurs] = useState(null)
 
   const backdropInteraction = usePointerInteraction()
   const closeButtonInteraction = usePointerInteraction()
+  const dialogRef = useRef(null)
 
   const currentTrack = engineState.currentTrack
-  const trackId = currentTrack?.id
-  const hasArtwork = currentTrack?.has_artwork
+  const artworkUrl = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
+  const [blurState, setBlurState] = useState(() => ({ url: artworkUrl, blurs: getCachedBlurs(artworkUrl) }))
+  const blurs = blurState.url === artworkUrl ? (blurState.blurs || getCachedBlurs(artworkUrl)) : getCachedBlurs(artworkUrl)
+  const setBlurs = useCallback((result) => {
+    setBlurState(prev => (prev.url === artworkUrl && prev.blurs === result ? prev : { url: artworkUrl, blurs: result }))
+  }, [artworkUrl])
 
   const activeCategory = categoryOverride || radioState.activeSeedMode || 'all'
   const categoryMeta = getCategoryMetadata(activeCategory)
   const categoryColor = categoryMeta?.color || '#6366f1'
 
   const handleClose = useCallback(() => {
+    pauseRendering(MODAL_CLOSE_PAUSE_MS)
     setIsClosing(true)
-    setTimeout(() => {
+  }, [pauseRendering])
+
+  const handleExitComplete = useCallback(() => {
+    if (!isClosing) return
+    startTransition(() => {
       setIsClosing(false)
       onClose()
-    }, 300)
-  }, [onClose])
+    })
+  }, [isClosing, onClose])
+
+  const deferredOpen = useDeferredValue(isOpen)
+  const isShown = isOpen && deferredOpen
+  const isVisible = isShown && !isClosing
 
   useEffect(() => {
     if (!isOpen) return
+    pauseRendering(MODAL_OPEN_PAUSE_MS)
+    return registerOverlay()
+  }, [isOpen, registerOverlay, pauseRendering])
+
+  useEffect(() => {
+    if (!isVisible) return
     const handleEsc = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -181,7 +378,24 @@ export function Modal({
     }
     document.addEventListener('keydown', handleEsc)
     return () => document.removeEventListener('keydown', handleEsc)
-  }, [isOpen, handleClose])
+  }, [isVisible, handleClose])
+
+  useEffect(() => {
+    if (!isShown) return
+    const previouslyFocused = document.activeElement
+    const frameId = requestAnimationFrame(() => {
+      const node = dialogRef.current
+      if (node && !node.contains(document.activeElement)) {
+        node.focus({ preventScroll: true })
+      }
+    })
+    return () => {
+      cancelAnimationFrame(frameId)
+      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
+        previouslyFocused.focus({ preventScroll: true })
+      }
+    }
+  }, [isShown])
 
   const handleBackdropClose = (e) => {
     e?.preventDefault()
@@ -200,25 +414,18 @@ export function Modal({
   }
 
   const stopAllEvents = (e) => {
-    e?.preventDefault()
     e?.stopPropagation()
-    e?.nativeEvent?.stopImmediatePropagation()
   }
-
-  if (!isOpen && !isClosing) return null
 
   return (
     <ModalBlurContext.Provider value={blurs}>
-      <AnimatePresence>
+      <AnimatePresence onExitComplete={handleExitComplete}>
+        {isVisible && (
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-          style={{
-            backgroundColor: 'rgba(0,0,0,0.75)',
-          }}
+          key="modal"
+          {...PRESETS.modalBackdrop}
+          className={`fixed inset-0 z-[60] flex items-center justify-center ${isShortViewport ? '' : 'p-4'}`}
+          style={isShortViewport ? MODAL_BACKDROP_SAFE_STYLE : MODAL_BACKDROP_STYLE}
           onPointerDown={(e) => {
             stopAllEvents(e)
             backdropInteraction.onPointerDown(e)
@@ -236,14 +443,13 @@ export function Modal({
           onMouseUp={stopAllEvents}
         >
           <motion.div
-            initial={{ opacity: 0, scale: 0.92, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.92, y: 20 }}
-            transition={{
-              duration: 0.3,
-              ease: [0.4, 0, 0.2, 1]
-            }}
-            className={`rounded-2xl shadow-2xl w-full ${maxWidth} ${maxHeight} flex flex-col relative`}
+            {...DIALOG_MOTION}
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={typeof title === 'string' ? title : undefined}
+            tabIndex={-1}
+            className={`rounded-2xl shadow-2xl w-full ${maxWidth} ${isShortViewport ? 'max-h-full' : maxHeight} flex flex-col relative focus:outline-none`}
             style={{
               backgroundColor: 'rgba(0, 0, 0, 0.85)',
               border: `1px solid ${getBorder(0.3)}`,
@@ -257,8 +463,7 @@ export function Modal({
             onMouseUp={stopAllEvents}
           >
             <BlurredArtworkBackground
-              trackId={trackId}
-              hasArtwork={hasArtwork}
+              artworkUrl={artworkUrl}
               categoryColor={categoryColor}
               gradientOpacity={gradientOpacity}
               onBlurReady={setBlurs}
@@ -269,7 +474,7 @@ export function Modal({
             <div className="relative z-10 flex flex-col" style={{ height: '100%', minHeight: 0 }}>
               {(title || showCloseButton) && (
                 <div
-                  className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0 relative overflow-hidden"
+                  className={`flex items-center justify-between border-b flex-shrink-0 relative overflow-hidden ${isShortViewport ? 'px-4 py-2' : 'px-6 py-4'}`}
                   style={{
                     backgroundColor: 'rgba(0, 0, 0, 0.6)',
                     borderColor: getBorder(0.2)
@@ -288,9 +493,8 @@ export function Modal({
                   )}
                   {title && (
                     <motion.div
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.1 }}
+                      {...TITLE_MOTION}
+                      transition={MODAL_TITLE_TRANSITION}
                       className="text-xl md:text-2xl font-bold relative z-10"
                       style={{ color: getWhite() }}
                     >
@@ -299,14 +503,12 @@ export function Modal({
                   )}
                   {showCloseButton && (
                     <motion.button
-                      initial={{ opacity: 0, rotate: -90 }}
-                      animate={{ opacity: 1, rotate: 0 }}
-                      transition={{ delay: 0.15 }}
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
+                      {...CLOSE_MOTION}
+                      transition={MODAL_CLOSE_TRANSITION}
                       onPointerDown={closeButtonInteraction.onPointerDown}
                       onPointerMove={closeButtonInteraction.onPointerMove}
                       onPointerUp={handleCloseButtonClick}
+                      aria-label="Close"
                       className="p-2 rounded-full transition-colors relative z-10"
                       style={{
                         backgroundColor: 'rgba(255,255,255,0.1)',
@@ -320,9 +522,9 @@ export function Modal({
               )}
 
               <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 }}
+                variants={CONTENT_VARIANTS}
+                initial="hidden"
+                animate="show"
                 className="flex-1 overflow-y-auto"
                 style={{
                   scrollbarWidth: 'thin',
@@ -354,6 +556,7 @@ export function Modal({
             </div>
           </motion.div>
         </motion.div>
+        )}
       </AnimatePresence>
     </ModalBlurContext.Provider>
   )
@@ -381,12 +584,13 @@ export const ModalFooter = memo(function ModalFooter({ children, className = '' 
   const { getBorder } = useDynamicTheme()
 
   return (
-    <div
+    <motion.div
+      variants={ITEM_VARIANTS}
       className={`flex items-center justify-between pt-4 border-t ${className}`}
       style={{ borderColor: getBorder(0.1) }}
     >
       {children}
-    </div>
+    </motion.div>
   )
 })
 
@@ -433,11 +637,11 @@ export const ModalButton = memo(function ModalButton({
 
   return (
     <motion.button
-      whileHover={{ scale: disabled ? 1 : 1.02 }}
-      whileTap={{ scale: disabled ? 1 : 0.98 }}
+      whileHover={disabled ? undefined : PRESETS.softPress.whileHover}
+      whileTap={disabled ? undefined : PRESETS.softPress.whileTap}
       onClick={handleClick}
       disabled={disabled}
-      className={`px-6 py-3 rounded-lg font-medium transition-all ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
+      className={`px-6 py-3 rounded-lg font-medium transition-[background-color,border-color,color,box-shadow,opacity] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
       style={variantStyles[variant]}
       {...props}
     >
@@ -450,7 +654,7 @@ export const ModalSection = memo(function ModalSection({ title, children, classN
   const { getWhite } = useDynamicTheme()
 
   return (
-    <div className={`mb-6 ${className}`}>
+    <motion.div variants={SECTION_VARIANTS} className={`mb-6 ${className}`}>
       {title && (
         <h3
           className="text-sm font-bold uppercase tracking-wide mb-3"
@@ -464,7 +668,7 @@ export const ModalSection = memo(function ModalSection({ title, children, classN
         </h3>
       )}
       {children}
-    </div>
+    </motion.div>
   )
 })
 
@@ -495,13 +699,14 @@ export const ModalOptionButton = memo(function ModalOptionButton({
 
   return (
     <motion.button
-      whileHover={isDisabled ? {} : { scale: 1.02, y: -2 }}
-      whileTap={isDisabled ? {} : { scale: 0.98 }}
+      variants={ITEM_VARIANTS}
+      whileHover={isDisabled ? undefined : OPTION_HOVER}
+      whileTap={isDisabled ? undefined : OPTION_TAP}
       onPointerDown={interaction.onPointerDown}
       onPointerMove={interaction.onPointerMove}
       onPointerUp={handleClick}
       disabled={isDisabled}
-      className={`rounded-xl border transition-all duration-150 group relative overflow-hidden ${
+      className={`rounded-xl border transition-[background-color,border-color,box-shadow,opacity] duration-micro group relative overflow-hidden ${
         isMobile ? 'p-3 flex flex-col items-center justify-center text-center gap-2' : 'p-4 text-left'
       } ${isDisabled ? 'cursor-not-allowed opacity-30' : 'cursor-pointer'} ${className}`}
       style={{
@@ -525,7 +730,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
       {isMobile ? (
         <>
           <div
-            className="p-2 rounded-lg transition-transform duration-200 group-hover:scale-110 relative z-10"
+            className="p-2 rounded-lg transition-transform duration-quick group-hover:scale-110 relative z-10"
             style={{ backgroundColor: resolvedIconBgColor }}
           >
             <Icon size={24} style={{ color: iconColor }} />
@@ -537,7 +742,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
       ) : (
         <div className="flex items-start gap-3 relative z-10">
           <div
-            className="p-2 rounded-lg transition-transform duration-200 group-hover:scale-110 flex-shrink-0"
+            className="p-2 rounded-lg transition-transform duration-quick group-hover:scale-110 flex-shrink-0"
             style={{ backgroundColor: resolvedIconBgColor }}
           >
             <Icon size={24} style={{ color: iconColor }} />
@@ -553,7 +758,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
             )}
           </div>
           <div
-            className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-150"
+            className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 transition-[transform,opacity] duration-micro"
             style={{
               backgroundColor: iconColor,
               transform: isSelected ? 'scale(1)' : 'scale(0)',
@@ -654,7 +859,7 @@ export const ModalProgress = memo(function ModalProgress({
           style={{ backgroundColor: categoryColor }}
           initial={{ width: 0 }}
           animate={{ width: `${percentage}%` }}
-          transition={{ duration: 0.3, ease: 'easeOut' }}
+          transition={MOTION.progress}
         />
       </div>
 
@@ -664,8 +869,8 @@ export const ModalProgress = memo(function ModalProgress({
 
       {showCancel && onCancel && (
         <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
+          whileHover={PRESETS.softPress.whileHover}
+          whileTap={PRESETS.softPress.whileTap}
           onClick={() => {
             triggerHaptic('light')
             onCancel()

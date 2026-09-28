@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from services import log_service
 from services.base_service import SingletonService
+from services.llm_router import LLM_BACKGROUND
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
 from config import settings
 
@@ -102,9 +103,10 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
         try:
             result = await self.ai_service.call_gemini(
                 prompt=rewrite_prompt,
-                model="gemini-2.5-flash-lite",
+                model=settings.GEMINI_METADATA_MODEL,
                 temperature=0.1,
-                system_instruction="You are a text correction assistant. Fix only artist name spelling while preserving all other details."
+                system_instruction="You are a text correction assistant. Fix only artist name spelling while preserving all other details.",
+                role=LLM_BACKGROUND
             )
 
             return result.strip() if result else obfuscated_style
@@ -214,9 +216,10 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
             result = await self.ai_service.call_gemini_structured(
                 prompt=prompt,
                 response_schema=DerivedTags,
-                model="gemini-2.5-flash-lite",
+                model=settings.GEMINI_METADATA_MODEL,
                 temperature=temperature,
-                system_instruction="You are a music cataloging expert. Extract precise, consistent metadata tags."
+                system_instruction="You are a music cataloging expert. Extract precise, consistent metadata tags.",
+                role=LLM_BACKGROUND
             )
 
             if not result:
@@ -304,56 +307,3 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
         except Exception as e:
             log_service.error(f"Error loading metadata {unique_id}: {str(e)}")
             return None
-
-    def is_already_enriched(self, metadata: Dict[str, Any]) -> bool:
-        return "derived_tags" in metadata and metadata["derived_tags"]
-
-    async def get_unenriched_files(self) -> List[Path]:
-
-        all_files = list(self.metadata_dir.glob("*.json"))
-        unenriched = []
-
-        for json_path in all_files:
-            try:
-                async with aiofiles.open(json_path, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    metadata = json.loads(content)
-
-                    if not self.is_already_enriched(metadata):
-                        unenriched.append(json_path)
-
-            except Exception as e:
-                log_service.warning(f"Error checking enrichment status for {json_path.name}: {str(e)}")
-                continue
-
-        return unenriched
-
-    def needs_video_search_terms(self, metadata: Dict[str, Any]) -> bool:
-        gen_params = metadata.get("generation_params", {})
-        if gen_params.get("video_search_terms"):
-            return False
-
-        derived_tags = metadata.get("derived_tags", {})
-        if derived_tags.get("video_search_terms"):
-            return False
-
-        return True
-
-    async def get_files_needing_video_terms(self) -> List[Path]:
-        all_files = list(self.metadata_dir.glob("*.json"))
-        needs_video = []
-
-        for json_path in all_files:
-            try:
-                async with aiofiles.open(json_path, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    metadata = json.loads(content)
-
-                    if self.is_already_enriched(metadata) and self.needs_video_search_terms(metadata):
-                        needs_video.append(json_path)
-
-            except Exception as e:
-                log_service.warning(f"Error checking video terms for {json_path.name}: {str(e)}")
-                continue
-
-        return needs_video

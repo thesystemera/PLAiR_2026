@@ -4,12 +4,13 @@ from pathlib import Path
 from typing import Optional
 import torch
 import librosa
-import soundfile as sf
 import numpy as np
 import gc
 from services import log_service
 from services.base_service import SingletonService
 from config import settings
+from models_global import gpu_lease, raise_if_cuda_oom
+from services.audio_headroom import write_float_wav
 
 sys.path.insert(0, str(settings.APOLLO_DIR))
 from look2hear.models import BaseModel
@@ -159,7 +160,7 @@ class AudioApolloService(SingletonService):
                 enhanced = enhanced_padded[:, :original_length]
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(str(output_path), enhanced.T, 44100, subtype='PCM_16')
+            write_float_wav(output_path, enhanced, 44100)
 
             del audio, audio_padded, enhanced, enhanced_chunks, enhanced_padded
             if self.device == "cuda":
@@ -172,6 +173,7 @@ class AudioApolloService(SingletonService):
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
+            raise_if_cuda_oom(e, "Apollo")
             return None, {"error": str(e)}
 
     async def process_audio(
@@ -190,11 +192,12 @@ class AudioApolloService(SingletonService):
 
             log_service.upscaling(f"Apollo: Processing {input_path.name}")
 
-            result, metadata = await asyncio.to_thread(
-                self._process_audio_sync,
-                input_path,
-                output_path
-            )
+            async with gpu_lease("Apollo"):
+                result, metadata = await asyncio.to_thread(
+                    self._process_audio_sync,
+                    input_path,
+                    output_path
+                )
 
             if not result:
                 log_service.error(f"Apollo processing failed: {metadata.get('error', 'Unknown error')}")

@@ -1,7 +1,9 @@
 import { X, Loader2, Trash2, CheckCircle2, XCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
-import { TRANSITIONS } from '../lib/themeManager'
+import { GLASS } from '../lib/themeManager'
+import { MOTION, PRESETS } from '../lib/motion'
+import { Expandable } from './Motion'
 
 function getJobTypeIcon(type) {
   switch (type) {
@@ -43,11 +45,9 @@ function JobItem({ job, onCancel, onRemove }) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: 10 }}
+      {...PRESETS.listItem}
       className={`
-        flex flex-col gap-2 p-3 rounded-lg border transition-all
+        flex flex-col gap-2 p-3 rounded-lg border transition-colors
         ${isCompleted ? 'bg-green-500/10 border-green-500/30' : ''}
         ${isFailed ? 'bg-red-500/10 border-red-500/30' : ''}
         ${isActive ? 'bg-purple-500/10 border-purple-500/30' : ''}
@@ -84,7 +84,7 @@ function JobItem({ job, onCancel, onRemove }) {
         {isActive && (
           <button
             onClick={() => onCancel(job.id)}
-            className="p-1.5 hover:bg-red-500/20 rounded transition"
+            className="ui-press p-1.5 hover:bg-red-500/20 rounded transition"
             title="Cancel generation"
           >
             <X size={16} className="text-red-400" />
@@ -94,7 +94,7 @@ function JobItem({ job, onCancel, onRemove }) {
         {(isCompleted || isFailed) && (
           <button
             onClick={() => onRemove(job.id)}
-            className="p-1.5 hover:bg-white/10 rounded transition"
+            className="ui-press p-1.5 hover:bg-white/10 rounded transition"
             title="Remove from list"
           >
             <X size={16} className="text-gray-400" />
@@ -105,14 +105,14 @@ function JobItem({ job, onCancel, onRemove }) {
       {job.total_tracks > 0 && (
         <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
           <motion.div
-            className={`h-full ${
+            className={`h-full w-full origin-left ${
               isCompleted ? 'bg-green-500' :
               isFailed ? 'bg-red-500' :
               'bg-gradient-to-r from-purple-600 to-blue-600'
             }`}
-            initial={{ width: 0 }}
-            animate={{ width: `${progress}%` }}
-            transition={{ duration: 0.3 }}
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: progress / 100 }}
+            transition={MOTION.base}
           />
         </div>
       )}
@@ -132,23 +132,15 @@ export function GenerationQueuePanel() {
   const completedJobs = jobs.filter(j => j.status === 'completed' || j.status === 'failed')
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-        initial={{ height: 0, opacity: 0 }}
-        animate={{ height: 'auto', opacity: 1 }}
-        exit={{ height: 0, opacity: 0 }}
-        transition={TRANSITIONS.panel}
-        className="w-full border-t border-white/10 shadow-2xl overflow-hidden"
-      >
+    <Expandable open={isOpen} className={GLASS.expandPanel}>
         <div className="max-w-screen-2xl mx-auto px-3 py-2 md:px-4 md:py-3">
-          <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-3">
+          <div className={GLASS.expandPanelHeader}>
             <h3 className="m-0 text-lg font-semibold text-white">Generation Queue</h3>
             <div className="flex items-center gap-2">
               {completedJobs.length > 0 && (
                 <button
                   onClick={clearCompleted}
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition"
+                  className="ui-press flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition"
                   title="Clear completed jobs"
                 >
                   <Trash2 size={14} />
@@ -157,7 +149,7 @@ export function GenerationQueuePanel() {
               )}
               <button
                 onClick={() => setIsOpen(false)}
-                className="bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
+                className="ui-press bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
               >
                 <X size={20} />
               </button>
@@ -183,8 +175,6 @@ export function GenerationQueuePanel() {
             </div>
           )}
         </div>
-      </motion.div>
-      )}
-    </AnimatePresence>
+    </Expandable>
   )
 }

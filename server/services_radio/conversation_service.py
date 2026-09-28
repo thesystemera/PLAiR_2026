@@ -1,14 +1,22 @@
 import asyncio
 import re
-from typing import Optional, List, Dict, Callable
+import time
+from typing import Optional, List, Dict, Callable, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
 from database import AsyncSessionLocal
 from database.models import Conversation, User
 from services import log_service
+from services import usage_tracking
+from services.task_utils import spawn
+from config.settings import settings
 
-temp_conversations = {}
+TEMP_CONVERSATION_MAX_SESSIONS = 1000
+TEMP_CONVERSATION_TTL_S = 6 * 3600
+
+temp_conversations: Dict[str, List[str]] = {}
+_temp_conversation_touched: Dict[str, float] = {}
 
 def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
     if not text_history:
@@ -92,15 +100,25 @@ async def save_conversation_to_database(
         log_service.conversation("User not authenticated. Cannot save conversation.")
         return None
 
+def _prune_temp_conversations(now: float):
+    for stale in [key for key, touched in _temp_conversation_touched.items() if now - touched >= TEMP_CONVERSATION_TTL_S]:
+        temp_conversations.pop(stale, None)
+        _temp_conversation_touched.pop(stale, None)
+    while len(temp_conversations) > TEMP_CONVERSATION_MAX_SESSIONS:
+        oldest = next(iter(temp_conversations))
+        temp_conversations.pop(oldest, None)
+        _temp_conversation_touched.pop(oldest, None)
+
 def save_temp_conversation(temp_user_id: str, transcription: str, response: str):
-    if temp_user_id not in temp_conversations:
-        temp_conversations[temp_user_id] = []
+    now = time.time()
+    entries = temp_conversations.pop(temp_user_id, [])
 
     conversation_entry = f"[LISTENER TXT] {transcription}\n{response}"
-    temp_conversations[temp_user_id].append(conversation_entry)
+    entries.append(conversation_entry)
 
-    if len(temp_conversations[temp_user_id]) > 10:
-        temp_conversations[temp_user_id] = temp_conversations[temp_user_id][-10:]
+    temp_conversations[temp_user_id] = entries[-10:]
+    _temp_conversation_touched[temp_user_id] = now
+    _prune_temp_conversations(now)
 
     log_service.conversation(f"Saved temp conversation for guest: {temp_user_id}")
 
@@ -194,6 +212,8 @@ class ConversationService:
         self.ai_service = None
         self.broadcast_func: Optional[Callable] = None
         self.broadcast_all_func: Optional[Callable] = None
+        self._active_turns: Dict[str, Set[asyncio.Task]] = {}
+        self._turn_started_at: Dict[str, float] = {}
 
     def initialize(self,
                    dj_prompt_service,
@@ -223,14 +243,56 @@ class ConversationService:
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
 
+    async def _interrupt_session_speech(self, session_id: str, user_id: Optional[int]):
+        if self.tts_queue_manager is None:
+            return
+        try:
+            await self.tts_queue_manager.cancel_session(session_id, user_id)
+        except Exception as e:
+            log_service.error(f"[{session_id}] TTS interrupt failed: {e}")
+
+    def last_turn_at(self, session_id: Optional[str]) -> float:
+        return self._turn_started_at.get(session_id or "", 0.0)
+
+    def turn_in_progress(self, session_id: Optional[str]) -> bool:
+        return any(not task.done() for task in self._active_turns.get(session_id or "", ()))
+
+    async def _begin_turn(self, session_id: str, session_dict: Dict, origin: str) -> Set[asyncio.Task]:
+        now = time.time()
+        self._turn_started_at = {key: at for key, at in self._turn_started_at.items() if now - at < 3600}
+        self._turn_started_at[session_id] = now
+        previous = self._active_turns.pop(session_id, None)
+        self._active_turns = {key: tasks for key, tasks in self._active_turns.items() if tasks}
+        turn_tasks: Set[asyncio.Task] = set()
+        self._active_turns[session_id] = turn_tasks
+        session_dict['_turn_tasks'] = turn_tasks
+        session_dict['origin'] = origin
+
+        pending = [task for task in (previous or ()) if not task.done() and task is not asyncio.current_task()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=settings.DJ_TURN_CANCEL_TIMEOUT_S)
+            log_service.system(f"[{session_id}] New listener turn - cancelled {len(pending)} task(s) from the previous turn")
+        return turn_tasks
+
+    @staticmethod
+    def _track_turn_task(turn_tasks: Set[asyncio.Task], task: asyncio.Task):
+        turn_tasks.add(task)
+        task.add_done_callback(turn_tasks.discard)
+
     async def handle_text_interaction(self, text: str, session_id: str, user: Optional[User], is_guest: bool = False):
         user_id = user.id if user else None
         session_dict = {"session_id": session_id, "user_id": user_id}
+        usage_tracking.bind_session(session_id, user_id)
 
-        asyncio.create_task(self._safe_bg_task(
-            self._process_gpt_and_orchestrate(text, user_id, session_id, is_guest, session_dict),
+        turn_tasks = await self._begin_turn(session_id, session_dict, "text")
+        await self._interrupt_session_speech(session_id, user_id)
+
+        self._track_turn_task(turn_tasks, spawn(self._safe_bg_task(
+            self._process_gpt_and_orchestrate(text, user_id, session_id, is_guest, session_dict, origin="text"),
             "process_text_interaction"
-        ))
+        ), name="process_text_interaction"))
         return {"status": "processing", "input": text}
 
     async def handle_audio_interaction(self, audio_bytes: bytes, session_id: str, user: Optional[User],
@@ -238,8 +300,11 @@ class ConversationService:
         user_id = user.id if user else None
         session_dict = {"session_id": session_id, "user_id": user_id}
         storage_id = user_id or session_id
+        usage_tracking.bind_session(session_id, user_id)
 
-        import time
+        turn_tasks = await self._begin_turn(session_id, session_dict, "voice")
+        await self._interrupt_session_speech(session_id, user_id)
+
         timestamp = str(int(time.time()))
 
         if self.user_content_service is None:
@@ -251,11 +316,11 @@ class ConversationService:
 
         fast_transcription_task = asyncio.create_task(self.whisper_service.transcribe_fast(audio_bytes))
 
-        asyncio.create_task(self._safe_bg_task(
+        self._track_turn_task(turn_tasks, spawn(self._safe_bg_task(
             self._process_audio_full_flow_parallel(audio_bytes, save_task, session_id, user_id, session_dict, is_guest,
                                                    user),
             "process_audio_full_flow"
-        ))
+        ), name="process_audio_full_flow"))
 
         fast_transcription = await fast_transcription_task
 
@@ -303,7 +368,7 @@ class ConversationService:
             if len(words) == 1 and len(words[0]) < 5:
                 return
 
-            webm_path = await save_task
+            webm_path = await asyncio.shield(save_task)
             if not webm_path:
                 log_service.error(f"[{session_id}] Failed to save audio file, skipping metadata")
                 return
@@ -332,21 +397,147 @@ class ConversationService:
                     },
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
-                await self.user_content_service.save_metadata_file(user_id or session_id, timestamp, metadata)  # type: ignore
+                await asyncio.shield(self.user_content_service.save_metadata_file(user_id or session_id, timestamp, metadata))  # type: ignore
 
-            await self._process_gpt_and_orchestrate(transcription, user_id, session_id, is_guest, session_dict)
+            await self._process_gpt_and_orchestrate(transcription, user_id, session_id, is_guest, session_dict,
+                                                    origin="voice")
 
         except Exception as e:
             log_service.error(f"[{session_id}] Audio flow failed: {e}")
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
 
-    async def _process_gpt_and_orchestrate(self, transcription, user_id, session_id, is_guest, session_dict):
+    async def _persist_conversation_turn(self, user_id, transcription, full_response, commands_for_display):
+        async with AsyncSessionLocal() as db:
+            await save_conversation_to_database(
+                user_id=user_id,
+                db=db,
+                user_input=transcription,
+                bot_response=full_response,
+                commands=commands_for_display,
+                message_type='interactive'
+            )
+
+        from services_radio.persona_service import update_user_persona_if_needed
+        try:
+            async with AsyncSessionLocal() as db:
+                await update_user_persona_if_needed(user_id, db, self.ai_service)
+        except Exception:
+            pass
+
+    async def _speak_dj_text(self, text, user_id, session_id, is_guest):
+        sections = re.split(r'(\[BROADCAST]|\[TXT])', text)
+        spoken_content = [
+            section.strip() for section in sections
+            if section.strip() and section not in ('[BROADCAST]', '[TXT]')
+        ]
+
+        if spoken_content:
+            if self.tts_queue_manager is None:
+                raise RuntimeError("tts_queue_manager not initialized")
+            await self.tts_queue_manager.add_tts_request(
+                text=" ".join(spoken_content),
+                user_id=user_id or 0,
+                tts_type="interactive",
+                is_broadcast=True,
+                is_temp_user=is_guest,
+                session_id=session_id
+            )
+
+    async def _publish_turn(self, transcription, full_response, commands_for_display, user_id, session_id, is_guest):
+        if is_guest:
+            save_temp_conversation(session_id, transcription, full_response)
+
+        if self.broadcast_func:
+            await self.broadcast_func(session_id, {
+                "type": "conversation_update",
+                "data": {
+                    "user_input": transcription,
+                    "bot_response": full_response,
+                    "commands": commands_for_display,
+                    "message_type": "interactive"
+                }
+            })
+
+        if not is_guest:
+            spawn(self._safe_bg_task(
+                self._persist_conversation_turn(user_id, transcription, full_response, commands_for_display),
+                "persist_conversation_turn"
+            ), name=f"persist_conversation_turn:{session_id}")
+
+    async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
+        from services_radio.dj_tools import DJToolRuntime, DJTurnContext
+
+        if self.dj_prompt_service is None:
+            raise RuntimeError("dj_prompt_service not initialized")
+
+        ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin)
+        runtime = DJToolRuntime(self.command_executor, ctx)
+        spoken = []
+        impulse_sent = []
+
+        async def speak_preamble(text):
+            if text:
+                await self._speak_dj_text(text, user_id, session_id, is_guest)
+                spoken.append(text)
+            elif origin == "text" and not impulse_sent and not spoken and self.tts_queue_manager is not None:
+                impulse_sent.append(True)
+                safe_text = transcription.replace("[", "(").replace("]", ")")
+                await self.tts_queue_manager.add_tts_request(
+                    text=f"[IMPULSE]{safe_text}[/IMPULSE]",
+                    user_id=user_id or 0,
+                    tts_type="interactive",
+                    is_broadcast=True,
+                    is_temp_user=is_guest,
+                    session_id=session_id
+                )
+
+        try:
+            result = await self.dj_prompt_service.gpt_dj_interactive_tools(transcription, session_dict, runtime,
+                                                                           speak_preamble)
+            if not result:
+                if not ctx.records and not spoken:
+                    log_service.error(f"[{session_id}] Tool-mode DJ turn failed before acting - falling back to two-pass flow")
+                    return False
+                log_service.error(f"[{session_id}] Tool-mode DJ turn failed after acting")
+                return True
+
+            if result["status"] == "na":
+                log_service.api(f"[{session_id}] Tool-mode DJ response not applicable")
+                return True
+
+            main_response = result["main"]
+            notes = result["notes"]
+
+            if main_response and main_response not in spoken:
+                await self._speak_dj_text(main_response, user_id, session_id, is_guest)
+
+            reply_parts = spoken + [main_response] if main_response and main_response not in spoken else spoken
+            full_main = "\n".join(reply_parts)
+            full_response = full_main + "\n" + notes if notes else full_main
+
+            for record in ctx.records:
+                log_service.commands(f"[DJ TOOLS] {record['status'].upper()} {record['name']} {record['args']}"
+                                     f"{' -> ' + record['reason'] if record.get('reason') else ''}")
+
+            await asyncio.shield(self._publish_turn(transcription, full_response, runtime.commands_for_display(),
+                                                    user_id, session_id, is_guest))
+            return True
+        finally:
+            ctx.gate.set()
+
+    async def _process_gpt_and_orchestrate(self, transcription, user_id, session_id, is_guest, session_dict,
+                                           origin="text"):
         try:
             log_service.system(f"[{session_id}] Orchestrating DJ Response...")
 
             if self.dj_prompt_service is None:
                 raise RuntimeError("dj_prompt_service not initialized")
+
+            if settings.DJ_TOOL_USE_ENABLED and self.command_executor is not None:
+                if await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin):
+                    return
+
             result = await self.dj_prompt_service.gpt_dj_interactive(transcription, session_dict)
             if not result:
                 log_service.error(f"[{session_id}] GPT response failed")
@@ -354,34 +545,7 @@ class ConversationService:
 
             main_response, notes = result
 
-            sections = re.split(r'(\[BROADCAST]|\[TXT])', main_response)
-            broadcast_content = []
-            txt_content = []
-            current_mode = None
-
-            for section in sections:
-                if section == '[BROADCAST]':
-                    current_mode = 'BROADCAST'
-                elif section == '[TXT]':
-                    current_mode = 'TXT'
-                elif section.strip():
-                    if current_mode == 'BROADCAST':
-                        broadcast_content.append(section.strip())
-                    elif current_mode == 'TXT':
-                        txt_content.append(section.strip())
-
-            if broadcast_content:
-                broadcast_package = " ".join(broadcast_content)
-                if self.tts_queue_manager is None:
-                    raise RuntimeError("tts_queue_manager not initialized")
-                await self.tts_queue_manager.add_tts_request(
-                    text=broadcast_package,
-                    user_id=user_id or 0,
-                    tts_type="interactive",
-                    is_broadcast=True,
-                    is_temp_user=is_guest,
-                    session_id=session_id
-                )
+            await self._speak_dj_text(main_response, user_id, session_id, is_guest)
 
             full_response = main_response + "\n" + notes if notes else main_response
 
@@ -404,36 +568,8 @@ class ConversationService:
             else:
                 log_service.commands("[HAL11000 PIPELINE] No commands extracted")
 
-            if not is_guest:
-                async with AsyncSessionLocal() as db:
-                    await save_conversation_to_database(
-                        user_id=user_id,
-                        db=db,
-                        user_input=transcription,
-                        bot_response=full_response,
-                        commands=commands_for_display,
-                        message_type='interactive'
-                    )
-
-                from services_radio.persona_service import update_user_persona_if_needed
-                try:
-                    async with AsyncSessionLocal() as db:
-                        await update_user_persona_if_needed(user_id, db, self.ai_service)
-                except Exception:
-                    pass
-            else:
-                save_temp_conversation(session_id, transcription, full_response)
-
-            if self.broadcast_func:
-                await self.broadcast_func(session_id, {
-                    "type": "conversation_update",
-                    "data": {
-                        "user_input": transcription,
-                        "bot_response": full_response,
-                        "commands": commands_for_display,
-                        "message_type": "interactive"
-                    }
-                })
+            await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display, user_id, session_id,
+                                                    is_guest))
 
         except Exception as e:
             log_service.error(f"[{session_id}] GPT processing failed: {e}")

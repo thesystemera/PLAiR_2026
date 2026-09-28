@@ -3,6 +3,7 @@ import re
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from services import log_service
+from models_global import run_on_gpu_executor
 
 class CatalogVectorSearchService:
 
@@ -26,11 +27,7 @@ class CatalogVectorSearchService:
             log_service.warning("No catalog available for search")
             return []
 
-        current_annoy_index = (
-            self.vector_db.annoy_index_tracks_1
-            if self.vector_db.current_index == 1
-            else self.vector_db.annoy_index_tracks_2
-        )
+        current_annoy_index = self.vector_db.current_annoy_index()
 
         def _safe_search(vector_data, num_items):
             with self.vector_db.index_lock:
@@ -39,75 +36,9 @@ class CatalogVectorSearchService:
                 return current_annoy_index.get_nns_by_vector(vector_data, num_items)
 
         if isinstance(query, list):
-            import json
-            conn = self.catalog._get_connection()
-            c = conn.cursor()
-
-            context_vectors = []
-            found_ids = set()
-
-            for track_id in query:
-                c.execute("SELECT rowid, metadata_json FROM tracks WHERE track_id = %s", (track_id,))
-                result = c.fetchone()
-                if result:
-                    rowid, metadata_json = result
-                    track = json.loads(metadata_json)
-                    category_texts = self.vector_db._extract_category_texts(track)
-
-                    category_embeddings = {}
-                    for cat in ["song_title", "primary_genre", "secondary_genres", "mood", "primary_artist",
-                                "similar_artists", "style", "theme", "vocal", "lyrics"]:
-                        cache = getattr(self.vector_db, f"{cat}_embeddings")
-                        category_embeddings[cat] = self.vector_db.get_or_create_embedding(
-                            category_texts[cat], f"{cat}_embeddings", cache
-                        )
-
-                    combined = self.vector_db._create_weighted_embedding(category_embeddings)
-                    context_vectors.append(combined)
-                    found_ids.add(track_id)
-
-            if not context_vectors:
-                conn.close()
-                return []
-
-            weights = np.linspace(0.5, 1.0, len(context_vectors))
-            average_vector = np.average(context_vectors, axis=0, weights=weights)
-
-            nearest_ids = await asyncio.to_thread(_safe_search, average_vector, n_results * 3)
-
-            results = []
-            exclude_ids = (banned_ids or set()) | found_ids
-
-            for annoy_idx in nearest_ids:
-                rowid = annoy_idx + 1
-                
-                if hasattr(self.vector_db, '_track_rowid_cache') and rowid in self.vector_db._track_rowid_cache:
-                    track_id = self.vector_db._track_rowid_cache[rowid]
-                    if track_id in exclude_ids:
-                        continue
-                    track = self.vector_db._track_metadata_cache.get(rowid, {}).copy()
-                    if track:
-                        track['similarity_score'] = 0.95
-                        results.append(track)
-                        if len(results) >= n_results:
-                            break
-                        continue
-                
-                c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
-                result = c.fetchone()
-                if not result:
-                    continue
-                track_id, metadata_json = result
-                if track_id in exclude_ids:
-                    continue
-                track = json.loads(metadata_json)
-                track['similarity_score'] = 0.95
-                results.append(track)
-                if len(results) >= n_results:
-                    break
-
-            conn.close()
-            return results
+            return await asyncio.to_thread(
+                self._search_by_track_ids_sync, query, n_results, banned_ids, _safe_search
+            )
 
         try:
             log_service.vector_music(f"🔍 Searching: '{query}'")
@@ -127,7 +58,7 @@ class CatalogVectorSearchService:
 
             log_service.vector_music(f"  📊 Category weights: {query_weights}")
 
-            query_embedding = self.vector_db._generate_embedding(cleaned_query)
+            query_embedding = await run_on_gpu_executor(self.vector_db._generate_embedding, cleaned_query)
 
             if cleaned_query != query:
                 log_service.vector_music(f"  Cleaned query: '{cleaned_query}'")
@@ -143,90 +74,10 @@ class CatalogVectorSearchService:
                 f"  Found {len(nearest_ids)} candidates, re-ranking with intent weights..."
             )
 
-            track_results = []
-            import json
-            conn = self.catalog._get_connection()
-            c = conn.cursor()
-
-            for annoy_idx in nearest_ids:
-                rowid = annoy_idx + 1
-                track = None
-                track_id = None
-                
-                if hasattr(self.vector_db, '_track_rowid_cache') and rowid in self.vector_db._track_rowid_cache:
-                    track_id = self.vector_db._track_rowid_cache[rowid]
-                    track = self.vector_db._track_metadata_cache.get(rowid, {}).copy()
-                
-                if track is None:
-                    c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
-                    result = c.fetchone()
-                    if not result:
-                        continue
-                    track_id, metadata_json = result
-                    track = json.loads(metadata_json)
-
-                if banned_ids and track_id in banned_ids:
-                    continue
-
-                params = track.get("generation_params", {})
-                if instrumental is not None and params.get("instrumental", False) != instrumental:
-                    continue
-                if vocal_gender is not None and vocal_gender != "none":
-                    if params.get("vocal_gender") != vocal_gender:
-                        continue
-
-                category_texts = self.vector_db._extract_category_texts(track)
-
-                category_embeddings = {
-                    "song_title": self.vector_db.get_or_create_embedding(
-                        category_texts["song_title"], "song_title_embeddings", self.vector_db.song_title_embeddings
-                    ),
-                    "primary_genre": self.vector_db.get_or_create_embedding(
-                        category_texts["primary_genre"], "primary_genre_embeddings",
-                        self.vector_db.primary_genre_embeddings
-                    ),
-                    "secondary_genres": self.vector_db.get_or_create_embedding(
-                        category_texts["secondary_genres"], "secondary_genres_embeddings",
-                        self.vector_db.secondary_genres_embeddings
-                    ),
-                    "mood": self.vector_db.get_or_create_embedding(
-                        category_texts["mood"], "mood_embeddings", self.vector_db.mood_embeddings
-                    ),
-                    "primary_artist": self.vector_db.get_or_create_embedding(
-                        category_texts["primary_artist"], "primary_artist_embeddings",
-                        self.vector_db.primary_artist_embeddings
-                    ),
-                    "similar_artists": self.vector_db.get_or_create_embedding(
-                        category_texts["similar_artists"], "similar_artists_embeddings",
-                        self.vector_db.similar_artists_embeddings
-                    ),
-                    "style": self.vector_db.get_or_create_embedding(
-                        category_texts["style"], "style_embeddings", self.vector_db.style_embeddings
-                    ),
-                    "theme": self.vector_db.get_or_create_embedding(
-                        category_texts["theme"], "theme_embeddings", self.vector_db.theme_embeddings
-                    ),
-                    "vocal": self.vector_db.get_or_create_embedding(
-                        category_texts["vocal"], "vocal_embeddings", self.vector_db.vocal_embeddings
-                    ),
-                    "lyrics": self.vector_db.get_or_create_embedding(
-                        category_texts["lyrics"], "lyrics_embeddings", self.vector_db.lyrics_embeddings
-                    )
-                }
-
-                reweighted_embedding = self.vector_db._create_weighted_embedding(
-                    category_embeddings, query_weights
-                )
-                reranked_similarity = np.dot(query_embedding, reweighted_embedding)
-
-                track_result = track.copy()
-                track_result['similarity_score'] = float(reranked_similarity)
-                track_result['intent_category'] = intent_category
-                track_result['match_weights'] = query_weights
-
-                track_results.append(track_result)
-
-            conn.close()
+            track_results = await asyncio.to_thread(
+                self._rerank_candidates_sync, nearest_ids, query_embedding, query_weights, intent_category,
+                instrumental, vocal_gender, banned_ids
+            )
 
             track_results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
 
@@ -255,6 +106,124 @@ class CatalogVectorSearchService:
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
             return []
+
+    def _search_by_track_ids_sync(self, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
+        conn = self.catalog._get_connection()
+        try:
+            return self._search_by_track_ids_with_conn(conn, query, n_results, banned_ids, _safe_search)
+        finally:
+            conn.close()
+
+    def _search_by_track_ids_with_conn(self, conn, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
+        import json
+        c = conn.cursor()
+
+        context_vectors = []
+        found_ids = set()
+
+        for track_id in query:
+            c.execute("SELECT rowid, metadata_json FROM tracks WHERE track_id = %s", (track_id,))
+            result = c.fetchone()
+            if result:
+                rowid, metadata_json = result
+                track = json.loads(metadata_json)
+                category_texts = self.vector_db._extract_category_texts(track)
+
+                combined = self.vector_db._create_weighted_embedding(
+                    self.vector_db.get_category_embeddings(category_texts)
+                )
+                context_vectors.append(combined)
+                found_ids.add(track_id)
+
+        if not context_vectors:
+            return []
+
+        weights = np.linspace(0.5, 1.0, len(context_vectors))
+        average_vector = np.average(context_vectors, axis=0, weights=weights)
+
+        nearest_ids = _safe_search(average_vector, n_results * 3)
+
+        results = []
+        exclude_ids = (banned_ids or set()) | found_ids
+
+        for annoy_idx in nearest_ids:
+            rowid = annoy_idx + 1
+
+            track_id, track = self.vector_db.lookup_cached_row(rowid)
+            if track_id is not None:
+                if track_id in exclude_ids:
+                    continue
+                if track:
+                    track['similarity_score'] = 0.95
+                    results.append(track)
+                    if len(results) >= n_results:
+                        break
+                    continue
+
+            c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
+            result = c.fetchone()
+            if not result:
+                continue
+            track_id, metadata_json = result
+            if track_id in exclude_ids:
+                continue
+            track = json.loads(metadata_json)
+            track['similarity_score'] = 0.95
+            results.append(track)
+            if len(results) >= n_results:
+                break
+
+        return results
+
+    def _rerank_candidates_sync(self, nearest_ids, query_embedding, query_weights, intent_category,
+                                instrumental, vocal_gender, banned_ids) -> List[Dict[str, Any]]:
+        import json
+        track_results = []
+        conn = self.catalog._get_connection()
+        try:
+            c = conn.cursor()
+
+            for annoy_idx in nearest_ids:
+                rowid = annoy_idx + 1
+                track_id, track = self.vector_db.lookup_cached_row(rowid)
+
+                if track is None:
+                    c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
+                    result = c.fetchone()
+                    if not result:
+                        continue
+                    track_id, metadata_json = result
+                    track = json.loads(metadata_json)
+
+                if banned_ids and track_id in banned_ids:
+                    continue
+
+                params = track.get("generation_params", {})
+                if instrumental is not None and params.get("instrumental", False) != instrumental:
+                    continue
+                if vocal_gender is not None and vocal_gender != "none":
+                    if params.get("vocal_gender") != vocal_gender:
+                        continue
+
+                category_texts = self.vector_db._extract_category_texts(track)
+
+                category_embeddings = self.vector_db.get_category_embeddings(category_texts)
+
+                reweighted_embedding = self.vector_db._create_weighted_embedding(
+                    category_embeddings, query_weights
+                )
+                reranked_similarity = np.dot(query_embedding, reweighted_embedding)
+
+                track_result = track.copy()
+                track_result['similarity_score'] = float(reranked_similarity)
+                track_result['intent_category'] = intent_category
+                track_result['match_weights'] = query_weights
+
+                track_results.append(track_result)
+
+        finally:
+            conn.close()
+        return track_results
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()

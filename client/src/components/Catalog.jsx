@@ -1,9 +1,9 @@
 import { ListPlus } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react'
-import { useArtwork } from '../contexts/UIStateContext'
+import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
+import { useArtworkThumb } from '../contexts/UIStateContext'
 import { formatDateShort } from '../lib/utils'
-import { FALLBACK_GRADIENTS } from '../lib/themeManager'
+import { FALLBACK_GRADIENTS, CARD_TRANSITION } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
 import MediaActions from './MediaActions'
 import { CatalogHeader } from './MediaStatsOverlay'
@@ -11,7 +11,7 @@ import { useDynamicTheme, GenreIcon, CatalogIcon } from '../contexts/DynamicThem
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { MediaSearchMatchBadge } from './MediaSearchMatchBadge'
-import { useUIState } from '../contexts/UIStateContext'
+import { useRadioState, useUIState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { MediaSearch } from './MediaSearch'
 import { Scroller } from './Scroller'
@@ -20,8 +20,12 @@ import { logger } from '../lib/logger'
 import { retryableAPICall } from '../lib/retryUtils'
 import { useVirtualWindow } from '../hooks/useVirtualWindow'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
-import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata, useMediaGridColumns, isCardEntering } from './MediaShared'
+import { useArtPop } from '../hooks/useArtPop'
 import { useViewport } from '../contexts/ViewportContext'
+import { MOTION } from '../lib/motion'
+import { FadeSwap } from './Motion'
+import { useEntranceWindow } from '../hooks/useEntranceWindow'
 
 export function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
@@ -83,12 +87,13 @@ export function createCatalogScrollLabel(tracks, sortMode, options = {}) {
 
 const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNow, onSeedFromTrack, index, shouldAnimate, selectedGenre = null }) {
   const { getWhite, triggerEffect } = useDynamicTheme()
-  const { radioState } = useUIState()
+  const radioState = useRadioState()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
   const [isLoading, setIsLoading] = useState(false)
   const cardInteraction = usePointerInteraction()
-  const artworkUrl = useArtwork(track.id, track.has_artwork)
+  const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
+  const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
   useEffect(() => {
     if (isPlaying) queueMicrotask(() => setIsLoading(false))
@@ -133,18 +138,19 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
     <MediaCardAnimation
       index={index}
       shouldAnimate={shouldAnimate}
-      className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card transition-all duration-200 group/card cursor-pointer ${
+      className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} group/card cursor-pointer ${
         isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
       } ${isQueued && !isPlaying ? 'ring-1 ring-blue-400/40' : ''}`}
       onPointerDown={cardInteraction.onPointerDown}
       onPointerMove={cardInteraction.onPointerMove}
       onPointerUp={handlePlayNow}
     >
-      <div className="aspect-square bg-gradient-to-br from-white/[0.06] to-white/[0.03] rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">
+      <div ref={artBoxRef} className="aspect-square bg-gradient-to-br from-white/[0.06] to-white/[0.03] rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">
         <img
           src={artworkUrl}
           alt={params.title || 'Track artwork'}
           className="absolute inset-0 w-full h-full object-cover"
+          onLoad={onArtLoad}
           onError={(e) => { e.target.style.display = 'none' }}
         />
         {isPlaying && <MediaPlayingOverlay />}
@@ -175,7 +181,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
           <div className="absolute bottom-2 right-2 px-2 py-1 z-40">
             <motion.div
               animate={{ rotate: 360 }}
-              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              transition={MOTION.spin}
               className="w-4 h-4 md:w-5 md:h-5 border-2 border-purple-500 border-t-transparent rounded-full"
             />
           </div>
@@ -198,7 +204,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
         matchWeights={track.match_weights}
       />
 
-      <h3 className="font-semibold truncate text-xs md:text-sm transition-colors duration-700" style={{ color: getWhite() }}>
+      <h3 className="font-semibold truncate text-xs md:text-sm transition-colors duration-theme" style={{ color: getWhite() }}>
         {params.title || 'Untitled'}
       </h3>
 
@@ -225,26 +231,26 @@ const GenreCard = memo(function GenreCard({ genre, count, subGenres, onSelectGen
   return (
     <MediaCardAnimation
       index={index}
-      className="bg-dark-card rounded-lg p-4 hover:bg-dark-hover active:bg-dark-card transition-all duration-200 cursor-pointer group/card"
+      className={`bg-dark-card rounded-lg p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card`}
       onClick={() => onSelectGenre(genre)}
     >
-      <div className={`aspect-square bg-gradient-to-br ${FALLBACK_GRADIENTS[gradientIndex]} opacity-80 rounded-lg mb-3 flex items-center justify-center relative overflow-hidden group-hover/card:scale-105 transition-transform duration-200`}>
+      <div className={`aspect-square bg-gradient-to-br ${FALLBACK_GRADIENTS[gradientIndex]} opacity-80 rounded-lg mb-3 flex items-center justify-center relative overflow-hidden group-hover/card:scale-105 transition-transform duration-quick`}>
         <GenreIcon className="w-12 h-12 md:w-16 md:h-16 text-white opacity-90" />
         <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 backdrop-blur-sm rounded-full text-xs font-bold text-white">
           {count}
         </div>
       </div>
-      <h3 className="font-bold text-sm md:text-base mb-2 transition-colors duration-700" style={{ color: getWhite() }}>
+      <h3 className="font-bold text-sm md:text-base mb-2 transition-colors duration-theme" style={{ color: getWhite() }}>
         {genre}
       </h3>
       <div className="flex flex-wrap gap-1">
         {subGenres.slice(0, 3).map((sub, i) => (
-          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 transition-colors duration-700" style={{ color: getGrey400() }}>
+          <span key={i} className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 transition-colors duration-theme" style={{ color: getGrey400() }}>
             {sub}
           </span>
         ))}
         {subGenres.length > 3 && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 transition-colors duration-700" style={{ color: getGrey400() }}>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 transition-colors duration-theme" style={{ color: getGrey400() }}>
             +{subGenres.length - 3}
           </span>
         )}
@@ -253,13 +259,12 @@ const GenreCard = memo(function GenreCard({ genre, count, subGenres, onSelectGen
   )
 })
 
-const ITEMS_PER_ROW = 2
-const BUFFER_ITEMS = 50
-const LOAD_THRESHOLD = 30
+const getTrackArtworkId = (track) => (track.has_artwork === false ? null : track.id)
 
-function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0, onToggleView, currentView }) {
+function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
   const playback = usePlayback()
-  const { engineState } = useUIState()
+  const { engineState, contentUpdates } = useUIState()
+  const contentUpdateCounter = contentUpdates.tracks
   const currentTrackId = engineState.currentTrack?.id
   const queuedTrackIds = useMemo(() => engineState.queue.map(t => t.id), [engineState.queue])
 
@@ -274,6 +279,23 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
   const { isMobile } = useViewport()
   const [measuredRowHeight, setMeasuredRowHeight] = useState(isMobile ? 308 : 344)
   const measurementRef = useRef(null)
+  const { itemsPerRow, gridClassName } = useMediaGridColumns()
+  const gridLayoutRef = useRef({ itemsPerRow, rowHeight: measuredRowHeight, anchorIndex: null, anchorUntil: 0 })
+
+  useLayoutEffect(() => {
+    const layout = gridLayoutRef.current
+    const container = scrollContainerRef.current
+    if (layout.itemsPerRow !== itemsPerRow && container) {
+      const firstRow = Math.floor(container.scrollTop / layout.rowHeight)
+      layout.anchorIndex = firstRow > 0 ? firstRow * layout.itemsPerRow : null
+      layout.anchorUntil = performance.now() + 1500
+    }
+    layout.itemsPerRow = itemsPerRow
+    layout.rowHeight = measuredRowHeight
+    if (layout.anchorIndex !== null && container && performance.now() < layout.anchorUntil) {
+      container.scrollTop = Math.floor(layout.anchorIndex / itemsPerRow) * measuredRowHeight
+    }
+  }, [itemsPerRow, measuredRowHeight])
 
   const { toastInfo, toastError, audioState } = useUIState()
   const { togglePanel: toggleQueuePanel, addJob } = useGenerationQueue()
@@ -331,9 +353,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
         total: data?.total_tracks || 0
       }
     }, [getSortParams]),
-    windowSize: 150,
-    bufferSize: 10
+    pageSize: 60
   })
+
+  const serverReachable = audioState.connectionMode !== 'degraded' && audioState.connectionMode !== 'offline'
 
   useEffect(() => {
     const loadData = async () => {
@@ -365,7 +388,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
       }
     }
     void loadData()
-  }, [sortMode, selectedGenre, audioState.isOnline])
+  }, [sortMode, selectedGenre, audioState.isOnline, serverReachable])
 
   const sortModeRef = useRef(sortMode)
   const selectedGenreRef = useRef(selectedGenre)
@@ -444,10 +467,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
     } catch (error) {
       logger.error('Generation failed:', error)
       const errorMsg = error.message || 'Failed to start generation. Please try again.'
-      if (errorMsg.includes('rate limit') || errorMsg.includes('cooldown')) {
-        errorToast(errorMsg, 5000, 'bottom')
-      } else if (errorMsg.includes('daily limit')) {
+      if (error.status === 429) {
         errorToast(errorMsg, 7000, 'bottom')
+      } else if (errorMsg.includes('rate limit') || errorMsg.includes('cooldown')) {
+        errorToast(errorMsg, 5000, 'bottom')
       } else {
         errorToast('Failed to start generation. Please try again.', 5000, 'bottom')
       }
@@ -522,7 +545,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
       if (!gridContainer) return
 
       const firstCard = gridContainer.children[0]
-      const thirdCard = gridContainer.children[2]
+      const thirdCard = gridContainer.children[gridLayoutRef.current.itemsPerRow]
 
       if (firstCard && thirdCard) {
         const firstRect = firstCard.getBoundingClientRect()
@@ -544,11 +567,17 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
       totalCount: catalogWindow.totalCount,
       windowStart: catalogWindow.windowStart,
       isVirtual: !isSearchMode,
-      itemsPerRow: 2,
+      itemsPerRow,
       itemHeight: measuredRowHeight
     }),
-    [displayTracks, sortMode, catalogWindow.totalCount, catalogWindow.windowStart, isSearchMode, measuredRowHeight]
+    [displayTracks, sortMode, catalogWindow.totalCount, catalogWindow.windowStart, isSearchMode, measuredRowHeight, itemsPerRow]
   )
+
+  const showingGenres = sortMode === 'genre' && !selectedGenre && genres.length > 0
+  const isLoadingContent = loading && catalogWindow.items.length === 0
+  const contentState = isLoadingContent ? 'loading' : showingGenres ? 'genres' : displayTracks.length === 0 ? 'empty' : 'tracks'
+  const entranceKey = contentState === 'tracks' ? (isSearchMode ? searchTracks : `${sortMode}|${selectedGenre || ''}`) : null
+  const cardsEntering = useEntranceWindow(entranceKey)
 
   const renderTrack = useCallback((track, absoluteIndex) => (
     <TrackCard
@@ -559,10 +588,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
       onPlayNow={onPlayNow}
       onSeedFromTrack={onSeedFromTrack}
       index={absoluteIndex}
-      shouldAnimate={false}
+      shouldAnimate={cardsEntering}
       selectedGenre={selectedGenre}
     />
-  ), [currentTrackId, queuedTrackSet, onPlayNow, onSeedFromTrack, selectedGenre])
+  ), [currentTrackId, queuedTrackSet, onPlayNow, onSeedFromTrack, selectedGenre, cardsEntering])
 
   const renderPlaceholder = useCallback((absoluteIndex) => (
     <div
@@ -592,12 +621,6 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
     total_subgenre_count: totalSubGenreCount
   }
 
-  const showingGenres = sortMode === 'genre' && !selectedGenre && genres.length > 0
-
-  // Only show full-screen spinner on initial load (no items yet), not during virtual scroll
-  // VirtualScroller handles its own loading states via renderPlaceholder
-  const isLoadingContent = loading && catalogWindow.items.length === 0
-
   return (
     <div className="flex flex-col h-full relative">
       <MediaSearch
@@ -609,79 +632,76 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack, contentUpdateCounter = 0
         audio={playback?.audio}
         searchIntent={searchIntent}
         isSearchMode={isSearchMode}
-        onToggleView={onToggleView}
-        currentView={currentView}
       />
       <Scroller ref={scrollContainerRef} className="flex-1 relative" getScrollLabel={catalogScrollLabel}>
-        {isLoadingContent ? (
-          <MediaLoadingSpinner type="track" sortMode={sortMode} offsetHeader />
-        ) : showingGenres ? (
-          <div className="relative">
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={setSortMode}
-              selectedGenre={selectedGenre}
-              onBackToGenres={handleBackToGenres}
-              contentType="catalog"
-            />
-            <MediaGrid>
-              {genres.map((genreData, index) => (
-                <GenreCard
-                  key={genreData.genre}
-                  genre={genreData.genre}
-                  count={genreData.count}
-                  subGenres={genreData.sub_genres}
-                  onSelectGenre={handleSelectGenre}
-                  index={index}
-                />
-              ))}
-            </MediaGrid>
-          </div>
-        ) : displayTracks.length === 0 ? (
-          <div className="relative">
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={setSortMode}
-              selectedGenre={selectedGenre}
-              onBackToGenres={handleBackToGenres}
-              contentType="catalog"
-            />
-            <MediaEmptyState
-              icon={CatalogIcon}
-              title="No tracks found"
-              subtitle="Try adjusting your search or browse the catalog"
-            />
-          </div>
-        ) : (
-          <div ref={measurementRef} className="relative">
-            <CatalogHeader
-              stats={adaptiveStats}
-              sortMode={sortMode}
-              onSortChange={setSortMode}
-              selectedGenre={selectedGenre}
-              onBackToGenres={handleBackToGenres}
-              contentType="catalog"
-            />
-            <VirtualScroller
-              items={displayTracks}
-              totalCount={isSearchMode ? displayTracks.length : catalogWindow.totalCount}
-              windowStart={isSearchMode ? 0 : catalogWindow.windowStart}
-              itemHeight={measuredRowHeight}
-              itemsPerRow={ITEMS_PER_ROW}
-              renderItem={renderTrack}
-              renderPlaceholder={renderPlaceholder}
-              onLoadForward={!isSearchMode ? catalogWindow.loadForward : undefined}
-              onLoadBackward={!isSearchMode ? catalogWindow.loadBackward : undefined}
-              hasMore={catalogWindow.hasMore}
-              loadThreshold={LOAD_THRESHOLD}
-              bufferItems={BUFFER_ITEMS}
-              scrollContainerRef={scrollContainerRef}
-              className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-2 gap-3 md:gap-4 px-3 md:px-6"
-            />
-          </div>
-        )}
+        <FadeSwap swapKey={contentState} className={contentState === 'loading' ? 'absolute inset-0' : undefined}>
+          {isLoadingContent ? (
+            <MediaLoadingSpinner type="track" sortMode={sortMode} offsetHeader />
+          ) : showingGenres ? (
+            <div className="relative">
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={setSortMode}
+                selectedGenre={selectedGenre}
+                onBackToGenres={handleBackToGenres}
+                contentType="catalog"
+              />
+              <MediaGrid>
+                {genres.map((genreData, index) => (
+                  <GenreCard
+                    key={genreData.genre}
+                    genre={genreData.genre}
+                    count={genreData.count}
+                    subGenres={genreData.sub_genres}
+                    onSelectGenre={handleSelectGenre}
+                    index={index}
+                  />
+                ))}
+              </MediaGrid>
+            </div>
+          ) : displayTracks.length === 0 ? (
+            <div className="relative">
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={setSortMode}
+                selectedGenre={selectedGenre}
+                onBackToGenres={handleBackToGenres}
+                contentType="catalog"
+              />
+              <MediaEmptyState
+                icon={CatalogIcon}
+                title="No tracks found"
+                subtitle="Try adjusting your search or browse the catalog"
+              />
+            </div>
+          ) : (
+            <div ref={measurementRef} className="relative">
+              <CatalogHeader
+                stats={adaptiveStats}
+                sortMode={sortMode}
+                onSortChange={setSortMode}
+                selectedGenre={selectedGenre}
+                onBackToGenres={handleBackToGenres}
+                contentType="catalog"
+              />
+              <VirtualScroller
+                items={displayTracks}
+                totalCount={isSearchMode ? displayTracks.length : catalogWindow.totalCount}
+                windowStart={isSearchMode ? 0 : catalogWindow.windowStart}
+                itemHeight={measuredRowHeight}
+                itemsPerRow={itemsPerRow}
+                renderItem={renderTrack}
+                renderPlaceholder={renderPlaceholder}
+                onRangeChange={!isSearchMode ? catalogWindow.ensureRange : undefined}
+                getPrefetchId={getTrackArtworkId}
+                scrollContainerRef={scrollContainerRef}
+                className={gridClassName}
+              />
+            </div>
+          )}
+        </FadeSwap>
       </Scroller>
     </div>
   )

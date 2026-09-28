@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { usePlayback } from '../contexts/PlaybackContext'
 import { useVoiceRecording } from '../contexts/VoiceRecordingContext'
 import { useUIState } from '../contexts/UIStateContext'
@@ -22,19 +22,21 @@ export function KeyboardControls({
   const uiSound = useUISound()
 
   const stateRef = useRef({})
-  stateRef.current = {
-    playback,
-    isRecording,
-    startRecording,
-    stopRecording,
-    uiSound,
-    showLogin,
-    showRegister,
-    onCloseLogin,
-    onCloseRegister,
-    isFullscreenVisuals: interfaceState.isFullscreenVisuals,
-    reportInterfaceState,
-  }
+  useLayoutEffect(() => {
+    stateRef.current = {
+      playback,
+      isRecording,
+      startRecording,
+      stopRecording,
+      uiSound,
+      showLogin,
+      showRegister,
+      onCloseLogin,
+      onCloseRegister,
+      isFullscreenVisuals: interfaceState.isFullscreenVisuals,
+      reportInterfaceState,
+    }
+  })
 
   const mouseRef = useRef({ x: 0, y: 0 })
 

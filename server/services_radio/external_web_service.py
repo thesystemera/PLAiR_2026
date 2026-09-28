@@ -1,164 +1,340 @@
-import httpx
+import asyncio
 import datetime
+import time
+import unicodedata
 from collections import defaultdict
-from async_lru import alru_cache
+from typing import Optional
+from urllib.parse import quote
+
+import httpx
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config.settings import settings
 from services import log_service
+from services import usage_tracking
+from services.http_client import fetch
+
+MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/artist/"
+MUSICBRAINZ_MIN_INTERVAL_S = 1.1
+_musicbrainz_lock = asyncio.Lock()
+_musicbrainz_last = 0.0
+
+
+async def musicbrainz_get(url: str, params: dict):
+    global _musicbrainz_last
+    async with _musicbrainz_lock:
+        wait = MUSICBRAINZ_MIN_INTERVAL_S - (time.monotonic() - _musicbrainz_last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            return await fetch("GET", url, params=params)
+        finally:
+            _musicbrainz_last = time.monotonic()
+WEATHER_URL = "https://api.openweathermap.org/data/2.5/"
+BIOGRAPHY_NEGATIVE_CACHE_SECONDS = 600
+BIOGRAPHY_CACHE_MAX = 500
+WEATHER_CACHE_MAX = 5000
+MIN_MUSICBRAINZ_SCORE = 90
+
+
+def _normalize_name(name: str) -> str:
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return "".join(ch for ch in ascii_name.lower() if ch.isalnum())
+
 
 class WebService:
-    def __init__(self):
-        self.weather_cache = {}
-        self.WEATHER_CACHE_DURATION = 3600
+    def __init__(self, area_store=None, session_maker=None):
+        self.weather_cache: dict[tuple, tuple[float, str]] = {}
+        self.biography_cache: dict[str, tuple[float, str, float]] = {}
+        self.area_store = area_store
+        self._session_maker = session_maker
+        self._locks: dict[tuple, asyncio.Lock] = {}
 
-    @alru_cache(maxsize=100)
-    async def retrieve_artist_biography(self, artist_name):
-        async def get_wikidata_biography(w_id, w_client):
-            wikidata_url = f"https://www.wikidata.org/wiki/Special:EntityData/{w_id}.json"
-            try:
-                w_response = await w_client.get(wikidata_url)
-                w_response.raise_for_status()
-                wikidata_data = w_response.json()
-                entities = wikidata_data.get('entities', {})
-                entity = entities.get(w_id, {})
-                sitelinks = entity.get('sitelinks', {})
-                wikipedia_link = sitelinks.get('enwiki', {}).get('url')
+    def _sessions(self):
+        if self._session_maker is None:
+            from database import AsyncSessionLocal
+            self._session_maker = AsyncSessionLocal
+        return self._session_maker
 
-                if not wikipedia_link:
-                    return f"No Wikipedia link found for artist '{artist_name}'"
+    def _lock(self, key: tuple) -> asyncio.Lock:
+        if len(self._locks) > 1000:
+            self._locks = {k: lock for k, lock in self._locks.items() if lock.locked()}
+        return self._locks.setdefault(key, asyncio.Lock())
 
-                wiki_api_url = wikipedia_link.replace('https://en.wikipedia.org/wiki/', 'https://en.wikipedia.org/api/rest_v1/page/summary/')
-                wiki_res = await w_client.get(wiki_api_url)
-                wiki_res.raise_for_status()
-                wiki_data = wiki_res.json()
-                biography = wiki_data.get('extract')
+    def cached_artist_biography(self, artist_name: str) -> Optional[str]:
+        cached = self.biography_cache.get(_normalize_name(artist_name or ""))
+        if cached and time.monotonic() - cached[0] < cached[2]:
+            return cached[1]
+        return None
 
-                if not biography:
-                    return f"No biography found on Wikipedia for artist '{artist_name}'"
-                return biography
-            except httpx.RequestError as err:
-                log_service.error(f"External Web Service: Error fetching biography: {str(err)}")
-                return f"Error retrieving biography for '{artist_name}': {str(err)}"
+    def _remember_biography(self, key: str, biography: str, ttl: float) -> None:
+        now = time.monotonic()
+        self.biography_cache.pop(key, None)
+        self.biography_cache[key] = (now, biography, ttl)
+        self.biography_cache = {k: v for k, v in self.biography_cache.items() if now - v[0] < v[2]}
+        while len(self.biography_cache) > BIOGRAPHY_CACHE_MAX:
+            self.biography_cache.pop(next(iter(self.biography_cache)))
 
+    async def _stored_biography(self, key: str) -> Optional[tuple[str, float]]:
+        if not settings.BIOGRAPHY_PERSIST_ENABLED:
+            return None
+        from database.models import ArtistBiography
         try:
-            base_url = "https://musicbrainz.org/ws/2/artist/"
-            query_url = f"{base_url}?query={artist_name}&fmt=json"
-            async with httpx.AsyncClient(headers={'User-Agent': 'PLAiR/1.0 ( mail@plair.com )'}) as client:
-                response = await client.get(query_url)
-                response.raise_for_status()
-                artists = response.json().get('artists', [])
-
-                if not artists:
-                    return f"No artist found for '{artist_name}'"
-
-                artist_id = artists[0]['id']
-                artist_url = f"{base_url}{artist_id}?inc=url-rels&fmt=json"
-                response = await client.get(artist_url)
-                response.raise_for_status()
-                artist_data = response.json()
-
-            relations = artist_data.get('relations', [])
-            target_wikidata_url = next((relation['url']['resource'] for relation in relations if relation['type'] == 'wikidata'), None)
-
-            if not target_wikidata_url:
-                return f"No Wikidata link found for artist '{artist_name}'"
-
-            wikidata_id = target_wikidata_url.split('/')[-1]
-            async with httpx.AsyncClient() as client:
-                return await get_wikidata_biography(wikidata_id, client)
-        except httpx.RequestError as e:
-            log_service.error(f"External Web Service: Error in API request: {str(e)}")
-            return f"Error retrieving information for '{artist_name}': {str(e)}"
-
-    async def retrieve_weather_data(self, latitude, longitude, forecast_type='current'):
-        cache_key = f"{latitude},{longitude},{forecast_type}"
-        if cache_key in self.weather_cache:
-            cached_time, cached_data = self.weather_cache[cache_key]
-            if (datetime.datetime.now() - cached_time).total_seconds() < self.WEATHER_CACHE_DURATION:
-                log_service.external("Weather: Retrieved weather data from cache")
-                return cached_data
-
-        weather_api_key = settings.WEATHER_API_KEY
-        base_url = "https://api.openweathermap.org/data/2.5/"
-        endpoint = "weather" if forecast_type == 'current' else "forecast"
-        endpoint_url = f"{base_url}{endpoint}?lat={float(latitude)}&lon={float(longitude)}&appid={weather_api_key}&units=metric"
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(endpoint_url)
-
-        if response.status_code != 200:
-            log_service.error("External Web Service: Failed to retrieve weather information.")
+            async with self._sessions()() as db:
+                row = await db.get(ArtistBiography, key)
+        except Exception as e:
+            log_service.warning(f"Biography store read failed: {type(e).__name__}: {e}")
             return None
+        if row is None:
+            return None
+        remaining = (row.expires_at - datetime.datetime.now(datetime.timezone.utc)).total_seconds()
+        if remaining <= 0:
+            return None
+        return ((row.biography or "") if row.status == "found" else ""), remaining
 
-        weather_data = response.json()
+    async def _save_biography(self, key: str, artist_name: str, biography: str, ttl: float) -> None:
+        if not settings.BIOGRAPHY_PERSIST_ENABLED:
+            return
+        from database.models import ArtistBiography
+        now = datetime.datetime.now(datetime.timezone.utc)
+        stmt = pg_insert(ArtistBiography).values(
+            name_key=key, artist_name=artist_name[:300], biography=biography,
+            status="found" if biography else "not_found", fetched_at=now,
+            expires_at=now + datetime.timedelta(seconds=ttl))
+        stmt = stmt.on_conflict_do_update(index_elements=["name_key"], set_={
+            column: stmt.excluded[column] for column in ("artist_name", "biography", "status", "fetched_at",
+                                                         "expires_at")})
+        try:
+            async with self._sessions()() as db:
+                await db.execute(stmt)
+                await db.commit()
+        except Exception as e:
+            log_service.warning(f"Biography store write failed: {type(e).__name__}: {e}")
+
+    async def retrieve_artist_biography(self, artist_name: str) -> str:
+        key = _normalize_name(artist_name or "")
+        if not key:
+            return ""
+        cached = self.cached_artist_biography(artist_name)
+        if cached is not None:
+            return cached
+        async with self._lock(("biography", key)):
+            cached = self.cached_artist_biography(artist_name)
+            if cached is not None:
+                return cached
+            stored = await self._stored_biography(key)
+            if stored is not None:
+                self._remember_biography(key, stored[0], stored[1])
+                usage_tracking.record_api_call("biography", "musicbrainz_wikipedia", cached=True)
+                return stored[0]
+            return await self._lookup_biography(artist_name, key)
+
+    async def _lookup_biography(self, artist_name: str, key: str) -> str:
+        failed = False
+        try:
+            biography = await asyncio.wait_for(self._fetch_biography(artist_name, key), settings.BIOGRAPHY_DEADLINE_S)
+        except asyncio.TimeoutError:
+            log_service.error(f"Biography lookup for '{artist_name}' exceeded {settings.BIOGRAPHY_DEADLINE_S:.0f}s")
+            biography, failed = "", True
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            log_service.error(f"Biography lookup failed for '{artist_name}': {type(e).__name__}: {e}")
+            biography, failed = "", True
+        usage_tracking.record_api_call("biography", "musicbrainz_wikipedia", error=failed)
+
+        if biography:
+            ttl = settings.BIOGRAPHY_TTL_DAYS * 86400
+        else:
+            ttl = BIOGRAPHY_NEGATIVE_CACHE_SECONDS if failed else settings.BIOGRAPHY_NOT_FOUND_TTL_S
+        self._remember_biography(key, biography, ttl)
+        if not failed:
+            await self._save_biography(key, artist_name, biography, ttl)
+        return biography
+
+    async def _fetch_biography(self, artist_name: str, key: str) -> str:
+        response = await musicbrainz_get(MUSICBRAINZ_URL, {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5})
+        response.raise_for_status()
+        match = next((
+            a for a in response.json().get("artists", [])
+            if a.get("score", 0) >= MIN_MUSICBRAINZ_SCORE and key in {
+                _normalize_name(a.get("name", "")),
+                *(_normalize_name(alias.get("name", "")) for alias in a.get("aliases", []) or []),
+            }
+        ), None)
+        if not match:
+            log_service.external(f"Biography: no confident MusicBrainz match for '{artist_name}'")
+            return ""
+
+        response = await musicbrainz_get(f"{MUSICBRAINZ_URL}{match['id']}", {"inc": "url-rels", "fmt": "json"})
+        response.raise_for_status()
+        wikidata_url = next((
+            r["url"]["resource"] for r in response.json().get("relations", []) if r.get("type") == "wikidata"
+        ), None)
+        if not wikidata_url:
+            return ""
+
+        wikidata_id = wikidata_url.rstrip("/").split("/")[-1]
+        response = await fetch("GET", f"https://www.wikidata.org/wiki/Special:EntityData/{wikidata_id}.json")
+        response.raise_for_status()
+        entity = response.json().get("entities", {}).get(wikidata_id, {})
+        title = entity.get("sitelinks", {}).get("enwiki", {}).get("title")
+        if not title:
+            return ""
+
+        response = await fetch("GET", f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}")
+        response.raise_for_status()
+        return response.json().get("extract") or ""
+
+    async def retrieve_weather_data(self, latitude, longitude, forecast_type: str = "current") -> Optional[str]:
         formatter = {
-            'current': self.format_current_weather,
-            'today': lambda data: self.format_daily_forecast(data, 0),
-            'tomorrow': lambda data: self.format_daily_forecast(data, 1),
-            'week': self.format_weekly_forecast
+            "current": self.format_current_weather,
+            "today": lambda data: self.format_daily_forecast(data, 0),
+            "tomorrow": lambda data: self.format_daily_forecast(data, 1),
+            "week": self.format_weekly_forecast,
         }.get(forecast_type)
-
         if not formatter:
-            log_service.error("External Web Service: Invalid forecast type.")
+            log_service.error(f"Weather: invalid forecast type '{forecast_type}'")
             return None
 
-        formatted_weather = formatter(weather_data)
-        self.weather_cache[cache_key] = (datetime.datetime.now(), formatted_weather)
-        return formatted_weather
+        lat, lon = round(float(latitude), 2), round(float(longitude), 2)
+        cache_key = (lat, lon, forecast_type)
+        cached = self._cached_weather(cache_key)
+        if cached is not None:
+            usage_tracking.record_api_call("weather", "openweathermap", cached=True)
+            return cached
+        async with self._lock(("weather",) + cache_key):
+            cached = self._cached_weather(cache_key)
+            if cached is None:
+                cached = await self._stored_weather(cache_key)
+            if cached is not None:
+                usage_tracking.record_api_call("weather", "openweathermap", cached=True)
+                return cached
+            return await self._fetch_weather(cache_key, formatter)
+
+    def _cached_weather(self, cache_key: tuple) -> Optional[str]:
+        cached = self.weather_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < settings.WEATHER_CACHE_S:
+            return cached[1]
+        return None
+
+    def _remember_weather(self, cache_key: tuple, formatted: str, age_s: float = 0.0) -> None:
+        now = time.monotonic()
+        self.weather_cache = {k: v for k, v in self.weather_cache.items() if now - v[0] < settings.WEATHER_CACHE_S}
+        self.weather_cache[cache_key] = (now - age_s, formatted)
+        while len(self.weather_cache) > WEATHER_CACHE_MAX:
+            self.weather_cache.pop(next(iter(self.weather_cache)))
+
+    @staticmethod
+    def _weather_cell(cache_key: tuple) -> tuple[str, str]:
+        lat, lon, forecast_type = cache_key
+        return f"weather_{forecast_type}", f"{lat:.2f},{lon:.2f}"
+
+    async def _stored_weather(self, cache_key: tuple) -> Optional[str]:
+        if self.area_store is None or not settings.WEATHER_PERSIST_ENABLED:
+            return None
+        try:
+            stored = await self.area_store.get(*self._weather_cell(cache_key))
+        except Exception as e:
+            log_service.warning(f"Weather: store read failed: {type(e).__name__}: {e}")
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not stored or stored["status"] != "ok" or stored["expires_at"] <= now:
+            return None
+        formatted = (stored["payload"] or {}).get("text")
+        if not formatted:
+            return None
+        self._remember_weather(cache_key, formatted, (now - stored["fetched_at"]).total_seconds())
+        return formatted
+
+    async def _fetch_weather(self, cache_key: tuple, formatter) -> Optional[str]:
+        lat, lon, forecast_type = cache_key
+        endpoint = "weather" if forecast_type == "current" else "forecast"
+        try:
+            response = await fetch("GET", f"{WEATHER_URL}{endpoint}", params={
+                "lat": lat, "lon": lon, "appid": settings.WEATHER_API_KEY, "units": "metric",
+            })
+        except httpx.HTTPError as e:
+            usage_tracking.record_api_call("weather", "openweathermap", error=True)
+            log_service.error(f"Weather: request failed: {type(e).__name__}")
+            return None
+        usage_tracking.record_api_call("weather", "openweathermap", error=response.status_code != 200)
+        if response.status_code != 200:
+            log_service.error(f"Weather: OpenWeatherMap returned {response.status_code}")
+            return None
+
+        formatted = formatter(response.json())
+        if formatted:
+            self._remember_weather(cache_key, formatted)
+            if self.area_store is not None and settings.WEATHER_PERSIST_ENABLED:
+                expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+                    seconds=settings.WEATHER_CACHE_S)
+                try:
+                    await self.area_store.put(*self._weather_cell(cache_key), {"text": formatted}, "ok", expires)
+                except Exception as e:
+                    log_service.warning(f"Weather: store write failed: {type(e).__name__}: {e}")
+        return formatted
+
+    @staticmethod
+    def _local_time(timestamp: int, tz_offset_seconds: int) -> datetime.datetime:
+        tz = datetime.timezone(datetime.timedelta(seconds=tz_offset_seconds))
+        return datetime.datetime.fromtimestamp(timestamp, tz)
 
     @staticmethod
     def format_current_weather(current_data):
         try:
-            main = current_data['main']
-            wind = current_data['wind']
-            weather = current_data['weather'][0]
-            sys = current_data['sys']
+            main = current_data["main"]
+            wind = current_data["wind"]
+            weather = current_data["weather"][0]
+            sys = current_data["sys"]
+            tz = current_data.get("timezone", 0)
             return (
                 f"Current Weather in {current_data['name']}:\n"
                 f"Temperature: {int(main['temp'])}°C, Feels Like: {int(main['feels_like'])}°C, "
                 f"Humidity: {main['humidity']}%, Pressure: {main['pressure']} hPa, "
                 f"Visibility: {current_data.get('visibility', 'N/A')} meters, "
-                f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind['deg']}°, "
+                f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind.get('deg', 'N/A')}°, "
                 f"Cloudiness: {current_data['clouds']['all']}%, "
-                f"Weather: {weather['description']}, Icon: {weather['icon']}, "
-                f"Sunrise: {datetime.datetime.fromtimestamp(sys['sunrise']).strftime('%H:%M:%S')}, "
-                f"Sunset: {datetime.datetime.fromtimestamp(sys['sunset']).strftime('%H:%M:%S')}"
+                f"Weather: {weather['description']}, "
+                f"Sunrise: {WebService._local_time(sys['sunrise'], tz).strftime('%H:%M')}, "
+                f"Sunset: {WebService._local_time(sys['sunset'], tz).strftime('%H:%M')}"
             )
         except KeyError as e:
-            return f"Error retrieving current weather data: {e}"
+            log_service.error(f"Weather: unexpected current-weather payload, missing {e}")
+            return None
 
     @staticmethod
     def format_daily_forecast(forecast_data, day_offset=0):
-        target_date = (datetime.datetime.now() + datetime.timedelta(days=day_offset)).date()
+        tz = forecast_data.get("city", {}).get("timezone", 0)
+        now_local = WebService._local_time(int(time.time()), tz)
+        target_date = (now_local + datetime.timedelta(days=day_offset)).date()
         day_name = "Today's" if day_offset == 0 else "Tomorrow's"
-        forecast_str = f"{day_name} Forecast:\n"
-        for entry in forecast_data['list']:
-            entry_time = datetime.datetime.fromtimestamp(entry['dt'])
+        lines = []
+        for entry in forecast_data["list"]:
+            entry_time = WebService._local_time(entry["dt"], tz)
             if entry_time.date() == target_date:
-                main = entry['main']
-                wind = entry['wind']
-                weather = entry['weather'][0]
-                forecast_str += (
+                main = entry["main"]
+                wind = entry["wind"]
+                lines.append(
                     f"{entry_time.strftime('%H:%M')} - "
                     f"Temp: {int(main['temp'])}°C, Feels Like: {int(main['feels_like'])}°C, "
                     f"Humidity: {main['humidity']}%, "
-                    f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind['deg']}°, "
-                    f"Weather: {weather['description']}\n"
+                    f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind.get('deg', 'N/A')}°, "
+                    f"Weather: {entry['weather'][0]['description']}"
                 )
-        return forecast_str if forecast_str != f"{day_name} Forecast:\n" else f"No data available for {day_name.lower()[:-2]}."
+        if not lines:
+            return f"No forecast data available for {'today' if day_offset == 0 else 'tomorrow'}."
+        return f"{day_name} Forecast:\n" + "\n".join(lines)
 
     @staticmethod
     def format_weekly_forecast(forecast_data):
-        daily_summaries = defaultdict(lambda: {'temps': [], 'descs': []})
-        for entry in forecast_data['list']:
-            entry_time = datetime.datetime.fromtimestamp(entry['dt'])
-            date = entry_time.date()
-            daily_summaries[date]['temps'].append(entry['main']['temp'])
-            daily_summaries[date]['descs'].append(entry['weather'][0]['description'])
-        forecast_str = "Weekly Forecast:\n"
-        for date, data in daily_summaries.items():
-            high_temp = max(data['temps'])
-            low_temp = min(data['temps'])
-            common_desc = max(set(data['descs']), key=data['descs'].count)
-            forecast_str += f"{date.strftime('%A, %B %d')} - High: {int(high_temp)}°C, Low: {int(low_temp)}°C, Weather: {common_desc}\n"
-        return forecast_str
+        tz = forecast_data.get("city", {}).get("timezone", 0)
+        daily_summaries = defaultdict(lambda: {"temps": [], "descs": []})
+        for entry in forecast_data["list"]:
+            date = WebService._local_time(entry["dt"], tz).date()
+            daily_summaries[date]["temps"].append(entry["main"]["temp"])
+            daily_summaries[date]["descs"].append(entry["weather"][0]["description"])
+        lines = [
+            f"{date.strftime('%A, %B %d')} - High: {int(max(d['temps']))}°C, Low: {int(min(d['temps']))}°C, "
+            f"Weather: {max(set(d['descs']), key=d['descs'].count)}"
+            for date, d in daily_summaries.items()
+        ]
+        return "5-Day Forecast:\n" + "\n".join(lines)

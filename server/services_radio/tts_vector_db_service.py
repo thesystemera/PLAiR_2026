@@ -1,7 +1,6 @@
 import os
 import time
 import datetime
-import psycopg2
 import numpy as np
 import torch
 import random
@@ -11,6 +10,7 @@ from typing import List, Tuple
 
 from models_global import get_tokenizer, get_vector_model, get_device
 from config.settings import settings
+from database.pg_pool import get_pooled_connection
 from services import log_service
 
 class VectorDBService:
@@ -27,6 +27,7 @@ class VectorDBService:
         self.meta_db_data = None
         self.impulse_db_data = None
         self.audio_db_data = None
+        self.breath_db_data = None
 
         self.annoy_index_tts_1 = AnnoyIndex(1024, 'angular')
         self.annoy_index_tts_2 = AnnoyIndex(1024, 'angular')
@@ -36,8 +37,17 @@ class VectorDBService:
         self.annoy_index_impulse_2 = AnnoyIndex(1024, 'angular')
         self.annoy_index_audio_1 = AnnoyIndex(1024, 'angular')
         self.annoy_index_audio_2 = AnnoyIndex(1024, 'angular')
+        self.annoy_index_breath_1 = AnnoyIndex(1024, 'angular')
+        self.annoy_index_breath_2 = AnnoyIndex(1024, 'angular')
 
-        self.current_index = 1
+        self.index_pairs = {
+            "tts_embeddings": (self.annoy_index_tts_1, self.annoy_index_tts_2),
+            "meta_embeddings": (self.annoy_index_meta_1, self.annoy_index_meta_2),
+            "impulse_embeddings": (self.annoy_index_impulse_1, self.annoy_index_impulse_2),
+            "audio_embeddings": (self.annoy_index_audio_1, self.annoy_index_audio_2),
+            "breath_embeddings": (self.annoy_index_breath_1, self.annoy_index_breath_2),
+        }
+        self.current_slots = {db_name: 1 for db_name in self.index_pairs}
         self.new_embeddings_log = []
         self.shotgun_cache = {}
         self.last_rebuild_time = None
@@ -49,7 +59,7 @@ class VectorDBService:
         self._initialize_databases()
 
     def _get_connection(self):
-        return psycopg2.connect(settings.EMBEDDINGS_DATABASE_URL)
+        return get_pooled_connection(settings.EMBEDDINGS_DATABASE_URL)
 
     def _initialize_databases(self):
         conn = self._get_connection()
@@ -74,12 +84,68 @@ class VectorDBService:
         conn.close()
         log_service.tts_vector_db("TTS embedding tables initialized (PostgreSQL)")
 
+    def _clip_base_directory(self, table_name: str):
+        return {
+            "tts_embeddings": settings.TTS_AUDIO_DIR,
+            "meta_embeddings": settings.META_AUDIO_DIR,
+            "impulse_embeddings": settings.IMPULSE_AUDIO_DIR,
+            "audio_embeddings": settings.AUDIO_EFFECT_DIR,
+            "breath_embeddings": settings.BREATH_AUDIO_DIR,
+        }.get(table_name)
+
+    def purge_missing_files(self):
+        for table_name in settings.TTS_EMBEDDING_TABLES:
+            base_dir = self._clip_base_directory(table_name)
+            if base_dir is None or not os.path.isdir(base_dir):
+                continue
+            conn = self._get_connection()
+            try:
+                c = conn.cursor()
+                c.execute(f"SELECT filename, voice FROM {table_name}")
+                rows = c.fetchall()
+                missing = [filename for filename, voice in rows
+                           if not os.path.exists(os.path.join(str(base_dir), voice or "", filename))]
+                if not missing:
+                    continue
+                if len(missing) > len(rows) // 2:
+                    log_service.warning(
+                        f"Vector Cache: {len(missing)}/{len(rows)} {table_name} files missing on disk - skipping purge")
+                    continue
+                c.execute(f"DELETE FROM {table_name} WHERE filename = ANY(%s)", (missing,))
+                conn.commit()
+                log_service.tts_vector_db(f"Vector Cache: Purged {len(missing)} stale {table_name} rows (files missing)")
+            except Exception as e:
+                conn.rollback()
+                log_service.error(f"Vector Cache: purge failed for {table_name}: {e}")
+            finally:
+                conn.close()
+
+    def delete_embedding(self, filename: str, db_type: str):
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(f"DELETE FROM {db_type} WHERE filename = %s", (filename,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log_service.error(f"Failed to delete embedding {filename} from {db_type}: {e}")
+        finally:
+            conn.close()
+
+        with self.log_lock:
+            self.new_embeddings_log[:] = [
+                item for item in self.new_embeddings_log if not (item[2] == filename and item[5] == db_type)
+            ]
+        log_service.tts_vector_db(f"Vector Cache: Removed stale {db_type} embedding: {filename}")
+
     def load_initial_data(self):
         start_time = time.perf_counter()
+        self.purge_missing_files()
         self.tts_db_data = {}
         self.meta_db_data = {}
         self.impulse_db_data = {}
         self.audio_db_data = {}
+        self.breath_db_data = {}
 
         db_data_results = {}
         for table_name in settings.TTS_EMBEDDING_TABLES:
@@ -94,6 +160,8 @@ class VectorDBService:
                 self.impulse_db_data = data
             elif table_name == "audio_embeddings":
                 self.audio_db_data = data
+            elif table_name == "breath_embeddings":
+                self.breath_db_data = data
 
         log_service.tts_vector_db("Loading Annoy indexes from disk...")
         self._load_annoy_indexes()
@@ -107,13 +175,19 @@ class VectorDBService:
             ("tts_embeddings", self.annoy_index_tts_1, self.annoy_index_tts_2),
             ("meta_embeddings", self.annoy_index_meta_1, self.annoy_index_meta_2),
             ("impulse_embeddings", self.annoy_index_impulse_1, self.annoy_index_impulse_2),
-            ("audio_embeddings", self.annoy_index_audio_1, self.annoy_index_audio_2)
+            ("audio_embeddings", self.annoy_index_audio_1, self.annoy_index_audio_2),
+            ("breath_embeddings", self.annoy_index_breath_1, self.annoy_index_breath_2)
         ]
 
         missing_files = []
         for db_name, index_1, index_2 in indexes:
             ann_file_1 = os.path.join(str(settings.EMBEDDINGS_DIR), f"{db_name}_1.ann")
             ann_file_2 = os.path.join(str(settings.EMBEDDINGS_DIR), f"{db_name}_2.ann")
+            if os.path.exists(ann_file_1) and self._index_is_stale(db_name, ann_file_1):
+                log_service.warning(f"  ✗ {db_name} index does not match database ids (stale) - discarding")
+                for stale_file in (ann_file_1, ann_file_2):
+                    if os.path.exists(stale_file):
+                        os.remove(stale_file)
             if not os.path.exists(ann_file_1):
                 missing_files.append(f"{db_name}_1.ann")
             if not os.path.exists(ann_file_2):
@@ -149,6 +223,23 @@ class VectorDBService:
                 log_service.error(f"Failed to load Annoy indexes for {db_name}: {e}")
                 log_service.warning(f"  🔨 Triggering rebuild for {db_name}...")
                 self.rebuild_indexes()
+
+    def _index_is_stale(self, table_name: str, ann_file: str) -> bool:
+        probe = AnnoyIndex(1024, 'angular')
+        try:
+            probe.load(ann_file)
+            index_items = probe.get_n_items()
+        except Exception:
+            return True
+        finally:
+            probe.unload()
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table_name}")
+            return index_items != c.fetchone()[0]
+        finally:
+            conn.close()
 
     def _preload_database(self, table_name: str):
         conn = self._get_connection()
@@ -196,10 +287,11 @@ class VectorDBService:
         return data, voice_counts
 
     def _generate_embedding(self, text: str) -> np.ndarray:
+        token_count = len(self.tokenizer.encode_plus(text, max_length=512, truncation=True)["input_ids"])
         inputs = self.tokenizer.encode_plus(
             text,
             return_tensors='pt',
-            max_length=512,
+            max_length=min(512, token_count + 128),
             truncation=True,
             padding='max_length'
         )
@@ -275,19 +367,13 @@ class VectorDBService:
         results = []
         skipped_count = 0
 
-        if db_type == "tts_embeddings":
-            current_annoy_index = self.annoy_index_tts_1 if self.current_index == 1 else self.annoy_index_tts_2
-        elif db_type == "meta_embeddings":
-            current_annoy_index = self.annoy_index_meta_1 if self.current_index == 1 else self.annoy_index_meta_2
-        elif db_type == "impulse_embeddings":
-            current_annoy_index = self.annoy_index_impulse_1 if self.current_index == 1 else self.annoy_index_impulse_2
-        elif db_type == "audio_embeddings":
-            current_annoy_index = self.annoy_index_audio_1 if self.current_index == 1 else self.annoy_index_audio_2
-        else:
+        index_pair = self.index_pairs.get(db_type)
+        if index_pair is None:
             log_service.error(f"Unknown database type: {db_type}")
             return results
 
         with self.index_lock:
+            current_annoy_index = index_pair[0] if self.current_slots[db_type] == 1 else index_pair[1]
             if current_annoy_index.get_n_items() == 0:
                 log_service.warning(f"Annoy index for {db_type} is empty. Queries may be slow or incomplete.")
                 nearest_ids = []
@@ -298,9 +384,16 @@ class VectorDBService:
         c = conn.cursor()
         all_matches = []
 
+        rows_by_id = {}
+        if nearest_ids:
+            c.execute(
+                f"SELECT id, filename, title, embedding, voice FROM {db_type} WHERE id = ANY(%s)",
+                ([item_id + 1 for item_id in nearest_ids],)
+            )
+            rows_by_id = {row[0]: row[1:] for row in c.fetchall()}
+
         for item_id in nearest_ids:
-            c.execute(f"SELECT filename, title, embedding, voice FROM {db_type} WHERE id = %s", (item_id + 1,))
-            result = c.fetchone()
+            result = rows_by_id.get(item_id + 1)
             if result:
                 filename, title, embedding_bytes, db_voice = result
                 if db_voice == voice_name:
@@ -316,17 +409,17 @@ class VectorDBService:
                             skipped_count += 1
 
         with self.log_lock:
-            if len(all_matches) < top_n:
-                for _row_id, embedding, filename, title, item_voice, item_db_type in self.new_embeddings_log:
-                    if item_voice == voice_name and item_db_type == db_type:
-                        embedding = embedding / np.linalg.norm(embedding)
-                        similarity = np.dot(query_embedding, embedding)
-                        with self.shotgun_lock:
-                            if filename not in self.shotgun_cache or (
-                                    current_time - self.shotgun_cache[filename]) >= settings.VECTOR_DB_SHOTGUN_COOLDOWN:
-                                all_matches.append((filename, title, similarity))
-                            else:
-                                skipped_count += 1
+            indexed_filenames = {m[0] for m in all_matches}
+            for _row_id, embedding, filename, title, item_voice, item_db_type in self.new_embeddings_log:
+                if item_voice == voice_name and item_db_type == db_type and filename not in indexed_filenames:
+                    embedding = embedding / np.linalg.norm(embedding)
+                    similarity = np.dot(query_embedding, embedding)
+                    with self.shotgun_lock:
+                        if filename not in self.shotgun_cache or (
+                                current_time - self.shotgun_cache[filename]) >= settings.VECTOR_DB_SHOTGUN_COOLDOWN:
+                            all_matches.append((filename, title, similarity))
+                        else:
+                            skipped_count += 1
 
         conn.close()
 
@@ -372,14 +465,8 @@ class VectorDBService:
 
         log_service.tts_vector_db("Vector Database: Starting index rebuild and database sync")
 
-        databases = [
-            ("tts_embeddings", self.annoy_index_tts_1, self.annoy_index_tts_2),
-            ("meta_embeddings", self.annoy_index_meta_1, self.annoy_index_meta_2),
-            ("impulse_embeddings", self.annoy_index_impulse_1, self.annoy_index_impulse_2),
-            ("audio_embeddings", self.annoy_index_audio_1, self.annoy_index_audio_2)
-        ]
-
-        for db_name, index_1, index_2 in databases:
+        rebuilt = []
+        for db_name, (index_1, index_2) in self.index_pairs.items():
             db_rebuild_start_time = time.perf_counter()
             new_index = None
             try:
@@ -388,54 +475,62 @@ class VectorDBService:
                 ann_file_2 = os.path.join(str(settings.EMBEDDINGS_DIR), f"{db_name}_2.ann")
 
                 conn = self._get_connection()
-                c = conn.cursor()
+                try:
+                    c = conn.cursor()
+                    c.execute(f"SELECT id, embedding FROM {db_name}")
+                    rows = c.fetchall()
+                finally:
+                    conn.close()
 
-                with self.log_lock:
-                    self.new_embeddings_log[:] = [item for item in self.new_embeddings_log if item[5] != db_name]
-
-                c.execute(f"SELECT id, embedding FROM {db_name}")
                 items_added = 0
-                for row in c.fetchall():
-                    row_id, embedding_bytes = row
-                    embedding = np.frombuffer(bytes(embedding_bytes), dtype=np.float32)
-                    new_index.add_item(row_id - 1, embedding)
+                max_row_id = 0
+                for row_id, embedding_bytes in rows:
+                    new_index.add_item(row_id - 1, np.frombuffer(bytes(embedding_bytes), dtype=np.float32))
+                    max_row_id = max(max_row_id, row_id)
                     items_added += 1
 
-                conn.close()
                 log_service.tts_vector_db(f"Vector Database: Added {items_added} items from DB to the new '{db_name}' index.")
+                if items_added == 0:
+                    log_service.tts_vector_db(f"Vector Database: '{db_name}' is empty - index will be built once clips exist")
+                    continue
 
                 log_service.tts_vector_db(f"Vector Database: Building new Annoy index for {db_name}")
                 new_index.build(10)
 
-                if not os.path.exists(ann_file_1) or not os.path.exists(ann_file_2):
-                    new_index.save(ann_file_1)
-                    new_index.save(ann_file_2)
-                    log_service.tts_vector_db(f"Vector Database: Created new Annoy index files: {ann_file_1} and {ann_file_2}")
-
-                    if _verify_file_saved(ann_file_1) and _verify_file_saved(ann_file_2):
-                        new_index.unload()
+                with self.index_lock:
+                    if not os.path.exists(ann_file_1) or not os.path.exists(ann_file_2):
                         index_1.unload()
                         index_2.unload()
+                        new_index.save(ann_file_1)
+                        new_index.save(ann_file_2)
+                        log_service.tts_vector_db(f"Vector Database: Created new Annoy index files: {ann_file_1} and {ann_file_2}")
+                        if not (_verify_file_saved(ann_file_1) and _verify_file_saved(ann_file_2)):
+                            raise IOError(f"Failed to verify saved files: {ann_file_1} or {ann_file_2}")
+                        new_index.unload()
                         index_1.load(ann_file_1)
                         index_2.load(ann_file_2)
+                        self.current_slots[db_name] = 1
                     else:
-                        raise IOError(f"Failed to verify saved files: {ann_file_1} or {ann_file_2}")
-                else:
-                    with self.index_lock:
-                        new_ann_file = ann_file_2 if self.current_index == 1 else ann_file_1
-                        current_index_to_update = index_2 if self.current_index == 1 else index_1
+                        target_slot = 2 if self.current_slots[db_name] == 1 else 1
+                        new_ann_file = ann_file_2 if target_slot == 2 else ann_file_1
+                        index_to_update = index_2 if target_slot == 2 else index_1
 
-                        current_index_to_update.unload()
+                        index_to_update.unload()
                         new_index.save(new_ann_file)
                         log_service.tts_vector_db(f"Vector Database: Updated Annoy index file: {new_ann_file}")
-
-                        if _verify_file_saved(new_ann_file):
-                            new_index.unload()
-                            current_index_to_update.load(new_ann_file)
-                        else:
+                        if not _verify_file_saved(new_ann_file):
                             raise IOError(f"Failed to verify saved file: {new_ann_file}")
+                        new_index.unload()
+                        index_to_update.load(new_ann_file)
+                        self.current_slots[db_name] = target_slot
 
-                log_service.tts_vector_db(f"Vector Database: Total items in the {db_name} index: {new_index.get_n_items()}")
+                with self.log_lock:
+                    self.new_embeddings_log[:] = [
+                        item for item in self.new_embeddings_log if item[5] != db_name or item[0] > max_row_id
+                    ]
+                rebuilt.append(db_name)
+                log_service.tts_vector_db(
+                    f"Vector Database: Total items in the {db_name} index: {items_added} (slot {self.current_slots[db_name]})")
 
             except Exception as e:
                 log_service.error(f"Failed to rebuild/update index for {db_name}: {str(e)}")
@@ -446,12 +541,10 @@ class VectorDBService:
             db_rebuild_end_time = time.perf_counter()
             log_service.tts_vector_db(f"Rebuilding index for '{db_name}' took {db_rebuild_end_time - db_rebuild_start_time:.4f} seconds.")
 
-        with self.index_lock:
-            self.current_index = 3 - self.current_index
-        log_service.tts_vector_db(f"Vector Database: Switched current_index to {self.current_index}")
-
         self.last_rebuild_time = datetime.datetime.now()
-        log_service.tts_vector_db(f"Vector Database: Index rebuilt and database synced at {self.last_rebuild_time}")
+        log_service.tts_vector_db(
+            f"Vector Database: Rebuilt {len(rebuilt)}/{len(self.index_pairs)} indexes ({', '.join(rebuilt) or 'none'}) "
+            f"at {self.last_rebuild_time}")
 
         rebuild_end_time = time.perf_counter()
         log_service.tts_vector_db(f"VectorDB full index rebuild took {rebuild_end_time - rebuild_start_time:.4f} seconds.")

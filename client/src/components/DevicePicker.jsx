@@ -2,101 +2,98 @@ import { logger } from '../lib/logger'
 import { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react'
 import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
-import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
+import { usePlayback } from '../contexts/PlaybackContext'
 import { useUIState } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useNetwork } from '../contexts/NetworkContext'
 import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { TRANSITIONS } from '../lib/themeManager'
+import { GLASS } from '../lib/themeManager'
+import { CSS_TRANSITION, SPRING, TWEEN } from '../lib/motion'
+import { Expandable } from './Motion'
+
+const BANNER_SAFE_AREA_STYLE = {
+  paddingTop: 'calc(var(--safe-top) + 0.75rem)',
+  paddingLeft: 'calc(var(--safe-left) + 0.75rem)',
+  paddingRight: 'calc(var(--safe-right) + 0.75rem)'
+}
+
+const BANNER_MOTION = {
+  initial: { y: '-100%', opacity: 0 },
+  animate: { y: 0, opacity: 1, transition: SPRING.panel },
+  exit: { y: '-100%', opacity: 0, transition: TWEEN.exit }
+}
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
-  const { engineState, toastSuccess } = useUIState()
+  const { engineState, toastSuccess, toastError } = useUIState()
+  const { transferPlayback, connected } = usePlayback()
   const { storageInfo } = useStorage()
   const { connectionMode, isOnline } = useNetwork()
-  const [devices, setDevices] = useState([])
+  const [deviceList, setDeviceList] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
   const [editingDeviceId, setEditingDeviceId] = useState(null)
   const [editingName, setEditingName] = useState('')
   const [bannerDismissed, setBannerDismissed] = useState(false)
-  const activeDeviceIdRef = useRef(null)
-  const lastActiveDeviceIdRef = useRef(null)
+  const activeDeviceId = engineState.activeDeviceId
+  const loadingDevicesRef = useRef(false)
 
-  const loadDevices = async () => {
+  const canUseServerFeatures = isOnline && connectionMode === 'full'
+
+  const loadDevices = useCallback(async () => {
+    if (loadingDevicesRef.current) return
+    loadingDevicesRef.current = true
     try {
       setLoading(true)
       const response = await api.getDevices()
       logger.info('[DevicePicker] Loaded devices:', response.devices)
-      const devicesWithActive = response.devices.map(device => ({
-        ...device,
-        is_active: device.device_id === activeDeviceIdRef.current
-      }))
-      setDevices(devicesWithActive)
+      setDeviceList(response.devices || [])
     } catch (err) {
       logger.error('[DevicePicker] Failed to load devices:', err)
     } finally {
+      loadingDevicesRef.current = false
       setLoading(false)
     }
-  }
-
-  useWebSocketSubscribe('playback_state', (data) => {
-    logger.info(`[DevicePicker] 📥 Playback state: active_device_id=${data.active_device_id?.slice(0,8) || 'none'}`)
-
-    if (lastActiveDeviceIdRef.current !== data.active_device_id) {
-      queueMicrotask(() => setBannerDismissed(false))
-      lastActiveDeviceIdRef.current = data.active_device_id
-    }
-
-    activeDeviceIdRef.current = data.active_device_id
-
-    setDevices(prevDevices => {
-      if (prevDevices.length === 0) {
-        if (isAuthenticated) {
-          logger.info(`[DevicePicker] Devices array empty, loading devices`)
-          void loadDevices()
-        }
-        return prevDevices
-      }
-
-      const activeDeviceExists = prevDevices.some(d => d.device_id === data.active_device_id)
-      if (data.active_device_id && !activeDeviceExists && isAuthenticated) {
-        logger.info(`[DevicePicker] Unknown device ${data.active_device_id.slice(0,8)} is active, reloading devices`)
-        void loadDevices()
-      }
-
-      const updated = prevDevices.map(device => ({
-        ...device,
-        is_active: device.device_id === data.active_device_id
-      }))
-      logger.info(`[DevicePicker] Updated devices:`, updated.map(d => ({ id: d.device_id.slice(0,8), is_active: d.is_active, is_current: d.is_current })))
-      return updated
-    })
-  })
-
-  // Use connection mode to determine if we can load devices (need both internet and server)
-  const canUseServerFeatures = isOnline && connectionMode === 'full'
+  }, [])
 
   useEffect(() => {
-    if (isAuthenticated && canUseServerFeatures) {
+    setBannerDismissed(false)
+  }, [activeDeviceId])
+
+  useEffect(() => {
+    if (isAuthenticated && canUseServerFeatures && (connected || isOpen)) {
       void loadDevices()
     }
-  }, [isAuthenticated, canUseServerFeatures])
+  }, [isAuthenticated, canUseServerFeatures, connected, isOpen, loadDevices])
+
+  const knownActive = !activeDeviceId || deviceList.some(d => d.device_id === activeDeviceId)
+  useEffect(() => {
+    if (!knownActive && isAuthenticated && canUseServerFeatures) {
+      logger.info(`[DevicePicker] Unknown device ${activeDeviceId?.slice(0, 8)} is active, reloading devices`)
+      void loadDevices()
+    }
+  }, [knownActive, activeDeviceId, isAuthenticated, canUseServerFeatures, loadDevices])
+
+  const devices = useMemo(() => deviceList.map(device => ({
+    ...device,
+    is_active: !!activeDeviceId && device.device_id === activeDeviceId
+  })), [deviceList, activeDeviceId])
 
   const handleActivateDevice = async (deviceId = null) => {
     try {
       setActionLoading(true)
-      await api.activateDevice(deviceId)
+      await transferPlayback(deviceId)
       logger.info('[DevicePicker] Device activated successfully:', deviceId || 'current device')
-      await loadDevices()
+      if (isAuthenticated) await loadDevices()
       if (!deviceId) {
         setIsOpen(false)
       }
     } catch (err) {
       logger.error('[DevicePicker] Failed to activate device:', err)
+      toastError?.('Could not move playback to that device')
     } finally {
       setActionLoading(false)
     }
@@ -173,7 +170,7 @@ export function useDevicePicker() {
     devices,
     isOpen,
     setIsOpen,
-    showInactive: !engineState.isActiveDevice,
+    showInactive: !engineState.isActiveDevice && !!activeDeviceId,
     bannerDismissed,
     handleDismissBanner,
     loading,
@@ -196,7 +193,7 @@ export function useDevicePicker() {
 }
 
 export const DevicePickerButton = memo(function DevicePickerButton({ currentDevice, activeDevice, isOpen, setIsOpen, getDeviceIcon, connectionMode, storageInfo, isPlaying }) {
-  const { getBorder, getErrorColor, getGradient, getAccentColor, getSuccessColor, getWarningColor } = useDynamicTheme()
+  const { getErrorColor, getGradient, getAccentColor, getSuccessColor, getWarningColor } = useDynamicTheme()
 
   if (connectionMode !== 'full') {
     const isOffline = connectionMode === 'offline'
@@ -208,11 +205,11 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
 
     return (
       <button
-        className="relative rounded-lg cursor-pointer hover:scale-105 flex flex-col items-center justify-center gap-0.5 h-10 w-10 md:h-12 md:w-12"
+        className="ui-tap ui-hover relative rounded-lg cursor-pointer flex flex-col items-center justify-center gap-0.5 h-10 w-10 md:h-12 md:w-12"
         style={{
           background: 'transparent',
           border: `1px solid ${color}`,
-          transition: 'all 700ms ease-in-out, transform 150ms ease-in-out'
+          transition: CSS_TRANSITION.theme
         }}
         onClick={() => setIsOpen(!isOpen)}
         title={title}
@@ -239,11 +236,11 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
 
   return (
     <button
-      className="relative rounded-lg cursor-pointer hover:scale-105 flex items-center justify-center h-10 w-10 md:h-12 md:w-12 text-lg md:text-xl"
+      className="ui-tap ui-hover relative rounded-lg cursor-pointer flex items-center justify-center h-10 w-10 md:h-12 md:w-12 text-lg md:text-xl"
       style={{
         background: getGradient(0.2),
         border: `1px solid ${getAccentColor(0.3)}`,
-        transition: 'all 700ms ease-in-out, transform 150ms ease-in-out'
+        transition: CSS_TRANSITION.theme
       }}
       onClick={() => setIsOpen(!isOpen)}
       title="Manage devices"
@@ -255,26 +252,30 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
 })
 
 export const DevicePickerBanner = memo(function DevicePickerBanner({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
-  if (!showInactive || bannerDismissed) return null
-
+  const { engineState } = useUIState()
+  const message = engineState.activeDeviceOnline ? '▶️ Playing on another device' : '📴 Your other device is offline'
   return (
-    <div className="fixed top-0 left-0 right-0 bg-gradient-to-r from-purple-600 to-blue-600 text-white p-3 flex items-center justify-center gap-4 z-[9999] text-sm font-medium shadow-lg">
-      <span>▶️ Playing on another device</span>
+    <AnimatePresence>
+      {showInactive && !bannerDismissed && (
+    <motion.div {...BANNER_MOTION} className="fixed top-0 left-0 right-0 bg-gradient-to-r from-purple-600 to-blue-600 text-white p-3 flex items-center justify-center gap-4 z-[9999] text-sm font-medium shadow-lg" style={BANNER_SAFE_AREA_STYLE}>
+      <span>{message}</span>
       <button
         onClick={() => handleActivateDevice()}
         disabled={actionLoading}
-        className="bg-white text-purple-600 px-4 py-1.5 rounded-full text-xs font-bold cursor-pointer transition-transform hover:scale-105 shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+        className="ui-press ui-hover bg-white text-purple-600 px-4 py-1.5 rounded-full text-xs font-bold cursor-pointer transition shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {actionLoading ? 'Loading...' : 'Play here instead'}
       </button>
       <button
         onClick={handleDismissBanner}
-        className="ml-auto bg-transparent border-none text-white/80 cursor-pointer p-1 leading-none transition-colors hover:text-white hover:scale-110"
+        className="ui-tap ui-hover-lg ml-auto bg-transparent border-none text-white/80 cursor-pointer p-1 leading-none transition-colors hover:text-white"
         title="Close (will reappear on device change)"
       >
         <X size={18} />
       </button>
-    </div>
+    </motion.div>
+      )}
+    </AnimatePresence>
   )
 })
 
@@ -284,23 +285,15 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
   const isDegraded = connectionMode === 'degraded'
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={TRANSITIONS.panel}
-          className="w-full border-t border-white/10 shadow-2xl overflow-hidden"
-        >
+    <Expandable open={isOpen} className={GLASS.expandPanel}>
             <div className="max-w-screen-2xl mx-auto px-3 py-2 md:px-4 md:py-3">
-              <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-3">
+              <div className={GLASS.expandPanelHeader}>
                 <h3 className="m-0 text-lg font-semibold text-white">
                   {isOffline ? 'Offline Mode' : isDegraded ? 'Server Unavailable' : 'Devices'}
                 </h3>
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
+                  className="ui-press bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
                 >
                   <X size={20} />
                 </button>
@@ -359,7 +352,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                     <div
                       key={device.device_id}
                       className={`
-                        flex items-center gap-3 p-3 rounded-lg border transition-all
+                        flex items-center gap-3 p-3 rounded-lg border transition
                         ${device.is_current ? 'bg-purple-600/20 border-purple-600/40' : 'bg-white/5 border-white/10'}
                         ${device.is_active ? 'ring-2 ring-green-500/50' : ''}
                         ${!device.is_active ? 'cursor-pointer hover:bg-purple-600/15 hover:border-purple-600/30 hover:scale-[1.02]' : ''}
@@ -395,7 +388,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                                   e.stopPropagation()
                                   handleSaveEdit(device.device_id)
                                 }}
-                                className="p-1 hover:bg-green-500/20 rounded transition"
+                                className="ui-press p-1 hover:bg-green-500/20 rounded transition"
                                 disabled={actionLoading}
                                 title="Save"
                               >
@@ -406,7 +399,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                                   e.stopPropagation()
                                   handleCancelEdit()
                                 }}
-                                className="p-1 hover:bg-red-500/20 rounded transition"
+                                className="ui-press p-1 hover:bg-red-500/20 rounded transition"
                                 disabled={actionLoading}
                                 title="Cancel"
                               >
@@ -421,7 +414,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                                   e.stopPropagation()
                                   handleStartEdit(device.device_id, device.device_name)
                                 }}
-                                className="p-1 hover:bg-white/10 rounded transition opacity-50 hover:opacity-100"
+                                className="ui-press p-1 hover:bg-white/10 rounded transition opacity-50 hover:opacity-100"
                                 title="Rename device"
                               >
                                 <Edit2 size={14} />
@@ -440,7 +433,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                       </div>
                       {!device.is_current && (
                         <button
-                          className="bg-transparent border-none text-lg cursor-pointer opacity-50 transition-all p-1 hover:opacity-100 hover:scale-110"
+                          className="ui-tap ui-hover-lg bg-transparent border-none text-lg cursor-pointer opacity-50 transition-opacity p-1 hover:opacity-100"
                           onClick={(e) => {
                             e.stopPropagation()
                             handleRemoveDevice(device.device_id)
@@ -456,8 +449,6 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                 </div>
               )}
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </Expandable>
   )
 })

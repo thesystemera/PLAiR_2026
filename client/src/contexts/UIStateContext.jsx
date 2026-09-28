@@ -60,11 +60,15 @@
  * See: docs/ARCHITECTURE_SSOT_PATTERN.md for detailed documentation
  */
 
-import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { artworkCache, enrichedArtworkCache } from '../lib/mediaCache'
+import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useSyncExternalStore } from 'react'
+import { artworkCache, artworkThumbCache, enrichedArtworkCache } from '../lib/mediaCache'
+import { artworkPrefetcher } from '../lib/artworkPrefetcher'
+import { AudioInteractionManager } from '../lib/audioInteractionManager'
 import { logger } from '../lib/logger'
-import { UI_FULLSCREEN } from '../lib/themeManager'
+import { safeStorage } from '../lib/safeStorage'
+import { UI_FULLSCREEN, FALLBACK_GRADIENT_HEX, getOnAirSegment } from '../lib/themeManager'
 import { api } from '../lib/api'
+import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -107,29 +111,28 @@ export const GLASS_EFFECT_CONFIG = {
   get featherPx() { return Math.round(this.referenceDimensionPx * this.featherPct) }
 }
 
-const UIStateContext = createContext(null)
+const DJ_DUCK_RELEASE_HOLD_MS = 350
 
-const GRADIENT_COLORS = [
-  ['#9333ea', '#2563eb'],
-  ['#db2777', '#9333ea'],
-  ['#2563eb', '#06b6d4'],
-  ['#16a34a', '#14b8a6'],
-  ['#ea580c', '#dc2626'],
-]
+const UIStateContext = createContext(null)
+const ArtworkStoreContext = createContext(null)
+const RadioButtonContext = createContext(null)
+const UIActionsContext = createContext(null)
+const RadioStateContext = createContext(null)
+const EMPTY_CLIPS = []
+const noopUnsubscribe = () => {}
+
+const GRADIENT_COLORS = FALLBACK_GRADIENT_HEX
+
+function gradientSvgDataUrl(color1, color2) {
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:${color1}"/><stop offset="100%" style="stop-color:${color2}"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/><text x="50" y="65" font-size="40" text-anchor="middle" fill="white" opacity="0.8">🎵</text></svg>`)}`
+}
 
 function generatePlaceholderDataURL(id) {
-  if (!id) {
-    const [color1, color2] = GRADIENT_COLORS[0]
-    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:${color1}"/><stop offset="100%" style="stop-color:${color2}"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/><text x="50" y="65" font-size="40" text-anchor="middle" fill="white" opacity="0.8">🎵</text></svg>`)}`
-  }
-
   try {
-    const index = parseInt(id.slice(0, 2), 16) % GRADIENT_COLORS.length
-    const [color1, color2] = GRADIENT_COLORS[index]
-    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:${color1}"/><stop offset="100%" style="stop-color:${color2}"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/><text x="50" y="65" font-size="40" text-anchor="middle" fill="white" opacity="0.8">🎵</text></svg>`)}`
-  } catch (e) {
-    const [color1, color2] = GRADIENT_COLORS[0]
-    return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:${color1}"/><stop offset="100%" style="stop-color:${color2}"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/><text x="50" y="65" font-size="40" text-anchor="middle" fill="white" opacity="0.8">🎵</text></svg>`)}`
+    const index = id ? parseInt(id.slice(0, 2), 16) % GRADIENT_COLORS.length : 0
+    return gradientSvgDataUrl(...GRADIENT_COLORS[index])
+  } catch {
+    return gradientSvgDataUrl(...GRADIENT_COLORS[0])
   }
 }
 
@@ -138,6 +141,7 @@ export const uiState = {
     isOnline: navigator.onLine,
     isServerAvailable: navigator.onLine,
     connectionMode: navigator.onLine ? 'full' : 'offline',
+    offlineMode: !navigator.onLine,
     isCached: false,
     buffering: false,
     bitrate: null,
@@ -152,10 +156,10 @@ export const uiState = {
     totalQueued: 0,
     dailyDownloadedBytes: 0,
     dailyLimit: 500 * 1024 * 1024,
-    isEnabled: localStorage.getItem('backgroundDownloads') !== 'false',
+    isEnabled: (() => { try { return localStorage.getItem('backgroundDownloads') !== 'false' } catch { return true } })(),
   },
   authState: {
-    isAuthenticated: !!localStorage.getItem('cached_user'),
+    isAuthenticated: (() => { try { return !!localStorage.getItem('cached_user') } catch { return false } })(),
     user: null,
   }
 }
@@ -193,15 +197,25 @@ const STATE_COLORS = {
   5: { r: 250, g: 204, b: 21 }
 }
 
+const ON_AIR_TINTED_STATES = new Set([0, 2, 5])
+
+function hexToRgb(hex) {
+  const value = parseInt(hex.replace('#', ''), 16)
+  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 }
+}
+
 export function UIStateProvider({ children }) {
-  const [artworkUrls, setArtworkUrls] = useState(new Map())
-  const [enrichedArtworkUrls, setEnrichedArtworkUrls] = useState(new Map())
+  const artworkUrlsRef = useRef(new Map())
+  const enrichedArtworkUrlsRef = useRef(new Map())
+  const artworkListenersRef = useRef(new Map())
+  const pinnedArtworkIdsRef = useRef(new Set())
   const loadingTracksRef = useRef(new Set())
   const loadingEnrichedRef = useRef(new Set())
   const [audioFeatures, setAudioFeatures] = useState(null)
   const [lyricTimestamps, setLyricTimestamps] = useState(null)
 
-  const [videoClipsMap, setVideoClipsMap] = useState(new Map())
+  const videoClipsMapRef = useRef(new Map())
+  const [videoClipsByTrack, setVideoClipsByTrack] = useState({})
   const loadingVideoClipsRef = useRef(new Set())
 
   const djFftDataRef = useRef(new Array(32).fill(0))
@@ -248,11 +262,14 @@ export function UIStateProvider({ children }) {
     isMusicPaused: false,
     isAIProcessing: false,
     isActiveDevice: false,
+    activeDeviceId: null,
+    activeDeviceOnline: false,
     isCrossfading: false,
     is_playing: false,
     currentTrack: null,
     queue: [],
     currentIndex: 0,
+    talkBreak: null,
   })
 
   const engineRef = useRef({
@@ -267,6 +284,7 @@ export function UIStateProvider({ children }) {
   })
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
+  const [usageModalOpen, setUsageModalOpen] = useState(false)
 
   const [isOfflineRendering, setIsOfflineRendering] = useState(false)
 
@@ -276,8 +294,16 @@ export function UIStateProvider({ children }) {
     const handleVisibilityChange = () => {
       setIsScreenVisible(!document.hidden)
     }
+    const handlePageHide = () => setIsScreenVisible(false)
+    const handlePageShow = () => setIsScreenVisible(true)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', handlePageHide)
+    window.addEventListener('pageshow', handlePageShow)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', handlePageHide)
+      window.removeEventListener('pageshow', handlePageShow)
+    }
   }, [])
 
   const duckingStateRef = useRef('idle')
@@ -286,7 +312,12 @@ export function UIStateProvider({ children }) {
     mixerRefInternal.current = ref
   }, [])
 
+  const physicsKickRef = useRef(null)
+
   useEffect(() => {
+    let disposed = false
+    let cancelGesture = null
+
     const handleOrientation = (event) => {
       const { beta, gamma } = event
       if (beta === null || gamma === null) return
@@ -309,6 +340,7 @@ export function UIStateProvider({ children }) {
 
       physicsState.current.rawTargetX = -(clampedGamma / 30)
       physicsState.current.rawTargetY = -(clampedBeta / 30)
+      physicsKickRef.current?.()
     }
 
     const handleMouseMove = (e) => {
@@ -316,39 +348,40 @@ export function UIStateProvider({ children }) {
       mouseRef.current.parallaxY = (e.clientY / window.innerHeight - 0.5) * 2
     }
 
-    const requestPermission = async () => {
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        try {
-          const permission = await DeviceOrientationEvent.requestPermission()
-          if (permission === 'granted') {
-            window.addEventListener('deviceorientation', handleOrientation)
-          }
-        } catch (error) {
-          logger.error('Gyroscope permission denied', error)
-        }
-      } else {
-        window.addEventListener('deviceorientation', handleOrientation)
-      }
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      cancelGesture = AudioInteractionManager.onUserGesture(() => {
+        DeviceOrientationEvent.requestPermission()
+          .then((permission) => {
+            if (permission === 'granted' && !disposed) {
+              window.addEventListener('deviceorientation', handleOrientation, { passive: true })
+            }
+          })
+          .catch((error) => {
+            logger.error('Gyroscope permission denied', error)
+          })
+      })
+    } else {
+      window.addEventListener('deviceorientation', handleOrientation, { passive: true })
     }
 
-    void requestPermission()
-    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mousemove', handleMouseMove, { passive: true })
 
     return () => {
+      disposed = true
+      cancelGesture?.()
       window.removeEventListener('deviceorientation', handleOrientation)
       window.removeEventListener('mousemove', handleMouseMove)
     }
   }, [])
 
-  // Register RAF source for debugging
   useEffect(() => {
     window.registerRAFSource?.('UIState-physics')
   }, [])
 
   useEffect(() => {
-    if (!isScreenVisible) return  // Don't run when screen is hidden
+    if (!isScreenVisible) return
 
-    let animationFrameId
+    let animationFrameId = null
     let lastInputTime = Date.now()
     const IDLE_TIMEOUT = 2000
 
@@ -356,11 +389,8 @@ export function UIStateProvider({ children }) {
     const FRICTION = 0.80
     const INPUT_SMOOTHING = 0.10
 
-    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches
-
     const handleInput = () => {
       lastInputTime = Date.now()
-      // Restart loop if it stopped
       if (!animationFrameId) {
         animationFrameId = requestAnimationFrame(loop)
       }
@@ -386,34 +416,26 @@ export function UIStateProvider({ children }) {
 
       window.__rafDebug?.sources && (window.__rafDebug.sources['UIState-physics'] = (window.__rafDebug.sources['UIState-physics'] || 0) + 1)
 
-      // Touch devices: always run (gyroscope is continuous input)
-      // Desktop: pause when mouse idle AND physics settled
-      if (isTouchDevice) {
+      const isMoving = Math.abs(p.vx) > 0.001 || Math.abs(p.vy) > 0.001
+      const isRecentInput = Date.now() - lastInputTime < IDLE_TIMEOUT
+      if (isMoving || isRecentInput) {
         animationFrameId = requestAnimationFrame(loop)
       } else {
-        const isMoving = Math.abs(p.vx) > 0.001 || Math.abs(p.vy) > 0.001
-        const isRecentInput = Date.now() - lastInputTime < IDLE_TIMEOUT
-        if (isMoving || isRecentInput) {
-          animationFrameId = requestAnimationFrame(loop)
-        } else {
-          animationFrameId = null
-        }
+        animationFrameId = null
       }
     }
 
-    if (!isTouchDevice) {
-      window.addEventListener('mousemove', handleInput, { passive: true })
-    }
-
-    loop()
+    physicsKickRef.current = handleInput
 
     return () => {
+      physicsKickRef.current = null
       if (animationFrameId) cancelAnimationFrame(animationFrameId)
-      if (!isTouchDevice) {
-        window.removeEventListener('mousemove', handleInput)
-      }
     }
   }, [isScreenVisible])
+
+  const duckRestoreTimerRef = useRef(null)
+
+  useEffect(() => () => clearTimeout(duckRestoreTimerRef.current), [])
 
   useEffect(() => {
     const mixer = mixerRefInternal.current?.current
@@ -427,16 +449,24 @@ export function UIStateProvider({ children }) {
 
     if (duckingStateRef.current === targetState) return
 
+    const previousState = duckingStateRef.current
     duckingStateRef.current = targetState
+    clearTimeout(duckRestoreTimerRef.current)
+    duckRestoreTimerRef.current = null
 
-    if (targetState === 'idle') {
+    if (targetState === 'idle' && previousState === 'dj') {
+      duckRestoreTimerRef.current = setTimeout(() => {
+        duckRestoreTimerRef.current = null
+        if (duckingStateRef.current === 'idle') mixerRefInternal.current?.current?.restoreMusic(400)
+      }, DJ_DUCK_RELEASE_HOLD_MS)
+    } else if (targetState === 'idle') {
       mixer.restoreMusic(400)
     } else if (targetState === 'user') {
       mixer.duckMusic(0.1, 200)
     } else if (targetState === 'shoutout') {
       mixer.duckMusic(0.1, 200)
     } else if (targetState === 'videoPreview') {
-      mixer.duckMusic(0.15, 200)  // Duck music for video preview
+      mixer.duckMusic(0.15, 200)
     } else if (targetState === 'dj') {
       mixer.duckMusic(0.25, 400)
     }
@@ -446,6 +476,7 @@ export function UIStateProvider({ children }) {
     isOnline: navigator.onLine,
     isServerAvailable: navigator.onLine,
     connectionMode: navigator.onLine ? 'full' : 'offline',
+    offlineMode: !navigator.onLine,
     isCached: false,
     buffering: false,
     bitrate: null,
@@ -455,6 +486,8 @@ export function UIStateProvider({ children }) {
 
   const publishAudioState = useCallback((updates) => {
     setAudioState(prev => {
+      const keys = Object.keys(updates)
+      if (keys.every(key => prev[key] === updates[key])) return prev
       const newState = { ...prev, ...updates }
       Object.assign(uiState.audioState, newState)
       return newState
@@ -484,14 +517,15 @@ export function UIStateProvider({ children }) {
   }, [])
 
   const [radioState, setRadioState] = useState({
-    activeSeedMode: localStorage.getItem('lastSeedMode') || null,
+    activeSeedMode: safeStorage.get('lastSeedMode') || null,
   })
 
   const publishRadioState = useCallback((updates) => {
     setRadioState(prev => {
+      if (Object.keys(updates).every(key => prev[key] === updates[key])) return prev
       const newState = { ...prev, ...updates }
       if (updates.activeSeedMode !== undefined) {
-        localStorage.setItem('lastSeedMode', updates.activeSeedMode || '')
+        safeStorage.set('lastSeedMode', updates.activeSeedMode || '')
       }
       return newState
     })
@@ -505,14 +539,16 @@ export function UIStateProvider({ children }) {
     totalQueued: 0,
     dailyDownloadedBytes: 0,
     dailyLimit: 500 * 1024 * 1024,
-    isEnabled: localStorage.getItem('backgroundDownloads') !== 'false',
+    isEnabled: safeStorage.get('backgroundDownloads') !== 'false',
   })
 
   const [settingsState, setSettingsState] = useState({
     ttsMuted: false,
     notificationsMuted: false,
     audioQuality: 'auto',
-    dataSaverMode: localStorage.getItem('dataSaverMode') === 'true',
+    dataSaverMode: safeStorage.get('dataSaverMode') === 'true',
+    costTickerEnabled: safeStorage.get('costTicker') === 'true',
+    autoClaimOnOpen: safeStorage.get('autoClaimOnOpen') !== 'false',
     fpsEnabled: false,
     videoClipsEnabled: false,
     visualQuality: 'high',
@@ -522,7 +558,13 @@ export function UIStateProvider({ children }) {
     setSettingsState(prev => {
       const newState = { ...prev, ...updates }
       if (updates.dataSaverMode !== undefined) {
-        localStorage.setItem('dataSaverMode', String(updates.dataSaverMode))
+        safeStorage.set('dataSaverMode', String(updates.dataSaverMode))
+      }
+      if (updates.costTickerEnabled !== undefined) {
+        safeStorage.set('costTicker', String(updates.costTickerEnabled))
+      }
+      if (updates.autoClaimOnOpen !== undefined) {
+        safeStorage.set('autoClaimOnOpen', String(updates.autoClaimOnOpen))
       }
       return newState
     })
@@ -533,7 +575,7 @@ export function UIStateProvider({ children }) {
       const newState = { ...prev, ...updates }
       Object.assign(uiState.downloadState, newState)
       if (updates.isEnabled !== undefined) {
-        localStorage.setItem('backgroundDownloads', String(updates.isEnabled))
+        safeStorage.set('backgroundDownloads', String(updates.isEnabled))
       }
       return newState
     })
@@ -618,8 +660,26 @@ export function UIStateProvider({ children }) {
     scale: 1
   })
 
-  const [radioButtonOpacity, setRadioButtonOpacity] = useState(1)
-  const [radioButtonForegroundOpacity, setRadioButtonForegroundOpacity] = useState(1)
+  const [radioButtonOpacity, setRadioButtonOpacityState] = useState(1)
+  const [radioButtonForegroundOpacity, setRadioButtonForegroundOpacityState] = useState(1)
+
+  const radioButtonRef = useRef({
+    opacity: 1,
+    foregroundOpacity: 1,
+    isHovered: false,
+    isPressed: false,
+    scale: 1
+  })
+
+  const setRadioButtonOpacity = useCallback((opacity) => {
+    radioButtonRef.current.opacity = opacity
+    setRadioButtonOpacityState(opacity)
+  }, [])
+
+  const setRadioButtonForegroundOpacity = useCallback((opacity) => {
+    radioButtonRef.current.foregroundOpacity = opacity
+    setRadioButtonForegroundOpacityState(opacity)
+  }, [])
 
   const [interfaceState, setInterfaceState] = useState({
     isScrolling: false,
@@ -628,7 +688,8 @@ export function UIStateProvider({ children }) {
     isFullscreenVisuals: false,
     showUIControls: false,
     currentMobilePanel: 2,
-    catalogView: 'tracks'
+    catalogView: 'tracks',
+    playerHeight: 80
   })
 
   const interfaceRef = useRef({
@@ -638,7 +699,8 @@ export function UIStateProvider({ children }) {
     isFullscreenVisuals: false,
     showUIControls: false,
     currentMobilePanel: 2,
-    catalogView: 'tracks'
+    catalogView: 'tracks',
+    playerHeight: 80
   })
 
   const reportInterfaceState = useCallback((updates) => {
@@ -649,38 +711,29 @@ export function UIStateProvider({ children }) {
       window.__refCalls.count++
     }
 
+    const merged = interfaceRef.current
+    const isHidden = merged.isFullscreenVisuals || merged.isScrolling
+    const isRadioPanel = merged.currentMobilePanel === 2
+    setRadioButtonOpacity(isHidden ? 0 : (isRadioPanel ? 1 : UI_FULLSCREEN.radioGlassOpacity))
+    setRadioButtonForegroundOpacity(isHidden ? 0 : (isRadioPanel ? 1 : 0))
+
     setInterfaceState(prev => {
-      const newState = { ...prev, ...updates }
-
-      // GLSL opacity (background frosted glass) - 0.35 on other panels
-      let glslOpacity
-      if (newState.isFullscreenVisuals || newState.isScrolling) {
-        glslOpacity = 0
-      } else if (newState.currentMobilePanel === 2) {
-        glslOpacity = 1
-      } else {
-        glslOpacity = UI_FULLSCREEN.radioGlassOpacity
-      }
-      setRadioButtonOpacity(glslOpacity)
-      
-      // React foreground opacity - 0 on other panels (foreground graphic, not glass)
-      let fgOpacity
-      if (newState.isFullscreenVisuals || newState.isScrolling) {
-        fgOpacity = 0
-      } else if (newState.currentMobilePanel === 2) {
-        fgOpacity = 1
-      } else {
-        fgOpacity = 0  // Foreground button hidden on other panels
-      }
-      setRadioButtonForegroundOpacity(fgOpacity)
-
-      return newState
+      const changed = Object.keys(updates).some(key => prev[key] !== updates[key])
+      return changed ? { ...prev, ...updates } : prev
     })
-  }, [])
+  }, [setRadioButtonOpacity, setRadioButtonForegroundOpacity])
 
-  const [shaderPanelRegions, setShaderPanelRegions] = useState([])
-  const [shaderPanelOpacities, setShaderPanelOpacities] = useState([])
-  const [shaderRadioButtonPos, setShaderRadioButtonPos] = useState({ x: 0.5, y: 0.5, radiusX: 0, radiusY: 0 })
+  const toggleCatalogView = useCallback(() => {
+    reportInterfaceState({ catalogView: interfaceRef.current.catalogView === 'tracks' ? 'shoutouts' : 'tracks' })
+  }, [reportInterfaceState])
+
+  const setMobilePanel = useCallback((index) => {
+    reportInterfaceState({ currentMobilePanel: index })
+  }, [reportInterfaceState])
+
+  const shaderPanelRegionsRef = useRef([])
+  const shaderPanelOpacitiesRef = useRef([])
+  const shaderRadioButtonPosRef = useRef({ x: 0.5, y: 0.5, radiusX: 0, radiusY: 0 })
 
   const visualState = useMemo(() => {
     if (engineState.isMicRecording) return 1
@@ -691,26 +744,36 @@ export function UIStateProvider({ children }) {
     return 0
   }, [engineState])
 
+  const onAirKind = engineState.talkBreak ? (engineState.talkBreak.kind || 'radio') : null
+
+  const onAirColor = useMemo(() => (
+    onAirKind ? hexToRgb(getOnAirSegment({ kind: onAirKind }).color) : null
+  ), [onAirKind])
+
   const visualColorData = useMemo(() => {
     let resolvedColor = STATE_COLORS[0]
     if (visualState === 3) {
       resolvedColor = speakerColorRef.current
+    } else if (onAirColor && ON_AIR_TINTED_STATES.has(visualState)) {
+      resolvedColor = onAirColor
     } else if (STATE_COLORS[visualState]) {
       resolvedColor = STATE_COLORS[visualState]
     }
 
     return {
       stateInt: visualState,
-      currentVisualColor: resolvedColor
+      currentVisualColor: resolvedColor,
+      onAirColor
     }
-  }, [visualState])
+  }, [visualState, onAirColor])
 
   const radioProgressData = useMemo(() => {
     return {
       stateInt: visualState,
-      currentVisualColor: visualColorData.currentVisualColor
+      currentVisualColor: visualColorData.currentVisualColor,
+      onAirColor
     }
-  }, [visualState, visualColorData])
+  }, [visualState, visualColorData, onAirColor])
 
   const reportEngineStatus = useCallback((updates) => {
     const now = Date.now()
@@ -724,26 +787,6 @@ export function UIStateProvider({ children }) {
       lastProgressUpdateTimeRef.current = now
     }
 
-    const refKeys = Object.keys(updates).filter(k =>
-      ['djFftData', 'micFftData', 'shoutoutFftData', 'speakerColor', 'progress_ms'].includes(k)
-    )
-    if (refKeys.length > 0) {
-      if (!window.__refCalls) {
-        window.__refCalls = { count: 0, last: now, perSecond: [], keysThisSecond: new Set() }
-      }
-      refKeys.forEach(key => window.__refCalls.keysThisSecond.add(key))
-      window.__refCalls.count++
-
-      if (now - window.__refCalls.last > 1000) {
-        const fps = window.__refCalls.count
-        window.__refCalls.perSecond.push(fps)
-        if (window.__refCalls.perSecond.length > 5) window.__refCalls.perSecond.shift()
-        window.__refCalls.count = 0
-        window.__refCalls.last = now
-        window.__refCalls.keysThisSecond.clear()
-      }
-    }
-
     const stateUpdates = {}
     if (updates.isMicRecording !== undefined) stateUpdates.isMicRecording = updates.isMicRecording
     if (updates.isDJSpeaking !== undefined) stateUpdates.isDJSpeaking = updates.isDJSpeaking
@@ -752,132 +795,180 @@ export function UIStateProvider({ children }) {
     if (updates.isMusicPaused !== undefined) stateUpdates.isMusicPaused = updates.isMusicPaused
     if (updates.isAIProcessing !== undefined) stateUpdates.isAIProcessing = updates.isAIProcessing
     if (updates.isActiveDevice !== undefined) stateUpdates.isActiveDevice = updates.isActiveDevice
+    if (updates.activeDeviceId !== undefined) stateUpdates.activeDeviceId = updates.activeDeviceId
+    if (updates.activeDeviceOnline !== undefined) stateUpdates.activeDeviceOnline = updates.activeDeviceOnline
     if (updates.isCrossfading !== undefined) stateUpdates.isCrossfading = updates.isCrossfading
     if (updates.is_playing !== undefined) stateUpdates.is_playing = updates.is_playing
     if (updates.currentTrack !== undefined) stateUpdates.currentTrack = updates.currentTrack
     if (updates.queue !== undefined) stateUpdates.queue = updates.queue
     if (updates.currentIndex !== undefined) stateUpdates.currentIndex = updates.currentIndex
+    if (updates.talkBreak !== undefined) stateUpdates.talkBreak = updates.talkBreak
 
-    if (Object.keys(stateUpdates).length > 0) {
-      if (!window.__stateCalls) {
-        window.__stateCalls = { count: 0, last: now, perSecond: [], keysThisSecond: new Set() }
-      }
-
-      Object.keys(stateUpdates).forEach(key => window.__stateCalls.keysThisSecond.add(key))
-      window.__stateCalls.count++
-
-      if (now - window.__stateCalls.last > 1000) {
-        const fps = window.__stateCalls.count
-        window.__stateCalls.perSecond.push(fps)
-        if (window.__stateCalls.perSecond.length > 5) window.__stateCalls.perSecond.shift()
-        window.__stateCalls.count = 0
-        window.__stateCalls.last = now
-        window.__stateCalls.keysThisSecond.clear()
-      }
-      setEngineState(prev => ({ ...prev, ...stateUpdates }))
+    const keys = Object.keys(stateUpdates)
+    if (keys.length > 0) {
+      setEngineState(prev => {
+        for (let i = 0; i < keys.length; i++) {
+          if (prev[keys[i]] !== stateUpdates[keys[i]]) return { ...prev, ...stateUpdates }
+        }
+        return prev
+      })
     }
   }, [])
 
   const updateRadioButtonInteraction = useCallback((interaction) => {
+    Object.assign(radioButtonRef.current, interaction)
     setRadioButtonInteraction(prev => ({ ...prev, ...interaction }))
   }, [])
 
-  const updateRadioButtonOpacity = useCallback((opacity) => {
-    setRadioButtonOpacity(opacity)
+  const updateRadioButtonOpacity = setRadioButtonOpacity
+
+  const updateRadioButtonForegroundOpacity = setRadioButtonForegroundOpacity
+
+  const notifyArtwork = useCallback((kind, trackId) => {
+    const listeners = artworkListenersRef.current.get(`${kind}:${trackId}`)
+    if (listeners) listeners.forEach(listener => listener())
   }, [])
 
-  const updateRadioButtonForegroundOpacity = useCallback((opacity) => {
-    setRadioButtonForegroundOpacity(opacity)
+  const subscribeArtwork = useCallback((kind, trackId, listener) => {
+    const key = `${kind}:${trackId}`
+    const registry = artworkListenersRef.current
+    let listeners = registry.get(key)
+    if (!listeners) {
+      listeners = new Set()
+      registry.set(key, listeners)
+    }
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0 && registry.get(key) === listeners) {
+        registry.delete(key)
+      }
+    }
   }, [])
 
   const getArtworkUrl = useCallback((trackId, hasArtwork = true) => {
     if (!trackId || hasArtwork === false) return null
-    if (artworkUrls.has(trackId)) return artworkUrls.get(trackId)
+    if (artworkUrlsRef.current.has(trackId)) return artworkUrlsRef.current.get(trackId)
     const memoryCached = artworkCache.getMemory(trackId)
     if (memoryCached) {
-      setArtworkUrls(prev => new Map(prev).set(trackId, memoryCached))
+      artworkUrlsRef.current.set(trackId, memoryCached)
       return memoryCached
     }
     return generatePlaceholderDataURL(trackId)
-  }, [artworkUrls])
+  }, [])
 
   const getEnrichedArtworkUrl = useCallback((trackId, hasArtwork = true) => {
     if (!trackId || hasArtwork === false) return null
-    if (enrichedArtworkUrls.has(trackId)) return enrichedArtworkUrls.get(trackId)
+    if (enrichedArtworkUrlsRef.current.has(trackId)) return enrichedArtworkUrlsRef.current.get(trackId)
     const memoryCached = enrichedArtworkCache.getMemory(trackId)
     if (memoryCached) {
-      setEnrichedArtworkUrls(prev => new Map(prev).set(trackId, memoryCached))
+      enrichedArtworkUrlsRef.current.set(trackId, memoryCached)
       return memoryCached
     }
     return generatePlaceholderDataURL(trackId)
-  }, [enrichedArtworkUrls])
+  }, [])
 
 
   const preloadArtwork = useCallback(async (trackId, hasArtwork = true) => {
     if (!trackId || hasArtwork === false) return
-    if (artworkUrls.has(trackId)) return
+    if (artworkUrlsRef.current.has(trackId)) return
     if (loadingTracksRef.current.has(trackId)) return
     loadingTracksRef.current.add(trackId)
     try {
       const url = await artworkCache.getMedia(trackId)
       if (url) {
-        setArtworkUrls(prev => new Map(prev).set(trackId, url))
+        artworkUrlsRef.current.set(trackId, url)
+        notifyArtwork('artwork', trackId)
       }
     } catch (error) {
       logger.error(`[UIState] Failed to load artwork:`, error)
     } finally {
       loadingTracksRef.current.delete(trackId)
     }
-  }, [artworkUrls])
+  }, [notifyArtwork])
+
+  const getThumbArtworkUrl = useCallback((trackId, hasArtwork = true) => {
+    if (!trackId || hasArtwork === false) return null
+    if (artworkPrefetcher.isReady(trackId)) return artworkThumbCache.peekMemory(trackId)
+    return artworkUrlsRef.current.get(trackId) || artworkCache.peekMemory(trackId) || generatePlaceholderDataURL(trackId)
+  }, [])
+
+  const preloadThumbArtwork = useCallback((trackId, hasArtwork = true) => {
+    if (!trackId || hasArtwork === false) return
+    artworkPrefetcher.request(trackId)
+  }, [])
 
   const preloadArtworkBatch = useCallback(async (trackIds) => {
-    const promises = trackIds.filter(id => id && !artworkUrls.has(id)).map(id => preloadArtwork(id, true))
+    const promises = trackIds.filter(id => id && !artworkUrlsRef.current.has(id)).map(id => preloadArtwork(id, true))
     await Promise.all(promises)
-  }, [artworkUrls, preloadArtwork])
+  }, [preloadArtwork])
 
   const clearArtwork = useCallback((trackId) => {
-    setArtworkUrls(prev => {
-      const next = new Map(prev)
-      const blobUrl = prev.get(trackId)
-      if (blobUrl && blobUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(blobUrl)
-      }
-      next.delete(trackId)
-      return next
-    })
-  }, [])
+    artworkCache.releaseMemory(trackId)
+    artworkUrlsRef.current.delete(trackId)
+    notifyArtwork('artwork', trackId)
+  }, [notifyArtwork])
 
   const preloadEnrichedArtwork = useCallback(async (trackId, hasArtwork = true) => {
     if (!trackId || hasArtwork === false) return
-    if (enrichedArtworkUrls.has(trackId)) return
+    if (enrichedArtworkUrlsRef.current.has(trackId)) return
     if (loadingEnrichedRef.current.has(trackId)) return
     loadingEnrichedRef.current.add(trackId)
     try {
       const url = await enrichedArtworkCache.getMedia(trackId)
       if (url) {
-        setEnrichedArtworkUrls(prev => new Map(prev).set(trackId, url))
+        enrichedArtworkUrlsRef.current.set(trackId, url)
+        notifyArtwork('enriched', trackId)
       }
     } catch (error) {
       logger.error(`[UIState] Failed to load enriched artwork:`, error)
     } finally {
       loadingEnrichedRef.current.delete(trackId)
     }
-  }, [enrichedArtworkUrls])
+  }, [notifyArtwork])
 
   const clearEnrichedArtwork = useCallback((trackId) => {
-    setEnrichedArtworkUrls(prev => {
-      const next = new Map(prev)
-      const blobUrl = prev.get(trackId)
-      if (blobUrl && blobUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(blobUrl)
-      }
-      next.delete(trackId)
-      return next
-    })
-  }, [])
+    enrichedArtworkCache.releaseMemory(trackId)
+    enrichedArtworkUrlsRef.current.delete(trackId)
+    notifyArtwork('enriched', trackId)
+  }, [notifyArtwork])
 
-  const videoClipsMapRef = useRef(videoClipsMap)
-  useEffect(() => { videoClipsMapRef.current = videoClipsMap }, [videoClipsMap])
+  useEffect(() => {
+    const listeners = artworkListenersRef.current
+    const pinned = pinnedArtworkIdsRef.current
+    const bind = (kind, cache, urlsRef, preload) => {
+      cache.setPinnedChecker(id => pinned.has(id) || listeners.has(`${kind}:${id}`))
+      const unsubscribe = cache.subscribe((id) => {
+        const url = cache.peekMemory(id)
+        if (url) {
+          urlsRef.current.set(id, url)
+        } else {
+          urlsRef.current.delete(id)
+          if (listeners.has(`${kind}:${id}`)) void preload(id, true)
+        }
+        notifyArtwork(kind, id)
+      })
+      return () => {
+        unsubscribe()
+        cache.setPinnedChecker(null)
+      }
+    }
+    const unbindArtwork = bind('artwork', artworkCache, artworkUrlsRef, preloadArtwork)
+    const unbindEnriched = bind('enriched', enrichedArtworkCache, enrichedArtworkUrlsRef, preloadEnrichedArtwork)
+    artworkThumbCache.setPinnedChecker(id => listeners.has(`thumb:${id}`) || artworkPrefetcher.isDemanded(id))
+    artworkPrefetcher.setHeldChecker(id => listeners.has(`thumb:${id}`))
+    const notifyThumb = (id) => notifyArtwork('thumb', id)
+    const unsubscribeThumbCache = artworkThumbCache.subscribe(notifyThumb)
+    const unsubscribeThumbReady = artworkPrefetcher.subscribe(notifyThumb)
+    return () => {
+      unbindArtwork()
+      unbindEnriched()
+      unsubscribeThumbCache()
+      unsubscribeThumbReady()
+      artworkThumbCache.setPinnedChecker(null)
+      artworkPrefetcher.setHeldChecker(null)
+    }
+  }, [notifyArtwork, preloadArtwork, preloadEnrichedArtwork])
 
   const fetchVideoClips = useCallback(async (trackId) => {
     if (!trackId) return
@@ -892,7 +983,6 @@ export function UIStateProvider({ children }) {
     loadingVideoClipsRef.current.add(trackId)
     logger.info(`[UIState] 🎬 Fetching video clips for ${trackId.slice(0, 8)}...`)
     try {
-      // Uses api._routeRequest() which handles offline routing automatically
       const data = await api.getVideoClips(trackId)
       logger.info(`[UIState] 🎬 API data:`, data.reason || `${data.clips?.length || 0} clips`, data.keywords?.slice(0, 2) || 'no keywords')
       if (data.clips && data.clips.length > 0) {
@@ -900,20 +990,12 @@ export function UIStateProvider({ children }) {
           ...clip,
           url: `${window.location.origin}${clip.url}`
         }))
-        setVideoClipsMap(prev => {
-          const next = new Map(prev)
-          next.set(trackId, clips)
-          return next
-        })
-        videoClipsMapRef.current = new Map(videoClipsMapRef.current).set(trackId, clips)
+        videoClipsMapRef.current.set(trackId, clips)
+        setVideoClipsByTrack(prev => ({ ...prev, [trackId]: clips }))
         logger.info(`[UIState] ✅ Loaded ${clips.length} video clips for track ${trackId.slice(0, 8)}`)
       } else {
-        setVideoClipsMap(prev => {
-          const next = new Map(prev)
-          next.set(trackId, [])
-          return next
-        })
-        videoClipsMapRef.current = new Map(videoClipsMapRef.current).set(trackId, [])
+        videoClipsMapRef.current.set(trackId, EMPTY_CLIPS)
+        setVideoClipsByTrack(prev => ({ ...prev, [trackId]: EMPTY_CLIPS }))
         logger.info(`[UIState] ⚠️ No video clips for ${trackId.slice(0, 8)}: ${data.reason || 'empty'}`)
       }
     } catch (error) {
@@ -933,6 +1015,10 @@ export function UIStateProvider({ children }) {
 
     // Preload NEXT track artwork for seamless transitions
     const nextTrack = queue?.[currentIndex + 1]
+    const pinned = pinnedArtworkIdsRef.current
+    pinned.clear()
+    pinned.add(currentTrack.id)
+    if (nextTrack) pinned.add(nextTrack.id)
     if (nextTrack) {
       preloadArtwork(nextTrack.id, nextTrack.has_artwork)
       preloadEnrichedArtwork(nextTrack.id, nextTrack.has_artwork)
@@ -953,16 +1039,17 @@ export function UIStateProvider({ children }) {
   }, [])
 
   const updateShaderRegions = useCallback((regions, opacities) => {
-    setShaderPanelRegions(regions)
-    setShaderPanelOpacities(opacities)
+    shaderPanelRegionsRef.current = regions
+    shaderPanelOpacitiesRef.current = opacities
   }, [])
 
   const updateShaderRadioButtonPos = useCallback((pos) => {
-    setShaderRadioButtonPos(pos)
+    shaderRadioButtonPosRef.current = pos
   }, [])
 
   const openShoutoutModal = useCallback((shoutout) => {
-    setShoutoutModalState({ isOpen: true, shoutout })
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setShoutoutModalState({ isOpen: true, shoutout }))
   }, [])
 
   const closeShoutoutModal = useCallback(() => {
@@ -970,18 +1057,38 @@ export function UIStateProvider({ children }) {
   }, [])
 
   const openUploadModal = useCallback(() => {
-    setUploadModalOpen(true)
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setUploadModalOpen(true))
   }, [])
 
   const closeUploadModal = useCallback(() => {
     setUploadModalOpen(false)
   }, [])
 
+  const openUsageModal = useCallback(() => {
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setUsageModalOpen(true))
+  }, [])
+
+  const closeUsageModal = useCallback(() => {
+    setUsageModalOpen(false)
+  }, [])
+
   const setVideoPreviewPlaying = useCallback((isPlaying) => {
     setEngineState(prev => ({ ...prev, isVideoPreviewPlaying: isPlaying }))
   }, [])
 
-  const value = {
+  const artworkStore = useMemo(() => ({
+    subscribeArtwork,
+    getArtworkUrl,
+    getEnrichedArtworkUrl,
+    getThumbArtworkUrl,
+    preloadArtwork,
+    preloadEnrichedArtwork,
+    preloadThumbArtwork,
+  }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, getThumbArtworkUrl, preloadArtwork, preloadEnrichedArtwork, preloadThumbArtwork])
+
+  const value = useMemo(() => ({
     reportEngineStatus,
     visualState,
     radioProgressData,
@@ -1029,32 +1136,32 @@ export function UIStateProvider({ children }) {
     gyroscopeRef,
     mouseRef,
 
-    radioButtonInteraction,
-    radioButtonOpacity,
-    radioButtonForegroundOpacity,
+    radioButtonRef,
     updateRadioButtonInteraction,
     updateRadioButtonOpacity,
     updateRadioButtonForegroundOpacity,
     reportInterfaceState,
     interfaceState,
     interfaceRef,
+    toggleCatalogView,
+    setMobilePanel,
 
-    shaderPanelRegions,
-    shaderPanelOpacities,
-    shaderRadioButtonPos,
+    shaderPanelRegions: shaderPanelRegionsRef,
+    shaderPanelOpacities: shaderPanelOpacitiesRef,
+    shaderRadioButtonPos: shaderRadioButtonPosRef,
     updateShaderRegions,
     updateShaderRadioButtonPos,
 
-    artworkUrls,
+    subscribeArtwork,
     getArtworkUrl,
     preloadArtwork,
     preloadArtworkBatch,
     clearArtwork,
-    enrichedArtworkUrls,
     getEnrichedArtworkUrl,
     preloadEnrichedArtwork,
     clearEnrichedArtwork,
-    videoClipsMap,
+    videoClipsMapRef,
+    videoClipsByTrack,
     fetchVideoClips,
     audioFeatures,
     lyricTimestamps,
@@ -1068,17 +1175,59 @@ export function UIStateProvider({ children }) {
     openUploadModal,
     closeUploadModal,
 
+    usageModalOpen,
+    openUsageModal,
+    closeUsageModal,
+
     isOfflineRendering,
     setIsOfflineRendering,
 
     isScreenVisible,
 
     setVideoPreviewPlaying,
-  }
+  }), [
+    reportEngineStatus, visualState, radioProgressData, visualColorData, engineState,
+    setMixerRef, audioState, publishAudioState, queueState, publishQueueState,
+    authState, publishAuthState, radioState, publishRadioState, downloadState, publishDownloadState,
+    settingsState, publishSettings, contentUpdates, publishContentUpdate,
+    toasts, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
+    updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
+    reportInterfaceState, interfaceState, toggleCatalogView, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
+    subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
+    getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
+    videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
+    shoutoutModalState, openShoutoutModal, closeShoutoutModal,
+    uploadModalOpen, openUploadModal, closeUploadModal,
+    usageModalOpen, openUsageModal, closeUsageModal,
+    isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
+  ])
+
+  const radioButtonValue = useMemo(() => ({
+    radioButtonInteraction,
+    radioButtonOpacity,
+    radioButtonForegroundOpacity,
+  }), [radioButtonInteraction, radioButtonOpacity, radioButtonForegroundOpacity])
+
+  const actionsValue = useMemo(() => ({
+    publishToast,
+    removeToast,
+    toastSuccess,
+    toastError,
+    toastInfo,
+    toastWarning,
+  }), [publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning])
 
   return (
     <UIStateContext.Provider value={value}>
-      {children}
+      <UIActionsContext.Provider value={actionsValue}>
+        <RadioStateContext.Provider value={radioState}>
+          <ArtworkStoreContext.Provider value={artworkStore}>
+            <RadioButtonContext.Provider value={radioButtonValue}>
+              {children}
+            </RadioButtonContext.Provider>
+          </ArtworkStoreContext.Provider>
+        </RadioStateContext.Provider>
+      </UIActionsContext.Provider>
     </UIStateContext.Provider>
   )
 }
@@ -1089,53 +1238,79 @@ export function useUIState() {
   return context
 }
 
-export function useArtwork(trackId, hasArtwork = true) {
-  const { getArtworkUrl, preloadArtwork } = useUIState()
-  const [artworkUrl, setArtworkUrl] = useState(() => getArtworkUrl(trackId, hasArtwork))
+export function useUIActions() {
+  const context = useContext(UIActionsContext)
+  if (!context) throw new Error('useUIActions must be used within UIStateProvider')
+  return context
+}
+
+export function useRadioState() {
+  const context = useContext(RadioStateContext)
+  if (!context) throw new Error('useRadioState must be used within UIStateProvider')
+  return context
+}
+
+function useArtworkStore() {
+  const context = useContext(ArtworkStoreContext)
+  if (!context) throw new Error('useArtwork must be used within UIStateProvider')
+  return context
+}
+
+function useArtworkSubscription(kind, trackId, hasArtwork, getUrl, preload) {
+  const { subscribeArtwork } = useArtworkStore()
+  const enabled = !!trackId && hasArtwork !== false
+
+  const subscribe = useCallback(
+    (onChange) => (enabled ? subscribeArtwork(kind, trackId, onChange) : noopUnsubscribe),
+    [enabled, kind, trackId, subscribeArtwork]
+  )
+  const getSnapshot = useCallback(
+    () => (enabled ? getUrl(trackId, hasArtwork) : null),
+    [enabled, trackId, hasArtwork, getUrl]
+  )
+
+  const url = useSyncExternalStore(subscribe, getSnapshot)
+
   useEffect(() => {
-    if (!trackId || hasArtwork === false) { setArtworkUrl(null); return }
-    const currentUrl = getArtworkUrl(trackId, hasArtwork)
-    setArtworkUrl(currentUrl)
-    preloadArtwork(trackId, hasArtwork)
-  }, [trackId, hasArtwork, getArtworkUrl, preloadArtwork])
-  return artworkUrl
+    if (enabled) void preload(trackId, hasArtwork)
+  }, [enabled, trackId, hasArtwork, preload])
+
+  return url
+}
+
+export function useArtwork(trackId, hasArtwork = true) {
+  const { getArtworkUrl, preloadArtwork } = useArtworkStore()
+  return useArtworkSubscription('artwork', trackId, hasArtwork, getArtworkUrl, preloadArtwork)
+}
+
+export function useArtworkThumb(trackId, hasArtwork = true) {
+  const { getThumbArtworkUrl, preloadThumbArtwork } = useArtworkStore()
+  return useArtworkSubscription('thumb', trackId, hasArtwork, getThumbArtworkUrl, preloadThumbArtwork)
 }
 
 export function useEnrichedArtwork(trackId, hasArtwork = true) {
-  const { getEnrichedArtworkUrl, preloadEnrichedArtwork } = useUIState()
-  const [enrichedArtworkUrl, setEnrichedArtworkUrl] = useState(() => getEnrichedArtworkUrl(trackId, hasArtwork))
-  useEffect(() => {
-    if (!trackId || hasArtwork === false) { setEnrichedArtworkUrl(null); return }
-    const currentUrl = getEnrichedArtworkUrl(trackId, hasArtwork)
-    setEnrichedArtworkUrl(currentUrl)
-    preloadEnrichedArtwork(trackId, hasArtwork)
-  }, [trackId, hasArtwork, getEnrichedArtworkUrl, preloadEnrichedArtwork])
-  return enrichedArtworkUrl
+  const { getEnrichedArtworkUrl, preloadEnrichedArtwork } = useArtworkStore()
+  return useArtworkSubscription('enriched', trackId, hasArtwork, getEnrichedArtworkUrl, preloadEnrichedArtwork)
 }
 
 export function useVideoClips(trackId) {
-  const { videoClipsMap, fetchVideoClips } = useUIState()
-  const [clips, setClips] = useState(() => videoClipsMap.get(trackId) || [])
-  useEffect(() => {
-    if (!trackId) { setClips([]); return }
-    const currentClips = videoClipsMap.get(trackId)
-    if (currentClips !== undefined) {
-      setClips(currentClips)
-    } else {
-      fetchVideoClips(trackId)
-    }
-  }, [trackId, videoClipsMap, fetchVideoClips])
+  const { videoClipsByTrack, fetchVideoClips } = useUIState()
+  const clips = trackId ? videoClipsByTrack[trackId] : EMPTY_CLIPS
 
-  return clips
+  useEffect(() => {
+    if (trackId && clips === undefined) void fetchVideoClips(trackId)
+  }, [trackId, clips, fetchVideoClips])
+
+  return clips || EMPTY_CLIPS
 }
 
 export function useRadioUI() {
+  const radioButton = useContext(RadioButtonContext)
+  if (!radioButton) throw new Error('useRadioUI must be used within UIStateProvider')
+  const { radioButtonOpacity, radioButtonForegroundOpacity, radioButtonInteraction } = radioButton
   const {
     reportEngineStatus,
     visualState,
-    radioButtonOpacity,
-    radioButtonForegroundOpacity,
-    radioButtonInteraction,
     radioProgressData,
     visualColorData,
     updateRadioButtonOpacity,

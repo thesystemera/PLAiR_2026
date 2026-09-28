@@ -1,7 +1,10 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react'
 import { useUIState, useEnrichedArtwork } from '../contexts/UIStateContext'
 import { useViewport } from '../contexts/ViewportContext'
+import { useQuality } from '../contexts/QualityContext'
+import { isSceneRenderingPaused } from '../lib/renderPause'
 import { logger } from '../lib/logger'
+import { CSS_TRANSITION } from '../lib/motion'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PARALLAX TUNING - All tweakable values for the POM + trail suppression shader
@@ -85,6 +88,7 @@ const fragmentShader = `
   uniform vec2 u_gyro;
   uniform float u_intensity;
   uniform float u_zoom;
+  uniform float u_steps;
 
   varying vec2 v_texCoord;
 
@@ -96,10 +100,9 @@ const fragmentShader = `
     float finalZoom = u_zoom * autoZoom;
     vec2 uv = (v_texCoord - 0.5) / finalZoom + 0.5;
 
-    // --- Stage 1: Parallax Occlusion Mapping ---
     const int LINEAR_STEPS = ${POM.LINEAR_STEPS};
     const int REFINE_STEPS = ${POM.REFINE_STEPS};
-    float layerStep = 1.0 / float(LINEAR_STEPS);
+    float layerStep = 1.0 / u_steps;
 
     float testDepth = 1.0;
     float prevTestDepth = 1.0;
@@ -108,6 +111,7 @@ const fragmentShader = `
     bool hit = false;
 
     for (int i = 0; i < LINEAR_STEPS; i++) {
+      if (float(i) >= u_steps) break;
       testUV = uv - (testDepth - 0.5) * displacement;
       sampledDepth = texture2D(u_depth, clamp(testUV, 0.0, 1.0)).r;
 
@@ -145,13 +149,18 @@ const fragmentShader = `
 
     vec4 pomColor = texture2D(u_color, clamp(testUV, 0.001, 0.999));
 
-    // --- Stage 2: Trail Detection ---
-    // trailMask = edgeness × foregroundness × displacementGate
-    //
-    // Occlusion side (good): base was background (low depth) → foregroundness low → mask ≈ 0
-    // Trail side (bad):      base was foreground (high depth) → foregroundness high → mask ≈ 1
+    float dispGate = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
+    if (dispGate <= 0.0) {
+      gl_FragColor = pomColor;
+      return;
+    }
 
     float baseDepth = texture2D(u_depth, clamp(uv, 0.0, 1.0)).r;
+    float foregroundness = smoothstep(${G(POM.FG_DEPTH_SOFT)}, ${G(POM.FG_DEPTH_HARD)}, baseDepth);
+    if (foregroundness <= 0.0) {
+      gl_FragColor = pomColor;
+      return;
+    }
 
     float texel = ${G(POM.EDGE_RADIUS)};
     float dL = texture2D(u_depth, clamp(testUV - vec2(texel, 0.0), 0.0, 1.0)).r;
@@ -160,16 +169,12 @@ const fragmentShader = `
     float dD = texture2D(u_depth, clamp(testUV + vec2(0.0, texel), 0.0, 1.0)).r;
     float gradient = abs(dR - dL) + abs(dD - dU);
 
-    float edgeness       = smoothstep(${G(POM.EDGE_SOFT)}, ${G(POM.EDGE_HARD)}, gradient);
-    float foregroundness  = smoothstep(${G(POM.FG_DEPTH_SOFT)}, ${G(POM.FG_DEPTH_HARD)}, baseDepth);
-    float dispGate        = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
-
+    float edgeness = smoothstep(${G(POM.EDGE_SOFT)}, ${G(POM.EDGE_HARD)}, gradient);
     float trailMask = edgeness * foregroundness * dispGate;
-
-    // --- Stage 3: Background Fill ---
-    // 4 samples: ±perpendicular to displacement, 1× and 2× anti-displacement.
-    // Weighted by pow(1-depth, power) so background pixels dominate the blend.
-    // Each sample displaced by its own depth for correct parallax positioning.
+    if (trailMask <= 0.0) {
+      gl_FragColor = pomColor;
+      return;
+    }
 
     vec2 dispDir = dispLen > 0.001 ? displacement / dispLen : vec2(1.0, 0.0);
     vec2 perpDir = vec2(-dispDir.y, dispDir.x);
@@ -206,6 +211,14 @@ const POSITIONS = new Float32Array([
   -1, 1,   1, -1,   1, 1
 ])
 
+const PARALLAX_EPSILON = 1e-4
+const REDRAW_SHIFT_PX = 0.1
+const MIN_LINEAR_STEPS = 6
+const FRAME_CAP_SLACK_MS = 4
+const MIPMAP_BELOW_RATIO = 0.75
+
+const isPowerOfTwo = value => value > 0 && (value & (value - 1)) === 0
+
 const TEX_COORDS = new Float32Array([
   0, 1,  1, 1,  0, 0,
   0, 0,  1, 1,  1, 0
@@ -220,7 +233,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   zoom = 1.0,
   onLoad,
   onError,
-  isActive = true  // Only run RAF loop when this layer is active/visible
+  isActive = true
 }) {
   const enrichedArtworkUrl = useEnrichedArtwork(trackId)
 
@@ -231,6 +244,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const depthTextureRef = useRef(null)
   const animationFrameRef = useRef(null)
   const uniformsRef = useRef(null)
+  const lastDrawRef = useRef(null)
+  const colorTextureInfoRef = useRef(null)
 
   const [glReady, setGlReady] = useState(false)
   const [texturesReady, setTexturesReady] = useState(false)
@@ -240,8 +255,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
   const { gyroscopeRef, mouseRef } = useUIState()
   const { isMobile } = useViewport()
+  const { parallaxDpr, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
 
-  // Register RAF source for debugging
   useEffect(() => {
     window.registerRAFSource?.('ParallaxArtwork')
   }, [])
@@ -337,7 +352,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         depth: gl.getUniformLocation(program, 'u_depth'),
         gyro: gl.getUniformLocation(program, 'u_gyro'),
         intensity: gl.getUniformLocation(program, 'u_intensity'),
-        zoom: gl.getUniformLocation(program, 'u_zoom')
+        zoom: gl.getUniformLocation(program, 'u_zoom'),
+        steps: gl.getUniformLocation(program, 'u_steps')
       }
 
       gl.uniform1i(uniformsRef.current.color, 0)
@@ -426,7 +442,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         depth: gl.getUniformLocation(program, 'u_depth'),
         gyro: gl.getUniformLocation(program, 'u_gyro'),
         intensity: gl.getUniformLocation(program, 'u_intensity'),
-        zoom: gl.getUniformLocation(program, 'u_zoom')
+        zoom: gl.getUniformLocation(program, 'u_zoom'),
+        steps: gl.getUniformLocation(program, 'u_steps')
       }
 
       gl.uniform1i(uniformsRef.current.color, 0)
@@ -455,7 +472,12 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         if (programRef.current) gl.deleteProgram(programRef.current)
         if (colorTextureRef.current) gl.deleteTexture(colorTextureRef.current)
         if (depthTextureRef.current) gl.deleteTexture(depthTextureRef.current)
+        gl.getExtension('WEBGL_lose_context')?.loseContext()
       }
+      programRef.current = null
+      colorTextureRef.current = null
+      depthTextureRef.current = null
+      glRef.current = null
     }
   }, [handleContextLost, handleContextRestored])
 
@@ -499,7 +521,13 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     const image = new Image()
     image.crossOrigin = 'anonymous'
 
-    image.onload = () => {
+    image.decoding = 'async'
+    image.onload = async () => {
+      try {
+        await image.decode?.()
+      } catch {
+        logger.debug('[ParallaxArtwork] Async decode unavailable, drawing directly')
+      }
       if (cancelled) {
         logger.debug('[ParallaxArtwork] Image load cancelled (track changed)')
         return
@@ -530,6 +558,9 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, splitCanvas)
+        const canMipmap = isPowerOfTwo(halfWidth) && isPowerOfTwo(height)
+        if (canMipmap) gl.generateMipmap(gl.TEXTURE_2D)
+        colorTextureInfoRef.current = { width: halfWidth, canMipmap, filter: gl.LINEAR }
 
         ctx.drawImage(image, halfWidth, 0, halfWidth, height, 0, 0, halfWidth, height)
 
@@ -602,7 +633,11 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       return
     }
 
-    const render = () => {
+    lastDrawRef.current = null
+    let errorCheckPending = true
+    const minFrameMs = parallaxFpsCap > 0 ? 1000 / parallaxFpsCap - FRAME_CAP_SLACK_MS : 0
+
+    const render = (timestamp) => {
       try {
         if (!gl || !canvas || !uniforms) {
           return
@@ -619,33 +654,77 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           return
         }
 
-        gl.viewport(0, 0, canvas.width, canvas.height)
-
-        gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
-        gl.activeTexture(gl.TEXTURE1)
-        gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
-
         const gyro = gyroscopeRef?.current || { parallaxX: 0, parallaxY: 0 }
         const mouse = mouseRef?.current || { parallaxX: 0, parallaxY: 0 }
 
         const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
-        const parallaxX = hasGyro ? gyro.parallaxX : mouse.parallaxX
-        const parallaxY = hasGyro ? gyro.parallaxY : mouse.parallaxY
+        const parallaxX = reduceMotion ? 0 : hasGyro ? gyro.parallaxX : mouse.parallaxX
+        const parallaxY = reduceMotion ? 0 : hasGyro ? gyro.parallaxY : mouse.parallaxY
 
-        gl.uniform2f(uniforms.gyro, parallaxX, parallaxY)
-        gl.uniform1f(uniforms.intensity, intensity)
-        gl.uniform1f(uniforms.zoom, zoom)
+        const effectiveZoom = zoom * (1 + Math.abs(intensity) * POM.ZOOM_FACTOR)
+        const pixelsPerUnit = Math.abs(intensity) * Math.max(canvas.width, canvas.height) * effectiveZoom
+        const epsilon = Math.max(PARALLAX_EPSILON, pixelsPerUnit > 0 ? REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit) : PARALLAX_EPSILON)
 
-        gl.clearColor(0, 0, 0, 1)
-        gl.clear(gl.COLOR_BUFFER_BIT)
-        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        const last = lastDrawRef.current
+        const unchanged = last &&
+          last.color === colorTextureRef.current &&
+          last.width === canvas.width &&
+          last.height === canvas.height &&
+          Math.abs(last.x - parallaxX) < epsilon &&
+          Math.abs(last.y - parallaxY) < epsilon
 
-        const error = gl.getError()
-        if (error !== gl.NO_ERROR) {
-          logger.error(`[ParallaxArtwork] WebGL error during render: ${error}`)
-          setFallbackMode(true)
-          return
+        const paused = last && timestamp !== undefined && isSceneRenderingPaused(timestamp)
+        const throttled = paused || (last && minFrameMs > 0 && timestamp !== undefined && timestamp - last.time < minFrameMs)
+
+        if (!unchanged && !throttled) {
+          const travelPx = Math.hypot(parallaxX, parallaxY) * pixelsPerUnit
+          const steps = parallaxStepPx > 0
+            ? Math.min(POM.LINEAR_STEPS, Math.max(MIN_LINEAR_STEPS, Math.ceil(travelPx / parallaxStepPx)))
+            : POM.LINEAR_STEPS
+
+          gl.viewport(0, 0, canvas.width, canvas.height)
+
+          gl.activeTexture(gl.TEXTURE0)
+          gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
+          const colorInfo = colorTextureInfoRef.current
+          if (colorInfo) {
+            const minify = !isTopTier && colorInfo.canMipmap && canvas.width < colorInfo.width * MIPMAP_BELOW_RATIO
+            const filter = minify ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR
+            if (colorInfo.filter !== filter) {
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+              colorInfo.filter = filter
+            }
+          }
+          gl.activeTexture(gl.TEXTURE1)
+          gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
+
+          gl.uniform2f(uniforms.gyro, parallaxX, parallaxY)
+          gl.uniform1f(uniforms.intensity, intensity)
+          gl.uniform1f(uniforms.zoom, zoom)
+          gl.uniform1f(uniforms.steps, steps)
+
+          gl.clearColor(0, 0, 0, 1)
+          gl.clear(gl.COLOR_BUFFER_BIT)
+          gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+          if (errorCheckPending) {
+            errorCheckPending = false
+            const error = gl.getError()
+            if (error !== gl.NO_ERROR) {
+              logger.error(`[ParallaxArtwork] WebGL error during render: ${error}`)
+              setFallbackMode(true)
+              return
+            }
+          }
+
+          lastDrawRef.current = {
+            color: colorTextureRef.current,
+            width: canvas.width,
+            height: canvas.height,
+            x: parallaxX,
+            y: parallaxY,
+            time: timestamp ?? performance.now(),
+          }
         }
 
         window.__rafDebug?.sources && (window.__rafDebug.sources['ParallaxArtwork'] = (window.__rafDebug.sources['ParallaxArtwork'] || 0) + 1)
@@ -663,7 +742,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         cancelAnimationFrame(animationFrameRef.current)
       }
     }
-  }, [glReady, texturesReady, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive])
+  }, [glReady, texturesReady, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -671,10 +750,11 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
-        const dpr = window.devicePixelRatio || 1
+        const deviceDpr = window.devicePixelRatio || 1
+        const dpr = Math.min(deviceDpr, parallaxDpr)
 
         let width, height
-        if (entry.devicePixelContentBoxSize) {
+        if (entry.devicePixelContentBoxSize && dpr === deviceDpr) {
           width = entry.devicePixelContentBoxSize[0].inlineSize
           height = entry.devicePixelContentBoxSize[0].blockSize
         } else {
@@ -691,22 +771,16 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
     resizeObserver.observe(canvas)
     return () => resizeObserver.disconnect()
-  }, [])
+  }, [parallaxDpr])
 
-  // Use fallback (standard artwork) when:
-  // - fallbackMode is true (WebGL failed)
-  // - contextLost
-  // - not visible (GPU savings when panel hidden)
-  // - not active (back layer in A/B crossfade)
-  // - textures not ready yet (show standard while enriched loads)
   const useStandardArtwork = fallbackMode || contextLost || !isVisible || !isActive || !texturesReady
 
   if (fallbackMode || contextLost) {
-    // Pure fallback - no canvas at all
     return (
       <img
         src={artworkUrl}
         alt={alt}
+        decoding="async"
         className={className}
         onLoad={onLoad}
         onError={onError}
@@ -715,14 +789,12 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     )
   }
 
-  // Always render standard artwork behind canvas
-  // Canvas fades in on top when textures are ready
   return (
     <div className={className} style={{ position: 'relative', width: '100%', height: '100%' }}>
-      {/* Standard artwork - always visible as base layer */}
       <img
         src={artworkUrl}
         alt={alt}
+        decoding="async"
         style={{
           position: 'absolute',
           inset: 0,
@@ -732,7 +804,6 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         }}
         onLoad={!texturesReady ? onLoad : undefined}
       />
-      {/* WebGL canvas - fades in when textures ready AND visible */}
       <canvas
         ref={canvasRef}
         style={{
@@ -741,7 +812,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           width: '100%',
           height: '100%',
           opacity: useStandardArtwork ? 0 : 1,
-          transition: 'opacity 300ms ease-in-out'
+          transition: CSS_TRANSITION.fadeOpacity
         }}
       />
     </div>

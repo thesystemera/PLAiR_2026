@@ -1,17 +1,131 @@
 import { logger } from './logger'
+import { safeStorage } from './safeStorage'
 import { getSessionIds } from './session'
 import { offlineBackend } from './offlineAPI'
 import { uiState } from '../contexts/UIStateContext'
 
 const API_BASE = '/api'
+const STREAM_BITRATES = new Set(['128k', '192k', '256k'])
 
 class API {
   constructor() {
     this.token = null
+    this.authRejectedListeners = new Set()
+    this.connectivityListeners = new Set()
+    this.syncingOfflineWrites = null
+  }
+
+  onConnectivity(listener) {
+    this.connectivityListeners.add(listener)
+    return () => this.connectivityListeners.delete(listener)
+  }
+
+  _notifyConnectivity(event) {
+    this.connectivityListeners.forEach(listener => {
+      try {
+        listener(event)
+      } catch (err) {
+        logger.error('[API] Connectivity listener failed:', err)
+      }
+    })
+  }
+
+  reportServerTrouble(source) {
+    this._notifyConnectivity({ type: 'trouble', source })
+  }
+
+  reportServerRecovered() {
+    this._notifyConnectivity({ type: 'recovered' })
+  }
+
+  async syncOfflineWrites() {
+    if (this.syncingOfflineWrites) return this.syncingOfflineWrites
+    const pending = offlineBackend.takePendingPreferenceWrites()
+    if (!pending.length) return 0
+    this.syncingOfflineWrites = (async () => {
+      const failed = []
+      for (const op of pending) {
+        try {
+          const url = `${API_BASE}/${op.type}s/${op.id}/preference`
+          const res = op.preferenceType
+            ? await this._fetch(url, { method: 'POST', headers: this.getHeaders(), body: JSON.stringify({ preference_type: op.preferenceType }) })
+            : await this._fetch(url, { method: 'DELETE', headers: this.getHeaders() })
+          if (!res.ok && res.status >= 500) failed.push(op)
+        } catch {
+          failed.push(op)
+        }
+      }
+      if (failed.length) offlineBackend.restorePendingPreferenceWrites(failed)
+      logger.info(`[API] Synced ${pending.length - failed.length}/${pending.length} offline preference change(s)`)
+      return pending.length - failed.length
+    })().finally(() => {
+      this.syncingOfflineWrites = null
+    })
+    return this.syncingOfflineWrites
   }
 
   setToken(token) {
     this.token = token
+  }
+
+  onAuthRejected(listener) {
+    this.authRejectedListeners.add(listener)
+    return () => this.authRejectedListeners.delete(listener)
+  }
+
+  _notifyAuthRejected(token, url) {
+    this.authRejectedListeners.forEach(listener => {
+      try {
+        listener({ token, url })
+      } catch (err) {
+        logger.error('[API] Auth rejection listener failed:', err)
+      }
+    })
+  }
+
+  async _fetch(url, options = {}) {
+    let res
+    try {
+      res = await fetch(url, options)
+    } catch (error) {
+      if (error?.name !== 'AbortError') this.reportServerTrouble('network')
+      throw error
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      this.reportServerTrouble(`http_${res.status}`)
+    }
+    if (res.status === 401) {
+      const auth = options.headers?.Authorization
+      const sentToken = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null
+      if (sentToken && sentToken === this.token) this._notifyAuthRejected(sentToken, url)
+    }
+    return res
+  }
+
+  async checkSession(token = this.token) {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      headers: { ...this.getHeaders(false), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      const error = new Error(`Not authenticated (${res.status})`)
+      error.status = res.status
+      throw error
+    }
+    return res.json()
+  }
+
+  async refreshToken() {
+    const res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    })
+    if (!res.ok) {
+      const error = new Error(`Token refresh failed (${res.status})`)
+      error.status = res.status
+      throw error
+    }
+    return res.json()
   }
 
   getHeaders(includeAuth = true) {
@@ -31,7 +145,7 @@ class API {
   }
 
   async put(url, data) {
-    const res = await fetch(url, {
+    const res = await this._fetch(url, {
       method: 'PUT',
       headers: this.getHeaders(),
       body: JSON.stringify(data)
@@ -59,7 +173,7 @@ class API {
   async register(username, password) {
     return this._routeRequest('register', [username, password], async () => {
       logger.info('Registering user:', username)
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await this._fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -77,7 +191,7 @@ class API {
   async login(username, password) {
     return this._routeRequest('login', [username, password], async () => {
       logger.info('Logging in user:', username)
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const res = await this._fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
@@ -94,15 +208,19 @@ class API {
 
   async getMe() {
     return this._routeRequest('getMe', [], async () => {
-      const res = await fetch(`${API_BASE}/auth/me`, {
+      const res = await this._fetch(`${API_BASE}/auth/me`, {
         headers: this.getHeaders(),
       })
-      if (!res.ok) throw new Error('Not authenticated')
+      if (!res.ok) {
+        const error = new Error(`Not authenticated (${res.status})`)
+        error.status = res.status
+        throw error
+      }
 
       const userData = await res.json()
 
       try {
-        localStorage.setItem('cached_user', JSON.stringify(userData))
+        safeStorage.set('cached_user', JSON.stringify(userData))
       } catch (err) {
         logger.error('[API] Failed to cache user data:', err)
       }
@@ -114,7 +232,7 @@ class API {
   async updateAudioQuality(audioQuality) {
     logger.info('[API] Updating audio quality to:', audioQuality)
     return this._routeRequest('updateAudioQuality', [audioQuality], async () => {
-      const res = await fetch(`${API_BASE}/auth/audio-quality`, {
+      const res = await this._fetch(`${API_BASE}/auth/audio-quality`, {
         method: 'PUT',
         headers: this.getHeaders(),
         body: JSON.stringify({ audio_quality: audioQuality }),
@@ -128,7 +246,7 @@ class API {
 
   async setPreference(type, id, preferenceType) {
     return this._routeRequest('setPreference', [type, id, preferenceType], async () => {
-      const res = await fetch(`${API_BASE}/${type}s/${id}/preference`, {
+      const res = await this._fetch(`${API_BASE}/${type}s/${id}/preference`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ preference_type: preferenceType }),
@@ -140,7 +258,7 @@ class API {
 
   async removePreference(type, id) {
     return this._routeRequest('removePreference', [type, id], async () => {
-      const res = await fetch(`${API_BASE}/${type}s/${id}/preference`, {
+      const res = await this._fetch(`${API_BASE}/${type}s/${id}/preference`, {
         method: 'DELETE',
         headers: this.getHeaders(),
       })
@@ -152,17 +270,19 @@ class API {
   async getUserPreferences(type) {
     return this._routeRequest('getUserPreferences', [type], async () => {
       const endpoint = type === 'track' ? '/user/preferences' : `/user/${type}-preferences`
-      const res = await fetch(`${API_BASE}${endpoint}`, {
+      const res = await this._fetch(`${API_BASE}${endpoint}`, {
         headers: this.getHeaders(),
       })
       if (!res.ok) throw new Error('Failed to get preferences')
-      return res.json()
+      const data = await res.json()
+      offlineBackend.rememberPreferences(type, data)
+      return data
     })
   }
 
   async updateUserProfile(updates) {
     return this._routeRequest('updateUserProfile', [updates], async () => {
-      const res = await fetch(`${API_BASE}/user/profile`, {
+      const res = await this._fetch(`${API_BASE}/user/profile`, {
         method: 'PUT',
         headers: this.getHeaders(),
         body: JSON.stringify(updates),
@@ -179,7 +299,7 @@ class API {
       if (genre) {
         url += `&genre=${encodeURIComponent(genre)}`
       }
-      const res = await fetch(url, {
+      const res = await this._fetch(url, {
         headers: this.getHeaders(),
       })
       return res.json()
@@ -192,21 +312,21 @@ class API {
       if (genre) {
         url += `?genre=${encodeURIComponent(genre)}`
       }
-      const res = await fetch(url)
+      const res = await this._fetch(url)
       return res.json()
     })
   }
 
   async getGenres() {
     return this._routeRequest('getGenres', [], async () => {
-      const res = await fetch(`${API_BASE}/catalog/genres`)
+      const res = await this._fetch(`${API_BASE}/catalog/genres`)
       return res.json()
     })
   }
 
   async getTrack(trackId) {
     return this._routeRequest('getTrack', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/track/${trackId}`)
+      const res = await this._fetch(`${API_BASE}/track/${trackId}`)
       if (!res.ok) {
         throw new Error(`Track not found: ${trackId}`)
       }
@@ -216,7 +336,7 @@ class API {
 
   async play(trackId = null) {
     return this._routeRequest('play', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/playback/play`, {
+      const res = await this._fetch(`${API_BASE}/playback/play`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ track_id: trackId }),
@@ -227,7 +347,7 @@ class API {
 
   async addToQueue(trackIds) {
     return this._routeRequest('addToQueue', [trackIds], async () => {
-      const res = await fetch(`${API_BASE}/queue/add`, {
+      const res = await this._fetch(`${API_BASE}/queue/add`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ track_ids: trackIds }),
@@ -238,7 +358,7 @@ class API {
 
   async removeFromQueue(trackId) {
     return this._routeRequest('removeFromQueue', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/queue/remove/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/queue/remove/${trackId}`, {
         method: 'DELETE',
         headers: this.getHeaders(),
       })
@@ -248,7 +368,7 @@ class API {
 
   async seedRadio(category = 'all', trackId = null) {
     return this._routeRequest('seedRadio', [category, trackId], async () => {
-      const res = await fetch(`${API_BASE}/queue/seed`, {
+      const res = await this._fetch(`${API_BASE}/queue/seed`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ category, track_id: trackId })
@@ -261,7 +381,7 @@ class API {
     return this._routeRequest('searchSemantic', [query, nResults], async () => {
       const mode = useAiAnalysis ? '🤖 AI-powered' : '⚡ Fast keyword'
       logger.info(`[API] 🌐 ONLINE MODE - ${mode} semantic search for "${query}"`)
-      const res = await fetch(`${API_BASE}/search/semantic`, {
+      const res = await this._fetch(`${API_BASE}/search/semantic`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis }),
@@ -273,7 +393,7 @@ class API {
   async getShoutout(shoutoutId) {
     return this._routeRequest('getShoutout', [shoutoutId], async () => {
       logger.info(`[API] 📝 Fetching shoutout ${shoutoutId}`)
-      const res = await fetch(`${API_BASE}/user_content/shoutouts/${shoutoutId}`, {
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/${shoutoutId}`, {
         method: 'GET',
         headers: this.getHeaders(),
       })
@@ -285,11 +405,23 @@ class API {
     })
   }
 
+  async deleteShoutout(shoutoutId) {
+    return this._routeRequest('deleteShoutout', [shoutoutId], async () => {
+      logger.info(`[API] 🗑️ Deleting shoutout ${shoutoutId}`)
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/${shoutoutId}`, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+        credentials: 'include',
+      })
+      return res.ok
+    })
+  }
+
   async searchShoutouts(query, nResults = 20, useAiAnalysis = false) {
     return this._routeRequest('searchShoutouts', [query, nResults], async () => {
       const mode = useAiAnalysis ? '🤖 AI-powered' : '⚡ Fast keyword'
       logger.info(`[API] 🔍 ${mode} shoutout search for "${query}"`)
-      const res = await fetch(`${API_BASE}/user_content/shoutouts/search`, {
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/search`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis }),
@@ -301,7 +433,7 @@ class API {
   async getShoutoutReplies(shoutoutId, sortBy = 'popularity') {
     return this._routeRequest('getShoutoutReplies', [shoutoutId, sortBy], async () => {
       logger.info(`[API] 💬 Fetching replies for shoutout ${shoutoutId}`)
-      const res = await fetch(`${API_BASE}/user_content/shoutouts/${shoutoutId}/replies?sort_by=${sortBy}`, {
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/${shoutoutId}/replies?sort_by=${sortBy}`, {
         method: 'GET',
         headers: this.getHeaders(),
       })
@@ -316,7 +448,7 @@ class API {
   async uploadShoutoutReply(parentId, audioBase64) {
     return this._routeRequest('uploadShoutoutReply', [parentId, audioBase64], async () => {
       logger.info(`[API] 🎤 Uploading reply directly to shoutout ${parentId}`)
-      const res = await fetch(`${API_BASE}/user_content/shoutouts/${parentId}/reply/upload`, {
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/${parentId}/reply/upload`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ audio: audioBase64 }),
@@ -342,14 +474,16 @@ class API {
         body.source_track_id = sourceTrackId
       }
 
-      const res = await fetch(`${API_BASE}/generate`, {
+      const res = await this._fetch(`${API_BASE}/generate`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(body),
       })
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Generation failed' }))
-        throw new Error(errorData.detail || 'Generation failed')
+        const err = new Error(errorData.detail || 'Generation failed')
+        err.status = res.status
+        throw err
       }
       return res.json()
     })
@@ -357,7 +491,7 @@ class API {
 
   async cancelGenerationJob(jobId) {
     return this._routeRequest('cancelGenerationJob', [jobId], async () => {
-      const res = await fetch(`${API_BASE}/generation-jobs/${jobId}`, {
+      const res = await this._fetch(`${API_BASE}/generation-jobs/${jobId}`, {
         method: 'DELETE',
         headers: this.getHeaders(),
       })
@@ -368,7 +502,7 @@ class API {
 
   async getGenerationJobs() {
     return this._routeRequest('getGenerationJobs', [], async () => {
-      const res = await fetch(`${API_BASE}/generation-jobs`, {
+      const res = await this._fetch(`${API_BASE}/generation-jobs`, {
         headers: this.getHeaders(),
       })
       if (!res.ok) throw new Error('Failed to get generation jobs')
@@ -378,7 +512,7 @@ class API {
 
   async getDevices() {
     return this._routeRequest('getDevices', [], async () => {
-      const res = await fetch(`${API_BASE}/devices`, {
+      const res = await this._fetch(`${API_BASE}/devices`, {
         headers: this.getHeaders(),
       })
       if (!res.ok) throw new Error('Failed to get devices')
@@ -388,7 +522,7 @@ class API {
 
   async activateDevice(deviceId = null) {
     return this._routeRequest('activateDevice', [deviceId], async () => {
-      const res = await fetch(`${API_BASE}/devices/activate`, {
+      const res = await this._fetch(`${API_BASE}/devices/activate`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({ device_id: deviceId }),
@@ -400,7 +534,7 @@ class API {
 
   async renameDevice(deviceId, newName) {
     return this._routeRequest('renameDevice', [deviceId, newName], async () => {
-      const res = await fetch(`${API_BASE}/devices/${deviceId}/name`, {
+      const res = await this._fetch(`${API_BASE}/devices/${deviceId}/name`, {
         method: 'PUT',
         headers: this.getHeaders(),
         body: JSON.stringify({ new_name: newName }),
@@ -412,7 +546,7 @@ class API {
 
   async removeDevice(deviceId) {
     return this._routeRequest('removeDevice', [deviceId], async () => {
-      const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+      const res = await this._fetch(`${API_BASE}/devices/${deviceId}`, {
         method: 'DELETE',
         headers: this.getHeaders(),
       })
@@ -421,7 +555,7 @@ class API {
     })
   }
 
-  getStreamUrl(trackId) {
+  getStreamUrl(trackId, bitrate = null) {
     const baseUrl = `/api/stream/${trackId}/webm`
     const session = getSessionIds()
     const params = new URLSearchParams({
@@ -429,9 +563,22 @@ class API {
       device_id: session.deviceId
     })
 
-    if (this.token) {
-      params.set('token', this.token)
+    if (STREAM_BITRATES.has(bitrate)) {
+      params.set('bitrate', bitrate)
     }
+
+    return `${baseUrl}?${params.toString()}`
+  }
+
+  getRenderAudioUrl(trackId) {
+    const baseUrl = `/api/stream/${trackId}`
+    const session = getSessionIds()
+    const params = new URLSearchParams({
+      guest_id: session.guestId,
+      device_id: session.deviceId,
+      render: '1',
+      t: String(Date.now())
+    })
 
     return `${baseUrl}?${params.toString()}`
   }
@@ -445,7 +592,7 @@ class API {
 
   async getAudioFeatures(trackId) {
     return this._routeRequest('getAudioFeatures', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/audio-features/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/audio-features/${trackId}`, {
         headers: this.getHeaders(false),
       })
       if (!res.ok) {
@@ -457,7 +604,7 @@ class API {
 
   async getLyricTimestamps(trackId) {
     return this._routeRequest('getLyricTimestamps', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/lyric-timestamps/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/lyric-timestamps/${trackId}`, {
         headers: this.getHeaders(false),
       })
       if (!res.ok) {
@@ -469,7 +616,7 @@ class API {
 
   async getVideoClips(trackId) {
     return this._routeRequest('getVideoClips', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/video-clips/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/video-clips/${trackId}`, {
         headers: this.getHeaders(false),
       })
       if (!res.ok) {
@@ -481,7 +628,7 @@ class API {
 
   async updateUsername(username) {
     return this._routeRequest('updateUsername', [username], async () => {
-      const res = await fetch(`${API_BASE}/auth/update-username`, {
+      const res = await this._fetch(`${API_BASE}/auth/update-username`, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ username }),
@@ -493,7 +640,7 @@ class API {
 
   async deleteConversationHistory() {
     return this._routeRequest('deleteConversationHistory', [], async () => {
-      const res = await fetch(`${API_BASE}/manage_user_data`, {
+      const res = await this._fetch(`${API_BASE}/manage_user_data`, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ action: 'delete_conversations' }),
@@ -505,7 +652,7 @@ class API {
 
   async resetPersona() {
     return this._routeRequest('resetPersona', [], async () => {
-      const res = await fetch(`${API_BASE}/manage_user_data`, {
+      const res = await this._fetch(`${API_BASE}/manage_user_data`, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ action: 'reset_persona' }),
@@ -517,7 +664,7 @@ class API {
 
   async djTalk({ audio, text, context = 'generic_talk', voice_name = null }) {
     return this._routeRequest('djTalk', [{ audio, text, context, voice_name }], async () => {
-      const res = await fetch(`${API_BASE}/dj/talk`, {
+      const res = await this._fetch(`${API_BASE}/dj/talk`, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({
@@ -536,7 +683,7 @@ class API {
 
   async getConversationHistory(limit = 3) {
     return this._routeRequest('getConversationHistory', [limit], async () => {
-      const res = await fetch(`${API_BASE}/conversation?limit=${limit}`, {
+      const res = await this._fetch(`${API_BASE}/conversation?limit=${limit}`, {
         method: 'GET',
         headers: this.getHeaders(true)
       })
@@ -553,7 +700,7 @@ class API {
 
   async getUserUploads() {
     return this._routeRequest('getUserUploads', [], async () => {
-      const res = await fetch(`${API_BASE}/user/music/tracks`, {
+      const res = await this._fetch(`${API_BASE}/user/music/tracks`, {
         headers: this.getHeaders(true)
       })
       if (!res.ok) {
@@ -569,16 +716,16 @@ class API {
       if (category) {
         url += `?category=${encodeURIComponent(category)}`
       }
-      const res = await fetch(url)
+      const res = await this._fetch(url)
       return res.json()
     })
   }
 
   async trackShoutoutPlay(data) {
     return this._routeRequest('trackShoutoutPlay', [data], async () => {
-      await fetch(`${API_BASE}/analytics/shoutout/play`, {
+      await this._fetch(`${API_BASE}/analytics/shoutout/play`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
         body: JSON.stringify(data)
       })
       return { ok: true }
@@ -587,7 +734,7 @@ class API {
 
   async getTrackAnalytics(trackId) {
     return this._routeRequest('getTrackAnalytics', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/analytics/track/${trackId}`)
+      const res = await this._fetch(`${API_BASE}/analytics/track/${trackId}`)
       if (!res.ok) return null
       return res.json()
     })
@@ -595,7 +742,7 @@ class API {
 
   async getShoutoutAnalytics(shoutoutId) {
     return this._routeRequest('getShoutoutAnalytics', [shoutoutId], async () => {
-      const res = await fetch(`${API_BASE}/analytics/shoutout/${shoutoutId}`)
+      const res = await this._fetch(`${API_BASE}/analytics/shoutout/${shoutoutId}`)
       if (!res.ok) return null
       return res.json()
     })
@@ -607,7 +754,7 @@ class API {
       formData.append('audio', audioBlob, 'recording.webm')
       const headers = this.getHeaders()
       delete headers['Content-Type']
-      const res = await fetch(`${API_BASE}/transcribe`, {
+      const res = await this._fetch(`${API_BASE}/transcribe`, {
         method: 'POST',
         headers,
         body: formData
@@ -619,7 +766,7 @@ class API {
 
   async deleteUserTrack(trackId) {
     return this._routeRequest('deleteUserTrack', [trackId], async () => {
-      const res = await fetch(`${API_BASE}/user/music/tracks/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/user/music/tracks/${trackId}`, {
         method: 'DELETE',
         headers: this.getHeaders()
       })
@@ -634,7 +781,7 @@ class API {
       const headers = {}
       const auth = this.getHeaders().Authorization
       if (auth) headers.Authorization = auth
-      const res = await fetch(`${API_BASE}/user/profile-picture`, {
+      const res = await this._fetch(`${API_BASE}/user/profile-picture`, {
         method: 'POST',
         headers,
         body: formData,
@@ -650,7 +797,7 @@ class API {
 
   async deleteProfilePicture() {
     return this._routeRequest('deleteProfilePicture', [], async () => {
-      const res = await fetch(`${API_BASE}/user/profile-picture`, {
+      const res = await this._fetch(`${API_BASE}/user/profile-picture`, {
         method: 'DELETE',
         headers: this.getHeaders(),
         credentials: 'include'
@@ -659,21 +806,33 @@ class API {
     })
   }
 
-  async createStripeCheckout() {
-    return this._routeRequest('createStripeCheckout', [], async () => {
-      const res = await fetch(`${API_BASE}/stripe/create-checkout-session`, {
-        method: 'POST',
-        headers: this.getHeaders()
-      })
-      if (!res.ok) throw new Error('Failed to create session')
-      return res.json()
-    })
+  async _billingRequest(path, options, fallbackMessage) {
+    const res = await this._fetch(`${API_BASE}/stripe/${path}`, { headers: this.getHeaders(), ...options })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      const err = new Error(data.detail || fallbackMessage)
+      err.status = res.status
+      throw err
+    }
+    return res.json()
   }
 
-  async getStripeKey() {
-    return this._routeRequest('getStripeKey', [], async () => {
-      const res = await fetch(`${API_BASE}/stripe/stripe_key`)
-      return res.json()
+  async createStripeCheckout() {
+    return this._routeRequest('createStripeCheckout', [], () =>
+      this._billingRequest('create-checkout-session', { method: 'POST' }, 'Could not start checkout. Please try again.')
+    )
+  }
+
+  async createBillingPortal() {
+    return this._routeRequest('createBillingPortal', [], () =>
+      this._billingRequest('portal', { method: 'POST' }, 'Could not open subscription management. Please try again.')
+    )
+  }
+
+  async getBillingStatus(checkoutSessionId = null) {
+    return this._routeRequest('getBillingStatus', [checkoutSessionId], () => {
+      const query = checkoutSessionId ? `?${new URLSearchParams({ session_id: checkoutSessionId })}` : ''
+      return this._billingRequest(`status${query}`, { method: 'GET' }, 'Could not load subscription status.')
     })
   }
 
@@ -683,7 +842,7 @@ class API {
       formData.append('file', file)
       const headers = this.getHeaders()
       delete headers['Content-Type']
-      const res = await fetch(`${API_BASE}/user/music/tracks/${trackId}/artwork`, {
+      const res = await this._fetch(`${API_BASE}/user/music/tracks/${trackId}/artwork`, {
         method: 'POST',
         headers,
         body: formData
@@ -696,22 +855,118 @@ class API {
     })
   }
 
-  async uploadMusic(file) {
-    return this._routeRequest('uploadMusic', [file], async () => {
+  async uploadShareVideo({ trackId, title, artist, blob }) {
+    return this._routeRequest('uploadShareVideo', [trackId, title, artist], async () => {
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('file', blob, `${trackId}_plair_share.mp4`)
+      formData.append('track_id', trackId)
+      formData.append('title', title || '')
+      formData.append('artist', artist || '')
+
       const headers = this.getHeaders()
       delete headers['Content-Type']
-      const res = await fetch(`${API_BASE}/user/music/upload`, {
+
+      const res = await this._fetch(`${API_BASE}/share/video`, {
+        method: 'POST',
+        headers,
+        body: formData
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to publish share video')
+      }
+
+      return res.json()
+    })
+  }
+
+  async uploadMusic(file, uploadId = null) {
+    return this._routeRequest('uploadMusic', [file, uploadId], async () => {
+      const sizeMb = file.size / (1024 * 1024)
+      logger.info(`[API] Uploading media: ${file.name} (${sizeMb.toFixed(1)}MB, ${file.type || 'unknown type'})`)
+      const formData = new FormData()
+      formData.append('file', file)
+      if (uploadId) formData.append('upload_id', uploadId)
+      const headers = this.getHeaders()
+      delete headers['Content-Type']
+      const res = await this._fetch(`${API_BASE}/user/music/upload`, {
         method: 'POST',
         headers,
         body: formData
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
+        if (res.status === 413) {
+          throw new Error('Upload is larger than the server currently accepts. Video uploads support up to 10GB once the proxy limit is active.')
+        }
         throw new Error(data.detail || 'Upload failed')
       }
       return res.json()
+    })
+  }
+
+  async _getUsage(methodName, path, params = {}) {
+    return this._routeRequest(methodName, [path, params], async () => {
+      const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== ''))
+      const res = await this._fetch(`${API_BASE}${path}${query.toString() ? `?${query}` : ''}`, {
+        headers: this.getHeaders(),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to load usage stats')
+      }
+      return res.json()
+    })
+  }
+
+  async getUsageSummary(period = 'month', start = null, end = null) {
+    return this._getUsage('getUsageSummary', '/admin/usage/summary', { period, start, end })
+  }
+
+  async getUsageUsers(period = 'month', start = null, end = null) {
+    return this._getUsage('getUsageUsers', '/admin/usage/users', { period, start, end })
+  }
+
+  async getUsageSubject(subject, period = 'month') {
+    return this._getUsage('getUsageSubject', `/admin/usage/user/${encodeURIComponent(subject)}`, { period })
+  }
+
+  async getMyUsage(period = 'month') {
+    return this._getUsage('getMyUsage', '/usage/me', { period })
+  }
+
+  async getRadioMode() {
+    return this._routeRequest('getRadioMode', [], async () => {
+      const res = await this._fetch(`${API_BASE}/radio-mode`, { headers: this.getHeaders() })
+      if (!res.ok) throw new Error('Failed to load Radio Mode settings')
+      return res.json()
+    })
+  }
+
+  async updateRadioMode(updates) {
+    return this._routeRequest('updateRadioMode', [updates], async () => {
+      const res = await this._fetch(`${API_BASE}/radio-mode`, {
+        method: 'PUT',
+        headers: this.getHeaders(),
+        body: JSON.stringify(updates),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || 'Failed to save Radio Mode settings')
+      }
+      return res.json()
+    })
+  }
+
+  async fetchMusicBed(url) {
+    if (typeof url !== 'string' || !url.startsWith(`${API_BASE}/music-beds/`)) {
+      throw new Error('Invalid music bed url')
+    }
+    return this._routeRequest('fetchMusicBed', [url], async () => {
+      const res = await this._fetch(url)
+      if (!res.ok) throw new Error(`Music bed request failed (${res.status})`)
+      return res.arrayBuffer()
     })
   }
 }

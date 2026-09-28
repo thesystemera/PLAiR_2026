@@ -1,9 +1,9 @@
 import json
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
+import time
+from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime, timezone
-from pydantic import BaseModel, Field
 
 from google import genai
 from google.genai import types
@@ -12,33 +12,11 @@ from services import log_service
 from services.base_service import SingletonService
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
 from config import settings
+from services.ai_service import build_gemini_http_options
+from services.llm_telemetry import record_gemini_usage
 
+HUMAN_METADATA_GEMINI_TIMEOUT_MS = 300_000
 
-class ExtractedMetadata(BaseModel):
-    style: str = Field(description="Detailed production style description")
-    title: str = Field(description="Extracted or suggested title")
-    instrumental: bool = Field(description="True if no vocals")
-    vocal_gender: Optional[str] = Field(default=None, description="m/f/mixed/null")
-
-    primary_genre: str = Field(description="Main genre")
-    secondary_genres: List[str] = Field(default_factory=list)
-    inspired_artist: Optional[str] = Field(default=None)
-    mood_keywords: List[str] = Field(default_factory=list)
-    lyrical_interpretation: Optional[str] = Field(default=None)
-    vocal_style_keywords: List[str] = Field(default_factory=list)
-    similar_artists: List[str] = Field(default_factory=list)
-
-    transcribed_lyrics: Optional[str] = Field(default=None)
-
-    mix_analysis: Optional[str] = Field(default=None, description="Technical analysis of the mix quality")
-    sonic_master_prompt: Optional[str] = Field(default=None, description="Single sentence instruction for SonicMaster")
-    sonic_master_blend: int = Field(default=0, description="Enhancement blend percentage 0-100")
-    mastering_blend: int = Field(default=70, description="Mastering blend percentage 0-100")
-    enhance_vocals: bool = Field(default=False, description="Whether to apply vocal separation and enhancement")
-
-    artwork_prompt: Optional[str] = Field(default=None, description="AI-generated prompt for album artwork generation")
-
-    video_search_terms: List[str] = Field(default_factory=list, description="10-15 YouTube search queries for background video art")
 
 SYSTEM_PROMPT = """You are a professional music analyst, metadata specialist, and mastering engineer for a radio station catalog.
 
@@ -62,7 +40,7 @@ You must output valid JSON matching this exact schema:
     "transcribed_lyrics": "Full lyrics if vocals present, otherwise null",
     "mix_analysis": "Technical assessment of the mix quality - describe issues like: muddy low-mids, buried vocals, harsh highs, too much reverb, over-compressed dynamics, narrow stereo, weak bass, clipping/distortion, phone/cheap mic quality. If the mix is professional quality, say so.",
     "sonic_master_prompt": "Single sentence instruction for audio enhancement (or null if mix is professional)",
-    "sonic_master_blend": 0-100,
+    "sonic_master_blend": 0-60,
     "mastering_blend": 0-100,
     "enhance_vocals": true/false,
     "artwork_prompt": "Detailed prompt for generating album cover artwork using Stable Diffusion",
@@ -83,16 +61,18 @@ For sonic_master_prompt, write ONE natural sentence that tells our enhancement A
 
 You can combine 2-3 issues in one natural sentence, e.g.: "Clean up the muddy low-mids and bring the vocals forward slightly"
 
-For sonic_master_blend (0-100):
+For sonic_master_blend (0-60, values above 60 are reduced to 60):
 - 0 = Professional mix, no enhancement needed
-- 20-40 = Minor issues, subtle touch-up
-- 50-70 = Noticeable issues, moderate enhancement
-- 80-100 = Significant issues, heavy enhancement needed
+- 15-30 = Minor issues, subtle touch-up
+- 30-45 = Noticeable issues, moderate enhancement
+- 45-60 = Significant issues, heavy enhancement needed
+- If the track is intentionally lo-fi, already loud, already compressed, or stylistically gritty, prefer 0-35. Do not "fix" character.
 
-For mastering_blend (0-100) - how much final mastering/loudness normalization to apply:
+For mastering_blend (0-100) - how much corrective mastering EQ (resonance notches, presence/air balance) to apply; loudness is always normalized to -14 LUFS with a true-peak limiter regardless of this value:
 - 20-40 = Already professionally mastered, light touch only
 - 50-70 = Decent mix but needs polish and loudness normalization
 - 80-100 = Raw/unmastered recording, full mastering treatment needed
+- Never use 80-100 for already-loud, heavily-compressed, finished, or released-sounding music. Compression is not a reason for more mastering; use 20-40 to preserve dynamics and tone.
 
 For enhance_vocals (true/false) - whether to apply vocal separation and enhancement:
 - Set to TRUE only if vocals need significant help: buried in mix, noisy/roomy recording, phone/cheap mic quality, excessive reverb on vocals, or unclear diction
@@ -179,7 +159,7 @@ class HumanMetadataExtractionService(SingletonService):
             return
 
         self.client: Any = None
-        self.model = "gemini-2.5-pro"
+        self.model = settings.GEMINI_UPLOAD_ANALYSIS_MODEL
         self._service_initialized = False
         self._initialized = True
 
@@ -193,7 +173,10 @@ class HumanMetadataExtractionService(SingletonService):
             log_service.error("GEMINI_API_KEY not found - metadata extraction will fail")
             return
 
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=build_gemini_http_options(timeout_ms=HUMAN_METADATA_GEMINI_TIMEOUT_MS, attempts=1)
+        )
         self._service_initialized = True
         log_service.info(f"✓ HumanMetadataExtractionService initialized (model: {self.model})")
 
@@ -212,7 +195,7 @@ class HumanMetadataExtractionService(SingletonService):
             log_service.error(f"Audio file not found: {audio_path}")
             return None, "Audio file not found."
 
-        audio_bytes = audio_path.read_bytes()
+        audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         file_size_mb = len(audio_bytes) / (1024 * 1024)
 
         if file_size_mb > 20:
@@ -246,8 +229,8 @@ class HumanMetadataExtractionService(SingletonService):
                     mime_type=mime_type
                 )
 
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
+                started = time.perf_counter()
+                response = await self.client.aio.models.generate_content(
                     model=self.model,
                     contents=[audio_part, user_prompt],
                     config=types.GenerateContentConfig(
@@ -256,6 +239,7 @@ class HumanMetadataExtractionService(SingletonService):
                         response_mime_type="application/json"
                     )
                 )
+                record_gemini_usage("upload", self.model, response.usage_metadata, (time.perf_counter() - started) * 1000)
 
                 if not response.text:
                     log_service.error("Gemini returned empty response")

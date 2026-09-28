@@ -1,9 +1,14 @@
 from __future__ import annotations
 import asyncio
+import json
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import WebSocket
+from config import settings
 from services import log_service
+from services.task_utils import spawn
+
+WS_SEND_TIMEOUT_S = 3.0
 
 class WebSocketService:
     def __init__(self):
@@ -55,7 +60,19 @@ class WebSocketService:
         if session_id not in self._last_activity:
             self._last_activity[session_id] = {}
 
-        self._connections[session_id][device_id] = websocket
+        session_connections = self._connections[session_id]
+        if device_id not in session_connections:
+            while len(session_connections) >= max(settings.WS_MAX_CONNECTIONS_PER_SESSION, 1):
+                activity = self._last_activity.get(session_id, {})
+                oldest_device = min(session_connections, key=lambda did: activity.get(did, 0.0))
+                log_service.warning(
+                    f"WebSocket limit reached for {session_id}; evicting least active device {oldest_device}"
+                )
+                self._evict(session_id, oldest_device, session_connections[oldest_device])
+                session_connections = self._connections.setdefault(session_id, {})
+
+        self._last_activity.setdefault(session_id, {})
+        session_connections[device_id] = websocket
         self._last_activity[session_id][device_id] = time.time()
 
         total_connections = sum(len(devices) for devices in self._connections.values())
@@ -64,7 +81,14 @@ class WebSocketService:
             f"(total: {total_connections} connections, {len(self._connections)} sessions)"
         )
 
-    def unregister_connection(self, session_id: str, device_id: str):
+    def unregister_connection(self, session_id: str, device_id: str, websocket: Optional[WebSocket] = None):
+        current = self._connections.get(session_id, {}).get(device_id)
+        if websocket is not None and current is not None and current is not websocket:
+            log_service.system(
+                f"WebSocket closed for {session_id}/{device_id} but a newer connection is registered - keeping it"
+            )
+            return
+
         if session_id in self._connections and device_id in self._connections[session_id]:
             del self._connections[session_id][device_id]
             if not self._connections[session_id]:
@@ -94,6 +118,47 @@ class WebSocketService:
     def get_online_device_ids(self, session_id: str) -> List[str]:
         return list(self._connections.get(session_id, {}).keys())
 
+    @staticmethod
+    def _serialize(message: dict) -> str:
+        return json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+
+    @staticmethod
+    async def _close_quietly(ws: WebSocket):
+        try:
+            await asyncio.wait_for(ws.close(), timeout=WS_SEND_TIMEOUT_S)
+        except Exception:
+            pass
+
+    def _evict(self, session_id: str, device_id: str, ws: WebSocket):
+        current = self._connections.get(session_id, {}).get(device_id)
+        if current is ws:
+            del self._connections[session_id][device_id]
+            if not self._connections[session_id]:
+                del self._connections[session_id]
+            if session_id in self._last_activity and device_id in self._last_activity[session_id]:
+                del self._last_activity[session_id][device_id]
+                if not self._last_activity[session_id]:
+                    del self._last_activity[session_id]
+        spawn(self._close_quietly(ws), name=f"ws_close:{session_id}/{device_id}")
+
+    async def _send_many(self, targets: List[Tuple[str, str, WebSocket]], text: str, label: str):
+        async def send_one(sess_id: str, dev_id: str, ws_conn: WebSocket) -> Optional[Tuple[str, str, WebSocket]]:
+            try:
+                await asyncio.wait_for(ws_conn.send_text(text), timeout=WS_SEND_TIMEOUT_S)
+                return None
+            except asyncio.TimeoutError:
+                log_service.error(f"Failed to {label} {sess_id}/{dev_id}: send timed out after {WS_SEND_TIMEOUT_S}s")
+                return sess_id, dev_id, ws_conn
+            except Exception as e:
+                log_service.error(f"Failed to {label} {sess_id}/{dev_id}: {str(e)}")
+                return sess_id, dev_id, ws_conn
+
+        results = await asyncio.gather(*[send_one(sid, did, ws) for sid, did, ws in targets])
+
+        for failed in results:
+            if failed is not None:
+                self._evict(*failed)
+
     async def broadcast_to_session(self, session_id: str, message: dict):
         if session_id not in self._connections:
             return
@@ -102,27 +167,13 @@ class WebSocketService:
         if not connections:
             return
 
-        async def send_to_device(dev_id: str, ws_conn: WebSocket) -> Optional[Tuple[str, str]]:
-            try:
-                await ws_conn.send_json(message)
-                return None
-            except (RuntimeError, ConnectionError) as e:
-                log_service.error(f"Failed to send to {session_id}/{dev_id}: {str(e)}")
-                return session_id, dev_id
-            except Exception as e:
-                log_service.error(f"Failed to send to {session_id}/{dev_id}: {str(e)}")
-                return session_id, dev_id
+        try:
+            text = self._serialize(message)
+        except (TypeError, ValueError) as e:
+            log_service.error(f"Failed to serialize message for {session_id}: {str(e)}")
+            return
 
-        results = await asyncio.gather(
-            *[send_to_device(device_id, ws) for device_id, ws in connections]
-        )
-
-        disconnected = [r for r in results if r is not None]
-        for sid, did in disconnected:
-            if sid in self._connections and did in self._connections[sid]:
-                del self._connections[sid][did]
-                if not self._connections[sid]:
-                    del self._connections[sid]
+        await self._send_many([(session_id, did, ws) for did, ws in connections], text, "send to")
 
     async def broadcast_to_all_users(self, message: dict):
         all_connections = []
@@ -133,27 +184,13 @@ class WebSocketService:
         if not all_connections:
             return
 
-        async def send_to_device_broadcast(sess_id: str, dev_id: str, ws_conn: WebSocket) -> Optional[Tuple[str, str]]:
-            try:
-                await ws_conn.send_json(message)
-                return None
-            except (RuntimeError, ConnectionError) as e:
-                log_service.error(f"Failed to broadcast to {sess_id}/{dev_id}: {str(e)}")
-                return sess_id, dev_id
-            except Exception as e:
-                log_service.error(f"Failed to broadcast to {sess_id}/{dev_id}: {str(e)}")
-                return sess_id, dev_id
+        try:
+            text = self._serialize(message)
+        except (TypeError, ValueError) as e:
+            log_service.error(f"Failed to serialize broadcast message: {str(e)}")
+            return
 
-        results = await asyncio.gather(
-            *[send_to_device_broadcast(sid, did, ws) for sid, did, ws in all_connections]
-        )
-
-        disconnected = [r for r in results if r is not None]
-        for sid, did in disconnected:
-            if sid in self._connections and did in self._connections[sid]:
-                del self._connections[sid][did]
-                if not self._connections[sid]:
-                    del self._connections[sid]
+        await self._send_many(all_connections, text, "broadcast to")
 
     async def broadcast_playback_state(self, session_id: str, state: dict):
         message = {"type": "playback_state", "data": state}
@@ -207,7 +244,8 @@ class WebSocketService:
                 for device_id in devices_to_remove:
                     log_service.warning(f"Cleaning up stale WebSocket: {session_id}/{device_id}")
                     if session_id in self._connections and device_id in self._connections[session_id]:
-                        del self._connections[session_id][device_id]
+                        stale_ws = self._connections[session_id].pop(device_id)
+                        spawn(self._close_quietly(stale_ws), name=f"ws_close_stale:{session_id}/{device_id}")
                     del self._last_activity[session_id][device_id]
 
                 if not self._last_activity[session_id]:

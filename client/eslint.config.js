@@ -41,6 +41,7 @@ export default [
       'no-constant-condition': 'error',
       'no-unreachable': 'error',
       'react/prop-types': 'off',
+      'react/no-unknown-property': ['error', { ignore: ['geometry', 'material', 'renderOrder', 'args', 'attach', 'dispose', 'position', 'rotation', 'scale', 'object'] }],
       'react/react-in-jsx-scope': 'off',
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',

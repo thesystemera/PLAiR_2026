@@ -16,6 +16,51 @@ function seededRandom(seed) {
   return () => { s = Math.sin(s * 9999) * 10000; return s - Math.floor(s) }
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForEncoderQueue(encoder, maxQueueSize, getError) {
+  while (encoder.encodeQueueSize > maxQueueSize) {
+    const error = getError?.()
+    if (error) {
+      throw error
+    }
+    await sleep(10)
+  }
+}
+
+async function decodeRenderAudio(audioUrl, durationMs, onStatus) {
+  onStatus?.('Loading audio...')
+  const audioResponse = await fetch(audioUrl, { cache: 'no-store' })
+
+  if (!audioResponse.ok) {
+    throw new Error(`Unable to load audio for video (${audioResponse.status})`)
+  }
+
+  const contentType = audioResponse.headers.get('content-type') || 'unknown'
+  const audioArrayBuffer = await audioResponse.arrayBuffer()
+
+  if (!audioArrayBuffer.byteLength) {
+    throw new Error('Unable to load audio for video: empty audio response')
+  }
+
+  onStatus?.('Decoding audio...')
+  const audioCtx = new OfflineAudioContext(2, 44100 * Math.ceil(durationMs / 1000), 44100)
+
+  try {
+    return await audioCtx.decodeAudioData(audioArrayBuffer.slice(0))
+  } catch (err) {
+    console.error('[OfflineVideoRenderer] Audio decode failed:', {
+      url: audioUrl,
+      contentType,
+      bytes: audioArrayBuffer.byteLength,
+      error: err
+    })
+    throw new Error(`Unable to decode audio data (${contentType})`)
+  }
+}
+
 export async function renderVideo({
   artworkUrl,
   audioUrl,
@@ -132,13 +177,7 @@ export async function renderVideo({
   scene.add(mesh)
   resources.material = material
 
-  onStatus?.('Loading audio...')
-  const audioResponse = await fetch(audioUrl)
-  const audioArrayBuffer = await audioResponse.arrayBuffer()
-
-  onStatus?.('Decoding audio...')
-  const audioCtx = new OfflineAudioContext(2, 44100 * Math.ceil(durationMs / 1000), 44100)
-  const audioData = await audioCtx.decodeAudioData(audioArrayBuffer.slice(0))
+  const audioData = await decodeRenderAudio(audioUrl, durationMs, onStatus)
 
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
@@ -159,9 +198,13 @@ export async function renderVideo({
     fastStart: 'in-memory',
   })
 
+  let videoEncoderError = null
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => console.error('VideoEncoder error:', e),
+    error: (e) => {
+      videoEncoderError = e
+      console.error('VideoEncoder error:', e)
+    },
   })
   resources.videoEncoder = videoEncoder
 
@@ -173,9 +216,13 @@ export async function renderVideo({
     framerate: fps,
   })
 
+  let audioEncoderError = null
   const audioEncoder = new AudioEncoder({
     output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error: (e) => console.error('AudioEncoder error:', e),
+    error: (e) => {
+      audioEncoderError = e
+      console.error('AudioEncoder error:', e)
+    },
   })
   resources.audioEncoder = audioEncoder
 
@@ -192,6 +239,10 @@ export async function renderVideo({
   const samplesPerChunk = 1024
 
   for (let i = 0; i < left.length; i += samplesPerChunk) {
+    if (audioEncoderError) {
+      throw new Error(`Audio encoding failed: ${audioEncoderError.message || audioEncoderError.name || 'Encoding error'}`)
+    }
+
     const chunkSize = Math.min(samplesPerChunk, left.length - i)
     const planarData = new Float32Array(chunkSize * 2)
     for (let j = 0; j < chunkSize; j++) {
@@ -204,11 +255,24 @@ export async function renderVideo({
       sampleRate: 44100,
       numberOfFrames: chunkSize,
       numberOfChannels: 2,
-      timestamp: (i / 44100) * 1_000_000,
+      timestamp: Math.round((i / 44100) * 1_000_000),
       data: planarData,
     })
     audioEncoder.encode(audioFrame)
     audioFrame.close()
+
+    await waitForEncoderQueue(audioEncoder, 12, () => (
+      audioEncoderError
+        ? new Error(`Audio encoding failed: ${audioEncoderError.message || audioEncoderError.name || 'Encoding error'}`)
+        : null
+    ))
+  }
+
+  onStatus?.('Finishing audio encoding...')
+  try {
+    await audioEncoder.flush()
+  } catch (err) {
+    throw new Error(`Audio encoding failed: ${err.message || 'Encoding error'}`)
   }
 
   const effects = createInitialEffects()
@@ -354,12 +418,18 @@ export async function renderVideo({
 
     const bitmap = await createImageBitmap(flipCanvas)
     const videoFrame = new VideoFrame(bitmap, {
-      timestamp: (frame / fps) * 1_000_000,
-      duration: (1 / fps) * 1_000_000,
+      timestamp: Math.round((frame / fps) * 1_000_000),
+      duration: Math.round((1 / fps) * 1_000_000),
     })
     videoEncoder.encode(videoFrame, { keyFrame: frame % 30 === 0 })
     videoFrame.close()
     bitmap.close()
+
+    await waitForEncoderQueue(videoEncoder, 12, () => (
+      videoEncoderError
+        ? new Error(`Video encoding failed: ${videoEncoderError.message || videoEncoderError.name || 'Encoding error'}`)
+        : null
+    ))
 
     onProgress?.(frame / totalFrames)
 
@@ -369,10 +439,11 @@ export async function renderVideo({
   }
 
   onStatus?.('Finishing video encoding...')
-  await videoEncoder.flush()
-
-  onStatus?.('Finishing audio encoding...')
-  await audioEncoder.flush()
+  try {
+    await videoEncoder.flush()
+  } catch (err) {
+    throw new Error(`Video encoding failed: ${err.message || 'Encoding error'}`)
+  }
 
   onStatus?.('Building MP4 file...')
   muxer.finalize()
@@ -389,51 +460,51 @@ export async function renderVideo({
       if (resources.videoEncoder) {
         resources.videoEncoder.close()
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.audioEncoder) {
         resources.audioEncoder.close()
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.renderer) {
         resources.renderer.dispose()
         resources.renderer.forceContextLoss()
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.geometry) resources.geometry.dispose()
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.material) resources.material.dispose()
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.artworkTexture) resources.artworkTexture.dispose()
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.lyricTexture) resources.lyricTexture.dispose()
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     try {
       if (resources.transparentPixel) resources.transparentPixel.dispose()
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
 
     // Cleanup video clips
     for (const tex of resources.clipTextures) {
-      try { tex.dispose() } catch (e) { /* ignore */ }
+      try { tex.dispose() } catch { /* ignore */ }
     }
     for (const video of resources.clipVideos) {
       try {
         video.pause()
         video.src = ''
         video.load()
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
 
     await new Promise(r => setTimeout(r, 100))

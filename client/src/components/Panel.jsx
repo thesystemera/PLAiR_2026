@@ -1,6 +1,10 @@
 import { motion } from 'framer-motion'
 import { PANEL, TRANSITIONS, useDynamicTheme, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { useUIState, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
+import { EDGE_FADE_MASK } from '../lib/themeManager'
+import { PRESETS } from '../lib/motion'
+
+const CURVED_BACKDROP_MASK = EDGE_FADE_MASK('8px', '8px', '8px')
 
 // Re-export for use by other components (MediaStatsOverlay, MediaSearch)
 export { GLASS_EFFECT_CONFIG }
@@ -12,12 +16,8 @@ export { GLASS_EFFECT_CONFIG }
  * 12px corner radius, 8px feather on all sides.
  */
 export function CurvedBackdrop({ baseOpacity = 0.9, className = '' }) {
-  const r = 12  // corner radius
-  const f = 8   // feather
-
-  // Two gradients intersected (same as Scroller pattern)
-  const mask = `linear-gradient(0deg, transparent, black ${f}px, black calc(100% - ${f}px), transparent),
-                linear-gradient(90deg, transparent, black ${f}px, black calc(100% - ${f}px), transparent)`
+  const r = 12
+  const mask = CURVED_BACKDROP_MASK
 
   return (
     <div
@@ -196,7 +196,9 @@ export function Panel({
       onClick={onToggle}
     >
       {isOpen ? (
-        <div
+        <motion.div
+          initial={PRESETS.fade.initial}
+          animate={PRESETS.fade.animate}
           className="h-full flex flex-col relative"
           onClick={(e) => e.stopPropagation()}
           style={{
@@ -222,7 +224,7 @@ export function Panel({
               className="w-1 h-16 bg-white/20 rounded-full"
             />
           </motion.div>
-        </div>
+        </motion.div>
       ) : (
         <motion.div
           initial={{ opacity: 0 }}

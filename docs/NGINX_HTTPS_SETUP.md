@@ -26,7 +26,7 @@ PLAiR.live uses nginx on Windows with Let's Encrypt SSL certificates managed thr
 
 **Timer Status:**
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S systemctl status certbot.timer"
+wsl bash -c "sudo systemctl status certbot.timer"
 ```
 
 **Post-Renewal Hook:**
@@ -38,12 +38,12 @@ Located at `/etc/letsencrypt/renewal-hooks/deploy/copy-to-windows.sh` in WSL:
 
 ### Step 1: Renew Certificate
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot renew --force-renewal --no-random-sleep-on-renew"
+wsl bash -c "sudo certbot renew --force-renewal --no-random-sleep-on-renew"
 ```
 
 ### Step 2: Copy Certificates to Windows
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S bash -c 'cp /etc/letsencrypt/live/plair.live/fullchain.pem /mnt/c/Certbot/live/plair.live/ && cp /etc/letsencrypt/live/plair.live/privkey.pem /mnt/c/Certbot/live/plair.live/'"
+wsl bash -c "sudo bash -c 'cp /etc/letsencrypt/live/plair.live/fullchain.pem /mnt/c/Certbot/live/plair.live/ && cp /etc/letsencrypt/live/plair.live/privkey.pem /mnt/c/Certbot/live/plair.live/'"
 ```
 
 ### Step 3: Reload Nginx
@@ -60,19 +60,19 @@ curl -I https://plair.live
 
 **View current certificate:**
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot certificates"
+wsl bash -c "sudo certbot certificates"
 ```
 
 **Check expiry date:**
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S openssl x509 -in /etc/letsencrypt/live/plair.live/fullchain.pem -noout -dates"
+wsl bash -c "sudo openssl x509 -in /etc/letsencrypt/live/plair.live/fullchain.pem -noout -dates"
 ```
 
 ## Test Auto-Renewal
 
 **Dry run (doesn't actually renew):**
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot renew --dry-run --no-random-sleep-on-renew"
+wsl bash -c "sudo certbot renew --dry-run --no-random-sleep-on-renew"
 ```
 
 ## Nginx Configuration
@@ -100,8 +100,8 @@ If you see "INVALID: EXPIRED" when checking certificates, follow the manual rene
 
 ### Auto-Renewal Not Working
 - Check if WSL is running: `wsl --list --verbose`
-- Check timer status: `wsl bash -c "echo 'amiga4eva' | sudo -S systemctl status certbot.timer"`
-- Check renewal config: `wsl bash -c "echo 'amiga4eva' | sudo -S cat /etc/letsencrypt/renewal/plair.live.conf"`
+- Check timer status: `wsl bash -c "sudo systemctl status certbot.timer"`
+- Check renewal config: `wsl bash -c "sudo cat /etc/letsencrypt/renewal/plair.live.conf"`
 - Should show `authenticator = webroot` (NOT `manual`)
 
 ### Nginx Won't Start After Renewal
@@ -112,7 +112,7 @@ If you see "INVALID: EXPIRED" when checking certificates, follow the manual rene
 ### "Manual Plugin" Error
 This means the certificate was created with manual DNS challenge. Re-create with webroot:
 ```bash
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot certonly --webroot -w /mnt/c/nginx/html -d plair.live -d www.plair.live --force-renewal"
+wsl bash -c "sudo certbot certonly --webroot -w /mnt/c/nginx/html -d plair.live -d www.plair.live --force-renewal"
 ```
 
 ## Important Notes
@@ -126,14 +126,14 @@ wsl bash -c "echo 'amiga4eva' | sudo -S certbot certonly --webroot -w /mnt/c/ngi
 
 ```bash
 # Check cert status
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot certificates"
+wsl bash -c "sudo certbot certificates"
 
 # Manual renew + copy + reload (all-in-one)
-wsl bash -c "echo 'amiga4eva' | sudo -S certbot renew --force-renewal --no-random-sleep-on-renew && sudo cp /etc/letsencrypt/live/plair.live/fullchain.pem /mnt/c/Certbot/live/plair.live/ && sudo cp /etc/letsencrypt/live/plair.live/privkey.pem /mnt/c/Certbot/live/plair.live/" && cd C:/nginx && ./nginx.exe -s reload
+wsl bash -c "sudo certbot renew --force-renewal --no-random-sleep-on-renew && sudo cp /etc/letsencrypt/live/plair.live/fullchain.pem /mnt/c/Certbot/live/plair.live/ && sudo cp /etc/letsencrypt/live/plair.live/privkey.pem /mnt/c/Certbot/live/plair.live/" && cd C:/nginx && ./nginx.exe -s reload
 
 # Test HTTPS
 curl -I https://plair.live
 
 # Check timer
-wsl bash -c "echo 'amiga4eva' | sudo -S systemctl list-timers | grep certbot"
+wsl bash -c "sudo systemctl list-timers | grep certbot"
 ```

@@ -25,14 +25,24 @@ import {PANEL, useDynamicTheme} from '../contexts/DynamicThemeContext'
 import {VisualErrorBoundary} from './VisualErrorBoundary'
 import {isWebGL2Available} from '../lib/utils'
 import {logger} from '../lib/logger'
-
-
+import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
+import {isSceneRenderingPaused} from '../lib/renderPause'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
-  varying vec2 vUvCorrected;
+  varying vec2 vFxUv;
+  varying vec2 vFallbackUv;
+  varying vec2 vTextUv;
+  varying vec2 vHue;
   uniform vec2 u_canvas_resolution;
   uniform vec2 u_tex_resolution;
+  uniform vec2 u_parallax;
+  uniform vec2 u_glitch;
+  uniform float u_scale;
+  uniform vec2 u_frame_offset;
+  uniform float u_frame_scale;
+  uniform float u_rotation;
+  uniform float u_hue;
 
   vec2 getCoverUV(vec2 uv, vec2 canvasRes, vec2 texRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
@@ -47,14 +57,26 @@ const backgroundVertexShader = `
 
   void main() {
     vUv = uv;
-    vUvCorrected = getCoverUV(uv, u_canvas_resolution, u_tex_resolution);
+    vec2 center = vec2(0.5, 0.5);
+    vec2 corrected = getCoverUV(uv, u_canvas_resolution, u_tex_resolution);
+    float cosRot = cos(u_rotation);
+    float sinRot = sin(u_rotation);
+    mat2 rotationMatrix = mat2(cosRot, -sinRot, sinRot, cosRot);
+    vec2 glitchOffset = u_glitch / u_canvas_resolution;
+    vec2 framed = (corrected - center) / u_frame_scale + u_frame_offset;
+    vFxUv = rotationMatrix * (framed - u_parallax / u_canvas_resolution - glitchOffset) / u_scale + center;
+    vFallbackUv = rotationMatrix * framed / (u_scale + 0.2) + center;
+    vTextUv = uv - glitchOffset;
+    vHue = vec2(cos(u_hue), sin(u_hue));
     gl_Position = vec4(position, 1.0);
   }
 `
-
-const backgroundFragmentShader = `
+const BACKGROUND_FRAGMENT_BODY = `
   varying vec2 vUv;
-  varying vec2 vUvCorrected;
+  varying vec2 vFxUv;
+  varying vec2 vFallbackUv;
+  varying vec2 vTextUv;
+  varying vec2 vHue;
   uniform sampler2D u_texture;
   uniform sampler2D u_texture_prev;
   uniform sampler2D u_depth_map;
@@ -62,15 +84,9 @@ const backgroundFragmentShader = `
   uniform sampler2D u_video_clip;
   uniform float u_video_clip_blend;
   uniform float u_transition;
-  uniform vec2 u_tex_resolution;
   uniform vec2 u_canvas_resolution;
-  uniform vec2 u_parallax;
   uniform vec2 u_glitch;
   uniform float u_time;
-  uniform float u_scale;
-  uniform vec2 u_frame_offset;
-  uniform float u_frame_scale;
-  uniform float u_rotation;
   uniform float u_brightness;
   uniform float u_contrast;
   uniform float u_saturation;
@@ -83,63 +99,62 @@ const backgroundFragmentShader = `
   uniform float u_focal_range;
   uniform float u_is_capture;
 
+  const vec2 BOKEH_DIR_1 = vec2(1.0, 0.0);
+  const vec2 BOKEH_DIR_2 = vec2(-0.5, 0.8660254);
+  const vec2 BOKEH_DIR_3 = vec2(-0.5, -0.8660254);
+
   float getBlurAmount(vec2 uv) {
     if (u_has_depth_map < 0.5) {
        if (u_is_capture > 0.5) return 0.0;
-       return u_max_blur; 
+       return u_max_blur;
     }
-    
     vec2 clampedUV = clamp(uv, 0.0, 1.0);
     float depth = texture2D(u_depth_map, clampedUV).r;
     float blurAmount = abs(depth - u_focal_depth) - u_focal_range;
     return max(0.0, blurAmount) * u_max_blur * 2.0 + (u_max_blur * 0.05);
   }
 
-  vec4 sampleBokeh(sampler2D tex, vec2 uv, vec2 texelSize, float blur, float transition) {
-    if (u_is_capture > 0.5) {
-       vec4 texCurrent = texture2D(u_texture, uv);
-       vec4 texPrev = texture2D(u_texture_prev, uv);
-       return mix(texPrev, texCurrent, transition);
-    }
-    float cappedBlur = min(blur, 60.0);
-    vec4 color = vec4(0.0);
-    float total = 0.0;
-    float radius = cappedBlur * 0.008;
-    for (float ang = 0.0; ang < 6.2831853; ang += 2.0943951) {
-      for (float dist = 0.2; dist < 1.0; dist += 0.8) {
-        float r = dist * radius;
-        vec2 offset = vec2(cos(ang), sin(ang)) * r;
-        vec2 sampleUV = clamp(uv + offset, 0.0, 1.0);
-        vec4 texCurrent = texture2D(u_texture, sampleUV);
-        vec4 texPrev = texture2D(u_texture_prev, sampleUV);
-        color += mix(texPrev, texCurrent, transition);
-        total += 1.0;
-      }
-    }
-    return color / total;
+  vec4 sampleBlend(vec2 uv, float transition) {
+    return mix(texture2D(u_texture_prev, uv), texture2D(u_texture, uv), transition);
   }
 
-  vec4 applyEffects(sampler2D tex, vec2 uv, vec2 texelSize, float blurAmount, float transition) {
+  vec4 sampleBokeh(vec2 uv, float blur, float transition) {
+    float radius = min(blur, 60.0) * 0.0016;
+    vec4 color = sampleBlend(clamp(uv + BOKEH_DIR_1 * radius, 0.0, 1.0), transition);
+    color += sampleBlend(clamp(uv + BOKEH_DIR_2 * radius, 0.0, 1.0), transition);
+    color += sampleBlend(clamp(uv + BOKEH_DIR_3 * radius, 0.0, 1.0), transition);
+    return color / 3.0;
+  }
+
+  vec4 sampleBokehCurrent(vec2 uv, float blur) {
+    float radius = min(blur, 60.0) * 0.0016;
+    vec4 color = texture2D(u_texture, clamp(uv + BOKEH_DIR_1 * radius, 0.0, 1.0));
+    color += texture2D(u_texture, clamp(uv + BOKEH_DIR_2 * radius, 0.0, 1.0));
+    color += texture2D(u_texture, clamp(uv + BOKEH_DIR_3 * radius, 0.0, 1.0));
+    return color / 3.0;
+  }
+
+  vec4 applyEffects(vec2 uv, float blurAmount, float transition) {
     vec4 color;
     float blendFactor = transition * transition * (3.0 - 2.0 * transition);
     if (blurAmount > 1.0 && u_is_capture < 0.5) {
-      color = sampleBokeh(tex, uv, texelSize, blurAmount, blendFactor);
-    } else {
       if (transition < 1.0) {
-        vec4 texCurrent = texture2D(u_texture, uv);
-        vec4 texPrev = texture2D(u_texture_prev, uv);
-        color = mix(texPrev, texCurrent, blendFactor);
+        color = sampleBokeh(uv, blurAmount, blendFactor);
       } else {
-        color = texture2D(u_texture, uv);
+        color = sampleBokehCurrent(uv, blurAmount);
       }
+    } else if (transition < 1.0) {
+      color = sampleBlend(uv, blendFactor);
+    } else {
+      color = texture2D(u_texture, uv);
     }
     color.rgb = (color.rgb - 0.5) * u_contrast + 0.5;
     color.rgb *= u_brightness;
     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     color.rgb = mix(vec3(luma), color.rgb, u_saturation);
     if (abs(u_hue) > 0.001) {
-      float cosHue = cos(u_hue);
-      float sinHue = sin(u_hue);
+      float cosHue = vHue.x;
+      float sinHue = vHue.y;
       color.rgb = vec3(
         dot(color.rgb, vec3(0.213, 0.715, 0.072)) + cosHue * dot(color.rgb, vec3(0.787, -0.715, -0.072)) - sinHue * dot(color.rgb, vec3(-0.213, -0.715, 0.928)),
         dot(color.rgb, vec3(0.213, 0.715, 0.072)) + cosHue * dot(color.rgb, vec3(-0.213, 0.285, -0.072)) + sinHue * dot(color.rgb, vec3(0.143, -0.285, 0.142)),
@@ -149,12 +164,12 @@ const backgroundFragmentShader = `
     color.rgb = clamp(color.rgb, 0.0, 1.0);
     return color;
   }
-  
+
   float scanline(vec2 uv, float time, float glitch) {
     if (abs(glitch) > 20.0) return sin((uv.y + time * 0.1) * u_canvas_resolution.y * 0.25) * 0.05;
     return 0.0;
   }
-  
+
   vec3 fallbackGradient(vec2 uv) {
     vec3 color1 = vec3(0.545, 0.360, 0.964);
     vec3 color2 = vec3(0.231, 0.509, 0.964);
@@ -162,85 +177,56 @@ const backgroundFragmentShader = `
     return color * 0.4;
   }
 
-  void main() {
-    vec2 canvasRes = u_canvas_resolution;
-    vec2 texRes = u_tex_resolution;
-    vec2 texelSize = 1.0 / texRes;
-    vec2 center = vec2(0.5, 0.5);
-    vec2 screenUV = vUv;
-
-    float cosRot = cos(u_rotation);
-    float sinRot = sin(u_rotation);
-    mat2 rotationMatrix = mat2(cosRot, -sinRot, sinRot, cosRot);
-
-    vec2 uv = vUvCorrected;
-    uv -= center;
-    uv /= u_frame_scale;
-    uv += u_frame_offset;
-    uv += center;
-    uv -= u_parallax / canvasRes;
-    uv -= u_glitch / canvasRes;
-    uv -= center;
-    uv = rotationMatrix * uv;
-    uv /= u_scale;
-    uv += center;
-
+`
+const BACKGROUND_FRAGMENT_MAIN = `  void main() {
+    vec2 uv = vFxUv;
     float blurAmount = getBlurAmount(uv);
     vec4 finalColor;
 
     if (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) {
-      vec2 chromaticOffset = vec2(u_chromatic, 0.0) / canvasRes;
-      vec4 colorR = applyEffects(u_texture, uv + chromaticOffset, texelSize, blurAmount, u_transition);
-      vec4 colorG = applyEffects(u_texture, uv, texelSize, blurAmount, u_transition);
-      vec4 colorB = applyEffects(u_texture, uv - chromaticOffset, texelSize, blurAmount, u_transition);
+      vec2 chromaticOffset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
+      vec4 colorR = applyEffects(uv + chromaticOffset, blurAmount, u_transition);
+      vec4 colorG = applyEffects(uv, blurAmount, u_transition);
+      vec4 colorB = applyEffects(uv - chromaticOffset, blurAmount, u_transition);
       finalColor = vec4(colorR.r, colorG.g, colorB.b, colorG.a);
     } else {
-      finalColor = applyEffects(u_texture, uv, texelSize, blurAmount, u_transition);
+      finalColor = applyEffects(uv, blurAmount, u_transition);
     }
 
-    // Blend in video clip if active (same UV, gets same effects)
     if (u_video_clip_blend > 0.01) {
       vec4 clipColor = texture2D(u_video_clip, uv);
       finalColor = mix(finalColor, clipColor, u_video_clip_blend);
     }
 
     if (finalColor.a < 0.01 && u_transition < 0.01) {
-       vec2 fallbackUV = vUvCorrected;
-       fallbackUV -= center;
-       fallbackUV /= u_frame_scale;
-       fallbackUV += u_frame_offset;
-       fallbackUV += center;
-       fallbackUV -= center;
-       fallbackUV = rotationMatrix * fallbackUV;
-       fallbackUV /= (u_scale + 0.2);
-       fallbackUV += center;
-       finalColor.rgb = fallbackGradient(fallbackUV);
+       finalColor.rgb = fallbackGradient(vFallbackUv);
        finalColor.a = 1.0;
     }
-    
+
     if (u_is_capture < 0.5) {
        finalColor.rgb += scanline(vUv, u_time, u_glitch.x);
     }
     finalColor.rgb *= u_flicker;
 
-    vec2 textUV = screenUV - (u_glitch / canvasRes);
-    vec4 lyricsSample = texture2D(u_text_texture, textUV);
+    vec4 lyricsSample = texture2D(u_text_texture, vTextUv);
     if(lyricsSample.a > 0.01) {
       finalColor.rgb = mix(finalColor.rgb, lyricsSample.rgb, lyricsSample.a);
     }
     gl_FragColor = finalColor;
   }
 `
+const backgroundFragmentShader = BACKGROUND_FRAGMENT_BODY + BACKGROUND_FRAGMENT_MAIN
 
-const foregroundFragmentShader = `
-  varying vec2 vUv;
+const GLASS_FRAGMENT_BODY = `
   uniform sampler2D u_capture_texture;
   uniform sampler2D u_noise_texture;
-  uniform vec2 u_canvas_resolution;
+  uniform float u_glass_taps;
   uniform float u_scroll_offset;
 
   uniform vec4 u_panel_regions[7];
   uniform float u_panel_opacities[7];
+  uniform float u_panel_ids[7];
+  uniform int u_panel_count;
   uniform vec4 u_panels_bounding_box;
   uniform float u_header_height;
 
@@ -259,6 +245,10 @@ const foregroundFragmentShader = `
 
   uniform vec3 u_player_gradient_color;
   uniform float u_player_gradient_intensity;
+  uniform vec3 u_voice_color;
+  uniform float u_voice_level;
+  uniform vec3 u_on_air_color;
+  uniform float u_on_air;
 
   struct PanelData {
     float mask;
@@ -272,13 +262,12 @@ const foregroundFragmentShader = `
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
   }
 
-  // Glass effect configuration - hardcoded values matching GLASS_EFFECT_CONFIG
   float getCornerRadius() {
-    return 0.015;  // ~1.5% - matches GLASS_EFFECT_CONFIG.cornerRadiusPct
+    return 0.015;
   }
 
   float getFeatherSize() {
-    return 0.01;   // ~1% feather
+    return 0.01;
   }
 
   PanelData getPanelData(vec2 screenUV, vec4 region, float opacity) {
@@ -293,6 +282,7 @@ const foregroundFragmentShader = `
     vec2 p = screenUV - center;
     float cornerRadius = getCornerRadius();
     float feather = getFeatherSize();
+    if (abs(p.x) > size.x + feather || abs(p.y) > size.y + feather) return result;
     float dist = sdRoundedBox(p, size, cornerRadius);
     result.mask = smoothstep(feather * 0.5, 0.0, dist) * opacity;
     float maxDist = min(size.x, size.y) * 0.7;
@@ -321,9 +311,8 @@ const foregroundFragmentShader = `
     float noiseScale = 0.75;  
     float noiseStrength = 0.05;
     vec2 worldSpaceUV = (p + center) * noiseScale + vec2(0.0, -u_scroll_offset * 0.0003);
-    float noiseX = (texture2D(u_noise_texture, worldSpaceUV).r * 2.0 - 1.0);
-    float noiseY = (texture2D(u_noise_texture, worldSpaceUV).g * 2.0 - 1.0);
-    vec2 noiseGradient = vec2(noiseX, noiseY) * noiseStrength * depth;
+    vec2 noiseSample = texture2D(u_noise_texture, worldSpaceUV).rg * 2.0 - 1.0;
+    vec2 noiseGradient = noiseSample * noiseStrength * depth;
     return (bulgeOffset + edgeOffset + noiseGradient) * opacity;
   }
 
@@ -332,8 +321,8 @@ const foregroundFragmentShader = `
     vec3 darkenedColor = color * mix(0.3, 0.2, headerFactor);
     vec3 edgeColor = color * 1.2;
     vec3 resultColor = mix(darkenedColor, edgeColor, totalEdgeGlow);
-    vec3 glowColor = vec3(0.6, 0.7, 0.9);
-    resultColor += glowColor * totalEdgeGlow * 0.2;
+    vec3 glowColor = mix(vec3(0.6, 0.7, 0.9), u_on_air_color, clamp(u_on_air, 0.0, 1.0) * 0.85);
+    resultColor += glowColor * totalEdgeGlow * (0.2 + 0.3 * u_on_air);
 
     if (panelIndex == 5 && u_player_gradient_intensity > 0.001) {
       vec2 center = region.xy;
@@ -418,17 +407,14 @@ const foregroundFragmentShader = `
 
   vec3 sampleBokehTexture(sampler2D tex, vec2 uv, float blur) {
     if (blur <= 0.001) return texture2D(tex, uv).rgb;
-    float cappedBlur = min(blur, 20.0);
-    vec3 color = vec3(0.0);
-    float radius = cappedBlur * 0.001;
-    for (float ang = 0.0; ang < 6.2831853; ang += 2.0943951) {
-        vec2 offset = vec2(cos(ang), sin(ang)) * radius;
-        color += texture2D(tex, clamp(uv + offset, 0.0, 1.0)).rgb;
-    }
+    float radius = min(blur, 20.0) * 0.001;
+    vec3 color = texture2D(tex, clamp(uv + vec2(1.0, 0.0) * radius, 0.0, 1.0)).rgb;
+    color += texture2D(tex, clamp(uv + vec2(-0.5, 0.8660254) * radius, 0.0, 1.0)).rgb;
+    color += texture2D(tex, clamp(uv + vec2(-0.5, -0.8660254) * radius, 0.0, 1.0)).rgb;
     return color / 3.0;
   }
 
-  void main() {
+  vec4 computeGlass() {
     vec2 screenUV = vUv;
     vec4 finalColor = vec4(0.0); 
 
@@ -447,15 +433,18 @@ const foregroundFragmentShader = `
       
       int activePanelIndex = -1;
       vec4 activePanelRegion = vec4(0.0);
+      vec4 deepestRegion = vec4(0.0);
+      float deepestOpacity = 0.0;
 
       for(int i = 0; i < 7; i++) {
+        if (i >= u_panel_count) break;
         vec4 region = u_panel_regions[i];
         float opacity = u_panel_opacities[i];
         PanelData pd = getPanelData(screenUV, region, opacity);
         if (pd.mask > 0.001) {
           totalPanelMask = max(totalPanelMask, pd.mask);
           if (pd.mask > 0.5) {
-            activePanelIndex = i;
+            activePanelIndex = int(u_panel_ids[i] + 0.5);
             activePanelRegion = region;
           }
         }
@@ -463,15 +452,20 @@ const foregroundFragmentShader = `
         headerFactor = max(headerFactor, pd.header);
         if (pd.depth > 0.001 && pd.depth > totalDepth) {
           totalDepth = pd.depth;
-          if (u_enable_refraction > 0.5) refractionOffset = calculatePanelRefraction(screenUV, region, pd.depth, opacity);
+          deepestRegion = region;
+          deepestOpacity = opacity;
         }
+      }
+
+      if (totalDepth > 0.001 && u_enable_refraction > 0.5) {
+        refractionOffset = calculatePanelRefraction(screenUV, deepestRegion, totalDepth, deepestOpacity);
       }
 
       refractedScreenUV = vUv + refractionOffset * u_enable_refraction;
 
       if(totalPanelMask > 0.001) {
         vec3 panelColor;
-        if (u_glass_blur_factor > 0.001 && u_enable_refraction > 0.5) {
+        if (u_glass_taps > 1.5 && u_glass_blur_factor > 0.001 && u_enable_refraction > 0.5) {
           float blurRadius = 5.0 * totalDepth * u_glass_blur_factor;
           panelColor = sampleBokehTexture(u_capture_texture, refractedScreenUV, blurRadius);
         } else {
@@ -544,20 +538,165 @@ const foregroundFragmentShader = `
       finalColor = mix(finalColor, vec4(glassColor, 1.0), opacityMult);
     }
 
-    gl_FragColor = finalColor;
+    return finalColor;
+  }
+
+  vec3 applyAmbientGlow(vec3 color, vec2 screenUV, float glassAlpha) {
+    if (u_voice_level < 0.001 && u_on_air < 0.001) return color;
+    float aspect = u_canvas_resolution.x / max(u_canvas_resolution.y, 1.0);
+    vec2 anchor = clamp(u_radio_button_pos, vec2(0.0), vec2(1.0));
+    vec2 center = mix(vec2(0.5, 0.55), anchor, clamp(u_radio_button_state, 0.0, 1.0));
+    vec2 d = (screenUV - center) * vec2(aspect, 1.0);
+    float voiceFalloff = exp(-dot(d, d) * 6.0);
+    vec2 e = abs(screenUV - 0.5) * 2.0;
+    float edge = smoothstep(0.45, 1.0, max(e.x, e.y));
+    vec3 onAirGlow = u_on_air_color * u_on_air * (0.06 + 0.2 * edge);
+    vec3 voiceGlow = u_voice_color * u_voice_level * voiceFalloff * 0.45;
+    vec3 glow = (onAirGlow + voiceGlow) * mix(1.0, 0.7, glassAlpha);
+    return color + glow * (1.0 - color);
+  }
+`
+
+const BACKGROUND_FUNCTION = `
+  uniform vec3 u_underlay;
+
+` + BACKGROUND_FRAGMENT_MAIN.replace('void main() {', 'vec4 computeBackground() {').replace('gl_FragColor = finalColor;', 'return finalColor;')
+
+const backdropFragmentShader = BACKGROUND_FRAGMENT_BODY + BACKGROUND_FUNCTION + `
+  void main() {
+    vec4 background = clamp(computeBackground(), 0.0, 1.0);
+    gl_FragColor = vec4(background.rgb + (1.0 - background.a) * u_underlay, 1.0);
+  }
+`
+
+const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BACKGROUND_FUNCTION + `
+  void main() {
+    vec4 glass = clamp(computeGlass(), 0.0, 1.0);
+    vec3 color;
+    if (glass.a >= 0.999) {
+      color = glass.rgb;
+    } else {
+      vec4 background = clamp(computeBackground(), 0.0, 1.0);
+      float alpha = glass.a + background.a * (1.0 - glass.a);
+      color = mix(background.rgb, glass.rgb, glass.a) + (1.0 - alpha) * u_underlay;
+    }
+    gl_FragColor = vec4(applyAmbientGlow(color, vUv, glass.a), 1.0);
   }
 `
 const transparentPixel = new DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, RGBAFormat)
 const defaultGeometry = new PlaneGeometry(2, 2)
 
-// Load image and create texture at specified resolution (downscales if needed)
-function loadTextureAtResolution(url, targetSize, onLoad) {
+const numericAscending = (a, b) => a - b
+
+function lowerBound(sorted, value) {
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (sorted[mid] < value) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function pushEnergySample(history, sorted, value) {
+  if (sorted.length !== history.length) {
+    sorted.length = 0
+    for (let i = 0; i < history.length; i++) sorted.push(history[i])
+    sorted.sort(numericAscending)
+  }
+  history.push(value)
+  sorted.splice(lowerBound(sorted, value), 0, value)
+  if (history.length > 100) sorted.splice(lowerBound(sorted, history.shift()), 1)
+  return Math.max(0.65, sorted[Math.floor(sorted.length * 0.80)] || 0.65)
+}
+
+const BG_SIGNATURE_UNIFORMS = [
+  'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
+  'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_brightness', 'u_contrast', 'u_saturation',
+  'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution',
+]
+
+const FG_SIGNATURE_UNIFORMS = [
+  'u_scroll_offset', 'u_panel_regions', 'u_panel_opacities', 'u_panel_ids', 'u_panel_count', 'u_panels_bounding_box', 'u_header_height',
+  'u_radio_button_pos', 'u_radio_button_radius', 'u_radio_button_state', 'u_radio_button_hover',
+  'u_radio_button_pressed', 'u_radio_progress', 'u_radio_state_int', 'u_visual_state_color',
+  'u_glass_blur_factor', 'u_enable_refraction', 'u_audio_pulse', 'u_player_gradient_color',
+  'u_player_gradient_intensity', 'u_glass_taps', 'u_voice_color', 'u_voice_level', 'u_on_air_color', 'u_on_air',
+]
+
+const VOICE_ATTACK = 18
+const VOICE_RELEASE = 5
+const VOICE_GAIN = 2.2
+const VOICE_STEADY = 0.4
+const VOICE_COLOR_RATE = 4
+const ON_AIR_RATE = 2.5
+const ON_AIR_PAUSED = 0.5
+const ON_AIR_BREATHE_SECONDS = 2.4
+const AMBIENT_FLOOR = 0.002
+
+const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
+
+function averageLevel(data) {
+  if (!data || !data.length) return 0
+  let sum = 0
+  for (let i = 0; i < data.length; i++) sum += data[i]
+  return Math.min(1, (sum / data.length / 255) * VOICE_GAIN)
+}
+
+const SIGNATURE_EPSILON = 1e-4
+const SIGNATURE_SIZE = 160
+const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
+const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
+const FRAME_CAP_SLACK_SECONDS = 0.004
+
+function writeSignatureValue(out, index, value) {
+  if (typeof value === 'number') {
+    out[index] = value
+    return index + 1
+  }
+  if (Array.isArray(value)) {
+    let next = index
+    for (let i = 0; i < value.length; i++) next = writeSignatureValue(out, next, value[i])
+    return next
+  }
+  out[index] = value.x
+  out[index + 1] = value.y
+  if (value.isVector2) return index + 2
+  out[index + 2] = value.z
+  if (value.isVector3) return index + 3
+  out[index + 3] = value.w
+  return index + 4
+}
+
+function writeUniformSignature(out, index, uniforms, names) {
+  let next = index
+  for (let i = 0; i < names.length; i++) next = writeSignatureValue(out, next, uniforms[names[i]].value)
+  return next
+}
+
+function signatureChanged(current, previous, length) {
+  for (let i = 0; i < length; i++) {
+    if (Math.abs(current[i] - previous[i]) > SIGNATURE_EPSILON) return true
+  }
+  return false
+}
+
+function loadTextureAtResolution(url, targetSize, onLoad, onError) {
   const img = new Image()
   img.crossOrigin = 'anonymous'
-  img.onload = () => {
+  img.decoding = 'async'
+  let settled = false
+  img.onerror = (event) => {
+    if (settled) return
+    settled = true
+    onError?.(event)
+  }
+  const build = () => {
+    if (settled) return
+    settled = true
     let texture
     if (targetSize && (img.width > targetSize || img.height > targetSize)) {
-      // Downscale to target size
       const canvas = document.createElement('canvas')
       canvas.width = targetSize
       canvas.height = targetSize
@@ -565,7 +704,6 @@ function loadTextureAtResolution(url, targetSize, onLoad) {
       ctx.drawImage(img, 0, 0, targetSize, targetSize)
       texture = new CanvasTexture(canvas)
     } else {
-      // Use full resolution
       texture = new CanvasTexture(img)
     }
     texture.wrapS = ClampToEdgeWrapping
@@ -573,6 +711,13 @@ function loadTextureAtResolution(url, targetSize, onLoad) {
     texture.generateMipmaps = true
     texture.needsUpdate = true
     onLoad(texture)
+  }
+  img.onload = () => {
+    if (typeof img.decode === 'function') {
+      img.decode().then(build, build)
+    } else {
+      build()
+    }
   }
   img.src = url
 }
@@ -601,6 +746,40 @@ function generateNoiseTexture() {
   return texture
 }
 
+function createLyricResources() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 1024
+  canvas.height = 512
+  const ctx = canvas.getContext('2d', { alpha: true })
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const texture = new CanvasTexture(canvas)
+  texture.needsUpdate = true
+  return { canvas, texture }
+}
+
+function releaseVideo(video) {
+  video.pause()
+  video.removeAttribute('src')
+  video.load()
+}
+
+function syncVideoClipPlayback(clipState) {
+  const count = clipState.videos.length
+  if (count === 0) return
+  const nextIndex = (clipState.currentIndex + 1) % count
+  clipState.videos.forEach((video, index) => {
+    if (index === clipState.currentIndex || index === nextIndex) {
+      if (!video.getAttribute('src')) {
+        video.src = video.dataset.clipUrl
+        video.load()
+      }
+      if (video.paused) video.play().catch(() => {})
+    } else if (!video.paused) {
+      video.pause()
+    }
+  })
+}
+
 function MultiPassPlane({
   currentArtwork,
   transitionProgressRef,
@@ -611,6 +790,7 @@ function MultiPassPlane({
   audioFeatures,
   videoClips = [],
   visualQuality = 'high',
+  referenceDpr = 1,
 }) {
   const videoClipRef = useRef({
     videos: [],
@@ -621,13 +801,13 @@ function MultiPassPlane({
   })
 
   const {
-    shaderPanelRegions: panelRegions,
-    shaderPanelOpacities: panelOpacities,
-    shaderRadioButtonPos: radioButtonPos,
-    radioButtonOpacity,
-    radioButtonInteraction,
+    shaderPanelRegions: panelRegionsRef,
+    shaderPanelOpacities: panelOpacitiesRef,
+    shaderRadioButtonPos: radioButtonPosRef,
+    radioButtonRef,
     radioProgressData,
     speakerColorRef,
+    djFftDataRef,
     gyroscopeRef,
     mouseRef,
     interfaceRef,
@@ -642,8 +822,12 @@ function MultiPassPlane({
   const isFullscreen = interfaceState?.isFullscreenVisuals ?? false
 
   const { interactionEffectsRef, getCategoryMetadata } = useDynamicTheme()
+  const { fpsCap, glassTaps, reduceMotion, reportFrame, reportRenderer, tier } = useQuality()
+  const renderer = useThree(state => state.gl)
+  const mainScene = useThree(state => state.scene)
+  const mainCamera = useThree(state => state.camera)
+  const programsReadyRef = useRef(false)
 
-  // Register RAF source for debugging
   useEffect(() => {
     window.registerRAFSource?.('ARC-MultiPass')
   }, [])
@@ -673,6 +857,17 @@ function MultiPassPlane({
 
   const lastAudioUpdateRef = useRef(0)
   const energyHistoryRef = useRef([])
+  const energyScratchRef = useRef([])
+  const renderSignatureRef = useRef({
+    current: new Float64Array(SIGNATURE_SIZE),
+    previous: new Float64Array(SIGNATURE_SIZE),
+    length: 0,
+    textures: [null, null, null, null],
+    textVersion: -1,
+    fgVisible: false,
+    force: true,
+  })
+  const lastDrawAtRef = useRef(0)
   const visualCueMapRef = useRef(new Map())
   const lastBeatIndexRef = useRef(0)
   const lastSegmentIndexRef = useRef(0)
@@ -681,8 +876,8 @@ function MultiPassPlane({
   const lastSeenProgressRef = useRef(0)
   const localProgressUpdateTimeRef = useRef(Date.now())
   const scratchColorRef = useRef(new Vector3())
-  const playerGradientColorRef = useRef(new Vector3(0.0, 0.0, 0.0))
   const targetPlayerGradientColorRef = useRef({ r: 0, g: 0, b: 0 })
+  const ambientRef = useRef({ voice: 0, onAir: 0, breatheTime: 0 })
 
   const captureScene = useMemo(() => new Scene(), [])
   const captureCamera = useMemo(() => new OrthographicCamera(-1, 1, 1, -1, 0, 1), [])
@@ -737,17 +932,20 @@ function MultiPassPlane({
 
   const fgMaterial = useMemo(() => new ShaderMaterial({
       vertexShader: backgroundVertexShader,
-      fragmentShader: foregroundFragmentShader,
+      fragmentShader: sceneFragmentShader,
       uniforms: {
+        ...bgMaterial.uniforms,
         u_capture_texture: { value: captureRenderTarget.texture },
         u_noise_texture: { value: null },
-        u_canvas_resolution: { value: new Vector2(1, 1) },
-        u_time: { value: 0.0 },
+        u_glass_taps: { value: 3.0 },
+        u_underlay: { value: new Vector3(UNDERLAY_LEVEL, UNDERLAY_LEVEL, UNDERLAY_LEVEL) },
         u_scroll_offset: { value: 0.0 },
         u_glass_blur_factor: { value: 1.0 },
         u_enable_refraction: { value: 1.0 },
         u_panel_regions: { value: [new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4()] },
         u_panel_opacities: { value: [0,0,0,0,0,0,0] },
+        u_panel_ids: { value: [0,0,0,0,0,0,0] },
+        u_panel_count: { value: 0 },
         u_panels_bounding_box: { value: new Vector4(0, 0, 0, 0) },
         u_header_height: { value: 0.063 },
         u_radio_button_pos: { value: new Vector2(0.5, 0.5) },
@@ -761,60 +959,116 @@ function MultiPassPlane({
         u_radio_time: { value: 0.0 },
         u_audio_pulse: { value: 0.0 },
         u_player_gradient_color: { value: new Vector3(0.0, 0.0, 0.0) },
-        u_player_gradient_intensity: { value: 0.0 }
-      },
-      transparent: true
-  }), [captureRenderTarget])
+        u_player_gradient_intensity: { value: 0.0 },
+        u_voice_color: { value: new Vector3(0.58, 0.2, 0.92) },
+        u_voice_level: { value: 0.0 },
+        u_on_air_color: { value: new Vector3(0.96, 0.62, 0.04) },
+        u_on_air: { value: 0.0 }
+      }
+  }), [bgMaterial, captureRenderTarget])
+
+  const backdropMaterial = useMemo(() => new ShaderMaterial({
+      vertexShader: backgroundVertexShader,
+      fragmentShader: backdropFragmentShader,
+      uniforms: {
+        ...bgMaterial.uniforms,
+        u_underlay: fgMaterial.uniforms.u_underlay,
+      }
+  }), [bgMaterial, fgMaterial])
+
+  const glassMeshRef = useRef(null)
+  const backdropMeshRef = useRef(null)
 
   const captureMesh = useMemo(() => new Mesh(defaultGeometry, bgMaterial), [bgMaterial])
   useEffect(() => { captureScene.add(captureMesh); return () => captureScene.remove(captureMesh) }, [captureScene, captureMesh])
 
   useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      renderer.compileAsync(captureScene, captureCamera),
+      renderer.compileAsync(mainScene, mainCamera),
+    ]).then(() => {
+      if (!cancelled) programsReadyRef.current = true
+    })
+    return () => { cancelled = true }
+  }, [renderer, mainScene, mainCamera, captureScene, captureCamera, captureMesh, fgMaterial, backdropMaterial])
+
+  useEffect(() => {
+    try {
+      const context = renderer.getContext()
+      const info = context.getExtension('WEBGL_debug_renderer_info')
+      reportRenderer(String(context.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : context.RENDERER) || ''))
+    } catch {
+      reportRenderer('')
+    }
+  }, [renderer, reportRenderer])
+
+  useEffect(() => {
     return () => {
       bgMaterial.dispose()
       fgMaterial.dispose()
+      backdropMaterial.dispose()
       captureMesh.geometry.dispose()
     }
-  }, [bgMaterial, fgMaterial, captureMesh])
+  }, [bgMaterial, fgMaterial, backdropMaterial, captureMesh])
 
   const [texA, setTexA] = useState(transparentPixel)
   const [texB, setTexB] = useState(transparentPixel)
   const [frontTex, setFrontTex] = useState('A')
   const previousArtworkRef = useRef(null)
+  const textureLoadTokensRef = useRef({ A: 0, B: 0 })
+
+  useEffect(() => () => {
+    if (texA !== transparentPixel) texA.dispose()
+  }, [texA])
+
+  useEffect(() => () => {
+    if (texB !== transparentPixel) texB.dispose()
+  }, [texB])
 
   const smoothProgressRef = useRef(0)
 
-  const panelRegionsRef = useRef([new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4()])
-  const panelOpacitiesRef = useRef([0,0,0,0,0,0,0])
-  const fgMeshRef = useRef(null)
+  const panelRegionsVecsRef = useRef([new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4(), new Vector4()])
+  const panelOpacitiesLerpRef = useRef([0,0,0,0,0,0,0])
 
   const lastLoadedResolutionRef = useRef(null)
 
   useEffect(() => {
     if (!currentArtwork) return
 
-    // 512px when panels visible, full resolution in fullscreen
     const targetSize = isFullscreen ? null : 512
     const isNewArtwork = currentArtwork !== previousArtworkRef.current
     const isResolutionChange = !isNewArtwork && targetSize !== lastLoadedResolutionRef.current
 
-    if (isNewArtwork) {
-      // New artwork: load to back layer, crossfade
-      const backLayer = frontTex === 'A' ? 'B' : 'A'
+    const loadIntoLayer = (layer, onApplied) => {
+      const tokens = textureLoadTokensRef.current
+      const token = ++tokens[layer]
       loadTextureAtResolution(currentArtwork, targetSize, (texture) => {
-        if (backLayer === 'A') setTexA(texture); else setTexB(texture);
+        if (tokens[layer] !== token) {
+          texture.dispose()
+          return
+        }
+        if (layer === 'A') setTexA(texture); else setTexB(texture);
+        onApplied?.()
+      }, () => {
+        if (tokens[layer] === token) {
+          console.warn('[AudioReactiveCanvas] Failed to load artwork texture')
+        }
+      })
+    }
+
+    if (isNewArtwork) {
+      const backLayer = frontTex === 'A' ? 'B' : 'A'
+      loadIntoLayer(backLayer, () => {
         requestAnimationFrame(() => { requestAnimationFrame(() => { transitionProgressRef.current = 0; setFrontTex(backLayer) }) })
       })
       previousArtworkRef.current = currentArtwork
       lastLoadedResolutionRef.current = targetSize
     } else if (isResolutionChange) {
-      // Same artwork, different resolution: update current layer in place
-      loadTextureAtResolution(currentArtwork, targetSize, (texture) => {
-        if (frontTex === 'A') setTexA(texture); else setTexB(texture);
-      })
+      loadIntoLayer(frontTex)
       lastLoadedResolutionRef.current = targetSize
     }
-  }, [currentArtwork, frontTex, isFullscreen])
+  }, [currentArtwork, frontTex, isFullscreen, transitionProgressRef])
 
 
 
@@ -839,7 +1093,7 @@ function MultiPassPlane({
   useEffect(() => {
     const clipState = videoClipRef.current
 
-    clipState.videos.forEach(v => { v.pause(); v.src = '' })
+    clipState.videos.forEach(releaseVideo)
     clipState.textures.forEach(t => t.dispose())
     clipState.videos = []
     clipState.textures = []
@@ -855,9 +1109,8 @@ function MultiPassPlane({
       video.muted = true
       video.loop = true
       video.playsInline = true
-      video.src = clip.url
-      video.load()
-      video.play().catch(() => {})
+      video.preload = 'auto'
+      video.dataset.clipUrl = clip.url
 
       const texture = new VideoTexture(video)
       texture.minFilter = LinearFilter
@@ -867,9 +1120,13 @@ function MultiPassPlane({
       clipState.textures.push(texture)
     })
 
+    syncVideoClipPlayback(clipState)
+
     return () => {
-      clipState.videos.forEach(v => { v.pause(); v.src = '' })
+      clipState.videos.forEach(releaseVideo)
       clipState.textures.forEach(t => t.dispose())
+      clipState.videos = []
+      clipState.textures = []
     }
   }, [videoClips])
 
@@ -912,13 +1169,13 @@ function MultiPassPlane({
 
   const frameTimingRef = useRef({ total: 0, count: 0, lastLog: 0 })
 
-  useFrame(({ size, gl }, frameDelta) => {
+  useFrame(({ size, gl, scene, camera }, frameDelta) => {
     window.__rafDebug?.sources && (window.__rafDebug.sources['ARC-MultiPass'] = (window.__rafDebug.sources['ARC-MultiPass'] || 0) + 1)
     const frameStart = performance.now()
 
     if (isOfflineRendering) return
 
-    if (isUnmountedRef.current || !engineRef || !interfaceRef) return
+    if (isUnmountedRef.current || !engineRef || !interfaceRef || !programsReadyRef.current) return
 
     const now = Date.now()
     const effects = effectsRef.current
@@ -970,12 +1227,7 @@ function MultiPassPlane({
 
                 effects.currentEnergy = rawEnergy
 
-                const energyHistory = energyHistoryRef.current
-                energyHistory.push(rawEnergy)
-                if (energyHistory.length > 100) energyHistory.shift()
-                const sortedEnergy = [...energyHistory].sort((a, b) => a - b)
-                const p80 = Math.floor(sortedEnergy.length * 0.80)
-                const energyThreshold = Math.max(0.65, sortedEnergy[p80] || 0.65)
+                const energyThreshold = pushEnergySample(energyHistoryRef.current, energyScratchRef.current, rawEnergy)
                 const intensity = Math.max(0, (rawEnergy - energyThreshold) / (1.0 - energyThreshold))
 
                 let onBeat = false
@@ -1002,6 +1254,7 @@ function MultiPassPlane({
                                 const clipState = videoClipRef.current
                                 if (clipState.textures.length > 0) {
                                     clipState.currentIndex = (clipState.currentIndex + 1) % clipState.textures.length
+                                    syncVideoClipPlayback(clipState)
                                 }
                             }
                             if (cues.has('SMALL_ROTATION')) effects.rotation += (Math.random() - 0.5) * 10.0 * rawEnergy
@@ -1060,26 +1313,34 @@ function MultiPassPlane({
     const dpr = gl.getPixelRatio()
     const w = size.width * dpr
     const h = size.height * dpr
+    const logicalWidth = size.width * referenceDpr
+    const logicalHeight = size.height * referenceDpr
 
     fgMaterial.uniforms.u_header_height.value = PANEL.headerHeight / size.height
 
     let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
     let hasVisiblePanels = false;
-    const panelCount = panelRegions ? Math.min(panelRegions.length, 7) : 0;
+    const regions = panelRegionsRef.current
+    const opacities = panelOpacitiesRef.current
+    const panelCount = regions ? Math.min(regions.length, 7) : 0;
+    const packedRegions = fgMaterial.uniforms.u_panel_regions.value
+    const packedOpacities = fgMaterial.uniforms.u_panel_opacities.value
+    const packedIds = fgMaterial.uniforms.u_panel_ids.value
+    let packedCount = 0
 
     for (let i = 0; i < panelCount; i++) {
-        const region = panelRegions[i];
-        const current = panelRegionsRef.current[i];
-        const targetOpacity = panelOpacities[i] || 0.0;
+        const region = regions[i];
+        const current = panelRegionsVecsRef.current[i];
+        const targetOpacity = opacities[i] || 0.0;
 
         current.x = region.x;
         current.y = region.y;
         current.z = region.z;
         current.w = region.w;
 
-        panelOpacitiesRef.current[i] += (targetOpacity - panelOpacitiesRef.current[i]) * 0.3;
+        panelOpacitiesLerpRef.current[i] += (targetOpacity - panelOpacitiesLerpRef.current[i]) * 0.3;
 
-        if (current.z > 0.01 && panelOpacitiesRef.current[i] > 0.01) {
+        if (current.z > 0.01 && panelOpacitiesLerpRef.current[i] > 0.01) {
           hasVisiblePanels = true;
           const halfWidth = current.z * 0.5;
           const halfHeight = current.w * 0.5;
@@ -1088,9 +1349,19 @@ function MultiPassPlane({
           maxX = Math.max(maxX, current.x + halfWidth);
           maxY = Math.max(maxY, current.y + halfHeight);
         }
-        fgMaterial.uniforms.u_panel_regions.value[i].copy(current)
-        fgMaterial.uniforms.u_panel_opacities.value[i] = panelOpacitiesRef.current[i]
+        if (current.z >= 0.01 && panelOpacitiesLerpRef.current[i] >= 0.01) {
+          packedRegions[packedCount].copy(current)
+          packedOpacities[packedCount] = panelOpacitiesLerpRef.current[i]
+          packedIds[packedCount] = i
+          packedCount++
+        }
     }
+    for (let i = packedCount; i < 7; i++) {
+      packedRegions[i].set(0, 0, 0, 0)
+      packedOpacities[i] = 0
+      packedIds[i] = 0
+    }
+    fgMaterial.uniforms.u_panel_count.value = packedCount
     if (hasVisiblePanels) {
       fgMaterial.uniforms.u_panels_bounding_box.value.set(
         Math.max(0.0, minX - 0.02), Math.max(0.0, minY - 0.02),
@@ -1100,34 +1371,27 @@ function MultiPassPlane({
       fgMaterial.uniforms.u_panels_bounding_box.value.set(0,0,0,0);
     }
 
-    if (radioButtonPos && radioButtonPos.radiusX > 0 && radioButtonPos.radiusY > 0) {
+    const rbPos = radioButtonPosRef.current
+    if (rbPos && rbPos.radiusX > 0 && rbPos.radiusY > 0) {
        const currentPos = fgMaterial.uniforms.u_radio_button_pos.value;
        const currentRadius = fgMaterial.uniforms.u_radio_button_radius.value;
 
-       currentPos.x = radioButtonPos.x;
-       currentPos.y = radioButtonPos.y;
-       currentRadius.x = radioButtonPos.radiusX;
-       currentRadius.y = radioButtonPos.radiusY;
+       currentPos.x = rbPos.x;
+       currentPos.y = rbPos.y;
+       currentRadius.x = rbPos.radiusX;
+       currentRadius.y = rbPos.radiusY;
     }
 
-    if (radioButtonOpacity !== undefined) {
-        const currentOpacity = fgMaterial.uniforms.u_radio_button_state.value;
-        // Sync with React CSS transition (0.5s) - approx 0.15 per frame at 60fps
-        fgMaterial.uniforms.u_radio_button_state.value += (radioButtonOpacity - currentOpacity) * 0.15;
-    }
+    const radioButton = radioButtonRef.current
+
+    fgMaterial.uniforms.u_radio_button_state.value += (radioButton.opacity - fgMaterial.uniforms.u_radio_button_state.value) * 0.15;
 
     if (fgMaterial.uniforms.u_radio_button_state.value > 0.01) hasVisiblePanels = true;
 
-    if (radioButtonInteraction) {
-        const targetHover = radioButtonInteraction.isHovered ? 1.0 : 0.0;
-        const targetPressed = radioButtonInteraction.isPressed ? 1.0 : 0.0;
-
-        const currentHover = fgMaterial.uniforms.u_radio_button_hover.value;
-        const currentPressed = fgMaterial.uniforms.u_radio_button_pressed.value;
-
-        fgMaterial.uniforms.u_radio_button_hover.value += (targetHover - currentHover) * 0.25;
-        fgMaterial.uniforms.u_radio_button_pressed.value += (targetPressed - currentPressed) * 0.25;
-    }
+    const targetHover = radioButton.isHovered ? 1.0 : 0.0;
+    const targetPressed = radioButton.isPressed ? 1.0 : 0.0;
+    fgMaterial.uniforms.u_radio_button_hover.value += (targetHover - fgMaterial.uniforms.u_radio_button_hover.value) * 0.25;
+    fgMaterial.uniforms.u_radio_button_pressed.value += (targetPressed - fgMaterial.uniforms.u_radio_button_pressed.value) * 0.25;
 
     if (radioProgressData) {
         const currentTrack = engineState.currentTrack
@@ -1156,12 +1420,42 @@ function MultiPassPlane({
         }
     }
 
+    const ambient = ambientRef.current
+    const onAirColor = radioProgressData?.onAirColor || null
+    const speaking = radioProgressData?.stateInt === 3
+    const steadyAmbient = reduceMotion || tier === 0
+    const voiceTarget = speaking ? (steadyAmbient ? VOICE_STEADY : averageLevel(djFftDataRef?.current)) : 0
+    ambient.voice = approach(ambient.voice, voiceTarget, voiceTarget > ambient.voice ? VOICE_ATTACK : VOICE_RELEASE, delta)
+    if (ambient.voice < AMBIENT_FLOOR && voiceTarget === 0) ambient.voice = 0
+    fgMaterial.uniforms.u_voice_level.value = ambient.voice
+    if (speaking && speakerColorRef?.current) {
+      const sc = speakerColorRef.current
+      scratchColorRef.current.set(sc.r / 255, sc.g / 255, sc.b / 255)
+      fgMaterial.uniforms.u_voice_color.value.lerp(scratchColorRef.current, Math.min(1, VOICE_COLOR_RATE * delta))
+    }
+
+    const talkBreak = engineState.talkBreak
+    const onAirTarget = talkBreak ? (talkBreak.paused ? ON_AIR_PAUSED : 1) : 0
+    ambient.onAir = approach(ambient.onAir, onAirTarget, ON_AIR_RATE, delta)
+    if (ambient.onAir < AMBIENT_FLOOR && onAirTarget === 0) ambient.onAir = 0
+    let breathe = 1
+    if (ambient.onAir > 0 && !talkBreak?.paused && !reduceMotion && tier >= 2) {
+      ambient.breatheTime += delta
+      breathe = 0.8 + 0.2 * Math.sin(ambient.breatheTime * Math.PI * 2 / ON_AIR_BREATHE_SECONDS)
+    }
+    fgMaterial.uniforms.u_on_air.value = ambient.onAir * breathe
+    if (onAirColor) {
+      scratchColorRef.current.set(onAirColor.r / 255, onAirColor.g / 255, onAirColor.b / 255)
+      fgMaterial.uniforms.u_on_air_color.value.lerp(scratchColorRef.current, Math.min(1, VOICE_COLOR_RATE * delta))
+    }
+
     fgMaterial.uniforms.u_glass_blur_factor.value = visualQuality === 'high' ? glassBlurFactor : 0
     fgMaterial.uniforms.u_enable_refraction.value = visualQuality === 'high' ? 1.0 : 0.0
+    fgMaterial.uniforms.u_glass_taps.value = glassTaps
     fgMaterial.uniforms.u_audio_pulse.value = effects.beatPulse
     fgMaterial.uniforms.u_scroll_offset.value = scrollPosition
 
-    const targetGradientColor = targetPlayerGradientColorRef.current
+    const targetGradientColor = onAirColor || targetPlayerGradientColorRef.current
     scratchColorRef.current.set(targetGradientColor.r / 255, targetGradientColor.g / 255, targetGradientColor.b / 255)
     fgMaterial.uniforms.u_player_gradient_color.value.lerp(scratchColorRef.current, 2.0 * delta)
 
@@ -1208,18 +1502,27 @@ function MultiPassPlane({
 
     bgMaterial.uniforms.u_time.value = (bgMaterial.uniforms.u_time.value + delta) % 1000.0
     bgMaterial.uniforms.u_transition.value = transitionProgressRef.current
-    bgMaterial.uniforms.u_parallax.value.set(pX, pY)
-    bgMaterial.uniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
-    bgMaterial.uniforms.u_frame_offset.value.set(effects.frameOffset.x, effects.frameOffset.y)
-    bgMaterial.uniforms.u_frame_scale.value = effects.frameScale
-    bgMaterial.uniforms.u_scale.value = effects.scale || 1.0
-    bgMaterial.uniforms.u_rotation.value = effects.rotation * Math.PI / 180
+    if (reduceMotion) {
+      bgMaterial.uniforms.u_parallax.value.set(0, 0)
+      bgMaterial.uniforms.u_glitch.value.set(0, 0)
+      bgMaterial.uniforms.u_frame_offset.value.set(0, 0)
+      bgMaterial.uniforms.u_frame_scale.value = 1.0
+      bgMaterial.uniforms.u_scale.value = 1.0
+      bgMaterial.uniforms.u_rotation.value = 0.0
+    } else {
+      bgMaterial.uniforms.u_parallax.value.set(pX, pY)
+      bgMaterial.uniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
+      bgMaterial.uniforms.u_frame_offset.value.set(effects.frameOffset.x, effects.frameOffset.y)
+      bgMaterial.uniforms.u_frame_scale.value = effects.frameScale
+      bgMaterial.uniforms.u_scale.value = effects.scale || 1.0
+      bgMaterial.uniforms.u_rotation.value = effects.rotation * Math.PI / 180
+    }
     bgMaterial.uniforms.u_brightness.value = effects.brightness
     bgMaterial.uniforms.u_contrast.value = effects.contrast
     bgMaterial.uniforms.u_saturation.value = effects.saturation
     bgMaterial.uniforms.u_hue.value = effects.hue * Math.PI / 180
     bgMaterial.uniforms.u_max_blur.value = visualQuality === 'high' ? effects.blur : 0
-    bgMaterial.uniforms.u_chromatic.value = visualQuality === 'high' ? effects.chromatic : 0
+    bgMaterial.uniforms.u_chromatic.value = visualQuality === 'high' && !reduceMotion ? effects.chromatic : 0
     bgMaterial.uniforms.u_has_depth_map.value = 0.0
     bgMaterial.uniforms.u_flicker.value = effects.flicker
 
@@ -1259,39 +1562,86 @@ function MultiPassPlane({
         captureRenderTarget.setSize(rtWidth, rtHeight)
     }
 
-    bgMaterial.uniforms.u_canvas_resolution.value.set(rtWidth, rtHeight)
     if (textTexture) bgMaterial.uniforms.u_text_texture.value = textTexture
+    bgMaterial.uniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
 
-    if (hasVisiblePanels) {
-        bgMaterial.uniforms.u_is_capture.value = 1.0
+    const bgUniforms = bgMaterial.uniforms
+    const fgUniforms = fgMaterial.uniforms
+    const signature = renderSignatureRef.current
+    let sigLength = writeUniformSignature(signature.current, 0, bgUniforms, BG_SIGNATURE_UNIFORMS)
+    sigLength = writeUniformSignature(signature.current, sigLength, fgUniforms, FG_SIGNATURE_UNIFORMS)
+    signature.current[sigLength++] = Math.abs(effects.glitchX) > 20 ? bgUniforms.u_time.value : 0
+    signature.current[sigLength++] = fgUniforms.u_radio_state_int.value === 4 ? fgUniforms.u_radio_time.value : 0
+    signature.current[sigLength++] = bgUniforms.u_parallax.value.x * PARALLAX_SIGNATURE_SCALE
+    signature.current[sigLength++] = bgUniforms.u_parallax.value.y * PARALLAX_SIGNATURE_SCALE
+    signature.current[sigLength++] = w
+    signature.current[sigLength++] = h
+
+    const textures = signature.textures
+    const textVersion = textTexture ? textTexture.version : -1
+    const videoActive = bgUniforms.u_video_clip_blend.value > 0.01
+    const wantsRender = signature.force ||
+      videoActive ||
+      hasVisiblePanels !== signature.fgVisible ||
+      textures[0] !== bgUniforms.u_texture.value ||
+      textures[1] !== bgUniforms.u_texture_prev.value ||
+      textures[2] !== bgUniforms.u_text_texture.value ||
+      textures[3] !== fgUniforms.u_noise_texture.value ||
+      textVersion !== signature.textVersion ||
+      sigLength !== signature.length ||
+      signatureChanged(signature.current, signature.previous, sigLength)
+
+    const paused = !signature.force && isSceneRenderingPaused(frameStart)
+    reportFrame(delta, wantsRender && !paused)
+    const frameSeconds = frameStart / 1000
+    const throttled = paused || (fpsCap > 0 && !signature.force && frameSeconds - lastDrawAtRef.current < 1 / fpsCap - FRAME_CAP_SLACK_SECONDS)
+    const needsRender = wantsRender && !throttled
+
+    if (needsRender) {
+      lastDrawAtRef.current = frameSeconds
+      signature.force = false
+      signature.fgVisible = hasVisiblePanels
+      signature.textVersion = textVersion
+      signature.length = sigLength
+      textures[0] = bgUniforms.u_texture.value
+      textures[1] = bgUniforms.u_texture_prev.value
+      textures[2] = bgUniforms.u_text_texture.value
+      textures[3] = fgUniforms.u_noise_texture.value
+      const swap = signature.previous
+      signature.previous = signature.current
+      signature.current = swap
+
+      if (hasVisiblePanels) {
+        bgUniforms.u_canvas_resolution.value.set(rtWidth, rtHeight)
+        bgUniforms.u_is_capture.value = 1.0
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
         gl.setRenderTarget(null)
-        bgMaterial.uniforms.u_is_capture.value = 0.0
+        bgUniforms.u_is_capture.value = 0.0
+        bgUniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
+      }
+
+      if (glassMeshRef.current) glassMeshRef.current.visible = hasVisiblePanels
+      if (backdropMeshRef.current) backdropMeshRef.current.visible = !hasVisiblePanels
+
+      gl.render(scene, camera)
     }
 
-    bgMaterial.uniforms.u_canvas_resolution.value.set(w, h)
-    fgMaterial.uniforms.u_canvas_resolution.value.set(w, h)
-
-    if (fgMeshRef.current) {
-      fgMeshRef.current.visible = hasVisiblePanels
-    }
-
-    // DEBUG: Frame timing measurement
     const frameEnd = performance.now()
     const frameTime = frameEnd - frameStart
     frameTimingRef.current.total += frameTime
     frameTimingRef.current.count++
+    if (needsRender) frameTimingRef.current.rendered = (frameTimingRef.current.rendered || 0) + 1
 
-    // DEBUG: Performance diagnostics - log every second
     if (now - frameTimingRef.current.lastLog > 1000) {
       const avgFrameTime = frameTimingRef.current.total / frameTimingRef.current.count
       const debugInfo = {
         avgFrameTimeMs: avgFrameTime.toFixed(2),
         framesInSecond: frameTimingRef.current.count,
+        framesRendered: frameTimingRef.current.rendered || 0,
         hasVisiblePanels,
         radioBtn: fgMaterial.uniforms.u_radio_button_state.value.toFixed(3),
-        panelOpacities: panelOpacitiesRef.current.map(o => o.toFixed(2)).join(','),
+        panelOpacities: panelOpacitiesLerpRef.current.map(o => o.toFixed(2)).join(','),
         captureRan: hasVisiblePanels ? 'YES' : 'no',
         videoClipsActive: clipState.textures.length > 0 && visualQuality === 'high',
         videoBlend: clipState.blend.toFixed(2),
@@ -1300,20 +1650,23 @@ function MultiPassPlane({
         mouseValues: `${mouse.parallaxX?.toFixed(3)},${mouse.parallaxY?.toFixed(3)}`,
         visualQuality,
         dpr: gl.getPixelRatio().toFixed(2),
+        fpsCap,
+        glassTaps,
       }
       if (settingsState.fpsEnabled) {
         console.log('[SHADER PERF]', debugInfo)
       }
       frameTimingRef.current.total = 0
       frameTimingRef.current.count = 0
+      frameTimingRef.current.rendered = 0
       frameTimingRef.current.lastLog = now
     }
-  })
+  }, 1)
 
   return (
     <>
-      <mesh geometry={defaultGeometry} material={bgMaterial} renderOrder={0} />
-      <mesh ref={fgMeshRef} geometry={defaultGeometry} material={fgMaterial} renderOrder={1} />
+      <mesh ref={glassMeshRef} geometry={defaultGeometry} material={fgMaterial} />
+      <mesh ref={backdropMeshRef} geometry={defaultGeometry} material={backdropMaterial} />
     </>
   )
 }
@@ -1353,7 +1706,6 @@ const LyricsRenderer = memo(function LyricsRenderer({
   const intervalRef = useRef(null)
   const lastWordIndexRef = useRef(-1)
 
-  // Poll at 10fps only when playing and screen visible
   useEffect(() => {
     if (isOfflineRendering) return
     if (!engineRef) return
@@ -1367,12 +1719,10 @@ const LyricsRenderer = memo(function LyricsRenderer({
       const progressMs = engineRef.current.progress_ms || 0
       const currentTimeSec = progressMs / 1000
 
-      // Find current word index
       const currentIndex = lyricData.findIndex(w =>
         currentTimeSec >= w.start && currentTimeSec <= w.end
       )
 
-      // Only redraw if word changed
       if (currentIndex !== lastWordIndexRef.current) {
         lastWordIndexRef.current = currentIndex
 
@@ -1403,19 +1753,23 @@ const LyricsRenderer = memo(function LyricsRenderer({
 })
 
 const AudioReactiveScene = memo(function AudioReactiveScene({
-  depthMap,
   captureResolution = 128,
   glassBlurFactor = 1.0,
   onContextLostChange,
 }) {
   const { currentArtwork } = useDynamicTheme()
-  const { audioFeatures, lyricTimestamps, engineState, isOfflineRendering, settingsState } = useUIState()
+  const { audioFeatures, lyricTimestamps, engineState, isOfflineRendering, settingsState, isScreenVisible } = useUIState()
+  const { sceneDpr } = useQuality()
   const visualQuality = settingsState.visualQuality || 'high'
+  const deviceDpr = window.devicePixelRatio || 1
+  const referenceDpr = Math.min(deviceDpr, visualQuality === 'high' ? REFERENCE_SCENE_DPR : 1.0)
+  const canvasDpr = Math.min(referenceDpr, sceneDpr)
 
   const currentTrackId = engineState?.currentTrack?.id
   const videoClips = useVideoClips(currentTrackId)
 
-  const [textTexture, setTextTexture] = useState(null)
+  const [lyricResources] = useState(createLyricResources)
+  const textTexture = lyricResources.texture
   const transitionProgressRef = useRef(1)
 
   const textRendererRef = useRef(null)
@@ -1427,23 +1781,14 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const noiseTexture = useMemo(() => generateNoiseTexture(), [])
 
   useEffect(() => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 1024
-    canvas.height = 512
-    lyricCanvasRef.current = canvas
-    const ctx = canvas.getContext('2d', { alpha: true })
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    const texture = new CanvasTexture(canvas)
-    texture.needsUpdate = true
-    lyricTextureRef.current = texture
-    setTextTexture(texture)
+    lyricCanvasRef.current = lyricResources.canvas
+    lyricTextureRef.current = lyricResources.texture
     return () => {
-      if (lyricTextureRef.current) {
-        lyricTextureRef.current.dispose()
-      }
-      setTextTexture(null)
+      lyricResources.texture.dispose()
+      lyricCanvasRef.current = null
+      lyricTextureRef.current = null
     }
-  }, [])
+  }, [lyricResources])
 
   useEffect(() => {
     lastWordRef.current = null
@@ -1474,8 +1819,11 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
       <Canvas
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}
-        gl={{ antialias: false, powerPreference: 'high-performance', stencil: false, depth: false, alpha: true }}
-        dpr={Math.min(window.devicePixelRatio || 1, visualQuality === 'high' ? 1.5 : 1.0)}
+        gl={{ antialias: false, powerPreference: 'high-performance', stencil: false, depth: false, alpha: false }}
+        dpr={canvasDpr}
+        flat
+        linear
+        frameloop={isScreenVisible ? 'always' : 'never'}
       >
         <MultiPassPlane
           currentArtwork={currentArtwork}
@@ -1487,6 +1835,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
           audioFeatures={audioFeatures}
           videoClips={videoClips}
           visualQuality={visualQuality}
+          referenceDpr={referenceDpr}
         />
         <LyricsRenderer
           lyricDataRef={processedLyricDataRef}
@@ -1628,11 +1977,8 @@ export function calculateFrameEffects({
   const rawEnergy = Math.max(0, Math.min(1, (currentSegment.loudness - minL) / (peakL - minL)))
   effects.currentEnergy = rawEnergy
 
-  trackingState.energyHistory.push(rawEnergy)
-  if (trackingState.energyHistory.length > 100) trackingState.energyHistory.shift()
-  const sortedEnergy = [...trackingState.energyHistory].sort((a, b) => a - b)
-  const p80 = Math.floor(sortedEnergy.length * 0.80)
-  const energyThreshold = Math.max(0.65, sortedEnergy[p80] || 0.65)
+  if (!trackingState.energyScratch) trackingState.energyScratch = []
+  const energyThreshold = pushEnergySample(trackingState.energyHistory, trackingState.energyScratch, rawEnergy)
   const intensity = Math.max(0, (rawEnergy - energyThreshold) / (1.0 - energyThreshold))
 
   let onBeat = false

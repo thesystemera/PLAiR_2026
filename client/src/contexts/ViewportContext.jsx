@@ -1,8 +1,11 @@
 import { createContext, useContext, useState, useMemo, useLayoutEffect } from 'react'
+import { flushSync } from 'react-dom'
 
 const ViewportContext = createContext(null)
 
 const BREAKPOINTS = { xs: 0, sm: 640, md: 768, lg: 1024, xl: 1440, '2xl': 1920, '3xl': 2560 }
+
+const SHORT_VIEWPORT_MAX_HEIGHT = 500
 
 const getBp = (w) => {
   if (w >= BREAKPOINTS['3xl']) return '3xl'
@@ -29,43 +32,38 @@ const detectDevice = () => {
                 (ua.includes('Macintosh') && navigator.maxTouchPoints > 1)
 
   const isAndroid = /Android/.test(ua)
-  const isNaturallyLandscape = window.screen.width > window.screen.height
-  const isMobileDevice = (isIOS || isAndroid) && !isNaturallyLandscape
+  const isMobileDevice = isIOS || isAndroid
 
   const isSafari = /^((?!chrome|android).)*safari/i.test(ua) ||
                    (isIOS && (/CriOS|FxiOS/.test(ua) || !(/Chrome/.test(ua))))
 
-  const isCompatible = !isIOS
+  const isCompatible = true
 
   return { isIOS, isAndroid, isMobileDevice, isSafari, isCompatible }
 }
 
+const readViewport = () => ({
+  width: typeof window !== 'undefined' ? window.innerWidth : 1920,
+  height: typeof window !== 'undefined' ? window.innerHeight : 1080,
+  dpr: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
+})
+
+const layoutKey = ({ width, height }) => `${getBp(width)}|${width > height ? 'l' : 'p'}|${height < SHORT_VIEWPORT_MAX_HEIGHT ? 's' : 't'}`
+
 export function ViewportProvider({ children }) {
   const deviceInfo = useMemo(() => detectDevice(), [])
 
-  const [viewport, setViewport] = useState(() => ({
-    width: typeof window !== 'undefined' ? window.innerWidth : 1920,
-    height: typeof window !== 'undefined' ? window.innerHeight : 1080,
-    dpr: typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1,
-  }))
+  const [viewport, setViewport] = useState(readViewport)
 
   useLayoutEffect(() => {
-    let ticking = false
-    let lastBp = getBp(window.innerWidth)
+    let lastKey = layoutKey(readViewport())
 
     const handleResize = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          const width = window.innerWidth
-          const newBp = getBp(width)
-          if (newBp !== lastBp) {
-            setViewport({ width, height: window.innerHeight, dpr: window.devicePixelRatio || 1 })
-            lastBp = newBp
-          }
-          ticking = false
-        })
-        ticking = true
-      }
+      const next = readViewport()
+      const key = layoutKey(next)
+      if (key === lastKey) return
+      lastKey = key
+      flushSync(() => setViewport(next))
     }
 
     window.addEventListener('resize', handleResize)
@@ -95,15 +93,18 @@ export function ViewportProvider({ children }) {
       breakpoint: bp,
       breakpoints: BREAKPOINTS,
 
-      isMobile: deviceInfo.isMobileDevice,
+      isMobile: deviceInfo.isMobileDevice || width < BREAKPOINTS.md,
+      isMobileDevice: deviceInfo.isMobileDevice,
       isNarrowViewport: width < BREAKPOINTS.md,
+      isShortViewport: height < SHORT_VIEWPORT_MAX_HEIGHT,
+      isPhoneLandscape: (deviceInfo.isMobileDevice || width < BREAKPOINTS.md) && width > height && height < SHORT_VIEWPORT_MAX_HEIGHT,
 
       isTablet: bp === 'md',
       isDesktop: width >= BREAKPOINTS.lg,
       isWidescreen: width >= BREAKPOINTS.xl,
       is4K: bp === '3xl',
-      isPortrait: height > width,
-      isLandscape: width >= height,
+      isPortrait: height >= width,
+      isLandscape: width > height,
       isRetina: dpr >= 2,
 
       isXS: bp === 'xs', isSM: bp === 'sm', isMD: bp === 'md',

@@ -110,14 +110,14 @@ When offline/disconnected:
 
 ### Implementation Plan (TODO)
 
-- [ ] Add `NetworkContext` to detect internet + server status
+- [x] Add `NetworkContext` to detect internet + server status (exists: `client/src/contexts/NetworkContext.jsx`, see `docs/OFFLINE_MODE.md`)
 - [ ] Add connection status banner component
 - [ ] Implement `client_state_sync` WebSocket message
 - [ ] Add server-side session recovery logic in `PlaybackState`
 - [ ] Add visual indicators for all connection states
 - [ ] Test with forced disconnects (airplane mode, server restart)
 - [ ] Add auto-resume on reconnect
-- [ ] Document new WebSocket protocol in `ARCHITECTURE_SSOT_PATTERN.md`
+- [ ] Document new WebSocket protocol in `docs/ARCHITECTURE_SSOT.md`
 
 ### Related Code
 
@@ -125,7 +125,7 @@ When offline/disconnected:
 - `client/src/contexts/WebSocketContext.jsx` - Connection management
 - `client/src/contexts/PlaybackContext.jsx` - Client playback state
 - `client/src/lib/session.js` - localStorage persistence
-- `client/src/contexts/NetworkContext.jsx` - **NEEDS TO BE CREATED**
+- `client/src/contexts/NetworkContext.jsx` - Online/offline + server status detection (`useNetwork()`)
 
 **Backend:**
 - `server/services/playback_state.py` - Server session state

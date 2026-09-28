@@ -7,6 +7,7 @@ Uses Gemini Flash Lite (fast, cheap) with PostgreSQL caching.
 This is the brain that makes the node system efficient - it only requests what's needed.
 """
 
+import asyncio
 import time
 import os
 import json
@@ -20,8 +21,13 @@ from pydantic import BaseModel, Field
 
 from services.base_service import SingletonService
 from services import log_service
+from services import usage_tracking
+from services.llm_router import LLM_LIVE
 from services_radio.context_node_registry import node_registry
 from config.settings import settings
+from database.pg_pool import get_pooled_connection
+from models_global import run_on_gpu_executor
+from services.task_utils import spawn
 
 class NodeSelection(BaseModel):
     selected_nodes: List[str] = Field(
@@ -55,7 +61,7 @@ class ContextRouterService(SingletonService):
         self._initialized = True
 
     def _get_connection(self):
-        return psycopg2.connect(settings.EMBEDDINGS_DATABASE_URL)
+        return get_pooled_connection(settings.EMBEDDINGS_DATABASE_URL)
 
     async def initialize(self, ai_service, vector_db_service=None):
         self.ai_service = ai_service
@@ -72,35 +78,39 @@ class ContextRouterService(SingletonService):
 
     def _initialize_database(self):
         conn = self._get_connection()
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS context_routing_cache (
-                input_hash TEXT PRIMARY KEY,
-                user_input TEXT,
-                embedding BYTEA,
-                selected_nodes TEXT,
-                reasoning TEXT,
-                confidence REAL,
-                created_at REAL,
-                times_reused INTEGER DEFAULT 0,
-                last_used REAL
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS context_routing_cache (
+                    input_hash TEXT PRIMARY KEY,
+                    user_input TEXT,
+                    embedding BYTEA,
+                    selected_nodes TEXT,
+                    reasoning TEXT,
+                    confidence REAL,
+                    created_at REAL,
+                    times_reused INTEGER DEFAULT 0,
+                    last_used REAL
+                )
+            ''')
+            conn.commit()
+        finally:
+            conn.close()
 
     def _load_cache_from_disk(self):
         start_time = time.perf_counter()
 
         try:
             conn = self._get_connection()
-            c = conn.cursor()
-            c.execute("SELECT input_hash, user_input, embedding, selected_nodes, reasoning, "
-                      "confidence, created_at, times_reused, last_used "
-                      "FROM context_routing_cache")
+            try:
+                c = conn.cursor()
+                c.execute("SELECT input_hash, user_input, embedding, selected_nodes, reasoning, "
+                          "confidence, created_at, times_reused, last_used "
+                          "FROM context_routing_cache")
 
-            rows = c.fetchall()
-            conn.close()
+                rows = c.fetchall()
+            finally:
+                conn.close()
 
             for row in rows:
                 input_hash, user_input, embedding_blob, selected_nodes_json, reasoning, \
@@ -164,7 +174,7 @@ class ContextRouterService(SingletonService):
             return cached['selected_nodes']
 
         if use_cache and self.vector_db_service:
-            input_embedding = self.vector_db_service._generate_embedding(user_input)
+            input_embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
 
             best_match = None
             best_similarity = 0.0
@@ -227,7 +237,8 @@ Return the selected nodes in order of importance."""
                 response_schema=NodeSelection,
                 model=settings.GEMINI_NODE_PRODUCER_MODEL,
                 temperature=settings.GEMINI_NODE_PRODUCER_TEMPERATURE,
-                system_instruction=system_prompt
+                system_instruction=system_prompt,
+                role=LLM_LIVE
             )
             llm_time = (time.perf_counter() - start_llm) * 1000
 
@@ -319,29 +330,38 @@ Reasoning: "Music request - core formatting + roles for personality + user taste
 Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
 
     def _update_cache_stats(self, input_hash: str):
+        usage_tracking.record_cache_hit("context_router")
         if input_hash in self.route_cache:
             cached = self.route_cache[input_hash]
             cached["times_reused"] += 1
             cached["last_used"] = time.time()
 
+            spawn(
+                asyncio.to_thread(self._persist_cache_stats, input_hash, cached["times_reused"], cached["last_used"]),
+                name="context_router_cache_stats"
+            )
+
+    def _persist_cache_stats(self, input_hash: str, times_reused: int, last_used: float):
+        try:
+            conn = self._get_connection()
             try:
-                conn = self._get_connection()
                 c = conn.cursor()
                 c.execute(
                     "UPDATE context_routing_cache SET times_reused = %s, last_used = %s WHERE input_hash = %s",
-                    (cached["times_reused"], cached["last_used"], input_hash)
+                    (times_reused, last_used, input_hash)
                 )
                 conn.commit()
+            finally:
                 conn.close()
-            except Exception as e:
-                log_service.error(f"[PRODUCER] Failed to update cache stats: {e}")
+        except Exception as e:
+            log_service.error(f"[PRODUCER] Failed to update cache stats: {e}")
 
     async def _save_to_cache(self, user_input: str, selection: NodeSelection, system_prompt: Optional[str] = None, user_prompt: Optional[str] = None):
         input_hash = self._hash_input(user_input)
 
         embedding = None
         if self.vector_db_service:
-            embedding = self.vector_db_service._generate_embedding(user_input)
+            embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
 
         selected_nodes_json = json.dumps(selection.selected_nodes)
         current_time = time.time()
@@ -357,7 +377,26 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
             "last_used": current_time
         }
 
-        conn = self._get_connection()
+        await asyncio.to_thread(
+            self._insert_cache_row, input_hash, user_input, embedding, selected_nodes_json, selection, current_time
+        )
+
+        await self._save_json_backup(user_input, selection, input_hash, system_prompt, user_prompt)
+
+        if system_prompt and user_prompt:
+            await self._save_prompt_debug(user_input, selection, system_prompt, user_prompt)
+
+        log_service.system(
+            f"[PRODUCER] Cached new routing decision for '{user_input[:40]}...'"
+        )
+
+    def _insert_cache_row(self, input_hash: str, user_input: str, embedding, selected_nodes_json: str,
+                          selection: NodeSelection, current_time: float):
+        try:
+            conn = self._get_connection()
+        except Exception as e:
+            log_service.error(f"[PRODUCER] DB Write error: {e}")
+            return
         c = conn.cursor()
         try:
             c.execute(
@@ -386,15 +425,6 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
             conn.rollback()
         finally:
             conn.close()
-
-        await self._save_json_backup(user_input, selection, input_hash, system_prompt, user_prompt)
-
-        if system_prompt and user_prompt:
-            await self._save_prompt_debug(user_input, selection, system_prompt, user_prompt)
-
-        log_service.system(
-            f"[PRODUCER] Cached new routing decision for '{user_input[:40]}...'"
-        )
 
     async def _save_json_backup(self, user_input: str, selection: NodeSelection, input_hash: str, _system_prompt: Optional[str] = None, _user_prompt: Optional[str] = None):
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

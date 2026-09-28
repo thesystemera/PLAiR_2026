@@ -1,4 +1,7 @@
+import asyncio
+import time
 from typing import Dict, List, Optional, Any, Callable
+from config import settings
 from services import log_service
 from services.base_service import SingletonService
 from services.playback_state import PlaybackState
@@ -14,16 +17,57 @@ class PlaybackService(SingletonService):
         self.population = PlaybackPopulationService(catalog_service, vector_search_service) if catalog_service else None
         self.sessions: Dict[str, PlaybackState] = {}
         self.session_callbacks: Dict[str, List[Callable]] = {}
+        self._broadcast_callbacks: Dict[str, Callable] = {}
+        self._last_access: Dict[str, float] = {}
+        self._eviction_task: Optional[asyncio.Task] = None
 
         self._initialized = True
 
     async def initialize(self):
+        if self._eviction_task is None or self._eviction_task.done():
+            self._eviction_task = asyncio.create_task(self._evict_idle_sessions_loop())
         log_service.system("PlaybackService initialized - multi-session support enabled")
+
+    async def _evict_idle_sessions_loop(self):
+        while True:
+            await asyncio.sleep(600)
+            try:
+                from service_registry import services
+                websocket_service = services.websocket_service
+                is_connected = websocket_service.has_session if websocket_service else (lambda _sid: False)
+                self.evict_idle_sessions(is_connected, settings.PLAYBACK_SESSION_IDLE_TIMEOUT_S)
+            except Exception as e:
+                log_service.error(f"[PlaybackService] Idle session eviction failed: {e}")
+
+    def evict_idle_sessions(self, is_connected: Callable[[str], bool], max_idle_s: float) -> int:
+        now = time.time()
+        evicted = 0
+        for session_id in list(self.sessions.keys()):
+            if is_connected(session_id):
+                self._last_access[session_id] = now
+                continue
+            if now - self._last_access.get(session_id, now) < max_idle_s:
+                continue
+            state = self.sessions.pop(session_id, None)
+            self._last_access.pop(session_id, None)
+            self.session_callbacks.pop(session_id, None)
+            self._broadcast_callbacks.pop(session_id, None)
+            fill_task = getattr(state, "_fill_task", None)
+            if fill_task is not None and not fill_task.done():
+                fill_task.cancel()
+            evicted += 1
+        for session_id in list(self._last_access.keys()):
+            if session_id not in self.sessions:
+                del self._last_access[session_id]
+        if evicted:
+            log_service.system(f"[PlaybackService] Evicted {evicted} idle playback sessions ({len(self.sessions)} remaining)")
+        return evicted
 
     def has_session(self, session_id: str) -> bool:
         return session_id in self.sessions
 
     def get_session_state(self, session_id: str) -> PlaybackState:
+        self._last_access[session_id] = time.time()
         if session_id not in self.sessions:
             self.sessions[session_id] = PlaybackState(
                 session_id=session_id,
@@ -40,6 +84,20 @@ class PlaybackService(SingletonService):
             self.session_callbacks[session_id] = []
         self.session_callbacks[session_id].append(callback)
         return callback
+
+    def ensure_broadcast_callback(self, session_id: str, callback_factory: Callable[[], Callable]) -> Callable:
+        callback = self._broadcast_callbacks.get(session_id)
+        if callback is None:
+            callback = callback_factory()
+            self._broadcast_callbacks[session_id] = callback
+        if callback not in self.session_callbacks.get(session_id, []):
+            self.register_session_callback(session_id, callback)
+        return callback
+
+    def release_broadcast_callback(self, session_id: str):
+        callback = self._broadcast_callbacks.pop(session_id, None)
+        if callback is not None:
+            self.unregister_session_callback(session_id, callback)
 
     def unregister_session_callback(self, session_id: str, callback):
         if session_id in self.session_callbacks:
@@ -62,11 +120,17 @@ class PlaybackService(SingletonService):
                     import traceback
                     log_service.error(f"Traceback: {traceback.format_exc()}")
 
-    async def play(self, session_id: str, track_id: Optional[str] = None, user_id: Optional[int] = None):
+    async def broadcast_session_state(self, session_id: str):
+        if session_id in self.sessions:
+            await self._notify_session_change(session_id)
+
+    async def play(self, session_id: str, track_id: Optional[str] = None, user_id: Optional[int] = None,
+                   device_id: Optional[str] = None, claim: bool = False):
         state = self.get_session_state(session_id)
         async def notify(_):
             await self._notify_session_change(session_id)
-        return await state.play(track_id=track_id, user_id=user_id, notify_callback=notify)
+        return await state.play(track_id=track_id, user_id=user_id, notify_callback=notify,
+                                device_id=device_id, claim=claim)
 
     async def pause(self, session_id: str):
         state = self.get_session_state(session_id)
@@ -86,11 +150,11 @@ class PlaybackService(SingletonService):
             await self._notify_session_change(session_id)
         return await state.next(user_id=user_id, notify_callback=notify, skip_reason=skip_reason)
 
-    async def previous(self, session_id: str):
+    async def previous(self, session_id: str, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
         async def notify(_):
             await self._notify_session_change(session_id)
-        return await state.previous(notify_callback=notify)
+        return await state.previous(user_id=user_id, notify_callback=notify)
 
     async def seek(self, session_id: str, position_ms: int):
         state = self.get_session_state(session_id)
@@ -148,12 +212,26 @@ class PlaybackService(SingletonService):
         state = self.get_session_state(session_id)
         return state.get_state(simplified=simplified)
 
-    def set_active_device(self, session_id: str, device_id: str):
+    async def transfer_playback(self, session_id: str, device_id: str, play: Optional[bool] = None,
+                                requester_device_id: Optional[str] = None, seq=None) -> bool:
         state = self.get_session_state(session_id)
-        state.active_device_id = device_id
+        async def notify(_):
+            await self._notify_session_change(session_id)
+        return await state.transfer(device_id, play=play, notify_callback=notify,
+                                    requester_device_id=requester_device_id, seq=seq)
+
+    async def claim_playback(self, session_id: str, device_id: str, play: Optional[bool] = None) -> bool:
+        state = self.get_session_state(session_id)
+        async def notify(_):
+            await self._notify_session_change(session_id)
+        return await state.claim(device_id, play=play, notify_callback=notify)
 
     async def initialize_new_session(self, session_id: str, user_id: Optional[int] = None):
         state = self.get_session_state(session_id)
+        async with state.init_lock:
+            await self._initialize_new_session_unlocked(state, session_id, user_id)
+
+    async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str, user_id: Optional[int]):
         async def notify(_):
             await self._notify_session_change(session_id)
 
@@ -164,7 +242,7 @@ class PlaybackService(SingletonService):
         log_service.system(f"[PlaybackService] Initializing new session: {session_id}")
 
         if self.catalog and self.catalog.tracks:
-            all_track_ids = list(self.catalog.tracks.keys())
+            all_track_ids = set(self.catalog.tracks.keys())
             if all_track_ids:
                 import random
                 from services.analytics_service import analytics_service

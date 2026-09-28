@@ -8,6 +8,17 @@ import {BUTTON} from '../lib/themeManager.js'
 import {Scroller} from './Scroller'
 import {ParallaxArtwork} from './ParallaxArtwork'
 import {api} from '../lib/api'
+import {useViewport} from '../contexts/ViewportContext'
+import {PANEL} from '../lib/themeManager'
+import {artPop, watchOffscreen} from '../lib/microMotion'
+
+const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
+const LYRIC_STATE_CLASSES = [
+  'px-1 rounded transition-colors duration-micro text-white font-bold bg-white/20',
+  'px-1 rounded transition-colors duration-micro text-gray-500',
+  'px-1 rounded transition-colors duration-micro text-gray-300',
+  'px-1 rounded transition-colors duration-micro text-gray-400',
+]
 
 const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
   const { engineState, engineRef, isScreenVisible } = useUIState()
@@ -15,11 +26,10 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
 
   const lyrics = lyricTimestamps?.lyrics || []
   const wordRefs = useRef(new Map())
-  const containerRef = useRef(null)
+  const [container, setContainer] = useState(null)
   const [isVisible, setIsVisible] = useState(true)
 
   useEffect(() => {
-    const container = containerRef.current
     if (!container) return
 
     const observer = new IntersectionObserver(
@@ -31,69 +41,60 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
 
     observer.observe(container)
     return () => observer.disconnect()
-  }, [])
-
-  const currentProgressRef = useRef(0)
+  }, [container])
 
   useEffect(() => {
     if (!lyrics.length || !isVisible || !isScreenVisible) return
 
-    const updateLyrics = () => {
-      const currentProgress = engineRef.current.progress_ms || 0
-      const currentTimeSec = currentProgress / 1000
-
-      lyrics.forEach((line, lineIndex) => {
-        if (line.words) {
-          line.words.forEach((word, wordIndex) => {
-            const key = `${lineIndex}-${wordIndex}`
-            const node = wordRefs.current.get(key)
-
-            if (node) {
-               const isActive = currentTimeSec >= word.start && currentTimeSec < word.end
-               const isPast = currentTimeSec > line.end
-
-               if (isActive) {
-                 if (!node.classList.contains('text-white')) {
-                   node.className = 'px-1 rounded transition-colors duration-150 text-white font-bold bg-white/20'
-                 }
-               } else if (isPast) {
-                 if (!node.classList.contains('text-gray-500')) {
-                   node.className = 'px-1 rounded transition-colors duration-150 text-gray-500'
-                 }
-               } else {
-                  const isLineCurr = currentTimeSec >= line.start && currentTimeSec < line.end
-                  if (isLineCurr) {
-                      if (!node.classList.contains('text-gray-300')) {
-                        node.className = 'px-1 rounded transition-colors duration-150 text-gray-300'
-                      }
-                  } else {
-                      if (!node.classList.contains('text-gray-400')) {
-                        node.className = 'px-1 rounded transition-colors duration-150 text-gray-400'
-                      }
-                  }
-               }
-            }
-          })
-        }
+    const entries = []
+    lyrics.forEach((line, lineIndex) => {
+      if (!line.words) return
+      line.words.forEach((word, wordIndex) => {
+        entries.push({ key: `${lineIndex}-${wordIndex}`, word, line, node: null, state: -1 })
       })
+    })
+
+    let lastTimeSec = -1
+
+    const updateLyrics = () => {
+      const currentTimeSec = (engineRef.current.progress_ms || 0) / 1000
+      if (currentTimeSec === lastTimeSec) return
+      lastTimeSec = currentTimeSec
+      const nodes = wordRefs.current
+
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        const node = nodes.get(entry.key)
+        if (!node) continue
+        const { word, line } = entry
+        let state
+        if (currentTimeSec >= word.start && currentTimeSec < word.end) state = 0
+        else if (currentTimeSec > line.end) state = 1
+        else if (currentTimeSec >= line.start && currentTimeSec < line.end) state = 2
+        else state = 3
+        if (entry.node === node && entry.state === state) continue
+        entry.node = node
+        entry.state = state
+        if (!node.classList.contains(LYRIC_STATE_MARKERS[state])) node.className = LYRIC_STATE_CLASSES[state]
+      }
     }
 
     updateLyrics()
     const intervalId = setInterval(updateLyrics, 100)
 
     return () => clearInterval(intervalId)
-  }, [lyrics, isPlaying, isVisible, isScreenVisible])
+  }, [lyrics, isPlaying, isVisible, isScreenVisible, engineRef])
 
   if (!lyricTimestamps || lyrics.length === 0) {
     return null
   }
 
   return (
-    <div className="bg-white/5 p-4 rounded-lg mb-6" ref={containerRef}>
+    <div className="bg-white/5 p-4 rounded-lg mb-6" ref={setContainer}>
       <div className="text-xs text-gray-400 mb-2">Lyrics</div>
       <div className="space-y-1">
         {lyrics.map((line, lineIndex) => (
-          <div key={lineIndex} className="transition-all duration-200">
+          <div key={lineIndex}>
             <div className="flex flex-wrap gap-x-1">
               {line.words && line.words.length > 0 ? (
                 line.words.map((word, wordIndex) => (
@@ -103,7 +104,7 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
                       if (el) wordRefs.current.set(`${lineIndex}-${wordIndex}`, el)
                       else wordRefs.current.delete(`${lineIndex}-${wordIndex}`)
                     }}
-                    className="px-1 rounded transition-colors duration-150 text-gray-400"
+                    className="px-1 rounded transition-colors duration-micro text-gray-400"
                   >
                     {word.word}
                   </span>
@@ -167,8 +168,8 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
             </div>
             <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
               <div
-                className={`h-full bg-gradient-to-r ${feature.color} transition-all duration-300`}
-                style={{ width: `${feature.value * 100}%` }}
+                className={`h-full w-full origin-left bg-gradient-to-r ${feature.color} transition-transform duration-base`}
+                style={{ transform: `scaleX(${feature.value})` }}
               />
             </div>
           </div>
@@ -178,15 +179,23 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
   )
 })
 
-export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
+export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
   const [layerA, setLayerA] = useState(null)
   const [layerB, setLayerB] = useState(null)
   const [frontLayer, setFrontLayer] = useState('A')
   const [analytics, setAnalytics] = useState(null)
   const previousArtworkUrlRef = useRef(null)
+  const layerSwapTimeoutRef = useRef(null)
+  const artBoxRef = useRef(null)
+
+  useEffect(() => () => clearTimeout(layerSwapTimeoutRef.current), [])
 
   const { togglePanel: toggleQueuePanel } = useGenerationQueue()
-  const { audioFeatures, lyricTimestamps, queueState, interfaceState } = useUIState()
+  const { audioFeatures, lyricTimestamps, queueState, interfaceState, engineState } = useUIState()
+  const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
+  const isSplit = isMobile && isLandscape
+  const splitOffset = interfaceState.playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32
+  const track = engineState.currentTrack
   const isFullscreen = interfaceState.isFullscreenVisuals
   const hasActiveJobs = queueState.hasActiveJobs
   const artworkUrl = useArtwork(track?.id, track?.has_artwork)
@@ -200,25 +209,35 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
         title: track?.generation_params?.title || 'Track artwork'
       }
 
+      const swapTo = (layer) => {
+        setFrontLayer(layer)
+        artPop(artBoxRef.current, 'artPopLarge')
+      }
+
+      clearTimeout(layerSwapTimeoutRef.current)
       if (frontLayer === 'A') {
         queueMicrotask(() => setLayerB(newImage))
-        setTimeout(() => setFrontLayer('B'), 50)
+        layerSwapTimeoutRef.current = setTimeout(() => swapTo('B'), 50)
       } else {
         queueMicrotask(() => setLayerA(newImage))
-        setTimeout(() => setFrontLayer('A'), 50)
+        layerSwapTimeoutRef.current = setTimeout(() => swapTo('A'), 50)
       }
 
       previousArtworkUrlRef.current = artworkUrl
     }
   }, [artworkUrl, track?.id, track?.has_artwork, track?.generation_params?.title])
 
+  const hasTrack = !!track
+  useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])
+
   useEffect(() => {
     if (!track?.id) return
 
+    let cancelled = false
     const fetchAnalytics = async () => {
       try {
         const data = await api.getTrackAnalytics(track.id)
-        if (data) {
+        if (data && !cancelled) {
           setAnalytics(data)
         }
       } catch (error) {
@@ -227,9 +246,19 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
     }
 
     void fetchAnalytics()
+    return () => { cancelled = true }
   }, [track?.id])
 
-  if (!track) return null
+  if (!track) {
+    return (
+      <div className="flex flex-col h-full">
+        <PanelHeader title="Now Playing" />
+        <div className="flex-1 flex items-center justify-center text-gray-400">
+          No track playing
+        </div>
+      </div>
+    )
+  }
 
   const params = track.generation_params || {}
 
@@ -238,11 +267,17 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
       <PanelHeader title="Now Playing" />
 
       <Scroller className="flex-1 p-4 md:p-6">
+        <div className={isSplit ? 'flex items-start gap-5' : undefined}>
         <div
-          className="aspect-square w-full rounded-xl mb-4 flex items-center justify-center shadow-2xl overflow-hidden relative"
+          className={isSplit ? 'np-split-art flex-shrink-0 sticky' : undefined}
+          style={isSplit ? { '--np-offset': `calc(${splitOffset}px + var(--safe-top))`, top: 0 } : undefined}
+        >
+        <div
+          ref={artBoxRef}
+          className={`aspect-square w-full rounded-xl flex items-center justify-center shadow-2xl overflow-hidden relative ${isSplit ? '' : 'mb-4'}`}
         >
           {layerA && (
-            <div className={`absolute inset-0 transition-opacity duration-700 ${
+            <div className={`absolute inset-0 transition-opacity duration-theme ${
               frontLayer === 'A' ? 'opacity-100' : 'opacity-0'
             }`}>
               <ParallaxArtwork
@@ -257,7 +292,7 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
           )}
 
           {layerB && (
-            <div className={`absolute inset-0 transition-opacity duration-700 ${
+            <div className={`absolute inset-0 transition-opacity duration-theme ${
               frontLayer === 'B' ? 'opacity-100' : 'opacity-0'
             }`}>
               <ParallaxArtwork
@@ -348,8 +383,10 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
           </div>
         </div>
 
+        </div>
+        <div className={isSplit ? 'flex-1 min-w-0' : undefined}>
         <div className="mb-6">
-          <h1 className="text-2xl font-bold mb-2">{params.title || 'Untitled'}</h1>
+          <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
           {params.artist_name && (
             <p className="text-lg text-gray-300 mb-1">{params.artist_name}</p>
           )}
@@ -538,6 +575,8 @@ export const NowPlaying = memo(function NowPlaying({ track, onToggleFullscreen, 
         {!params.instrumental && (
           <SyncedLyrics lyricTimestamps={lyricTimestamps} />
         )}
+        </div>
+        </div>
       </Scroller>
     </div>
   )

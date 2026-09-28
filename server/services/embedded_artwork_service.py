@@ -7,6 +7,8 @@ from services import log_service
 from services.base_service import SingletonService
 from config import settings
 
+Image.MAX_IMAGE_PIXELS = 40_000_000
+
 class EmbeddedArtworkService(SingletonService):
 
     def __init__(self):

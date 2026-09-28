@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
 import { api } from './api'
 import { uiState, updateDownloadState, onAuthStateChange } from '../contexts/UIStateContext'
@@ -9,8 +10,8 @@ class BackgroundDownloader {
     this.isRunning = false
     this.downloadQueue = []
     this.abortController = null
-    this.dailyDownloadedBytes = parseInt(localStorage.getItem('dailyDownloadedBytes') || '0', 10)
-    this.lastResetDate = localStorage.getItem('lastResetDate') || new Date().toDateString()
+    this.dailyDownloadedBytes = parseInt((() => { try { return localStorage.getItem('dailyDownloadedBytes') } catch { return null } })() || '0', 10)
+    this.lastResetDate = (() => { try { return localStorage.getItem('lastResetDate') } catch { return null } })() || new Date().toDateString()
 
     this.resetDailyLimitIfNeeded()
 
@@ -35,8 +36,8 @@ class BackgroundDownloader {
       logger.info('[BackgroundDownloader] New day - resetting daily download counter')
       this.dailyDownloadedBytes = 0
       this.lastResetDate = today
-      localStorage.setItem('dailyDownloadedBytes', '0')
-      localStorage.setItem('lastResetDate', today)
+      safeStorage.set('dailyDownloadedBytes', '0')
+      safeStorage.set('lastResetDate', today)
     }
   }
 
@@ -71,7 +72,7 @@ class BackgroundDownloader {
   shouldDownload() {
     const { audioState, downloadState } = uiState
 
-    if (!localStorage.getItem('cached_user')) {
+    if (!safeStorage.get('cached_user')) {
       return false
     }
 
@@ -207,7 +208,7 @@ class BackgroundDownloader {
       const downloadedBytes = cached?.audioBlob?.size || 0
 
       this.dailyDownloadedBytes += downloadedBytes
-      localStorage.setItem('dailyDownloadedBytes', String(this.dailyDownloadedBytes))
+      safeStorage.set('dailyDownloadedBytes', String(this.dailyDownloadedBytes))
 
       updateDownloadState({
         isDownloading: false,

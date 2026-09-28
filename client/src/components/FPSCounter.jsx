@@ -4,14 +4,27 @@ export function FPSCounter() {
   const [fps, setFps] = useState(60)
 
   useEffect(() => {
-    // Read from the global RAF debugger - no separate RAF loop needed
-    const intervalId = setInterval(() => {
-      if (window.__rafDebug) {
+    if (window.__rafDebug) {
+      const intervalId = setInterval(() => {
         setFps(window.__rafDebug.count || 60)
+      }, 1000)
+      return () => clearInterval(intervalId)
+    }
+
+    let frames = 0
+    let last = performance.now()
+    let rafId
+    const tick = (now) => {
+      frames++
+      if (now - last >= 1000) {
+        setFps(Math.round((frames * 1000) / (now - last)))
+        frames = 0
+        last = now
       }
-    }, 1000)
-    
-    return () => clearInterval(intervalId)
+      rafId = requestAnimationFrame(tick)
+    }
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
   }, [])
 
   const color = fps >= 55 ? '#22c55e' : fps >= 30 ? '#eab308' : '#ef4444'

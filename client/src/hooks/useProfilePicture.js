@@ -19,14 +19,28 @@ export function useProfilePicture(userId, hasProfilePicture = true) {
 
     let mounted = true
 
-    profilePictureCache.getMedia(userId).then(url => {
-      if (mounted && url) {
-        setProfilePictureUrl(url)
+    const load = (clearMissing) => {
+      profilePictureCache.getMedia(userId).then(url => {
+        if (!mounted) return
+        if (url || clearMissing) setProfilePictureUrl(url || null)
+      })
+    }
+
+    load(false)
+
+    const unsubscribe = profilePictureCache.subscribe((id) => {
+      if (id !== userId || !mounted) return
+      const current = profilePictureCache.peekMemory(userId)
+      if (current) {
+        setProfilePictureUrl(current)
+      } else {
+        load(true)
       }
     })
 
     return () => {
       mounted = false
+      unsubscribe()
     }
   }, [userId, hasProfilePicture])
 

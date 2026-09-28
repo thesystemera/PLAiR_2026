@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Lock
@@ -58,6 +59,8 @@ LOG_CATEGORIES = {
     'tts_vector_db': {'color_fg': 'BLACK', 'color_bg': 'BG_YELLOW', 'enabled': True},
 
     'audio': {'color_fg': 'WHITE', 'color_bg': 'BG_CYAN', 'enabled': False},
+    'upload': {'color_fg': 'BLACK', 'color_bg': 'BG_GREEN', 'enabled': True},
+    'transcode': {'color_fg': 'BLACK', 'color_bg': 'BG_CYAN', 'enabled': True},
 
     'catalog': {'color': 'GREEN', 'enabled': True},
     'analytics': {'color_fg': 'BLACK', 'color_bg': 'BG_CYAN', 'enabled': False},
@@ -77,9 +80,14 @@ LOG_CATEGORIES = {
 
 _log_queue: Optional[asyncio.Queue] = None
 _log_task: Optional[asyncio.Task] = None
+_log_loop: Optional[asyncio.AbstractEventLoop] = None
 _print_lock = Lock()
 _file_logger: Optional[logging.Logger] = None
 _file_handler: Optional[RotatingFileHandler] = None
+
+def _console_safe(text: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
 
 def _setup_file_logger():
     global _file_logger, _file_handler
@@ -143,7 +151,8 @@ def close_file_logger():
         _file_logger = None
 
 async def start_log_worker():
-    global _log_task, _log_queue, _file_logger
+    global _log_task, _log_queue, _file_logger, _log_loop
+    _log_loop = asyncio.get_running_loop()
     if _log_queue is None:
         _log_queue = asyncio.Queue()
     if _file_logger is None:
@@ -188,19 +197,39 @@ async def _log_worker():
                     header_color += COLORS[config['color']]
 
                 formatted = f"{header_color}[{category.upper()}]{COLORS['RESET']} {COLORS['WHITE']}{message}{COLORS['RESET']}"
-                print(formatted)
+                print(_console_safe(formatted))
 
         except Exception as e:
             print(f"Error in log worker: {e}")
 
-def log(message: str, category: str = "info"):
-    global _log_queue
-    if _log_queue is None:
-        _log_queue = asyncio.Queue()
+def _enqueue_log(entry):
     try:
-        _log_queue.put_nowait((category, message))
+        _log_queue.put_nowait(entry)
     except asyncio.QueueFull:
         pass
+
+def log(message: str, category: str = "info"):
+    global _log_queue
+    if not LOG_CATEGORIES.get(category, LOG_CATEGORIES['info'])['enabled']:
+        return
+    if _log_queue is None:
+        _log_queue = asyncio.Queue()
+
+    entry = (category, message)
+    loop = _log_loop
+    if loop is not None and not loop.is_closed():
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not loop:
+            try:
+                loop.call_soon_threadsafe(_enqueue_log, entry)
+            except RuntimeError:
+                pass
+            return
+
+    _enqueue_log(entry)
 
 def error(msg): log(msg, "error")
 def warning(msg): log(msg, "warning")
@@ -230,6 +259,8 @@ def tts_stream_planner(msg): log(msg, "tts_stream_planner")
 def tts_vector_db(msg): log(msg, "tts_vector_db")
 
 def audio(msg): log(msg, "audio")
+def upload(msg): log(msg, "upload")
+def transcode(msg): log(msg, "transcode")
 
 def catalog(msg): log(msg, "catalog")
 def analytics(msg): log(msg, "analytics")

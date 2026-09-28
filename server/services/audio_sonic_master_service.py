@@ -3,17 +3,57 @@ import asyncio
 from pathlib import Path
 import torch
 import torchaudio
-import soundfile as sf
 import yaml
 import numpy as np
 import gc
+import time
+from typing import Optional
 from safetensors.torch import load_file
 from diffusers.models.autoencoders.autoencoder_oobleck import AutoencoderOobleck  # type: ignore
 from services import log_service
 from services.base_service import SingletonService
+from config import settings
+from models_global import gpu_lease, raise_if_cuda_oom
+from services.audio_headroom import spectrally_balanced_blend, write_float_wav
 
 BASE_DIR = Path(__file__).parent.parent.parent
 SONIC_MASTER_DIR = BASE_DIR / "SonicMaster"
+SUNO_SONIC_SETTINGS = {
+    "wet_mix": 0.5,
+    "num_inference_steps": settings.SONIC_MASTER_STEPS,
+    "prompt": settings.SONIC_MASTER_SUNO_PROMPT,
+    "chunk_duration": 30,
+    "fs": 44100,
+}
+VAE_HOP_SAMPLES = 2048
+CONDITIONING_SECONDS = 10
+PROMPT_TEMPLATES = (
+    (("shine", "sparkle", "bright", "treble", "dull"), "Give the mix more shine and sparkle."),
+    (("air", "open", "breath", "airy"), "Add more air and openness to the sound."),
+    (("mud", "muddy", "low-mid", "boxy"), "Clean up the muddiness in the low-mids."),
+    (("harsh", "sibilan", "piercing"), "Clean up the harshness in the signal."),
+    (("vocal", "voice", "singer"), "Bring the vocals forward in the mix."),
+    (("reverb", "echo", "roomy"), "Can you remove the excess reverb in this audio, please?"),
+    (("compress", "squash", "dynamic", "decompress"), "Increase the dynamic range."),
+    (("clip", "distort"), "Fix the digital distortion."),
+    (("punch", "transient", "impact"), "Add more impact and dynamic punch to the sound."),
+    (("bass", "low end", "low-end", "sub"), "Add weight and depth to the bottom end."),
+    (("warm", "analog"), "Enhance the warmth for a fuller sound."),
+    (("stereo", "wide", "width", "spacious", "narrow"), "Enhance the stereo field for a more immersive sound."),
+    (("noise", "hiss"), "Clean up the noisiness in the audio."),
+    (("clear", "clarity", "definition"), "Increase the clarity!"),
+)
+
+
+def template_prompt(prompt: str) -> str:
+    known = {template.lower() for _keywords, template in PROMPT_TEMPLATES}
+    if (prompt or "").strip().lower() in known:
+        return prompt.strip()
+    lowered = (prompt or "").lower()
+    picked = [template for keywords, template in PROMPT_TEMPLATES if any(k in lowered for k in keywords)]
+    if not picked:
+        return "Improve the balance in this song."
+    return " ".join(picked[:2])
 sys.path.insert(0, str(SONIC_MASTER_DIR))
 
 from model import TangoFlux  # noqa: E402  # type: ignore
@@ -40,12 +80,16 @@ class SonicMasterService(SingletonService):
         self.prompt = "give the mix more breath and depth, a clean and dynamic mix with rich full harmonics"
         self.chunk_duration = 30
         self.fs = 44100
+        self.precision = settings.SONIC_MASTER_PRECISION
         self.device = None
 
         self.model = None
         self.vae = None
         self.lock = asyncio.Lock()
         self.sonic_loaded = False
+        self.sonic_available = False
+        self._last_used = time.monotonic()
+        self._idle_task: Optional[asyncio.Task] = None
         self._initialized = True
 
     def configure(
@@ -54,8 +98,16 @@ class SonicMasterService(SingletonService):
             num_inference_steps: int = None,  # type: ignore
             prompt: str = None,  # type: ignore
             chunk_duration: int = None,  # type: ignore
-            fs: int = None  # type: ignore
+            fs: int = None,  # type: ignore
+            precision: str = None  # type: ignore
     ):
+        if precision is not None and precision != self.precision:
+            self.precision = precision
+            if self.sonic_loaded:
+                self.model = None
+                self.vae = None
+                self.sonic_loaded = False
+                _clear_cuda_cache()
         if wet_mix is not None:
             self.wet_mix = wet_mix
         if num_inference_steps is not None:
@@ -72,6 +124,42 @@ class SonicMasterService(SingletonService):
             log_service.upscaling("SonicMaster already loaded")
             return
 
+        async with self.lock:
+            if self.sonic_loaded:
+                return
+            async with gpu_lease("SonicMaster load"):
+                await asyncio.to_thread(self._load_sync)
+            self._mark_used()
+
+    def _mark_used(self):
+        self._last_used = time.monotonic()
+        self._ensure_idle_watcher()
+
+    def _ensure_idle_watcher(self):
+        if settings.GPU_IDLE_UNLOAD_MINUTES <= 0:
+            return
+        if self._idle_task is not None and not self._idle_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._idle_task = loop.create_task(self._idle_unload_loop())
+
+    async def _idle_unload_loop(self):
+        idle_seconds = settings.GPU_IDLE_UNLOAD_MINUTES * 60
+        while self.sonic_loaded:
+            await asyncio.sleep(min(60.0, idle_seconds))
+            if not self.sonic_loaded or self.lock.locked():
+                continue
+            if time.monotonic() - self._last_used < idle_seconds:
+                continue
+            async with self.lock:
+                if self.sonic_loaded and time.monotonic() - self._last_used >= idle_seconds:
+                    log_service.upscaling(f"SonicMaster idle for {idle_seconds / 60:.0f} min, unloading")
+                    await self.unload()
+
+    def _load_sync(self):
         log_service.upscaling("Loading SonicMaster audio enhancement model...")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -92,7 +180,9 @@ class SonicMasterService(SingletonService):
             ckpt_path = ckpt_path / "model.safetensors"
 
         self.model.load_state_dict(load_file(str(ckpt_path)), strict=False)
-        self.model.to(self.device).eval().half()
+        self.model.to(self.device).eval()
+        if self._half:
+            self.model.half()
 
         for p in self.model.text_encoder.parameters():
             p.requires_grad = False
@@ -103,11 +193,19 @@ class SonicMasterService(SingletonService):
         self.vae = AutoencoderOobleck.from_pretrained(
             "stabilityai/stable-audio-open-1.0",
             subfolder="vae"
-        ).to(vae_device).half()  # type: ignore
+        ).to(vae_device)  # type: ignore
+        if self._half:
+            self.vae.half()
         self.vae.eval()
+        log_service.upscaling(f"SonicMaster precision: {'fp16' if self._half else 'fp32'}")
 
         self.sonic_loaded = True
+        self.sonic_available = True
         log_service.upscaling("SonicMaster model loaded and ready")
+
+    @property
+    def _half(self) -> bool:
+        return self.precision == "fp16" and self.device == "cuda"
 
     def _match_rms(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         source_rms = torch.sqrt(torch.mean(source ** 2))
@@ -118,7 +216,7 @@ class SonicMasterService(SingletonService):
             return source * scale
         return source
 
-    def _enhance_audio_sync(self, input_path: Path, output_path: Path) -> bool:
+    def _enhance_audio_sync(self, input_path: Path, output_path: Path, prompt: str, wet_mix: float) -> bool:
         try:
             audio, sr = torchaudio.load(str(input_path))
 
@@ -134,7 +232,12 @@ class SonicMasterService(SingletonService):
             total_samples = audio.shape[1]
 
             chunk_samples = self.chunk_duration * self.fs
+            if settings.SONIC_MASTER_ALIGN_CHUNKS:
+                chunk_samples = (chunk_samples // VAE_HOP_SAMPLES) * VAE_HOP_SAMPLES
             stride_samples = chunk_samples // 2
+            model_dtype = torch.float16 if self._half else torch.float32
+            conditioning_samples = min(CONDITIONING_SECONDS * self.fs, chunk_samples)
+            prev_cond_latent = None
 
             output_buffer = torch.zeros_like(audio)
             weight_buffer = torch.zeros_like(audio)
@@ -160,7 +263,7 @@ class SonicMasterService(SingletonService):
                 else:
                     chunk = input_slice
 
-                chunk_gpu = chunk.unsqueeze(0).to(self.device).half()
+                chunk_gpu = chunk.unsqueeze(0).to(self.device, dtype=model_dtype)
 
                 with torch.no_grad():
                     if self.vae is None:
@@ -174,8 +277,8 @@ class SonicMasterService(SingletonService):
                         raise RuntimeError("Model not initialized")
                     result_latent = self.model.inference_flow(
                         z_in,
-                        self.prompt,
-                        audiocond_latents=None,
+                        prompt,
+                        audiocond_latents=prev_cond_latent,
                         num_inference_steps=self.num_inference_steps,
                         timesteps=None,
                         guidance_scale=1.0,
@@ -187,10 +290,14 @@ class SonicMasterService(SingletonService):
                         solver="Euler",
                     )
 
-                    wav = self.vae.decode(result_latent.transpose(2, 1)).sample.float().cpu()  # type: ignore
+                    decoded = self.vae.decode(result_latent.transpose(2, 1)).sample  # type: ignore
+                    if settings.SONIC_MASTER_CHUNK_CONDITIONING:
+                        tail = decoded[:, :, -conditioning_samples:]
+                        prev_cond_latent = self.vae.encode(tail).latent_dist.mode().transpose(1, 2)  # type: ignore
+                    wav = decoded.float().cpu()
+                    del decoded
 
-                wav = wav.squeeze(0)
-                wav = torch.clamp(wav, -1.0, 1.0)
+                wav = torch.nan_to_num(wav.squeeze(0), nan=0.0, posinf=0.0, neginf=0.0)
 
                 valid_end_idx = min(end_idx, total_samples)
                 dest_slice = output_buffer[:, start_idx:valid_end_idx]
@@ -208,7 +315,7 @@ class SonicMasterService(SingletonService):
 
                 ref_slice = input_slice[:, :actual_dest_len]
 
-                if ref_slice.shape[1] == wav_fitted.shape[1]:
+                if settings.SONIC_MASTER_CHUNK_RMS_MATCH and ref_slice.shape[1] == wav_fitted.shape[1]:
                     wav_fitted = self._match_rms(wav_fitted, ref_slice)
 
                 win_cropped = window[:, :actual_dest_len]
@@ -229,13 +336,17 @@ class SonicMasterService(SingletonService):
 
             output_buffer = self._match_rms(output_buffer, original_audio)
 
-            if self.wet_mix < 1.0:
-                final = self.wet_mix * output_buffer + (1.0 - self.wet_mix) * original_audio
-            else:
-                final = output_buffer
+            final, blend_info = spectrally_balanced_blend(
+                output_buffer.numpy(), original_audio.numpy(), wet_mix, self.fs,
+                max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0
+            )
+            if blend_info["compensation_max_db"] > 0.05:
+                log_service.upscaling(
+                    f"SonicMaster: Blend power compensation up to {blend_info['compensation_max_db']:+.1f}dB "
+                    f"(HF avg {blend_info['compensation_hf_db']:+.1f}dB)"
+                )
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(str(output_path), final.numpy().T, self.fs, format="WAV")
+            write_float_wav(output_path, final, self.fs)
 
             del audio, original_audio, final, output_buffer, weight_buffer, window
             _clear_cuda_cache()
@@ -245,17 +356,41 @@ class SonicMasterService(SingletonService):
         except Exception as e:
             log_service.error(f"SonicMaster processing error: {e}")
             _clear_cuda_cache()
+            raise_if_cuda_oom(e, "SonicMaster")
             return False
 
-    async def enhance_audio(self, input_path: Path, output_path: Path) -> bool:
+    async def enhance_audio(
+            self,
+            input_path: Path,
+            output_path: Path,
+            prompt: Optional[str] = None,
+            wet_mix: Optional[float] = None
+    ) -> bool:
+        call_prompt = prompt or self.prompt
+        if settings.SONIC_MASTER_TEMPLATE_PROMPTS:
+            call_prompt = template_prompt(call_prompt)
+        call_wet_mix = float(np.clip(self.wet_mix if wet_mix is None else wet_mix, 0.0, 1.0))
+
         async with self.lock:
-            if not self.sonic_loaded:
+            if not self.sonic_loaded and not self.sonic_available:
                 log_service.error("SonicMaster model not loaded")
                 return False
 
             log_service.upscaling(f"SonicMaster: Enhancing {input_path.name}")
 
-            result = await asyncio.to_thread(self._enhance_audio_sync, input_path, output_path)
+            async with gpu_lease("SonicMaster"):
+                if not self.sonic_loaded:
+                    try:
+                        await asyncio.to_thread(self._load_sync)
+                    except Exception as e:
+                        log_service.error(f"SonicMaster reload failed: {e}")
+                        _clear_cuda_cache()
+                        raise_if_cuda_oom(e, "SonicMaster load")
+                        return False
+                result = await asyncio.to_thread(
+                    self._enhance_audio_sync, input_path, output_path, call_prompt, call_wet_mix
+                )
+            self._mark_used()
 
             if result:
                 log_service.upscaling(f"SonicMaster complete: {output_path.name}")

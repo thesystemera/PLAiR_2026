@@ -3,6 +3,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import User, Conversation
 from services import log_service
+from services.llm_router import LLM_BACKGROUND
+from config.settings import settings
+
+NO_UPDATES = "No updates needed."
+
+
+def _is_no_update(text: Optional[str]) -> bool:
+    normalized = (text or "").strip().strip("\"'*`").strip().rstrip(".").strip().lower()
+    return not normalized or normalized == NO_UPDATES.rstrip(".").lower()
 
 async def generate_user_persona_and_profile(user_id: int, db: AsyncSession, ai_service) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     result = await db.execute(select(User).where(User.id == user_id))
@@ -97,8 +106,9 @@ INSTRUCTIONS:
         response = await ai_service.call_gemini(
             prompt=prompt,
             system_instruction="You are a user profiling expert. Analyze conversations to create concise, information-dense user personas and profiles.",
-            model="gemini-2.5-flash-lite",
-            temperature=0.3
+            model=settings.GEMINI_PERSONA_MODEL,
+            temperature=0.3,
+            role=LLM_BACKGROUND
         )
 
         if not response:
@@ -132,9 +142,8 @@ INSTRUCTIONS:
         updated_profile = updated_profile.strip()
         updated_interests = updated_interests.strip()
 
-        if updated_persona == "No updates needed." or updated_profile == "No updates needed.":
+        if all(_is_no_update(section) for section in (updated_persona, updated_profile, updated_interests)):
             log_service.persona_profile(f"No significant updates for user {user_id}")
-            return None, None, None
 
         return updated_persona, updated_profile, updated_interests
 
@@ -158,19 +167,18 @@ async def update_user_persona_if_needed(user_id: int, db: AsyncSession, ai_servi
 
         updated_persona, updated_profile, updated_interests = await generate_user_persona_and_profile(user_id, db, ai_service)
 
-        if updated_persona and updated_persona != "No updates needed.":
+        if not _is_no_update(updated_persona):
             user.persona = updated_persona  # type: ignore
             log_service.persona_profile(f"Updated persona for user {user_id}")
 
-        if updated_profile and updated_profile != "No updates needed.":
+        if not _is_no_update(updated_profile):
             user.profile = updated_profile  # type: ignore
             log_service.persona_profile(f"Updated profile for user {user_id}")
 
-        if updated_interests and updated_interests != "No updates needed.":
+        if not _is_no_update(updated_interests):
             user.shoutout_interests = updated_interests  # type: ignore
             log_service.persona_profile(f"Updated shoutout interests for user {user_id}")
 
-        if updated_persona or updated_profile or updated_interests:
-            user.engagements_since_last_update = 0  # type: ignore
-            await db.commit()
-            log_service.persona_profile(f"Reset engagement counter for user {user_id}")
+        user.engagements_since_last_update = 0  # type: ignore
+        await db.commit()
+        log_service.persona_profile(f"Reset engagement counter for user {user_id}")

@@ -6,8 +6,9 @@ import { useUIState } from '../contexts/UIStateContext'
 import { useNetwork, BITRATE_OPTIONS } from '../contexts/NetworkContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { X, Loader2, Activity } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { TRANSITIONS } from '../lib/themeManager'
+import { GLASS } from '../lib/themeManager'
+import { CSS_TRANSITION } from '../lib/motion'
+import { Expandable } from './Motion'
 
 export function useBitratePicker(onReloadTrackQuality) {
   const { isAuthenticated, refreshUser } = useAuth()
@@ -172,12 +173,12 @@ export const BitratePickerButton = memo(function BitratePickerButton({
   return (
     <button
       onClick={() => setIsOpen(!isOpen)}
-      className="text-[8px] font-semibold rounded-lg cursor-pointer hover:scale-105 flex flex-col items-center justify-center leading-tight gap-0 h-10 w-10 md:h-12 md:w-12 whitespace-pre"
+      className="ui-tap ui-hover text-[8px] font-semibold rounded-lg cursor-pointer flex flex-col items-center justify-center leading-tight gap-0 h-10 w-10 md:h-12 md:w-12 whitespace-pre"
       style={{
         background: dataSaverMode ? 'rgba(34, 197, 94, 0.2)' : getGradient(0.2),
         border: `1px solid ${dataSaverMode ? 'rgba(34, 197, 94, 0.4)' : getAccentColor(0.3)}`,
         color: dataSaverMode ? 'rgb(134, 239, 172)' : getAccentColor(0.9),
-        transition: 'all 700ms ease-in-out, transform 150ms ease-in-out'
+        transition: CSS_TRANSITION.theme
       }}
       title={dataSaverMode ? "Data Saver Mode - 128k" : "Click to change audio quality"}
     >
@@ -206,21 +207,13 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
   isAuthenticated
 }) {
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={TRANSITIONS.panel}
-          className="w-full border-t border-white/10 shadow-2xl overflow-hidden"
-        >
+    <Expandable open={isOpen} className={GLASS.expandPanel}>
           <div className="max-w-screen-2xl mx-auto px-3 py-2 md:px-4 md:py-3">
-            <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-3">
+            <div className={GLASS.expandPanelHeader}>
               <h3 className="m-0 text-lg font-semibold text-white">Audio Quality</h3>
               <button
                 onClick={() => setIsOpen(false)}
-                className="bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
+                className="ui-press bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
                 title="Close"
               >
                 <X size={20} />
@@ -244,7 +237,7 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                     <button
                       onClick={detectQuality}
                       disabled={detecting}
-                      className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition disabled:opacity-50"
+                      className="ui-press text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition disabled:opacity-50"
                     >
                       {detecting ? (
                         <span className="flex items-center gap-1">
@@ -297,7 +290,7 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                   <div
                     key={bitrate}
                     className={`
-                      flex flex-col gap-2 p-3 rounded-lg border transition-all
+                      flex flex-col gap-2 p-3 rounded-lg border transition
                       ${isLocked || isGuestDisabled
                         ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
                         : 'cursor-pointer'
@@ -347,8 +340,6 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
               </div>
             )}
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    </Expandable>
   )
 })

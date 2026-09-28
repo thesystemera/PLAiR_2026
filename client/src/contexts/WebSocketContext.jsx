@@ -6,11 +6,36 @@ import { uiState } from './UIStateContext'
 
 export const WebSocketContext = createContext(null)
 
-export function WebSocketProvider({ children, token }) {
+function browserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+}
+
+const OUTBOX_LIMIT = 32
+const OUTBOX_TTL_MS = {
+  playback_command: 60 * 1000,
+  track_transition: 30 * 60 * 1000,
+  talk_break_ready: 60 * 1000,
+  talk_break_failed: 60 * 1000,
+  talk_break_start: 60 * 1000,
+  talk_break_end: 5 * 60 * 1000,
+  radio_mode_prefs: 5 * 60 * 1000,
+}
+
+export function WebSocketProvider({ children, sessionKey = 'guest', getToken, onSessionInfo }) {
   const ws = useRef(null)
+  const getTokenRef = useRef(getToken)
+  const onSessionInfoRef = useRef(onSessionInfo)
+  useEffect(() => { getTokenRef.current = getToken }, [getToken])
+  useEffect(() => { onSessionInfoRef.current = onSessionInfo }, [onSessionInfo])
   const [connected, setConnected] = useState(false)
   const reconnectTimeoutRef = useRef(null)
   const reconnectAttemptRef = useRef(0)
+  const outboxRef = useRef([])
+  const connectRef = useRef(null)
   const subscribersRef = useRef({
     playback_state: [],
     preference_change: [],
@@ -22,14 +47,38 @@ export function WebSocketProvider({ children, token }) {
     let isConnecting = false
     let isUnmounting = false
 
+    const flushOutbox = (socket) => {
+      const now = Date.now()
+      const pending = outboxRef.current
+      outboxRef.current = []
+      let flushed = 0
+      for (const entry of pending) {
+        if (now - entry.queuedAt > (OUTBOX_TTL_MS[entry.data.type] || 0)) continue
+        try {
+          socket.send(JSON.stringify(entry.data))
+          flushed++
+        } catch (error) {
+          logger.warn('[WebSocket] Failed to flush queued message:', error)
+        }
+      }
+      if (flushed) logger.info(`[WebSocket] Flushed ${flushed} queued message(s)`)
+    }
+
     const connect = () => {
+      if (isUnmounting) return
+
       if (!navigator.onLine) {
         logger.info('[WebSocket] Offline - skipping connection attempt')
         return
       }
 
-      if (isConnecting || (ws.current && ws.current.readyState === WebSocket.OPEN)) {
+      if (isConnecting || (ws.current && (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING))) {
         return
+      }
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
       }
 
       isConnecting = true
@@ -44,23 +93,41 @@ export function WebSocketProvider({ children, token }) {
           device_type: session.deviceType
         })
 
-        if (token) {
-          params.set('token', token)
+        const sentToken = getTokenRef.current?.() || null
+        if (sentToken) {
+          params.set('token', sentToken)
+        }
+
+        const timezone = browserTimezone()
+        if (timezone) {
+          params.set('tz', timezone)
         }
 
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/playback?${params.toString()}`
-        ws.current = new WebSocket(wsUrl)
+        const socket = new WebSocket(wsUrl)
+        ws.current = socket
 
-        ws.current.onopen = () => {
+        socket.onopen = () => {
+          if (ws.current !== socket) return
           logger.info('[WebSocket] Connected')
-          setConnected(true)
           isConnecting = false
           reconnectAttemptRef.current = 0
+          flushOutbox(socket)
+          setConnected(true)
         }
 
-        ws.current.onmessage = (event) => {
+        socket.onmessage = (event) => {
+          if (ws.current !== socket) return
           try {
             const message = JSON.parse(event.data)
+
+            if (message.type === 'session_info') {
+              try {
+                onSessionInfoRef.current?.(message.data, sentToken)
+              } catch (error) {
+                logger.error('[WebSocket] Session info handler error:', error)
+              }
+            }
 
             const subscribers = subscribersRef.current[message.type] || []
             subscribers.forEach(callback => {
@@ -75,16 +142,21 @@ export function WebSocketProvider({ children, token }) {
           }
         }
 
-        ws.current.onerror = (error) => {
+        socket.onerror = (error) => {
+          if (ws.current !== socket) return
           logger.warn('[WebSocket] Error (will reconnect):', error)
-          setConnected(false)
           isConnecting = false
         }
 
-        ws.current.onclose = (event) => {
+        socket.onclose = (event) => {
+          if (ws.current !== socket) return
           logger.info(`[WebSocket] Disconnected (code: ${event.code}, reason: ${event.reason || 'none'})`)
           setConnected(false)
           isConnecting = false
+
+          if (event.code === 4401 && sentToken) {
+            onSessionInfoRef.current?.({ authenticated: false, token_rejected: true }, sentToken)
+          }
 
           if (isUnmounting) {
             logger.info('[WebSocket] Close due to unmount, not reconnecting')
@@ -115,6 +187,7 @@ export function WebSocketProvider({ children, token }) {
       }
     }
 
+    connectRef.current = connect
     connect()
 
     const handleOnline = () => {
@@ -123,26 +196,41 @@ export function WebSocketProvider({ children, token }) {
       connect()
     }
 
+    const handleVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const socket = ws.current
+      if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+        reconnectAttemptRef.current = 0
+        connect()
+      }
+    }
+
     window.addEventListener('online', handleOnline)
+    document.addEventListener('visibilitychange', handleVisible)
 
     return () => {
       isUnmounting = true
+      connectRef.current = null
       window.removeEventListener('online', handleOnline)
+      document.removeEventListener('visibilitychange', handleVisible)
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
+        reconnectTimeoutRef.current = null
       }
-      if (ws.current) {
-        if (ws.current.readyState === WebSocket.OPEN) {
-          ws.current.close(1000, 'Component unmounting')
-        } else if (ws.current.readyState === WebSocket.CONNECTING) {
-          ws.current.onopen = null
-          ws.current.onmessage = null
-          ws.current.onerror = null
-          ws.current.onclose = null
+      const socket = ws.current
+      ws.current = null
+      if (socket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onerror = null
+        socket.onclose = null
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close(1000, 'Component unmounting')
         }
       }
+      setConnected(false)
     }
-  }, [token])
+  }, [sessionKey])
 
   const subscribe = useCallback((messageType, callback) => {
     if (!subscribersRef.current[messageType]) {
@@ -171,7 +259,7 @@ export function WebSocketProvider({ children, token }) {
   const send = useCallback(async (data) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(data))
-      return
+      return 'sent'
     }
 
     if (!uiState.audioState.isOnline) {
@@ -223,9 +311,20 @@ export function WebSocketProvider({ children, token }) {
       } catch (err) {
         logger.error('[WebSocket] Offline simulation failed:', err)
       }
-    } else {
-      logger.warn('[WebSocket] Cannot send - socket not open and not offline')
+      return 'offline'
     }
+
+    if (OUTBOX_TTL_MS[data?.type]) {
+      const outbox = outboxRef.current
+      outbox.push({ data, queuedAt: Date.now() })
+      if (outbox.length > OUTBOX_LIMIT) outbox.splice(0, outbox.length - OUTBOX_LIMIT)
+      logger.info(`[WebSocket] Socket not open - queued ${data.type} until reconnect`)
+      if (connectRef.current) connectRef.current()
+      return 'queued'
+    }
+
+    logger.warn('[WebSocket] Cannot send - socket not open and not offline')
+    return 'dropped'
   }, [emit])
 
   const value = useMemo(() => ({
@@ -253,9 +352,10 @@ export function useWebSocketSubscribe(messageType, callback) {
     callbackRef.current = callback
   }, [callback])
 
+  const { subscribe } = context
   useEffect(() => {
-    return context.subscribe(messageType, (...args) => callbackRef.current(...args))
-  }, [messageType, context])
+    return subscribe(messageType, (...args) => callbackRef.current(...args))
+  }, [messageType, subscribe])
 
   return context.connected
 }

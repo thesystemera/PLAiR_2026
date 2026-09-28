@@ -1,5 +1,6 @@
 from __future__ import annotations
 import io
+import asyncio
 import aiofiles
 from typing import Optional, Dict, Any
 from PIL import Image
@@ -12,6 +13,8 @@ from config import settings
 from services import log_service
 from services.base_service import SingletonService
 
+Image.MAX_IMAGE_PIXELS = 40_000_000
+
 class ProfilePictureService(SingletonService):
     def __init__(self):
         if self._initialized:
@@ -22,6 +25,22 @@ class ProfilePictureService(SingletonService):
         self.target_size = (512, 512)
         self.jpeg_quality = 90
         self._initialized = True
+
+    def _render_profile_jpeg(self, file_contents: bytes) -> bytes:
+        image = Image.open(io.BytesIO(file_contents))
+
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        image = image.resize(self.target_size, Image.Resampling.LANCZOS)
+
+        output = io.BytesIO()
+        image.save(output, format='JPEG', quality=self.jpeg_quality, optimize=True)
+        return output.getvalue()
 
     async def upload_profile_picture(
         self,
@@ -39,25 +58,11 @@ class ProfilePictureService(SingletonService):
             raise ValueError("File too large. Maximum size is 5MB")
 
         try:
-            image = Image.open(io.BytesIO(file_contents))
-
-            if image.mode == 'RGBA':
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[3])
-                image = background
-            elif image.mode != 'RGB':
-                image = image.convert('RGB')
-
-            image = image.resize(self.target_size, Image.Resampling.LANCZOS)
-
-            output = io.BytesIO()
-            image.save(output, format='JPEG', quality=self.jpeg_quality, optimize=True)
-            output.seek(0)
+            output_bytes = await asyncio.to_thread(self._render_profile_jpeg, file_contents)
 
             filename = "profile.jpg"
             file_path = settings.get_user_profile_picture_path(user_id, filename)
 
-            output_bytes = output.getvalue()
             async with aiofiles.open(file_path, 'wb') as f:
                 await f.write(output_bytes)
 

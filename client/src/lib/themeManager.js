@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { DURATION, MOTION } from './motion'
 
 function rgbToCss({ r, g, b }, opacity = 1) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`
@@ -689,16 +690,61 @@ export const PANEL_SCROLL = {
 }
 
 export const TRANSITIONS = {
-  panel: { type: 'spring', stiffness: 300, damping: 30 },
-  fade: { duration: 0.5, ease: 'easeInOut' },
-  colorShift: { duration: 700 }
+  panel: MOTION.spring,
+  fade: MOTION.fade,
+  colorShift: { duration: DURATION.theme * 1000 }
 }
 
 export const ANIMATION = {
-  springStiffness: 300,
-  springDamping: 30,
-  fadeInDuration: 500,
-  colorTransitionMs: 700
+  springStiffness: MOTION.spring.stiffness,
+  springDamping: MOTION.spring.damping,
+  fadeInDuration: DURATION.fade * 1000,
+  colorTransitionMs: DURATION.theme * 1000
+}
+
+export const EDGE_FADE_MASK = (fadeTop, fadeBottom, fadeSide) =>
+  `linear-gradient(0deg, transparent, black ${fadeBottom}, black calc(100% - ${fadeTop}), transparent), linear-gradient(90deg, transparent, black ${fadeSide}, black calc(100% - ${fadeSide}), transparent)`
+
+export const VERTICAL_EDGE_FADE_MASK = (fade) =>
+  `linear-gradient(to bottom, transparent 0%, black ${fade}, black calc(100% - ${fade}), transparent 100%)`
+
+export const CATEGORY_FALLBACK_COLORS = ['#8b5cf6', '#ec4899', '#06b6d4', '#10b981', '#f59e0b']
+
+export const ON_AIR_LAMP = '#ef4444'
+
+export const ON_AIR_SEGMENTS = {
+  news: { label: 'News', color: CATEGORY_FALLBACK_COLORS[4] },
+  city: { label: 'Weather & City', color: CATEGORY_FALLBACK_COLORS[2] },
+  local: { label: 'Local & Gigs', color: CATEGORY_FALLBACK_COLORS[3] },
+  community: { label: 'Community', color: CATEGORY_FALLBACK_COLORS[1] },
+  trivia: { label: 'Trivia', color: CATEGORY_FALLBACK_COLORS[0] },
+}
+
+export function getOnAirSegment(talkBreak) {
+  const segment = ON_AIR_SEGMENTS[talkBreak?.kind]
+  return {
+    label: segment?.label || talkBreak?.label || 'Radio',
+    color: segment?.color || CATEGORY_FALLBACK_COLORS[4],
+  }
+}
+
+export function getCategoryColorIndex(category) {
+  if (!category) return 0
+  let hash = 0
+  for (let i = 0; i < category.length; i++) {
+    hash = ((hash << 5) - hash) + category.charCodeAt(i)
+    hash = hash & hash
+  }
+  return Math.abs(hash) % CATEGORY_FALLBACK_COLORS.length
+}
+
+export const CARD_TRANSITION = 'transition-[background-color,border-color,color,box-shadow] duration-quick'
+
+export const GLASS = {
+  overlay: 'fixed inset-0 bg-black/50 backdrop-blur-sm',
+  dialog: 'bg-black/90 backdrop-blur-xl border border-white/10',
+  expandPanel: 'w-full border-t border-white/10 shadow-2xl overflow-hidden',
+  expandPanelHeader: 'flex items-center justify-between mb-3 border-b border-white/10 pb-3',
 }
 
 export const UI_FULLSCREEN = {
@@ -713,7 +759,7 @@ export const BUTTON = {
     padding: { small: 'p-2.5', medium: 'p-3' },
     rounded: 'rounded-full',
     shadow: 'shadow-lg',
-    transition: 'transition-all hover:scale-110',
+    transition: 'transition-colors ui-tap ui-hover-lg',
     disabled: 'disabled:opacity-50 disabled:cursor-not-allowed'
   },
   icon: {
@@ -722,7 +768,7 @@ export const BUTTON = {
   },
   card: {
     play: 'p-3 md:p-4 bg-white text-black rounded-full shadow-lg',
-    addToQueue: 'p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-full transition-all',
+    addToQueue: 'ui-tap p-1.5 bg-white/20 hover:bg-white/30 text-white rounded-full transition-colors',
     playOverlay: 'absolute inset-0 bg-black/70 opacity-0 group-hover/card:opacity-100 transition-opacity flex items-center justify-center z-10',
     durationBar: 'absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2 flex items-center justify-between z-20'
   }
@@ -737,16 +783,24 @@ export const CATALOG_HEADER = {
     clock: 'bg-blue-500/20 text-blue-400'
   },
   statText: {
-    value: 'text-lg md:text-xl font-bold tabular-nums leading-none',
+    value: 'text-lg md:text-xl font-bold tabular-nums leading-none whitespace-nowrap',
     label: 'text-xs text-white/60 uppercase tracking-wide font-medium',
     detail: 'text-xs text-white/50',
     range: 'text-xs text-white/40'
   },
   sortButton: {
-    active: 'px-2.5 py-1 text-xs md:text-sm rounded-full transition-all bg-purple-600 text-white font-semibold',
-    inactive: 'px-2.5 py-1 text-xs md:text-sm rounded-full transition-all bg-dark-card hover:bg-dark-hover'
+    active: 'ui-press px-2.5 py-1 text-xs md:text-sm rounded-full transition-colors bg-purple-600 text-white font-semibold',
+    inactive: 'ui-press px-2.5 py-1 text-xs md:text-sm rounded-full transition-colors bg-dark-card hover:bg-dark-hover'
   }
 }
+
+export const FALLBACK_GRADIENT_HEX = [
+  ['#9333ea', '#2563eb'],
+  ['#db2777', '#9333ea'],
+  ['#2563eb', '#06b6d4'],
+  ['#16a34a', '#14b8a6'],
+  ['#ea580c', '#dc2626'],
+]
 
 export const FALLBACK_GRADIENTS = [
   'from-purple-600 to-blue-600',
@@ -761,7 +815,7 @@ export function getFallbackGradientClass(trackId) {
   try {
     const index = parseInt(trackId.slice(0, 2), 16) % FALLBACK_GRADIENTS.length
     return FALLBACK_GRADIENTS[index]
-  } catch (e) {
+  } catch {
     return FALLBACK_GRADIENTS[0]
   }
 }

@@ -1,11 +1,11 @@
 import { logger } from '../lib/logger'
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react'
 import { api } from '../lib/api'
 import { useAuth } from './AuthContext'
 import { useWebSocketSubscribe } from './WebSocketContext'
 import { useUIState } from './UIStateContext'
 
-const GenerationQueueContext = createContext() // Okay this might actually be a BUG BUG BUG
+const GenerationQueueContext = createContext(null)
 
 const normalizeJobData = (data) => ({
   id: data.job_id || data.id,
@@ -17,13 +17,21 @@ const normalizeJobData = (data) => ({
   current_stage: data.current_stage || 'Processing...',
   progress_percent: data.progress_percent !== undefined ? data.progress_percent : 0,
   error: data.error || null,
+  refunded: data.refunded || 0,
   tracks: data.tracks || [],
   created_at: Date.now()
 })
 
+const refundNote = (count) => {
+  if (!count) return ''
+  return count > 1
+    ? ` ${count} generation credits were refunded.`
+    : ' Your generation credit was refunded.'
+}
+
 export function GenerationQueueProvider({ children }) {
   const { isAuthenticated } = useAuth()
-  const { publishQueueState } = useUIState()
+  const { publishQueueState, toastError, toastInfo } = useUIState()
   const [jobs, setJobs] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [hasLoadedInitialJobs, setHasLoadedInitialJobs] = useState(false)
@@ -56,6 +64,7 @@ export function GenerationQueueProvider({ children }) {
               query: statusData.title || job.query,
               progress_percent: statusData.progress_percent !== undefined ? statusData.progress_percent : job.progress_percent,
               error: statusData.error || null,
+              refunded: statusData.refunded ?? job.refunded,
               tracks: statusData.tracks || job.tracks
             }
           : job
@@ -81,18 +90,35 @@ export function GenerationQueueProvider({ children }) {
     }
   }, [updateJobFromStatus])
 
-  const handleGenerationFailed = useCallback((data) => {
-    if (data?.job_id) {
-      updateJobFromStatus(data.job_id, { ...data, status: 'failed' })
-    }
+  const handleGenerationBatchFailed = useCallback((data) => {
+    if (!data?.job_id) return
+    const jobStatus = typeof data.status === 'object' && data.status ? data.status : {}
+    updateJobFromStatus(data.job_id, { ...jobStatus, error: data.error })
   }, [updateJobFromStatus])
+
+  const handleGenerationJobFailed = useCallback((data) => {
+    if (!data?.job_id) return
+    const reason = data.error || 'Something went wrong while generating this song.'
+    updateJobFromStatus(data.job_id, { ...data, status: 'failed', current_stage: reason, error: reason })
+    toastError(`Song generation failed: ${reason}${refundNote(data.refunded)}`, 8000, 'top', `generation-failed-${data.job_id}`)
+  }, [updateJobFromStatus, toastError])
+
+  const handleGenerationJobCancelled = useCallback((data) => {
+    if (!data?.job_id) return
+    setJobs(prev => prev.filter(job => job.id !== data.job_id))
+    if (data.refunded > 0) {
+      toastInfo(`Generation cancelled.${refundNote(data.refunded)}`, 5000, 'top', `generation-cancelled-${data.job_id}`)
+    }
+  }, [toastInfo])
 
   useWebSocketSubscribe('generation_started', handleGenerationStarted)
   useWebSocketSubscribe('generation_stage_update', handleGenerationUpdate)
   useWebSocketSubscribe('generation_processing', handleGenerationUpdate)
   useWebSocketSubscribe('generation_job_completed', handleGenerationCompleted)
   useWebSocketSubscribe('generation_batch_completed', handleGenerationUpdate)
-  useWebSocketSubscribe('generation_batch_failed', handleGenerationFailed)
+  useWebSocketSubscribe('generation_batch_failed', handleGenerationBatchFailed)
+  useWebSocketSubscribe('generation_job_failed', handleGenerationJobFailed)
+  useWebSocketSubscribe('generation_job_cancelled', handleGenerationJobCancelled)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -160,7 +186,7 @@ export function GenerationQueueProvider({ children }) {
     publishQueueState({ hasActiveJobs })
   }, [hasActiveJobs, publishQueueState])
 
-  const value = {
+  const value = useMemo(() => ({
     jobs,
     isOpen,
     setIsOpen,
@@ -170,7 +196,7 @@ export function GenerationQueueProvider({ children }) {
     removeJob,
     clearCompleted,
     hasActiveJobs
-  }
+  }), [jobs, isOpen, togglePanel, addJob, cancelJob, removeJob, clearCompleted, hasActiveJobs])
 
   return (
     <GenerationQueueContext.Provider value={value}>

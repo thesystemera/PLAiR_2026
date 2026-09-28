@@ -1,6 +1,7 @@
 import re
 import time
 import json
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
@@ -8,13 +9,99 @@ from functools import lru_cache
 
 from services_radio.dj_prompt_helper_service import (
     filter_meta_tags_for_gpt_prompt_cleaning,
-    clean_gpt_output
+    clean_gpt_output,
+    is_valid_dj_script,
+    assemble_prompt,
+    UnavailableSegment
 )
+from database.models import User
 from services_radio.context_node_registry import node_registry
 from services_radio.context_service import gather_raw_dependencies
+from services_radio import listener_location as location_resolver
 from services_radio.context_router_service import context_router_service
 from services import log_service
+from services.llm_router import LLM_LIVE, LLM_ANNOUNCE, LLM_INTERPRET
+from services.llm_result_cache import cache_key, interpretation_caches
 from config.settings import settings
+
+BROADCAST_CUE = "Write the script for this segment now, following the instructions above."
+
+SCRIPT_PROVIDER_NOTES = {
+    "deepseek": (
+        "\n\nMARKUP DISCIPLINE: Asterisks are reserved for *paralanguage* sound cues - never use them for emphasis "
+        "inside spoken words (use CAPITALS for emphasis). Every *, %, @, & and $ must belong to a complete tag."
+        "\n\nLENGTH: This is live radio - keep it tight. Use at most 90 spoken words in total across all hosts "
+        "(tags and cues don't count). Cover only the most interesting points; never pad."
+    )
+}
+
+PERSONAL_NODE_NEUTRAL_PREFIXES = {
+    'user_persona': ("LISTENER PERSONA: Guest",),
+    'user_profile': ("LISTENER PROFILE: Guest",),
+    'conversation_recent': ("CONVERSATION HISTORY: None", "CONVERSATION HISTORY: No session", "CONVERSATION HISTORY: Error"),
+}
+
+INTERPRETATION_CACHE_NODES = {
+    'news': ('instruction_news', 'data_news_report', 'user_basic'),
+    'weather': ('instruction_weather', 'data_weather_report'),
+    'biography': ('instruction_biography', 'data_biography'),
+    'lyrics': ('instruction_lyrics', 'data_lyrics'),
+}
+HOURLY_INTERPRETATIONS = {'weather'}
+
+NA_MARKER = "[N/A]"
+
+RADIO_SEGMENT_BASE_NODES = [
+    'core_dj_identity',
+    'format_channels',
+    'format_tone',
+    'format_meta_tags_guide',
+    'format_roles_detailed',
+    'format_station_characteristics',
+    'format_dialogue_examples',
+    'instruction_radio_segment',
+    'data_radio_segment',
+    'user_local_time'
+]
+RADIO_SEGMENT_MARKUP_NOTE = (
+    "\n\nMARKUP DISCIPLINE: Asterisks are reserved for *paralanguage* sound cues - never use them for emphasis "
+    "inside spoken words (use CAPITALS for emphasis). Every *, %, @, & and $ must belong to a complete tag."
+)
+
+SEGMENT_DATA_NODES = {
+    'news': 'data_news_report',
+    'weather': 'data_weather_report',
+    'location_search': 'data_location_report',
+    'events': 'data_events_report',
+    'biography': 'data_biography',
+    'lyrics': 'data_lyrics',
+}
+SEGMENT_HOSTS = {'weather': ('TERRY', 'SHAQUILLE')}
+SEGMENT_SUBJECTS = {
+    'news': ('the news wire', 'the news'),
+    'weather': ('the weather feed', 'the weather'),
+    'location_search': ('the places lookup', 'places nearby'),
+    'events': ('the events listings', 'events'),
+    'biography': ("that artist's backstory", 'that biography'),
+    'lyrics': ('those lyrics', 'those lyrics'),
+}
+LOCATION_SEGMENTS = {
+    'weather': ('your forecast', True),
+    'location_search': ('spots near you', True),
+    'events': ('events near you', False),
+}
+UNAVAILABLE_SEGMENT_LINES = (
+    "[BROADCAST] [{host}] &0.2& *sighs* Damn, {subject} just came back empty on us. &0.2& Nothing to report right "
+    "now, so give it a minute and ask again.\n[{cohost}] &0.3& *chuckles* Pirate radio, baby. Held together with duct tape.",
+    "[BROADCAST] [{host}] &0.2& *groans* Ugh, nothing's coming through on {subject} right now. &0.2& Not gonna make "
+    "stuff up, so ask us again in a bit.\n[{cohost}] &0.3& *laughs* Honest radio. What a concept.",
+)
+NO_LOCATION_SEGMENT_LINES = (
+    "[TXT] [{host}] &0.2& *clears throat* I can't pull up {subject} without knowing where you're tuned in from. "
+    "&0.2& {fix}\n[{cohost}] &0.3& *chuckles* We're pirates, not psychics.",
+)
+NO_LOCATION_FIX_GUEST = "Let the app use your location, then ask me again."
+NO_LOCATION_FIX_USER = "Set your location in your profile and ask me again."
 
 def gpt_error_handler(func):
     async def wrapper(*args, **kwargs):
@@ -68,7 +155,24 @@ class DJPromptService:
                     'format_meta_tags_guide',
                     'format_roles_detailed',
                     'format_station_characteristics',
-                    'format_dialogue_examples'
+                    'format_dialogue_examples',
+                    'station_recent_airings',
+                    'local_happenings'
+                ],
+                'use_ai_picker': True
+            },
+            'interactive_tools': {
+                'required_nodes': [
+                    'core_dj_identity',
+                    'format_channels',
+                    'format_tone',
+                    'format_meta_tags_guide',
+                    'format_roles_detailed',
+                    'format_station_characteristics',
+                    'format_dialogue_examples',
+                    'instruction_dj_tools',
+                    'station_recent_airings',
+                    'local_happenings'
                 ],
                 'use_ai_picker': True
             },
@@ -211,7 +315,10 @@ class DJPromptService:
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
-                    'instruction_announcements'
+                    'instruction_announcements',
+                    'station_recent_airings',
+                    'listener_notes',
+                    'bank_talking_points'
                 ],
                 'use_ai_picker': False,
                 'time_presets': {
@@ -290,6 +397,17 @@ class DJPromptService:
                     }
                 }
             },
+            'radio_segment': {
+                'required_nodes': RADIO_SEGMENT_BASE_NODES + [
+                    'station_recent_airings',
+                    'listener_notes'
+                ],
+                'use_ai_picker': False
+            },
+            'radio_segment_shared': {
+                'required_nodes': list(RADIO_SEGMENT_BASE_NODES),
+                'use_ai_picker': False
+            },
             'command_extraction': {
                 'required_nodes': [
                     'instruction_hal11000_identity',
@@ -331,6 +449,7 @@ class DJPromptService:
         session_id: str,
         user_input: str | None = None,
         time_remaining: float | None = None,
+        dependencies: Dict | None = None,
         **extra_kwargs
     ) -> tuple[Dict[str, str], List[str], str | None]:
 
@@ -338,16 +457,9 @@ class DJPromptService:
         if not config:
             raise ValueError(f"Unknown GPT type: {gpt_type}")
 
-        raw_data = await gather_raw_dependencies(
-            user_id=user_id,
-            session_id=session_id,
-            async_session_maker=self.async_session_maker,
-            playback_service=self.playback_service,
-            audio_features_service=self.orchestrator.features if self.orchestrator else None,
-            catalog_service=self.catalog_service,
-            dj_service=self
-        )
+        raw_data = dict(dependencies) if dependencies else await self._gather_dependencies(user_id, session_id)
         raw_data.update(extra_kwargs)
+        raw_data.setdefault('user_input', user_input)
 
         required_nodes = config['required_nodes'].copy()
         final_nodes = required_nodes.copy()
@@ -376,7 +488,7 @@ class DJPromptService:
 
         context_data = await node_registry.fetch_nodes(node_keys=final_nodes, **raw_data)
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         debug_timestamp = self._save_prompt_debug(
             gpt_type=gpt_type,
             user_input=user_input or f"{gpt_type} request",
@@ -388,6 +500,44 @@ class DJPromptService:
         )
 
         return context_data, final_nodes, debug_timestamp
+
+    async def _gather_dependencies(self, user_id, session_id) -> Dict:
+        return await gather_raw_dependencies(
+            user_id=user_id,
+            session_id=session_id,
+            async_session_maker=self.async_session_maker,
+            playback_service=self.playback_service,
+            audio_features_service=self.orchestrator.features if self.orchestrator else None,
+            catalog_service=self.catalog_service,
+            dj_service=self
+        )
+
+    async def _listener_has_location(self, user_id, needs_coordinates: bool, session_id=None) -> bool:
+        user = None
+        if user_id:
+            async with self.async_session_maker() as db:
+                user = await db.get(User, user_id)
+            if user is None:
+                return False
+        location = await location_resolver.resolve(user, session_id, geocode=False)
+        if location.has_coordinates:
+            return True
+        return bool(location.address or location.city) and not needs_coordinates
+
+    async def _unavailable_segment(self, gpt_type: str, user_id, session_id=None) -> UnavailableSegment:
+        host, cohost = SEGMENT_HOSTS.get(gpt_type, ('SHAQUILLE', 'TERRY'))
+        subject, label = SEGMENT_SUBJECTS.get(gpt_type, ('that', 'that'))
+        location_need = LOCATION_SEGMENTS.get(gpt_type)
+        if location_need and not await self._listener_has_location(user_id, location_need[1], session_id):
+            fix = NO_LOCATION_FIX_USER if user_id else NO_LOCATION_FIX_GUEST
+            text = random.choice(NO_LOCATION_SEGMENT_LINES).format(host=host, cohost=cohost,
+                                                                   subject=location_need[0], fix=fix)
+            feedback = f"Set your location to get {label}"
+        else:
+            text = random.choice(UNAVAILABLE_SEGMENT_LINES).format(host=host, cohost=cohost, subject=subject)
+            feedback = f"Couldn't get {label} right now"
+        log_service.external(f"Segment {gpt_type}: no data - airing honest fallback ({feedback})")
+        return UnavailableSegment(text, feedback)
 
     @lru_cache(maxsize=1)
     def get_all_paralanguage_meta_tags(self):
@@ -417,17 +567,25 @@ class DJPromptService:
             ("*inhales sharply*", "%mic drop%")
         ]
 
-    async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list) -> str:
+    async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list,
+                                  role: str = LLM_LIVE, validate=None, provider_notes=None) -> str:
         system_content = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
-        user_content = messages[1]["content"] if len(messages) > 1 and messages[1]["role"] == "user" else messages[0][
-            "content"]
+        if len(messages) > 1 and messages[1]["role"] == "user":
+            user_content = messages[1]["content"]
+        elif system_content:
+            user_content = BROADCAST_CUE
+        else:
+            user_content = messages[0]["content"]
 
         response = await self.gemini_service.call_gemini(
             prompt=user_content,
-            system_instruction=system_content,
+            system_instruction=system_content or None,
             model=model,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            role=role,
+            validate=validate,
+            provider_notes=provider_notes
         )
         return response or ""
 
@@ -439,7 +597,10 @@ class DJPromptService:
         clean_role: str = 'dj_content',
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float | None = None
+        temperature: float | None = None,
+        role: str = LLM_LIVE,
+        validate_script: bool = False,
+        provider_notes: Dict[str, str] | None = None
     ) -> str:
 
         model = model or self.config['dj_model']
@@ -450,10 +611,13 @@ class DJPromptService:
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
-            messages=messages
+            messages=messages,
+            role=role,
+            validate=(lambda text: is_valid_dj_script(text, clean_role)) if validate_script else None,
+            provider_notes=(provider_notes or SCRIPT_PROVIDER_NOTES) if validate_script else None
         )
 
-        response = clean_gpt_output(response, role=clean_role)
+        response = NA_MARKER if NA_MARKER in response else clean_gpt_output(response, role=clean_role)
 
         if settings.PROMPT_DEBUG_ENABLED and debug_timestamp:
             import asyncio
@@ -467,21 +631,60 @@ class DJPromptService:
         except Exception as e:
             log_service.error(f"Failed to save response debug (non-blocking): {e}")
 
+    @staticmethod
+    def _is_personalised(context_data: Dict[str, str]) -> bool:
+        for node, neutral_prefixes in PERSONAL_NODE_NEUTRAL_PREFIXES.items():
+            content = (context_data.get(node) or "").strip()
+            if content and not content.startswith(neutral_prefixes):
+                return True
+        return False
+
+    def _interpretation_cache_key(self, gpt_type: str | None, context_data: Dict[str, str] | None) -> str | None:
+        nodes = INTERPRETATION_CACHE_NODES.get(gpt_type or "")
+        if not nodes or not context_data or self._is_personalised(context_data):
+            return None
+        instruction_node, data_node = nodes[0], nodes[1]
+        if not context_data.get(instruction_node) or not context_data.get(data_node):
+            return None
+        facts = [context_data.get(node) or "" for node in nodes]
+        bucket = datetime.now().strftime("%Y-%m-%d %H") if gpt_type in HOURLY_INTERPRETATIONS else ""
+        return cache_key(gpt_type, bucket, *facts)
+
     async def _execute_broadcast_gpt(self, prompt_name: str, system_prompt: str, logger_type: str = 'external',
-                                     clean_role: str = 'dj_content', gpt_type: str | None = None, debug_timestamp: str | None = None):
+                                     clean_role: str = 'dj_content', gpt_type: str | None = None, debug_timestamp: str | None = None,
+                                     context_data: Dict[str, str] | None = None, user_id=None, session_id=None):
 
         logger = getattr(log_service, logger_type)
+        data_node = SEGMENT_DATA_NODES.get(gpt_type or "")
+        if data_node and not (context_data or {}).get(data_node, "").strip():
+            return await self._unavailable_segment(gpt_type or "", user_id, session_id)
+
         logger(f"Prompt: {prompt_name} Prompt: {system_prompt}")
+
+        result_key = self._interpretation_cache_key(gpt_type, context_data)
+        result_cache = interpretation_caches.get(gpt_type or "")
+        if result_key and result_cache:
+            cached = result_cache.get(result_key)
+            if cached:
+                logger(f"Cached Response: {prompt_name} served from result cache")
+                return cached
 
         response_text = await self._execute_gpt_and_save(
             gpt_type=gpt_type or 'broadcast',
             debug_timestamp=debug_timestamp,
             messages=[{"role": "system", "content": system_prompt}],
-            clean_role=clean_role
+            clean_role=clean_role,
+            role=LLM_INTERPRET,
+            validate_script=True
         )
 
         logger(f"Raw Response: {prompt_name} Raw Response: {response_text}")
-        return response_text.strip().strip('"')
+        if NA_MARKER in response_text:
+            return ""
+        final_text = response_text.strip().strip('"')
+        if result_key and result_cache and is_valid_dj_script(final_text, clean_role):
+            result_cache.set(result_key, final_text)
+        return final_text
 
     @gpt_error_handler
     async def gpt_biography_interpretation(self, artist_name, session_dict):
@@ -492,9 +695,11 @@ class DJPromptService:
             artist_name=artist_name
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("Biography Interpretation", system_prompt,
-                                                 gpt_type='biography', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='biography', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
     async def gpt_lyrics_interpretation(self, lyrics, artist_name, session_dict):
@@ -506,9 +711,11 @@ class DJPromptService:
             artist_name=artist_name
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("Lyrics Interpretation", system_prompt,
-                                                 gpt_type='lyrics', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='lyrics', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
     async def gpt_news_interpretation(self, query, is_topic, categories, location, session_dict):
@@ -522,9 +729,11 @@ class DJPromptService:
             location=location
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("News", system_prompt,
-                                                 gpt_type='news', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='news', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
     async def gpt_weather_interpretation(self, session_dict, forecast_type: str = "current"):
@@ -535,9 +744,11 @@ class DJPromptService:
             forecast_type=forecast_type
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("Weather", system_prompt,
-                                                 gpt_type='weather', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='weather', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
     async def gpt_location_search_interpretation(self, query, session_dict):
@@ -548,12 +759,14 @@ class DJPromptService:
             query=query
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("Location Search Interpretation", system_prompt,
-                                                 gpt_type='location_search', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='location_search', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
-    async def gpt_events_interpretation(self, location, country_code, start_date, end_date, session_dict):
+    async def gpt_events_interpretation(self, location, country_code, start_date, end_date, session_dict, keyword=None):
         context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='events',
             user_id=session_dict.get('user_id'),
@@ -561,12 +774,15 @@ class DJPromptService:
             location=location,
             country_code=country_code,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            event_keyword=keyword
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         return await self._execute_broadcast_gpt("Events Search", system_prompt,
-                                                 gpt_type='events', debug_timestamp=debug_timestamp or "")
+                                                 gpt_type='events', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
     async def gpt_shoutouts_interpretation(self, session_dict, query: str | None = None, n_results: int = 10):
@@ -579,14 +795,20 @@ class DJPromptService:
             n_results=n_results
         )
 
-        system_prompt = "\n\n".join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        if not (context_data.get('data_shoutouts_data') or "").strip():
+            log_service.user_content("Shoutouts: No shoutouts available - skipping interpretation")
+            return None
+
+        system_prompt = assemble_prompt(context_data, final_nodes)
         log_service.user_content(f"Shoutouts: Shoutouts Prompt: {system_prompt}")
 
         response_text = await self._execute_gpt_and_save(
             gpt_type='shoutouts',
             debug_timestamp=debug_timestamp or "",
             messages=[{"role": "system", "content": system_prompt}],
-            clean_role='dj_content'
+            clean_role='dj_content',
+            role=LLM_INTERPRET,
+            validate_script=True
         )
 
         log_service.user_content(f"Shoutouts: Shoutouts Raw Response: {response_text}")
@@ -605,16 +827,20 @@ class DJPromptService:
 
         start_time = time.perf_counter()
 
+        dependencies = await self._gather_dependencies(user_id, session_id)
+        session_dict['_turn_dependencies'] = dependencies
+
         context_data, selected_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='interactive',
             user_id=user_id,
             session_id=session_id,
-            user_input=transcription
+            user_input=transcription,
+            dependencies=dependencies
         )
 
         fetch_time = (time.perf_counter() - start_time) * 1000
 
-        system_prompt = "\n\n".join(context_data[node] for node in selected_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, selected_nodes)
 
         log_service.gpt(f"Interactive: Prompt System: {system_prompt}")
 
@@ -647,6 +873,101 @@ class DJPromptService:
         )
 
         return main_response, notes_section
+
+    @staticmethod
+    def _split_interactive_response(response_text: str) -> tuple[str, str]:
+        parts = response_text.split("[INTERNAL DIALOGUE]", 1)
+        main_response = parts[0].strip()
+        notes_section = f"[INTERNAL DIALOGUE]{parts[1]}" if len(parts) > 1 else ""
+        return main_response, notes_section
+
+    @gpt_error_handler
+    async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None) -> dict:
+        from services_radio.dj_tools import (
+            DJ_FUNCTION_DECLARATIONS,
+            TOOL_MODE_REPLACED_NODES,
+            UNTRUSTED_NODE_KEYS,
+        )
+
+        user_id = session_dict.get('user_id')
+        session_id = session_dict.get('session_id')
+
+        log_service.node_performance(f"🎙️ DJ Interactive (Tool Mode) - User {user_id or 'Guest'}")
+
+        start_time = time.perf_counter()
+
+        context_data, selected_nodes, debug_timestamp = await self._get_nodes_unified(
+            gpt_type='interactive_tools',
+            user_id=user_id,
+            session_id=session_id,
+            user_input=transcription
+        )
+
+        fetch_time = (time.perf_counter() - start_time) * 1000
+
+        ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
+
+        system_prompt = assemble_prompt(context_data, ordered_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
+
+        log_service.gpt(f"Interactive Tools: Prompt System: {system_prompt}")
+
+        user_message = f"[LISTENER TXT] {transcription}"
+        log_service.gpt(f"Interactive Tools: Prompt User: {user_message}")
+
+        spoken_preambles = []
+
+        async def handle_preamble(raw_text):
+            preamble_main = ""
+            if raw_text and raw_text.strip() and NA_MARKER not in raw_text:
+                cleaned = clean_gpt_output(raw_text, role='dj_interactive')
+                preamble_main, _ = self._split_interactive_response(cleaned)
+            if preamble_main:
+                spoken_preambles.append(preamble_main)
+            if on_preamble is not None:
+                await on_preamble(preamble_main)
+
+        result = await self.gemini_service.run_gemini_tool_turn(
+            system_instruction=system_prompt,
+            user_message=user_message,
+            function_declarations=DJ_FUNCTION_DECLARATIONS,
+            dispatch=tool_runtime.dispatch,
+            model=self.config['dj_model'],
+            temperature=self.config['dj_temperature'],
+            max_tokens=self.config['dj_tokens'],
+            max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
+            call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
+            on_preamble=handle_preamble
+        )
+
+        raw_response = result.get("text") or ""
+        response_text = clean_gpt_output(raw_response, role='dj_interactive')
+
+        if settings.PROMPT_DEBUG_ENABLED and debug_timestamp:
+            import asyncio
+            asyncio.create_task(self._async_save_response_debug('interactive_tools', debug_timestamp, response_text))
+
+        log_service.api(f"Interactive Tools: Raw Response ({result.get('rounds')} rounds, "
+                        f"{len(result.get('tool_calls') or [])} tool calls): {response_text}")
+
+        if NA_MARKER in raw_response and not spoken_preambles:
+            log_service.api("Interactive Tools: Response is not applicable ([N/A])")
+            return {"status": "na", "main": "", "notes": "", "preambles": [], "tool_calls": result.get("tool_calls")}
+
+        main_response, notes_section = self._split_interactive_response(response_text)
+
+        log_service.node_performance(
+            f"✅ Node System (Tool Mode): {fetch_time:.1f}ms fetch | "
+            f"Selected {len(ordered_nodes)} nodes | {(time.perf_counter() - start_time) * 1000:.1f}ms total"
+        )
+
+        return {
+            "status": "ok",
+            "main": main_response,
+            "notes": notes_section,
+            "preambles": spoken_preambles,
+            "tool_calls": result.get("tool_calls") or [],
+            "rounds": result.get("rounds")
+        }
 
     def _save_prompt_debug(
             self,
@@ -786,14 +1107,16 @@ class DJPromptService:
             transition_duration_ms=transition_duration_ms
         )
 
-        system_prompt = '\n\n'.join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        system_prompt = assemble_prompt(context_data, final_nodes)
         log_service.gpt(f"Announcer: Announcements Prompt: {system_prompt}")
 
         response_text = await self._execute_gpt_and_save(
             gpt_type='announcements',
             debug_timestamp=debug_timestamp or "",
             messages=[{"role": "system", "content": system_prompt}],
-            clean_role='dj_announcements'
+            clean_role='dj_announcements',
+            role=LLM_ANNOUNCE,
+            validate_script=True
         )
 
         log_service.api(f"Announcer: Announcements Raw Response: {response_text}")
@@ -805,11 +1128,47 @@ class DJPromptService:
         return response_text
 
     @gpt_error_handler
+    async def gpt_radio_segment(self, segment_spec: Dict, facts_text: str, session_dict, shared: bool = False):
+        gpt_type = 'radio_segment_shared' if shared else 'radio_segment'
+        context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
+            gpt_type=gpt_type,
+            user_id=session_dict.get('user_id'),
+            session_id=session_dict.get('session_id'),
+            radio_segment=segment_spec,
+            radio_facts=facts_text
+        )
+
+        system_prompt = assemble_prompt(context_data, final_nodes)
+        log_service.announcer(f"[RADIO] Segment prompt ({segment_spec.get('label')}): {len(system_prompt)} chars")
+        length_note = (
+            f"\n\nLENGTH: This is a scheduled radio segment, not a quick link. Use between "
+            f"{segment_spec.get('min_words')} and {segment_spec.get('max_words')} spoken words in total across all "
+            f"hosts, aiming for about {segment_spec.get('target_words') or segment_spec.get('max_words')} "
+            "(tags and cues don't count)."
+        )
+
+        response_text = await self._execute_gpt_and_save(
+            gpt_type=gpt_type,
+            debug_timestamp=debug_timestamp or "",
+            messages=[{"role": "system", "content": system_prompt}],
+            clean_role='dj_content',
+            max_tokens=settings.RADIO_SEGMENT_MAX_TOKENS,
+            role=LLM_INTERPRET,
+            validate_script=True,
+            provider_notes={"deepseek": RADIO_SEGMENT_MARKUP_NOTE + length_note}
+        )
+
+        if not response_text or NA_MARKER in response_text:
+            return None
+        return response_text.strip().strip('"')
+
+    @gpt_error_handler
     async def gpt_command_extraction(self, gpt_response, transcription, session_dict):
         context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='command_extraction',
             user_id=session_dict.get('user_id'),
-            session_id=session_dict.get('session_id')
+            session_id=session_dict.get('session_id'),
+            dependencies=session_dict.pop('_turn_dependencies', None)
         )
 
         filtered_gpt_response = filter_meta_tags_for_gpt_prompt_cleaning(gpt_response)
@@ -817,7 +1176,7 @@ class DJPromptService:
         raw_history = context_data.get('conversation_recent', '')
         filtered_conversation_history = filter_meta_tags_for_gpt_prompt_cleaning(raw_history)
 
-        context_joined = '\n\n'.join(context_data[node] for node in final_nodes if node in context_data and context_data[node])
+        context_joined = assemble_prompt(context_data, final_nodes)
         system_prompt = f"{context_joined}\n\nCONVERSATION HISTORY:\n{filtered_conversation_history}"
         user_message = (
             f"[LISTENER TXT] {transcription}\n"
@@ -836,7 +1195,7 @@ class DJPromptService:
         )
         log_service.commands(f"[HAL11000 PIPELINE] Raw GPT Response (BEFORE cleaning):\n{commands_text}")
 
-        command_pattern = r'\(\{[a-z_]+\}(?:\{[a-z_]+\})*\)(?:"[^"]*")?|\{N/A\}'
+        command_pattern = r'\(\{[a-z_]+(?::[0-9_]+)?\}(?:\{[a-z_]+(?::[0-9_]+)?\})*\)(?:"[^"]*")?|\{N/A\}'
 
         extracted_commands = re.findall(command_pattern, commands_text)
         log_service.commands("[HAL11000 PIPELINE] Command extraction output for forbidden blocks")

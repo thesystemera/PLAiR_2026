@@ -56,7 +56,7 @@ These have state in UIState but no dedicated service managing them:
 
 These are active business logic that should not be in UIState:
 
-#### Artwork Preloading (lines 919-937)
+#### Artwork Preloading (lines 884-902)
 ```javascript
 useEffect(() => {
   const { currentTrack, queue, currentIndex } = engineState
@@ -69,7 +69,7 @@ useEffect(() => {
 - **Problem:** UIState is doing actual preload orchestration
 - **Fix:** Move to dedicated `ArtworkPreloader` hook or service
 
-#### Video Clips Fetching (lines 875-917)
+#### Video Clips Fetching (lines 850-882)
 ```javascript
 const fetchVideoClips = useCallback(async (trackId) => {
   // ... API calls, caching logic
@@ -80,7 +80,7 @@ const fetchVideoClips = useCallback(async (trackId) => {
 - **Problem:** API calls and caching logic inside UIState
 - **Fix:** Move to dedicated service, publish results to UIState
 
-#### Gyroscope/Physics Loop (lines 289-416)
+#### Gyroscope/Physics Loop (lines 297-424)
 ```javascript
 useEffect(() => {
   // ... RAF loop for parallax physics
@@ -94,7 +94,7 @@ useEffect(() => {
 - **Problem:** Active RAF processing loop in UIState
 - **Fix:** Move to dedicated `useParallaxPhysics` hook
 
-#### Music Ducking Logic (lines 418-443)
+#### Music Ducking Logic (lines 426-451)
 ```javascript
 useEffect(() => {
   const mixer = mixerRefInternal.current?.current
@@ -171,7 +171,7 @@ If UIState is doing anything more than storing and providing state, it's polluti
 
 ---
 
-## Current State (Feb 2026)
+## Current State (Feb 2026; line numbers refreshed 2026-09-26)
 
 The `dataSaverMode` change we just made adds to this pollution. For now it works, but it's in the wrong place architecturally. This document serves as a reminder to fix the broader issue.
 

@@ -1,15 +1,18 @@
 import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { motion, AnimatePresence, useMotionValue } from 'framer-motion'
 import { useDynamicTheme, PANEL, PANEL_SCROLL } from '../contexts/DynamicThemeContext'
+import { EDGE_FADE_MASK } from '../lib/themeManager'
+import { MOTION } from '../lib/motion'
 import { useUIState } from '../contexts/UIStateContext'
 
 const { maskFadeTop, maskFadeBottom, maskFadeSide } = PANEL_SCROLL
 
+const SCROLLER_MASK = EDGE_FADE_MASK(maskFadeTop, maskFadeBottom, maskFadeSide)
 
 const SCROLLER_MASK_STYLE = {
-  WebkitMask: `linear-gradient(0deg, transparent, black ${maskFadeBottom}, black calc(100% - ${maskFadeTop}), transparent), linear-gradient(90deg, transparent, black ${maskFadeSide}, black calc(100% - ${maskFadeSide}), transparent)`,
+  WebkitMask: SCROLLER_MASK,
   WebkitMaskComposite: 'source-in',
-  mask: `linear-gradient(0deg, transparent, black ${maskFadeBottom}, black calc(100% - ${maskFadeTop}), transparent), linear-gradient(90deg, transparent, black ${maskFadeSide}, black calc(100% - ${maskFadeSide}), transparent)`,
+  mask: SCROLLER_MASK,
   maskComposite: 'intersect'
 }
 
@@ -28,13 +31,21 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
     lastScrollRef.current.time = performance.now()
   }, [])
 
-  // Register RAF source for debugging
   useEffect(() => {
     window.registerRAFSource?.('Scroller')
   }, [])
 
   const { getAccentColor, triggerEffect } = useDynamicTheme()
-  const { reportInterfaceState } = useUIState()
+  const { reportInterfaceState, interfaceRef } = useUIState()
+
+  const reportScrollState = useCallback((isScrolling, scrollVelocity, scrollPosition) => {
+    const current = interfaceRef.current
+    current.scrollVelocity = scrollVelocity
+    if (scrollPosition !== undefined) current.scrollPosition = scrollPosition
+    if (current.isScrolling !== isScrolling) {
+      reportInterfaceState({ isScrolling })
+    }
+  }, [interfaceRef, reportInterfaceState])
 
   const indicatorY = useMotionValue(0)
 
@@ -80,17 +91,9 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
       setShowLabel(isActuallyScrolling)
 
       if (isActuallyScrolling) {
-        reportInterfaceState({
-          isScrolling: true,
-          scrollVelocity: velocity,
-          scrollPosition: scrollTop
-        })
+        reportScrollState(true, velocity, scrollTop)
       } else {
-        reportInterfaceState({
-          isScrolling: false,
-          scrollVelocity: 0,
-          scrollPosition: scrollTop
-        })
+        reportScrollState(false, 0, scrollTop)
       }
 
       if (hideTimeoutRef.current) {
@@ -100,19 +103,16 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
       if (!isTouchingRef.current) {
         hideTimeoutRef.current = setTimeout(() => {
           setShowLabel(false)
-          reportInterfaceState({
-            isScrolling: false,
-            scrollVelocity: 0
-          })
+          reportScrollState(false, 0)
         }, 500)
       }
     })
-  }, [getScrollLabel, onScroll, indicatorY, triggerEffect, reportInterfaceState])
+  }, [getScrollLabel, onScroll, indicatorY, triggerEffect, reportScrollState])
 
   const handleTouchStart = useCallback(() => {
     isTouchingRef.current = true
-    reportInterfaceState({ isScrolling: true })
-  }, [reportInterfaceState])
+    reportScrollState(true, interfaceRef.current.scrollVelocity)
+  }, [reportScrollState, interfaceRef])
 
   const handleTouchEnd = useCallback(() => {
     isTouchingRef.current = false
@@ -120,22 +120,16 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
     const scrollTop = container?.scrollTop || 0
 
     if (scrollTop <= 10) {
-      reportInterfaceState({
-        isScrolling: false,
-        scrollVelocity: 0
-      })
+      reportScrollState(false, 0)
     } else {
       if (hideTimeoutRef.current) {
         clearTimeout(hideTimeoutRef.current)
       }
       hideTimeoutRef.current = setTimeout(() => {
-        reportInterfaceState({
-          isScrolling: false,
-          scrollVelocity: 0
-        })
+        reportScrollState(false, 0)
       }, 500)
     }
-  }, [reportInterfaceState])
+  }, [reportScrollState])
 
   useEffect(() => {
     const container = scrollRef.current
@@ -157,12 +151,9 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current)
       }
-      reportInterfaceState({
-        isScrolling: false,
-        scrollVelocity: 0
-      })
+      reportScrollState(false, 0)
     }
-  }, [handleScroll, handleTouchStart, handleTouchEnd, reportInterfaceState])
+  }, [handleScroll, handleTouchStart, handleTouchEnd, reportScrollState])
 
   return (
     <div className="h-full relative overflow-hidden" style={SCROLLER_MASK_STYLE}>
@@ -181,7 +172,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9 }}
-            transition={{ opacity: { duration: 0.2 }, scale: { duration: 0.2 } }}
+            transition={MOTION.quickOpacityScale}
             style={{
               y: indicatorY,
               top: 0,

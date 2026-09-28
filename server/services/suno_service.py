@@ -1,4 +1,4 @@
-import requests
+import httpx
 import time
 import asyncio
 import aiofiles
@@ -7,7 +7,46 @@ from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 from services import log_service
 from services.base_service import SingletonService
+from services.http_client import fetch
 from config import settings
+
+SUNO_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
+SUNO_POLL_MAX_BACKOFF_S = 60
+SUNO_TRANSIENT_CODES = {430, 455}
+
+class SunoAPIError(Exception):
+    def __init__(self, code: Optional[int], msg: str, http_status: Optional[int] = None):
+        self.code = code
+        self.msg = msg or ""
+        self.http_status = http_status
+        super().__init__(f"Suno API error (code={code}): {self.msg}")
+
+    @property
+    def is_insufficient_credits(self) -> bool:
+        lowered = self.msg.lower()
+        if self.code == 429:
+            return True
+        return "credit" in lowered and ("insufficient" in lowered or "not enough" in lowered)
+
+class SunoTransientError(Exception):
+    pass
+
+class SunoSubmitUnconfirmed(SunoAPIError):
+    pass
+
+SUBMIT_NEVER_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol)
+SUBMIT_AMBIGUOUS_ERRORS = (httpx.TimeoutException, httpx.TransportError, SunoTransientError)
+
+def _parse_json_response(response: httpx.Response) -> Dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError:
+        if response.status_code >= 500 or response.status_code == 429:
+            raise SunoTransientError(f"HTTP {response.status_code} with non-JSON body")
+        raise SunoAPIError(None, response.text[:300], http_status=response.status_code)
+    if not isinstance(data, dict):
+        raise SunoAPIError(None, f"Unexpected response payload: {str(data)[:300]}", http_status=response.status_code)
+    return data
 
 class SunoAPI:
     def __init__(self, api_key: str, base_url: str = None):
@@ -25,7 +64,7 @@ class SunoAPI:
             style: Optional[str] = None,
             title: Optional[str] = None,
             instrumental: bool = False,
-            model: str = "V5",
+            model: str = settings.SUNO_MODEL_VERSION,
             negative_tags: Optional[str] = None,
             vocal_gender: Optional[str] = None,
             style_weight: Optional[float] = None,
@@ -58,22 +97,40 @@ class SunoAPI:
 
         log_service.api(f"Submitting music generation: {title or 'Untitled'}")
 
-        response = await asyncio.to_thread(
-            requests.post,
+        response = await fetch(
+            "POST",
             f"{self.base_url}/generate",
+            retries=0,
             headers=self.headers,
-            json=payload
+            json=payload,
+            timeout=SUNO_HTTP_TIMEOUT
         )
 
-        return response.json()
+        return _parse_json_response(response)
+
+    async def get_credits(self) -> Optional[float]:
+        response = await fetch(
+            "GET",
+            f"{self.base_url}/generate/credit",
+            headers=self.headers,
+            timeout=SUNO_HTTP_TIMEOUT
+        )
+        data = _parse_json_response(response)
+        credits = data.get("data")
+        if data.get("code") != 200 or isinstance(credits, bool) or not isinstance(credits, (int, float)):
+            return None
+        return float(credits)
 
     async def get_task_status(self, task_id: str) -> Dict[str, Any]:
-        response = await asyncio.to_thread(
-            requests.get,
+        response = await fetch(
+            "GET",
             f"{self.base_url}/generate/record-info?taskId={task_id}",
-            headers=self.headers
+            headers=self.headers,
+            timeout=SUNO_HTTP_TIMEOUT
         )
-        return response.json()
+        if response.status_code >= 500:
+            raise SunoTransientError(f"HTTP {response.status_code} from Suno status endpoint")
+        return _parse_json_response(response)
 
     async def poll_until_complete(
             self,
@@ -88,27 +145,54 @@ class SunoAPI:
             max_wait = settings.SUNO_MAX_WAIT
         log_service.system(f"Polling task {task_id}...")
         start_time = time.time()
+        backoff = 0.0
+        consecutive_errors = 0
 
         while True:
-            await asyncio.sleep(interval + random.uniform(0, 3))
+            await asyncio.sleep(interval + random.uniform(0, 3) + backoff)
 
             if time.time() - start_time > max_wait:
                 log_service.error(f"Task {task_id} timed out after {max_wait}s")
                 return None
 
-            result = await self.get_task_status(task_id)
+            try:
+                result = await self.get_task_status(task_id)
+            except (httpx.TransportError, httpx.TimeoutException, SunoTransientError) as e:
+                consecutive_errors += 1
+                backoff = min(SUNO_POLL_MAX_BACKOFF_S, 2 ** consecutive_errors)
+                log_service.warning(
+                    f"Transient error polling task {task_id} ({type(e).__name__}: {e}) - "
+                    f"retrying in ~{interval + backoff:.0f}s (error {consecutive_errors})"
+                )
+                continue
 
-            if result["code"] == 430:
+            code = result.get("code")
+
+            if code == 430:
                 log_service.warning("Rate limit hit (430) - backing off 30 seconds...")
                 await asyncio.sleep(30)
                 continue
 
-            if result["code"] != 200:
-                log_service.error(f"Error: {result['msg']}")
+            if code in SUNO_TRANSIENT_CODES or (isinstance(code, int) and code >= 500):
+                consecutive_errors += 1
+                backoff = min(SUNO_POLL_MAX_BACKOFF_S, 2 ** consecutive_errors)
+                log_service.warning(
+                    f"Suno status endpoint returned code {code} ({result.get('msg')}) for task {task_id} - retrying"
+                )
+                continue
+
+            if code != 200:
+                log_service.error(f"Error: {result.get('msg')}")
                 log_service.error(f"Full response: {result}")
                 return None
 
-            status = result["data"]["status"]
+            consecutive_errors = 0
+            backoff = 0.0
+
+            status = (result.get("data") or {}).get("status")
+            if status is None:
+                log_service.warning(f"Task {task_id} status missing from response - continuing to poll")
+                continue
             log_service.system(f"Task {task_id} Status: {status}")
 
             if status_callback:
@@ -146,10 +230,10 @@ class SunoService(SingletonService):
         self.suno_api = SunoAPI(suno_key)
         log_service.system("SunoService initialized - Suno API ready")
 
-    async def submit_task(self, music_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def submit_task(self, music_params: Dict[str, Any]) -> Dict[str, Any]:
         if not self.suno_api:
             log_service.error("Suno API not initialized")
-            return None
+            raise SunoAPIError(None, "Suno API not initialized")
 
         try:
             title = music_params.get("title")
@@ -168,7 +252,7 @@ class SunoService(SingletonService):
                 style=music_params.get("style"),
                 title=title,
                 instrumental=music_params.get("instrumental", False),
-                model="V5",
+                model=settings.SUNO_MODEL_VERSION,
                 negative_tags=music_params.get("negative_tags"),
                 vocal_gender=music_params.get("vocal_gender"),
                 style_weight=music_params.get("style_weight"),
@@ -176,17 +260,40 @@ class SunoService(SingletonService):
                 audio_weight=music_params.get("audio_weight")
             )
 
-            if result["code"] != 200:
-                log_service.error(f"Generation failed: {result['msg']}")
-                if "title cannot exceed 80 characters" in result['msg']:
+            code = result.get("code")
+            msg = str(result.get("msg") or "")
+            if code != 200:
+                log_service.error(f"Generation failed: {msg}")
+                if "title cannot exceed 80 characters" in msg:
                     log_service.error("Truncation may have failed, please check logic.")
-                return None
+                raise SunoAPIError(code, msg)
 
-            log_service.system(f"Task submitted: {result['data']['taskId']}")
+            task_id = (result.get("data") or {}).get("taskId")
+            if not task_id:
+                raise SunoAPIError(code, f"Suno response missing taskId: {str(result)[:300]}")
+
+            log_service.system(f"Task submitted: {task_id}")
             return result
 
+        except SunoAPIError:
+            raise
+        except SUBMIT_NEVER_SENT_ERRORS as e:
+            log_service.error(f"Error submitting task (request never reached Suno): {str(e)}")
+            raise SunoAPIError(None, f"{type(e).__name__}: {e}") from e
+        except SUBMIT_AMBIGUOUS_ERRORS as e:
+            log_service.error(f"Suno submit outcome unknown ({type(e).__name__}): {str(e)}")
+            raise SunoSubmitUnconfirmed(None, f"{type(e).__name__}: {e}") from e
         except Exception as e:
             log_service.error(f"Error submitting task: {str(e)}")
+            raise SunoAPIError(None, f"{type(e).__name__}: {e}") from e
+
+    async def get_credits(self) -> Optional[float]:
+        if not self.suno_api:
+            return None
+        try:
+            return await self.suno_api.get_credits()
+        except Exception as e:
+            log_service.warning(f"Could not read Suno credits: {type(e).__name__}: {e}")
             return None
 
     async def await_task(self, task_id: str, status_callback: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
@@ -229,10 +336,11 @@ class SunoService(SingletonService):
                 "Referer": "https://suno.com/"
             }
 
-            response = await asyncio.to_thread(
-                requests.get,
+            response = await fetch(
+                "GET",
                 audio_url,
-                headers=headers
+                headers=headers,
+                timeout=SUNO_HTTP_TIMEOUT
             )
 
             response.raise_for_status()
@@ -256,10 +364,11 @@ class SunoService(SingletonService):
                 "Referer": "https://suno.com/"
             }
 
-            response = await asyncio.to_thread(
-                requests.get,
+            response = await fetch(
+                "GET",
                 image_url,
-                headers=headers
+                headers=headers,
+                timeout=SUNO_HTTP_TIMEOUT
             )
 
             response.raise_for_status()

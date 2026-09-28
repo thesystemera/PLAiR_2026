@@ -3,13 +3,18 @@ import hashlib
 import json
 import shutil
 import sys
+import time
 import aiofiles
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from config.settings import settings
 from services import log_service
+
+MIN_SOURCE_SECONDS = 30
+MAX_SOURCE_SECONDS = 6 * 3600
+FAILED_SEARCH_RETRY_S = 24 * 3600
 
 VIDEO_SEARCH_TERMS_PROMPT = """
 **video_search_terms**: 10-15 YouTube search queries for background video art
@@ -65,12 +70,15 @@ class YouTubeClipService:
         self.cache_dir: Path = settings.YOUTUBE_CLIPS_DIR
         self.index_path = self.cache_dir / "clip_index.json"
         self.index = self._load_index()
+        self.index_lock = asyncio.Lock()
+        self.keyword_locks: dict[str, asyncio.Lock] = {}
 
         self.ytdlp_path = shutil.which("yt-dlp") or str(Path(sys.executable).parent / "yt-dlp.exe")
+        self.runtime_args = ["--encoding", "utf-8"] + (["--js-runtimes", "node"] if shutil.which("node") else [])
+        self.failed_searches: dict[str, float] = {}
 
         self.default_clip_duration = 30
-        self.max_video_age_days = 30
-        self.cache_expiry_days = 7
+        self.max_cache_bytes = int(settings.YOUTUBE_CLIPS_MAX_CACHE_GB * 1024 ** 3)
 
     def _load_index(self) -> dict:
         if self.index_path.exists():
@@ -80,24 +88,23 @@ class YouTubeClipService:
                 log_service.warning(f"[YOUTUBE] Failed to load index: {e}")
         return {"clips": {}, "searches": {}}
 
-    def _refresh_index(self):
-        self.index = self._load_index()
-
-    def _save_index(self):
-        try:
-            self.index_path.write_text(json.dumps(self.index, indent=2))
-        except Exception as e:
-            log_service.error(f"[YOUTUBE] Failed to save index: {e}")
+    async def _save_index(self):
+        async with self.index_lock:
+            payload = json.dumps(self.index, indent=2)
+            try:
+                await asyncio.to_thread(self.index_path.write_text, payload)
+            except Exception as e:
+                log_service.error(f"[YOUTUBE] Failed to save index: {e}")
 
     def _keyword_hash(self, keyword: str) -> str:
         normalized = keyword.lower().strip()
         return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
-    def _is_cache_valid(self, cache_entry: dict) -> bool:
-        if not cache_entry:
-            return False
-        cached_at = datetime.fromisoformat(cache_entry.get("cached_at", "2000-01-01"))
-        return datetime.now() - cached_at < timedelta(days=self.cache_expiry_days)
+    def _cached_entry(self, cache_key: str) -> Optional[dict]:
+        entry = self.index["clips"].get(cache_key)
+        if entry and Path(entry["path"]).exists():
+            return entry
+        return None
 
     async def search_videos(
         self,
@@ -105,11 +112,10 @@ class YouTubeClipService:
         max_results: int = 5
     ) -> list[dict]:
 
-        search_query = f"{keyword} news"
-
         cmd = [
             self.ytdlp_path,
-            f"ytsearch{max_results}:{search_query}",
+            *self.runtime_args,
+            f"ytsearch{max_results}:{keyword}",
             "--dump-json",
             "--no-download",
             "--no-warnings",
@@ -125,11 +131,11 @@ class YouTubeClipService:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] Search failed for '{keyword}': {stderr.decode()[:200]}")
+                log_service.error(f"[YOUTUBE] Search failed for '{keyword}': {stderr.decode('utf-8', 'replace')[:200]}")
                 return []
 
             results = []
-            for line in stdout.decode().strip().split("\n"):
+            for line in stdout.decode('utf-8', 'replace').strip().split("\n"):
                 if line:
                     try:
                         data = json.loads(line)
@@ -143,7 +149,7 @@ class YouTubeClipService:
                     except json.JSONDecodeError:
                         continue
 
-            filtered = [v for v in results if 30 <= (v.get("duration") or 0) <= 600]
+            filtered = [v for v in results if MIN_SOURCE_SECONDS <= (v.get("duration") or 0) <= MAX_SOURCE_SECONDS]
 
             return filtered[:max_results]
 
@@ -176,8 +182,10 @@ class YouTubeClipService:
         try:
             dl_cmd = [
                 self.ytdlp_path,
+                *self.runtime_args,
                 video_url,
-                "-f", "18",
+                "-f", "18/bv*[height<=480][ext=mp4]/b[height<=480]",
+                "--download-sections", f"*{start_time}-{start_time + duration}",
                 "-o", str(temp_path),
                 "--no-warnings",
                 "--no-playlist",
@@ -191,7 +199,7 @@ class YouTubeClipService:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] Download failed for {video_id}: {stderr.decode()[:200]}")
+                log_service.error(f"[YOUTUBE] Download failed for {video_id}: {stderr.decode('utf-8', 'replace')[:200]}")
                 return None
 
             possible_temps = list(self.cache_dir.glob(f"temp_{video_id}*"))
@@ -203,7 +211,6 @@ class YouTubeClipService:
             ffmpeg_cmd = [
                 "ffmpeg",
                 "-y",
-                "-ss", str(start_time),
                 "-i", str(actual_temp),
                 "-t", str(duration),
                 "-an",
@@ -224,7 +231,7 @@ class YouTubeClipService:
                 actual_temp.unlink()
 
             if proc.returncode != 0:
-                log_service.error(f"[YOUTUBE] FFmpeg failed for {video_id}: {stderr.decode()[-300:]}")
+                log_service.error(f"[YOUTUBE] FFmpeg failed for {video_id}: {stderr.decode('utf-8', 'replace')[-300:]}")
                 return None
 
             if output_path.exists():
@@ -250,27 +257,39 @@ class YouTubeClipService:
         start_offset: float = 10  # skip intros
     ) -> Optional[dict]:
 
-        self._refresh_index()
-
         kw_hash = self._keyword_hash(keyword)
         cache_key = f"{kw_hash}_{int(clip_duration)}"
 
-        if cache_key in self.index["clips"]:
-            entry = self.index["clips"][cache_key]
-            if self._is_cache_valid(entry):
-                clip_path = Path(entry["path"])
-                if clip_path.exists():
-                    return {
-                        "path": clip_path,
-                        "keyword": keyword,
-                        "source_title": entry.get("source_title"),
-                        "source_url": entry.get("source_url"),
-                        "duration": clip_duration
-                    }
+        lock = self.keyword_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            return await self._get_clip_for_keyword_locked(keyword, kw_hash, cache_key, clip_duration, start_offset)
+
+    async def _get_clip_for_keyword_locked(
+        self,
+        keyword: str,
+        kw_hash: str,
+        cache_key: str,
+        clip_duration: float,
+        start_offset: float
+    ) -> Optional[dict]:
+        entry = self._cached_entry(cache_key)
+        if entry:
+            return {
+                "path": Path(entry["path"]),
+                "keyword": keyword,
+                "source_title": entry.get("source_title"),
+                "source_url": entry.get("source_url"),
+                "duration": clip_duration
+            }
+
+        failed_at = self.failed_searches.get(cache_key)
+        if failed_at is not None and time.monotonic() - failed_at < FAILED_SEARCH_RETRY_S:
+            return None
 
         videos = await self.search_videos(keyword, max_results=3)
         if not videos:
             log_service.warning(f"[YOUTUBE] No videos found for '{keyword}'")
+            self.failed_searches[cache_key] = time.monotonic()
             return None
 
         for video in videos:
@@ -296,7 +315,7 @@ class YouTubeClipService:
                     "source_id": video["id"],
                     "cached_at": datetime.now().isoformat()
                 }
-                self._save_index()
+                await self._save_index()
 
                 return {
                     "path": clip_path,
@@ -306,6 +325,7 @@ class YouTubeClipService:
                     "duration": clip_duration
                 }
 
+        self.failed_searches[cache_key] = time.monotonic()
         return None
 
     async def get_clips_for_theme(
@@ -385,61 +405,44 @@ class YouTubeClipService:
             "track_duration_seconds": duration_seconds
         }
 
-    async def pre_download_for_track(self, metadata: dict, clip_duration: float = 30):
-
-        gen_params = metadata.get("generation_params", {})
-        derived_tags = metadata.get("derived_tags", {})
-        track_info = metadata.get("track_info", {})
-        track_id = metadata.get("id", "unknown")
-
+    def missing_keywords_for_track(self, metadata: dict, clip_duration: float = 30) -> list[str]:
+        gen_params = metadata.get("generation_params", {}) or {}
+        derived_tags = metadata.get("derived_tags", {}) or {}
         keywords = gen_params.get("video_search_terms") or derived_tags.get("video_search_terms")
-        if not keywords:
-            return 0
+        if not keywords or not isinstance(keywords, list):
+            return []
 
-        duration_ms = track_info.get("duration", 120000)
-        duration_seconds = duration_ms / 1000
+        duration_seconds = (metadata.get("track_info", {}) or {}).get("duration", 120000) / 1000
         max_clips = max(4, min(15, int(duration_seconds / 15)))
+        return [
+            keyword for keyword in keywords[:max_clips]
+            if not self._cached_entry(f"{self._keyword_hash(keyword)}_{int(clip_duration)}")
+        ]
 
-        self._refresh_index()
-        cached_count = 0
-        for keyword in keywords[:max_clips]:
-            kw_hash = self._keyword_hash(keyword)
-            cache_key = f"{kw_hash}_{int(clip_duration)}"
-            if cache_key in self.index["clips"]:
-                entry = self.index["clips"][cache_key]
-                if self._is_cache_valid(entry) and Path(entry["path"]).exists():
-                    cached_count += 1
-
-        needed = max_clips - cached_count
-        if needed <= 0:
-            return cached_count
-
-        log_service.info(f"[YOUTUBE] Pre-downloading {needed} clips for {track_id} ({cached_count} already cached)")
-
-        clips = await self.get_clips_for_theme(
-            keywords=keywords,
-            max_clips=max_clips,
-            clip_duration=clip_duration
-        )
-
-        return len(clips)
-
-    async def cleanup_old_clips(self, max_age_days: int = 14):
-        cutoff = datetime.now() - timedelta(days=max_age_days)
-        removed = 0
-
+    async def enforce_cache_limit(self):
+        entries = []
+        total_bytes = 0
         for cache_key, entry in list(self.index["clips"].items()):
-            cached_at = datetime.fromisoformat(entry.get("cached_at", "2000-01-01"))
-            if cached_at < cutoff:
-                clip_path = Path(entry["path"])
-                if clip_path.exists():
-                    clip_path.unlink()
-                    removed += 1
+            clip_path = Path(entry["path"])
+            if not clip_path.exists():
                 del self.index["clips"][cache_key]
+                continue
+            size = clip_path.stat().st_size
+            total_bytes += size
+            entries.append((entry.get("cached_at", "2000-01-01"), cache_key, clip_path, size))
 
+        removed = 0
+        for _cached_at, cache_key, clip_path, size in sorted(entries):
+            if total_bytes <= self.max_cache_bytes:
+                break
+            clip_path.unlink(missing_ok=True)
+            del self.index["clips"][cache_key]
+            total_bytes -= size
+            removed += 1
+
+        await self._save_index()
         if removed:
-            self._save_index()
-            log_service.info(f"[YOUTUBE] Cleaned up {removed} old clips")
+            log_service.info(f"[YOUTUBE] Evicted {removed} oldest clips to stay under {settings.YOUTUBE_CLIPS_MAX_CACHE_GB}GB")
 
     def get_cache_stats(self) -> dict:
         total_size = sum(

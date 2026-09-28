@@ -1,7 +1,46 @@
 # Offline Mode Architecture - Complete Documentation
 
-**Last Updated:** December 2025
-**Status:** Production-ready, fully unified DRY architecture
+**Last Updated:** September 2026
+**Status:** Offline library, routing and connectivity detection work; automatic hand-off of *playback* to the local engine when the server drops is still parked (see "Current state" below).
+
+---
+
+## Current state (September 2026)
+
+### What changed
+- **Connectivity detection (`NetworkContext.jsx`)** now has hysteresis instead of flipping on a single failed health check:
+  - first `/api/health` probe runs immediately on load (it used to wait 10 s);
+  - the server is declared unreachable only after **2 consecutive failed probes** (1.5 s apart, 4 s timeout each), and reachable again only after **2 consecutive successes** (3 s apart);
+  - **flap damping:** if the server drops again within 2 minutes of recovering, each extra flap requires 2 more successes before leaving degraded mode (max +6);
+  - the browser `offline` event is confirmed for 2 s before committing (network hand-offs such as Wi-Fi to cellular no longer flash "offline");
+  - any API call that fails with a network error or a 502/503/504 (nginx up, backend down) calls `api.reportServerTrouble()`, which triggers an immediate probe, so a dead backend is noticed in ~2 s instead of up to 10 s;
+  - probes also run when the tab becomes visible again.
+- UIState `audioState` gained **`offlineMode`** (`connectionMode !== 'full'`), the SSOT flag for "the app is running on the offline library". `api._routeRequest` keeps routing on `!isOnline || !isServerAvailable`, which is the same condition.
+- On recovery NetworkContext emits `api.reportServerRecovered()` and calls **`api.syncOfflineWrites()`**: likes/super-likes/bans made while offline are queued (`offline_pending_preferences` in safeStorage) and replayed to the server. Previously they were never synced.
+- **Preference snapshot:** every successful online `getUserPreferences` is mirrored into the offline preference store, so offline queues can weight by the listener's real likes (before, only likes made *while offline* were known).
+- **`offlineAPI.js` queue logic rewritten (same class/API):**
+  - `getPlaybackState()` called `cacheManager.getCachedTrackList()`, which did not exist, so an offline cold boot never produced a queue. Fixed (it now starts a local session).
+  - new `startLocalSession({ currentTrack, radioMode, isPlaying, progressMs })` and `advanceTo(trackId)` for a local radio: weighted shuffle of the downloads (super-like +2, like +1, bans excluded, radio-mode similarity for genre/mood/artist/style/vocal seeds, `favorites` restricts to liked tracks when at least 3 are downloaded), avoids the last 30 played tracks and back-to-back same artist.
+  - `play()` no longer spends the 5 best recommendations as fake "history" before the current track; `previous()` used to leave the current track unchanged (it only unshifted history); both fixed. `addToQueue`/`removeFromQueue` now work on the local queue and return `added`.
+  - offline `login`/`register` now **throw** a friendly error instead of returning an object that `startSession` treated as a successful login (it cleared the token and stored `cached_user = "undefined"`).
+  - catalog/search/stats/genres read the lightweight cached list; `sort_by=genre` works offline; search matches title, artist, style, genres, moods, tags.
+- **`offlineStorage.js`:** metadata is normalized on save and read (`normalizeTrackMetadata`: both `title/artist_name/style/duration_ms` and `generation_params`/`track_info`), because tracks cached from the queue were stored in the simplified queue shape and showed as "Unknown"/lost their duration offline. Transactions reopen the connection if iOS Safari closed it, saves resolve on transaction `complete` (quota errors surface), `open` has a 5 s timeout, and a missing/blocked IndexedDB (private mode) marks the library unavailable instead of throwing.
+- **`cacheManager.js`:** memoized `getCachedTrackList()` (no blobs) with `onChange` listeners; `isCached`, storage info and eviction use it. `activeStreams` is capped at 3 (partially streamed, skipped tracks used to keep their chunks in memory forever). LRU eviction now evicts non-liked tracks first and never the track being saved; `hasRoomFor()` lets background downloads avoid evict/redownload churn (important with the iOS 50 MB cap). Truncated downloads are rejected instead of being cached. Init failures no longer throw.
+
+### Parked (not done yet)
+1. **Automatic playback hand-off** (the owner's main ask). The pieces are ready (`audioState.offlineMode`, `offlineBackend.startLocalSession/advanceTo/next/previous`), but `PlaybackContext.jsx` still gates its offline paths on `audioState.isOnline` (browser online flag), not on `offlineMode`. Planned change:
+   - on `offlineMode` true: ignore/stash server snapshots, mark this device locally active (`audio.setActiveDevice(true)`, `reportEngineStatus({ isActiveDevice: true })`), end any armed talk break (`talkBreak.onServerState(null, ...)`), call `startLocalSession({ currentTrack: desired.track, isPlaying, progressMs: engine position })` and apply it without touching the engine's current track; `getTrackSource` returns cached blobs only; auto-advance (`handleCrossfadeStart`) calls `offlineBackend.advanceTo`; next/previous/seek/pause act locally; a stream that runs dry (`waiting` for >1.5 s on a non-cached source) skips to the next local track.
+   - on `offlineMode` false + WebSocket reconnected + first server snapshot: if playing locally and the server has no online active device (or it is us), hand over with `play {track_id, claim: true}` + `seek {position_ms}` (the existing seq/ack machinery keeps the current audio untouched); if another device is active, finish the current track locally and then apply the server state; if paused, apply the server state paused.
+   - `WebSocketContext.send` still contains an old "offline simulation" (`offlineBackend.pause/seek` do not exist); it should be replaced by returning `'offline'` while `offlineMode` is set, and the socket should reconnect immediately on `api.onConnectivity('recovered')` instead of waiting for its backoff (up to 30 s).
+   - `audioEngine.handleOfflineTransition` passes `cached.metadata` (undefined for the flattened record) so the reloaded slot loses `duration_ms` and auto-crossfade stops; it should reuse `currentSlot.metadata` and only reload when the MSE stream is incomplete.
+2. **UI:** an "Offline · playing your downloads (N)" pill for guests too (today only the signed-in DevicePicker button shows the offline icon + count), offline empty state in Catalog ("No downloads yet"), suppressing the "Failed to load tracks" toast while the health check is failing, friendlier voice-search/transcription message offline.
+3. **Service worker:** index.html is cached, but the hashed JS/CSS are only cached when fetched while the SW controls the page, so the *first* visit is not reload-proof offline. Fix: precache the `/assets/*` URLs referenced by `index.html` at install and let the page post its loaded `/assets/` URLs to the SW; add a ~4 s timeout to navigation fetches; stop intercepting `/api/stream/` (the SW audio cache duplicates IndexedDB and answers Range requests with full 200 bodies).
+4. **Background downloader:** `shouldDownload()` requires `networkQuality === 'excellent'`, which only Chrome's Network Information API can report, so Safari/iOS/Firefox never auto-download liked tracks; it should also check `cacheManager.hasRoomFor()` and `isServerAvailable`. The iOS cap (50 MB, about 8 tracks) is very conservative; consider a quota-aware cap from `navigator.storage.estimate()`.
+
+### How to test
+- Unit-ish: `npx eslint src --quiet` and a scratch build (`npx vite build --outDir <scratch>`); never build into `client/dist` for tests.
+- End-to-end: run `vite preview` of a scratch build with `/api` + `/ws` proxied to a **mock** backend you can stop/start (FastAPI in the main venv works: health, catalog, `/api/stream/{id}/webm` with HEAD + Range, artwork, a `/ws/playback` that sends `playback_state` with `state_epoch`/`version`/`acks`). Use headless Chrome with `--disable-gpu --mute-audio`. Stop the mock: the health indicator should flip to degraded after ~2 s and the catalog should switch to the downloads; restart it: recovery after ~6 s (longer if it flapped recently).
+- On a phone: enable airplane mode mid-track, confirm the offline icon appears after ~2 s, the catalog shows downloads, likes made offline sync after reconnecting, and signing in is not lost.
 
 ---
 
@@ -646,9 +685,9 @@ storageInfo = {
 | `server/services/catalog_vector_search_service.py` | **Vector embeddings for semantic search** - NOT replicated offline |
 | `server/services/playback_service.py` | Smart queue building with vector similarity |
 | `server/services_radio/dj_command_executor.py` | DJ AI and radio logic |
-| `server/routes/catalog_routes.py` | `/api/catalog/tracks`, `/api/catalog/stats` |
-| `server/routes/playback_routes.py` | `/api/playback/play` |
-| `server/routes/stream_routes.py` | `/api/stream/{trackId}/webm` |
+| `server/app.py` | `/api/catalog/tracks`, `/api/catalog/stats` |
+| `server/app.py` | `/api/playback/play` |
+| `server/app.py` | `/api/stream/{trackId}/webm` |
 
 ---
 
@@ -691,7 +730,7 @@ storageInfo = {
 2. **AI-Powered Features**
    - DJ conversations (requires LLM)
    - Music generation (requires Suno AI API)
-   - Smart announcements (requires GPT)
+   - Smart announcements (requires the LLM)
 
 3. **Real-Time Features**
    - WebSocket updates

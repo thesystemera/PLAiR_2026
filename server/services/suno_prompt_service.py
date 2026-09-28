@@ -272,7 +272,7 @@ Generate all required JSON fields:
 
         try:
             result = await self.ai_service.call_gemini_with_tools(
-                prompt=f"{system_prompt}\n\n{user_prompt}",
+                prompt=user_prompt,
                 tools=tools,
                 tool_handlers=tool_handlers,
                 response_schema=MusicGenerationParams,

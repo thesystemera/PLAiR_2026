@@ -1,208 +1,189 @@
-import {useCallback, useMemo, useRef, useState} from 'react'
-import {logger} from '../lib/logger'
-import {retryableAPICall} from '../lib/retryUtils'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { logger } from '../lib/logger'
+import { retryableAPICall } from '../lib/retryUtils'
+
+const MAX_CONCURRENT_PAGES = 2
+const RETRY_DELAY_MS = 1500
+const EMPTY_SNAPSHOT = { items: [], windowStart: 0, totalCount: 0 }
 
 export function useVirtualWindow({
   fetchFn,
-  windowSize = 150,
+  pageSize = 60,
+  maxPages = 16,
   initialParams = {}
 }) {
-  const [items, setItems] = useState([])
-  const [totalCount, setTotalCount] = useState(0)
-  const [windowStart, setWindowStart] = useState(0)
+  const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT)
   const [isLoading, setIsLoading] = useState(false)
-  const activeLoadRef = useRef(0)
+  const pagesRef = useRef(new Map())
+  const pendingRef = useRef(new Map())
+  const failedRef = useRef(new Map())
+  const queueRef = useRef([])
+  const demandRef = useRef({ first: 0, last: -1, focus: 0, args: null })
+  const totalRef = useRef(0)
+  const seqRef = useRef(0)
   const paramsRef = useRef(initialParams)
-  const windowRangeRef = useRef({ start: 0, end: 0 })
-  const itemsMapRef = useRef(new Map())
-  const idIndexMapRef = useRef(new Map())
-  const loadSequenceRef = useRef(0)
+  const retryTimerRef = useRef(null)
+  const pumpRef = useRef(null)
+  const ensureRef = useRef(null)
 
-  const maxWindowSize = windowSize * 2
-
-  const cleanupMaps = useCallback((indexToRemove) => {
-    const track = itemsMapRef.current.get(indexToRemove)
-    if (track) {
-      idIndexMapRef.current.delete(track.id)
+  const publish = useCallback(() => {
+    const pages = pagesRef.current
+    if (pages.size === 0) {
+      setSnapshot({ items: [], windowStart: 0, totalCount: totalRef.current })
+      return
     }
-    itemsMapRef.current.delete(indexToRemove)
+    let minPage = Infinity
+    let maxPage = -1
+    for (const page of pages.keys()) {
+      if (page < minPage) minPage = page
+      if (page > maxPage) maxPage = page
+    }
+    const start = minPage * pageSize
+    const end = maxPage * pageSize + pages.get(maxPage).length
+    const items = new Array(Math.max(0, end - start)).fill(null)
+    for (const [page, list] of pages) {
+      const offset = page * pageSize - start
+      for (let i = 0; i < list.length; i++) items[offset + i] = list[i]
+    }
+    setSnapshot({ items, windowStart: start, totalCount: Math.max(totalRef.current, end) })
+  }, [pageSize])
+
+  const evict = useCallback(() => {
+    const pages = pagesRef.current
+    if (pages.size <= maxPages) return
+    const { first, last, focus } = demandRef.current
+    const candidates = [...pages.keys()]
+      .filter(page => page < first || page > last)
+      .sort((a, b) => Math.abs(b - focus) - Math.abs(a - focus))
+    for (const page of candidates) {
+      if (pages.size <= maxPages) break
+      pages.delete(page)
+    }
+  }, [maxPages])
+
+  const scheduleRetry = useCallback(() => {
+    if (retryTimerRef.current) return
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null
+      const args = demandRef.current.args
+      if (args) ensureRef.current?.(...args)
+    }, RETRY_DELAY_MS)
   }, [])
 
-  const setTrackInMap = useCallback((index, track) => {
-    if (idIndexMapRef.current.has(track.id)) {
-      const oldIndex = idIndexMapRef.current.get(track.id)
-      if (oldIndex !== index) {
-        itemsMapRef.current.delete(oldIndex)
+  const loadPage = useCallback((page) => {
+    const seq = seqRef.current
+    const skip = page * pageSize
+    const task = (async () => {
+      try {
+        const result = await retryableAPICall(
+          () => fetchFn(skip, pageSize, { ...paramsRef.current }),
+          `Load tracks (start=${skip})`
+        )
+        if (seq !== seqRef.current) return
+        const list = result?.items || result?.tracks || []
+        const total = result?.total || result?.total_tracks || 0
+        if (list.length === 0 && skip < totalRef.current) {
+          failedRef.current.set(page, performance.now())
+          scheduleRetry()
+          return
+        }
+        totalRef.current = total || Math.max(totalRef.current, skip + list.length)
+        failedRef.current.delete(page)
+        pagesRef.current.set(page, list)
+        evict()
+        publish()
+      } catch (error) {
+        if (error?.name === 'AbortError' || seq !== seqRef.current) return
+        logger.error('[VirtualWindow] Page load failed:', page, error)
+        failedRef.current.set(page, performance.now())
+        scheduleRetry()
+      } finally {
+        if (seq === seqRef.current) {
+          pendingRef.current.delete(page)
+          setIsLoading(pendingRef.current.size > 0)
+          pumpRef.current?.()
+        }
       }
-    }
-
-    if (itemsMapRef.current.has(index)) {
-      const existingTrack = itemsMapRef.current.get(index)
-      if (existingTrack.id !== track.id) {
-        idIndexMapRef.current.delete(existingTrack.id)
-      }
-    }
-
-    itemsMapRef.current.set(index, track)
-    idIndexMapRef.current.set(track.id, index)
-  }, [])
-
-  const loadWindow = useCallback(async (targetStart, params = {}, shouldReplace = false) => {
-    const mySequence = loadSequenceRef.current
-    activeLoadRef.current++
+    })()
+    pendingRef.current.set(page, task)
     setIsLoading(true)
+    return task
+  }, [fetchFn, pageSize, publish, evict, scheduleRetry])
 
-    try {
-      const effectiveStart = Math.max(0, targetStart)
-      const result = await retryableAPICall(
-        () => fetchFn(effectiveStart, windowSize, { ...paramsRef.current, ...params }),
-        `Load tracks (start=${effectiveStart})`
-      )
-
-      if (mySequence !== loadSequenceRef.current) {
-        return
+  const pump = useCallback(() => {
+    const queue = queueRef.current
+    while (pendingRef.current.size < MAX_CONCURRENT_PAGES && queue.length) {
+      const page = queue.shift()
+      if (pagesRef.current.has(page) || pendingRef.current.has(page)) continue
+      const failedAt = failedRef.current.get(page)
+      if (failedAt && performance.now() - failedAt < RETRY_DELAY_MS) {
+        scheduleRetry()
+        continue
       }
-
-      const newTracks = result.items || result.tracks || []
-      const total = result.total || result.total_tracks || newTracks.length
-
-      if (shouldReplace) {
-        itemsMapRef.current.clear()
-        idIndexMapRef.current.clear()
-        windowRangeRef.current = { start: effectiveStart, end: effectiveStart + newTracks.length }
-
-        newTracks.forEach((track, idx) => {
-          const absIndex = effectiveStart + idx
-          itemsMapRef.current.set(absIndex, track)
-          idIndexMapRef.current.set(track.id, absIndex)
-        })
-
-        setWindowStart(effectiveStart)
-        setItems([...newTracks])
-        setTotalCount(total)
-        return
-      }
-
-      newTracks.forEach((track, idx) => {
-        const absoluteIndex = effectiveStart + idx
-        setTrackInMap(absoluteIndex, track)
-      })
-
-      const currentRange = windowRangeRef.current
-      const newStart = Math.min(currentRange.start || effectiveStart, effectiveStart)
-      const newEnd = Math.max(currentRange.end || 0, effectiveStart + newTracks.length)
-
-      if (newEnd - newStart > maxWindowSize) {
-        const isBackwardLoad = effectiveStart < (currentRange.start || effectiveStart)
-
-        let trimStart, trimEnd
-        if (isBackwardLoad) {
-          trimStart = newStart
-          trimEnd = newStart + maxWindowSize
-          for (let i = trimEnd; i < newEnd; i++) {
-            cleanupMaps(i)
-          }
-        } else {
-          trimStart = Math.max(0, newEnd - maxWindowSize)
-          trimEnd = newEnd
-          for (let i = newStart; i < trimStart; i++) {
-            cleanupMaps(i)
-          }
-        }
-
-        windowRangeRef.current = { start: trimStart, end: trimEnd }
-
-        const trimmedItems = []
-        for (let i = trimStart; i < trimEnd; i++) {
-          trimmedItems.push(itemsMapRef.current.get(i) || null)
-        }
-
-        setWindowStart(trimStart)
-        setItems(trimmedItems)
-      } else {
-        windowRangeRef.current = { start: newStart, end: newEnd }
-
-        const mergedItems = []
-        for (let i = newStart; i < newEnd; i++) {
-          mergedItems.push(itemsMapRef.current.get(i) || null)
-        }
-
-        setWindowStart(newStart)
-        setItems(mergedItems)
-      }
-
-      setTotalCount(total)
-    } catch (error) {
-      if (error?.name === 'AbortError') return
-      logger.error('[VirtualWindow] Load failed:', error)
-    } finally {
-      activeLoadRef.current--
-      if (activeLoadRef.current <= 0) {
-        activeLoadRef.current = 0
-        setIsLoading(false)
-      }
+      void loadPage(page)
     }
-  }, [fetchFn, windowSize, maxWindowSize, cleanupMaps, setTrackInMap])
+  }, [loadPage, scheduleRetry])
 
-  const loadDirection = useCallback(async (direction) => {
-    const currentRange = windowRangeRef.current
-    if (currentRange.end - currentRange.start === 0) return
-
-    const step = Math.floor(windowSize / 2)
-    const newStart = direction === 'forward'
-      ? currentRange.end
-      : Math.max(0, currentRange.start - step)
-
-    if (direction === 'forward' && currentRange.end >= totalCount) {
-      return
+  const ensureRange = useCallback((start, end, focusIndex = start) => {
+    demandRef.current.args = [start, end, focusIndex]
+    const total = totalRef.current
+    const upper = total > 0 ? Math.min(end, total) : end
+    const lower = Math.max(0, start)
+    if (upper <= lower) return
+    const first = Math.floor(lower / pageSize)
+    const last = Math.floor((upper - 1) / pageSize)
+    const focus = Math.floor(Math.max(lower, Math.min(focusIndex, upper - 1)) / pageSize)
+    demandRef.current.first = first
+    demandRef.current.last = last
+    demandRef.current.focus = focus
+    const wanted = []
+    for (let page = first; page <= last; page++) {
+      if (!pagesRef.current.has(page) && !pendingRef.current.has(page)) wanted.push(page)
     }
-    if (direction === 'backward' && currentRange.start === 0) {
-      return
-    }
+    wanted.sort((a, b) => Math.abs(a - focus) - Math.abs(b - focus))
+    queueRef.current = wanted
+    pump()
+  }, [pageSize, pump])
 
-    await loadWindow(newStart, paramsRef.current, false)
-  }, [windowSize, totalCount, loadWindow])
+  useEffect(() => {
+    pumpRef.current = pump
+    ensureRef.current = ensureRange
+  }, [pump, ensureRange])
 
-  const loadForward = useCallback(() => loadDirection('forward'), [loadDirection])
-  const loadBackward = useCallback(() => loadDirection('backward'), [loadDirection])
+  useEffect(() => () => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+  }, [])
 
   const reset = useCallback(async (params = {}) => {
-    loadSequenceRef.current++
-    activeLoadRef.current = 0
+    seqRef.current++
     paramsRef.current = { ...paramsRef.current, ...params }
-    itemsMapRef.current.clear()
-    idIndexMapRef.current.clear()
-    windowRangeRef.current = { start: 0, end: 0 }
-    setItems([])
-    setTotalCount(0)
-    setWindowStart(0)
-    await loadWindow(0, params, true)
-  }, [loadWindow])
+    pagesRef.current.clear()
+    pendingRef.current.clear()
+    failedRef.current.clear()
+    queueRef.current = []
+    demandRef.current = { first: 0, last: -1, focus: 0, args: null }
+    totalRef.current = 0
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
+    setSnapshot(EMPTY_SNAPSHOT)
+    await loadPage(0)
+  }, [loadPage])
 
   const updateParams = useCallback(async (params) => {
     await reset(params)
   }, [reset])
 
-  const hasMore = useMemo(() => {
-    return windowRangeRef.current.end < totalCount
-  }, [totalCount, items])
-
-  const windowEnd = useMemo(() => {
-    return windowRangeRef.current.end
-  }, [items])
-
   return {
-    items,
-    totalCount,
-    windowStart,
-    windowEnd,
+    items: snapshot.items,
+    totalCount: snapshot.totalCount,
+    windowStart: snapshot.windowStart,
+    windowEnd: snapshot.windowStart + snapshot.items.length,
     isLoading,
-    hasMore,
-    loadWindow,
-    loadForward,
-    loadBackward,
+    hasMore: snapshot.windowStart + snapshot.items.length < snapshot.totalCount,
+    ensureRange,
     reset,
     updateParams
   }
-
 }

@@ -1,20 +1,109 @@
 import { X, Radio, Heart, Star, Ban, TrendingUp } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { useState, useCallback, memo, useMemo, useEffect } from 'react'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
+import { flushSync } from 'react-dom'
+import { useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUIState } from '../contexts/UIStateContext'
 import { usePlayback } from '../contexts/PlaybackContext'
-import { useArtwork } from '../contexts/UIStateContext'
+import { useArtworkThumb } from '../contexts/UIStateContext'
 import { getFallbackGradientClass } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
 import { PanelHeader } from './Panel'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { Scroller } from './Scroller'
+import { MOTION, PRESETS, TWEEN } from '../lib/motion'
+import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
+
+const QUEUE_ROW = PRESETS.listReorder
+const QUEUE_ITEM_VARIANTS = {
+  exit: (mode) => mode === 'bulk' ? QUEUE_ROW.bulkExit : QUEUE_ROW.exit
+}
+const QUEUE_ROW_FLASH_TRANSITION = { ...MOTION.settle, layout: TWEEN.layout }
+const BULK_REMOVAL_THRESHOLD = 2
+const QUEUE_LIST_STYLE = { overflowAnchor: 'none' }
+const CONTENT_HOLD_MS = 1500
+const FOLLOW_USER_SCROLL_GRACE_MS = 4000
+const FOLLOW_DELAY_MS = 120
+const FOLLOW_MARGIN_PX = 24
+const HIGHLIGHT_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: { duration: 0 } }
+const HIGHLIGHT_FLASH_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: MOTION.settle }
+
+const NowPlayingHighlight = memo(function NowPlayingHighlight({ box, ringColor, background, flashing, glowRef }) {
+  useEffect(() => {
+    if (flashing) arrivalGlow(glowRef.current, true)
+  }, [flashing])
+
+  return (
+    <motion.div
+      layout
+      layoutDependency={box}
+      initial={false}
+      animate={{
+        opacity: box.visible ? 1 : 0,
+        scale: flashing ? [1, 1.03, 1] : 1
+      }}
+      transition={flashing ? HIGHLIGHT_FLASH_TRANSITION : HIGHLIGHT_TRANSITION}
+      className="absolute left-0 right-0 pointer-events-none"
+      style={{ top: box.top, height: box.height }}
+    >
+      <div
+        className="absolute inset-0 rounded-md transition-colors"
+        style={{ backgroundColor: background, boxShadow: `0 0 0 2px ${ringColor}` }}
+      />
+      <div
+        ref={glowRef}
+        className="absolute inset-0 rounded-md opacity-0"
+        style={{ boxShadow: `0 0 0 6px ${ringColor}80, 0 0 20px ${ringColor}40` }}
+      />
+    </motion.div>
+  )
+})
+
+const Equalizer = memo(function Equalizer({ playing }) {
+  const ref = useRef(null)
+
+  useEffect(() => watchOffscreen(ref.current), [])
+
+  return (
+    <span ref={ref} className="ui-eq" data-playing={playing ? 'true' : 'false'} aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  )
+})
+
+const BADGE_EXIT = { opacity: 0, transition: TWEEN.exit }
+
+const PlayingBadge = memo(function PlayingBadge({ active, playing, background, color }) {
+  return (
+    <AnimatePresence initial={false}>
+      {active && (
+        <motion.div
+          key="playing"
+          initial={false}
+          exit={BADGE_EXIT}
+          className="ui-badge-in flex items-center gap-1.5 px-2 py-1 text-xs rounded-full font-semibold"
+          style={{ backgroundColor: background, color }}
+        >
+          <Equalizer playing={playing} />
+          Playing
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+})
 
 const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
   const { getLikeBadgeBg, getSuperLikeBadgeBg, getBanBadgeBg, getPrimaryText } = useDynamicTheme()
+  const [shown, setShown] = useState(preference)
+  const [animate, setAnimate] = useState(false)
+  if (shown !== preference) {
+    setShown(preference)
+    setAnimate(!!preference)
+  }
 
   if (!preference) return null
 
@@ -30,7 +119,7 @@ const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
   const Icon = badge.icon
 
   return (
-    <div style={{ background: badge.getBg(), color: getPrimaryText() }} className="rounded-full p-1.5" title={preference.replace('_', ' ')}>
+    <div key={preference} style={{ background: badge.getBg(), color: getPrimaryText() }} className={`rounded-full p-1.5 ${animate ? 'ui-pop' : ''}`} title={preference.replace('_', ' ')}>
       <Icon size={12} fill={badge.fill ? 'currentColor' : 'none'} />
     </div>
   )
@@ -38,21 +127,24 @@ const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
 
 const TrackArtwork = memo(function TrackArtwork({ track }) {
   const [artworkError, setArtworkError] = useState(false)
-  const artworkUrl = useArtwork(track.id, track.has_artwork)
+  const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
 
   if (track.has_artwork && !artworkError) {
     return (
       <img
+        ref={noteImageMount}
+        data-queue-art
         src={artworkUrl}
         alt={track.title || 'Track artwork'}
         className="w-12 h-12 rounded object-cover flex-shrink-0"
+        onLoad={revealOnLoad}
         onError={() => setArtworkError(true)}
       />
     )
   }
 
   return (
-    <div className={`w-12 h-12 rounded flex-shrink-0 bg-gradient-to-br ${getFallbackGradientClass(track.id)} flex items-center justify-center text-2xl`}>
+    <div data-queue-art className={`w-12 h-12 rounded flex-shrink-0 bg-gradient-to-br ${getFallbackGradientClass(track.id)} flex items-center justify-center text-2xl`}>
       🎵
     </div>
   )
@@ -63,7 +155,7 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
   const { radioState, engineState } = useUIState()
-  const { queue, currentTrack } = engineState
+  const { queue, currentTrack, currentIndex, is_playing: isPlayingNow } = engineState
   const currentTrackId = currentTrack?.id
   const activeSeedMode = radioState.activeSeedMode
   const {
@@ -147,8 +239,88 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   }, [analyticsInteraction, onAnalytics])
 
   const visibleQueue = useMemo(() => {
-    return queue.filter(track => !removingTrackIds.has(track.id))
+    const occurrences = new Map()
+    return queue
+      .filter(track => !removingTrackIds.has(track.id))
+      .map(track => {
+        const occurrence = occurrences.get(track.id) || 0
+        occurrences.set(track.id, occurrence + 1)
+        return { track, key: `${track.id}-${occurrence}` }
+      })
   }, [queue, removingTrackIds])
+
+  const [contentHeight, setContentHeight] = useState(0)
+  const [removalState, setRemovalState] = useState({ items: visibleQueue, removed: 0, heldHeight: 0 })
+  if (removalState.items !== visibleQueue) {
+    const nextKeys = new Set(visibleQueue.map(item => item.key))
+    const removed = removalState.items.reduce((count, item) => count + (nextKeys.has(item.key) ? 0 : 1), 0)
+    const heldHeight = removed > 0 ? Math.max(removalState.heldHeight, contentHeight) : removalState.heldHeight
+    setRemovalState({ items: visibleQueue, removed, heldHeight })
+  }
+  const reduceMotion = useReducedMotion()
+  const exitMode = reduceMotion || removalState.removed > BULK_REMOVAL_THRESHOLD ? 'bulk' : 'single'
+  const layoutKey = useMemo(() => visibleQueue.map(item => item.key).join(','), [visibleQueue])
+  const currentKey = useMemo(() => {
+    if (!currentTrackId) return null
+    const indexed = queue[currentIndex]
+    const exact = indexed?.id === currentTrackId ? visibleQueue.find(item => item.track === indexed) : null
+    return (exact ?? visibleQueue.find(item => item.track.id === currentTrackId))?.key ?? null
+  }, [queue, currentIndex, visibleQueue, currentTrackId])
+  const hasQueue = queue.length > 0
+
+  const glowRef = useRef(null)
+  const previousKeyRef = useRef(currentKey)
+
+  const listRef = useRef(null)
+  const holdRef = useRef(null)
+  const [highlightBox, setHighlightBox] = useState(null)
+
+  const measureHighlight = useCallback(() => {
+    const list = listRef.current
+    if (!list) return
+    const row = currentKey ? list.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`) : null
+    setHighlightBox(prev => {
+      if (!row) return prev && prev.visible ? { ...prev, visible: false } : prev
+      const top = row.offsetTop
+      const height = row.offsetHeight
+      if (prev && prev.visible && prev.top === top && prev.height === height) return prev
+      return { top, height, visible: true }
+    })
+  }, [currentKey])
+
+  const measureHighlightRef = useRef(measureHighlight)
+
+  useLayoutEffect(() => {
+    measureHighlightRef.current = measureHighlight
+    queueMicrotask(() => flushSync(() => measureHighlightRef.current()))
+  }, [measureHighlight, layoutKey])
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      setContentHeight(list.offsetHeight)
+      measureHighlightRef.current()
+    })
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!removalState.heldHeight) return
+    const timeoutId = setTimeout(() => {
+      const hold = holdRef.current
+      const scroller = hold?.closest('[data-scroller]')
+      let needed = 0
+      if (hold && scroller && listRef.current) {
+        const offset = hold.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+        const required = Math.ceil(scroller.scrollTop + scroller.clientHeight - offset)
+        needed = required > listRef.current.offsetHeight ? required : 0
+      }
+      setRemovalState(prev => prev.heldHeight !== needed ? { ...prev, heldHeight: needed } : prev)
+    }, CONTENT_HOLD_MS)
+    return () => clearTimeout(timeoutId)
+  }, [removalState])
 
   useEffect(() => {
     if (queue.length === 0) {
@@ -166,6 +338,48 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
     }
   }, [queue])
 
+  const lastUserScrollRef = useRef(0)
+
+  useEffect(() => {
+    const scroller = listRef.current?.closest('[data-scroller]')
+    if (!scroller) return
+    const markUserScroll = () => { lastUserScrollRef.current = performance.now() }
+    const options = { passive: true }
+    scroller.addEventListener('wheel', markUserScroll, options)
+    scroller.addEventListener('touchmove', markUserScroll, options)
+    scroller.addEventListener('pointerdown', markUserScroll, options)
+    scroller.addEventListener('keydown', markUserScroll, options)
+    return () => {
+      scroller.removeEventListener('wheel', markUserScroll, options)
+      scroller.removeEventListener('touchmove', markUserScroll, options)
+      scroller.removeEventListener('pointerdown', markUserScroll, options)
+      scroller.removeEventListener('keydown', markUserScroll, options)
+    }
+  }, [hasQueue])
+
+  useEffect(() => {
+    const previousKey = previousKeyRef.current
+    previousKeyRef.current = currentKey
+    if (!previousKey || !currentKey || previousKey === currentKey) return
+    arrivalGlow(glowRef.current)
+    const row = listRef.current?.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`)
+    arrivalPulse(row?.querySelector('[data-queue-art]'))
+    const timeoutId = setTimeout(() => {
+      const target = listRef.current?.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`)
+      const scroller = target?.closest('[data-scroller]')
+      if (!target || !scroller || scroller.clientHeight === 0) return
+      if (performance.now() - lastUserScrollRef.current < FOLLOW_USER_SCROLL_GRACE_MS) return
+      const scrollerRect = scroller.getBoundingClientRect()
+      const rowRect = target.getBoundingClientRect()
+      const fullyVisible = rowRect.top >= scrollerRect.top + FOLLOW_MARGIN_PX && rowRect.bottom <= scrollerRect.bottom - FOLLOW_MARGIN_PX
+      if (fullyVisible) return
+      const rowTop = rowRect.top - scrollerRect.top + scroller.scrollTop
+      const top = Math.max(0, rowTop - scroller.clientHeight * 0.25)
+      scroller.scrollTo({ top, behavior: reduceMotion ? 'auto' : 'smooth' })
+    }, FOLLOW_DELAY_MS)
+    return () => clearTimeout(timeoutId)
+  }, [currentKey, reduceMotion])
+
   useEffect(() => {
     if (currentTrackId && loadingTrackId === currentTrackId) {
       queueMicrotask(() => setLoadingTrackId(null))
@@ -175,157 +389,168 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
   const SeedIcon = seedMeta?.icon || Radio
 
-  if (!queue || queue.length === 0) {
-    return (
-      <div className="flex flex-col h-full relative">
-        <PanelHeader title="Queue" />
-        <div className="flex-1 p-6 text-center transition-colors duration-700" style={{ color: getGrey400() }}>
-          <p>Queue is empty</p>
-          <p className="text-sm mt-2" style={{ color: getGrey300() }}>Click tracks to play or add them to your queue</p>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="flex flex-col h-full relative">
         <PanelHeader title="Queue">
-          <div className="flex items-center gap-2">
-            <button
-              onPointerDown={seedInteraction.onPointerDown}
-              onPointerMove={seedInteraction.onPointerMove}
-              onPointerUp={handleSeedButtonClick}
-              disabled={queue.length === 0}
-              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed border"
-              style={{
-                color: activeSeedMode ? seedMeta.color : getPrimaryActionText(),
-                backgroundColor: activeSeedMode ? `${seedMeta.color}15` : 'transparent',
-                borderColor: activeSeedMode ? `${seedMeta.color}30` : 'transparent'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}25` : getButtonHoverBg()
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}15` : 'transparent'
-              }}
-              title={activeSeedMode ? `Active Seed: ${seedMeta.label}` : "Seed Radio"}
-            >
-              <SeedIcon size={16} />
-              {activeSeedMode ? seedMeta.label : "Seed Radio"}
-            </button>
-            <button
-              onPointerDown={analyticsInteraction.onPointerDown}
-              onPointerMove={analyticsInteraction.onPointerMove}
-              onPointerUp={handleAnalyticsButtonClick}
-              disabled={queue.length === 0}
-              className="p-2 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed border"
-              style={{
-                color: getGrey400(),
-                backgroundColor: 'transparent',
-                borderColor: 'transparent'
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = getButtonHoverBg()
-                e.currentTarget.style.color = getWhite()
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent'
-                e.currentTarget.style.color = getGrey400()
-              }}
-              title="Station Analytics"
-            >
-              <TrendingUp size={16} />
-            </button>
-          </div>
+          {hasQueue && (
+            <div className="flex items-center gap-2">
+              <button
+                onPointerDown={seedInteraction.onPointerDown}
+                onPointerMove={seedInteraction.onPointerMove}
+                onPointerUp={handleSeedButtonClick}
+                disabled={queue.length === 0}
+                className="ui-press flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
+                style={{
+                  color: activeSeedMode ? seedMeta.color : getPrimaryActionText(),
+                  backgroundColor: activeSeedMode ? `${seedMeta.color}15` : 'transparent',
+                  borderColor: activeSeedMode ? `${seedMeta.color}30` : 'transparent'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}25` : getButtonHoverBg()
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}15` : 'transparent'
+                }}
+                title={activeSeedMode ? `Active Seed: ${seedMeta.label}` : "Seed Radio"}
+              >
+                <SeedIcon size={16} />
+                {activeSeedMode ? seedMeta.label : "Seed Radio"}
+              </button>
+              <button
+                onPointerDown={analyticsInteraction.onPointerDown}
+                onPointerMove={analyticsInteraction.onPointerMove}
+                onPointerUp={handleAnalyticsButtonClick}
+                disabled={queue.length === 0}
+                className="ui-tap p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
+                style={{
+                  color: getGrey400(),
+                  backgroundColor: 'transparent',
+                  borderColor: 'transparent'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = getButtonHoverBg()
+                  e.currentTarget.style.color = getWhite()
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.color = getGrey400()
+                }}
+                title="Station Analytics"
+              >
+                <TrendingUp size={16} />
+              </button>
+            </div>
+          )}
         </PanelHeader>
 
+      <AnimatePresence>
+        {!hasQueue && (
+          <motion.div key="queue-empty" {...PRESETS.emptyState} className="absolute inset-x-0 top-0 p-6 text-center transition-colors duration-theme" style={{ color: getGrey400() }}>
+            <p>Queue is empty</p>
+            <p className="text-sm mt-2" style={{ color: getGrey300() }}>Click tracks to play or add them to your queue</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <Scroller className="flex-1">
-        <AnimatePresence initial={false}>
-          {visibleQueue.map((track, index) => {
-            const isPlaying = track.id === currentTrackId
-            const isLoading = loadingTrackId === track.id && !isPlaying
-            const uniqueKey = `${track.id}-${index}`
+        <div ref={holdRef} style={removalState.heldHeight ? { ...QUEUE_LIST_STYLE, minHeight: removalState.heldHeight } : QUEUE_LIST_STYLE}>
+          <div ref={listRef} className="relative">
+            {highlightBox && (
+              <NowPlayingHighlight
+                box={highlightBox}
+                ringColor={getPlayingRingColor()}
+                background={getPlayingBackground()}
+                flashing={reselectFlash !== null && reselectFlash === currentTrackId}
+                glowRef={glowRef}
+              />
+            )}
+            <AnimatePresence initial={false} custom={exitMode} mode="popLayout">
+              {visibleQueue.map(({ track, key: uniqueKey }) => {
+                const isPlaying = track.id === currentTrackId
+                const isLoading = loadingTrackId === track.id && !isPlaying
 
-            const isReselectFlashing = reselectFlash === track.id
+                const isReselectFlashing = reselectFlash === track.id
 
-            return (
-              <motion.div
-                key={uniqueKey}
-                initial={{ opacity: 0, x: -20 }}
-                animate={isReselectFlashing ? {
-                  opacity: 1,
-                  x: 0,
-                  scale: [1, 1.03, 1],
-                  boxShadow: [
-                    `0 0 0 2px ${getPlayingRingColor()}`,
-                    `0 0 0 6px ${getPlayingRingColor()}80, 0 0 20px ${getPlayingRingColor()}40`,
-                    `0 0 0 2px ${getPlayingRingColor()}`
-                  ]
-                } : { opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={isReselectFlashing ? { duration: 0.6, ease: 'easeOut' } : { duration: 0.2 }}
-                className="p-4 transition cursor-pointer rounded-md"
-                style={{
-                  borderBottom: `1px solid ${getPanelBorder()}`,
-                  ...(isPlaying && !isReselectFlashing ? {
-                    boxShadow: `0 0 0 2px ${getPlayingRingColor()}`,
-                    backgroundColor: getPlayingBackground()
-                  } : {})
-                }}
-                onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = getButtonHoverBg())}
-                onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
-                onPointerDown={playInteraction.onPointerDown}
-                onPointerMove={playInteraction.onPointerMove}
-                onPointerUp={(e) => handlePlay(e, track.id)}
-              >
-                <div className="flex items-center gap-3">
-                  <TrackArtwork track={track} />
+                return (
+                  <motion.div
+                    key={uniqueKey}
+                    data-queue-key={uniqueKey}
+                    layout="position"
+                    layoutDependency={layoutKey}
+                    initial={QUEUE_ROW.initial}
+                    animate={isReselectFlashing ? {
+                      opacity: 1,
+                      x: 0,
+                      scale: [1, 1.03, 1]
+                    } : QUEUE_ROW.animate}
+                    variants={QUEUE_ITEM_VARIANTS}
+                    custom={exitMode}
+                    exit="exit"
+                    transition={isReselectFlashing ? QUEUE_ROW_FLASH_TRANSITION : QUEUE_ROW.transition}
+                    className="relative p-4 transition-colors cursor-pointer rounded-md"
+                    style={{
+                      borderBottom: `1px solid ${getPanelBorder()}`,
+                      ...(isPlaying ? { backgroundColor: 'transparent' } : {})
+                    }}
+                    onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = getButtonHoverBg())}
+                    onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
+                    onPointerDown={playInteraction.onPointerDown}
+                    onPointerMove={playInteraction.onPointerMove}
+                    onPointerUp={(e) => handlePlay(e, track.id)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <TrackArtwork track={track} />
 
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate transition-colors duration-700" style={{ color: getWhite() }}>{track.title || 'Untitled'}</div>
-                    {track.artist_name && (
-                      <div className="text-sm truncate transition-colors duration-700" style={{ color: getGrey300() }}>{track.artist_name}</div>
-                    )}
-                    <div className="text-sm truncate transition-colors duration-700" style={{ color: getGrey400() }}>{track.style || 'No style'}</div>
-                  </div>
-
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {isLoading && (
-                      <motion.div
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 rounded-full"
-                        style={{
-                          border: `2px solid ${getLoadingSpinner()}`,
-                          borderTopColor: 'transparent'
-                        }}
-                      />
-                    )}
-                    {isPlaying && (
-                      <div className="px-2 py-1 text-xs rounded-full font-semibold" style={{ backgroundColor: getLoadingSpinner(), color: getWhite() }}>
-                        Playing
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate transition-colors duration-theme" style={{ color: getWhite() }}>{track.title || 'Untitled'}</div>
+                        {track.artist_name && (
+                          <div className="text-sm truncate transition-colors duration-theme" style={{ color: getGrey300() }}>{track.artist_name}</div>
+                        )}
+                        <div className="text-sm truncate transition-colors duration-theme" style={{ color: getGrey400() }}>{track.style || 'No style'}</div>
                       </div>
-                    )}
 
-                    {isAuthenticated && <PreferenceBadge preference={getPreference('track', track.id)} />}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {isLoading && (
+                          <div className="ui-pop w-5 h-5">
+                            <motion.div
+                              animate={{ rotate: 360 }}
+                              transition={MOTION.spin}
+                              className="w-5 h-5 rounded-full"
+                              style={{
+                                border: `2px solid ${getLoadingSpinner()}`,
+                                borderTopColor: 'transparent'
+                              }}
+                            />
+                          </div>
+                        )}
+                        <PlayingBadge
+                          active={isPlaying}
+                          playing={isPlayingNow}
+                          background={getLoadingSpinner()}
+                          color={getWhite()}
+                        />
 
-                    <button
-                      onPointerDown={removeInteraction.onPointerDown}
-                      onPointerMove={removeInteraction.onPointerMove}
-                      onPointerUp={(e) => handleRemove(e, track.id)}
-                      className="p-1 transition"
-                      style={{ color: getGrey400() }}
-                      onMouseEnter={(e) => e.currentTarget.style.color = getDangerActionText()}
-                      onMouseLeave={(e) => e.currentTarget.style.color = getGrey400()}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            )
-          })}
-        </AnimatePresence>
+                        {isAuthenticated && <PreferenceBadge preference={getPreference('track', track.id)} />}
+
+                        <button
+                          onPointerDown={removeInteraction.onPointerDown}
+                          onPointerMove={removeInteraction.onPointerMove}
+                          onPointerUp={(e) => handleRemove(e, track.id)}
+                          className="ui-tap p-1 transition-colors"
+                          style={{ color: getGrey400() }}
+                          onMouseEnter={(e) => e.currentTarget.style.color = getDangerActionText()}
+                          onMouseLeave={(e) => e.currentTarget.style.color = getGrey400()}
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )
+              })}
+            </AnimatePresence>
+          </div>
+        </div>
       </Scroller>
     </div>
   )

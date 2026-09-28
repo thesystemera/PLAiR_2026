@@ -3,6 +3,8 @@
 
 **Development Timeline:** < 3 months
 **Project Type:** Full-stack AI-powered music streaming platform with real-time voice interaction
+**Live:** https://plair.live ("PLAiR.fm" is the on-air brand name the DJs use)
+**Latest status (28 Sep 2026):** see `docs/HANDOVER_2026-09-28.md`. New systems (Radio Mode, stings and talking clock, City Pulse regional knowledge, listener location, news store, cost tracking, offline auto-switch) are summarised in `CLAUDE.md` section 15 and `docs/CITY_PULSE.md`.
 
 ---
 
@@ -41,17 +43,19 @@ PLAiR.fm is a next-generation music streaming platform designed for **user-uploa
 - **Framework:** FastAPI (async Python web framework)
 - **Languages:** Python 3.11+
 - **ORM:** SQLAlchemy (async)
-- **Database:** SQLite (async with aiosqlite)
+- **Database:** PostgreSQL 18 (asyncpg via SQLAlchemy; psycopg2 in sync services), 4 databases: `ai_radio` (users, devices, preferences, conversations, analytics), `ai_radio_catalog` (tracks), `ai_radio_user_content` (shoutouts), `ai_radio_embeddings` (TTS + category embeddings, caches). Migrated from SQLite on 2026-02-01.
 - **Vector Search:** Annoy (Approximate Nearest Neighbors)
 - **WebSocket:** Native WebSocket (asyncio-based)
-- **Audio Processing:** FFmpeg, Demucs, Whisper, ClearVoice
-- **AI/LLM:** Anthropic Claude API
-- **TTS:** ElevenLabs API
+- **Audio Processing:** FFmpeg, Demucs, Whisper (faster-whisper), ClearVoice, pedalboard
+- **Embeddings:** Local `google/flan-t5-large` encoder (1024-dim)
+- **AI/LLM:** Google Gemini via the `google-genai` SDK (`gemini-2.5-flash-lite` for DJ, command extraction and node routing; `gemini-2.5-pro` default)
+- **TTS:** Local Orpheus-3B engine (`tts_server/`, llama.cpp CUDA + SNAC ONNX decoder, separate process on 127.0.0.1:8090)
 - **Music Generation:** Suno API
 - **Payment Processing:** Stripe
 
 ### DevOps & Infrastructure
-- **Platform:** Windows Server with ProactorEventLoop
+- **Platform:** Windows with ProactorEventLoop
+- **GPU:** Backend and TTS engine pinned to a Quadro P6000 (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=0`); Whisper runs int8 (Pascal has no efficient float16)
 - **Web Server:** Nginx (reverse proxy, SSL termination)
 - **SSL/TLS:** Certbot (Let's Encrypt)
 - **Process Management:** Custom service orchestration
@@ -79,7 +83,7 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 
 ### Frontend Architecture
 
-#### State Management Contexts (12 specialized contexts)
+#### State Management Contexts (13 specialized contexts)
 
 **Core Engine Contexts:**
 - **UIStateContext** - Central SSOT for all UI state (visual state priority system, device management, playback state)
@@ -98,6 +102,7 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 - **PreferencesContext** - User preferences (likes, bans, super_likes)
 - **GenerationQueueContext** - AI music generation job tracking
 - **DynamicThemeContext** - Theme engine (category-based colors, interaction effects)
+- **DialogContext** - App-wide confirm/alert dialogs
 
 #### Advanced Frontend Features
 
@@ -132,7 +137,7 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 
 ### Backend Architecture
 
-#### Service-Oriented Architecture (60+ specialized services)
+#### Service-Oriented Architecture (75+ specialized services)
 
 **Playback & State Management (Core):**
 - **PlaybackState** - State machine for queue management, radio modes, device orchestration
@@ -141,9 +146,9 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 - **WebSocketService** - Connection pooling, session broadcasting, cleanup
 
 **Catalog & Vector Search (Semantic Discovery Engine):**
-- **CatalogVectorSearchService** - Semantic music discovery using Annoy index (1M+ embeddings, <200ms search)
-- **CatalogVectorDatabaseService** - Embedding storage, retrieval, and indexing
-- **CatalogDatabaseService** - Traditional CRUD operations (metadata, relationships)
+- **CatalogVectorSearchService** - Semantic music discovery using Annoy index (~3,300 tracks, one weighted vector per track built from 10 category embeddings, <200ms search)
+- **CatalogVectorDatabaseService** - Embedding storage (PostgreSQL `ai_radio_embeddings`), retrieval, and Annoy indexing (validated against the DB on startup; stale indexes rebuild)
+- **CatalogDatabaseService** - PostgreSQL catalog CRUD (synced from JSON metadata files on startup)
 - **10 Vector Search Categories per Track:** Each track has 10 separate vector embeddings for different semantic aspects:
   - `song_title` - Track title similarity
   - `primary_artist` - Main artist matching
@@ -166,11 +171,11 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 - **AudioClearVoiceService** - Speech enhancement (noise reduction, normalization)
 - **WhisperDualService** - Speech-to-text with word-level timestamps
 
-**AI DJ System (20+ services):**
+**AI DJ System (25 services in `server/services_radio/`):**
 - **DJPromptService** - Personality prompts (character, tone, knowledge base)
-- **DJCommandExecutor** - Command parser for AI-generated playback control
+- **DJCommandExecutor** - Parses and executes brace commands emitted by a second LLM pass (the "HAL11000" command extractor) after the DJ's spoken reply
 - **ConversationService** - User-DJ conversation history and context
-- **TTSGenerationService** - Text-to-speech with voice cloning
+- **TTSGenerationService** - Client for the local Orpheus-3B TTS engine (built-in voices per host, inline emotion tags), PCM→MP3, semantic clip cache
 - **TTSBroadcastService** - Real-time audio streaming to frontend
 - **TTSStreamPlanner** - Chunk timing and coordination
 - **ContextService** - Dynamic context injection (track info, weather, news, events)
@@ -208,19 +213,19 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 - **TTS Vector Database Cache:** Semantic caching for generated speech
   - Stores generated TTS audio with vector embeddings
   - Searches for semantically similar phrases before generating new audio
-  - **Cost Savings:** ~70% reduction in TTS API calls (reuses similar phrases)
+  - **Savings:** ~70% fewer TTS synthesis calls (reuses similar phrases; saves GPU time and latency now that TTS runs locally)
   - Example: "Here's a track by Nine Inch Nails" → reuses cached audio for similar artist intros
 - **Prompt Caching for Vector Search:**
-  - `CatalogVectorSearchPromptCacheService` - Caches Claude API prompt responses
-  - `UserContentVectorSearchPromptCacheService` - Caches user content search prompts
-  - **Cost Savings:** ~90% reduction in embedding generation API calls
-  - Persists embeddings across sessions (doesn't regenerate on every search)
+  - `CatalogVectorSearchPromptCacheService` - Caches Gemini query-analysis responses (intent + category weights), matched by query-embedding similarity
+  - `UserContentVectorSearchPromptCacheService` - Same for user content search
+  - **Cost Savings:** Skips repeat LLM query-analysis calls for similar searches
+  - Persists embeddings across sessions in PostgreSQL (doesn't regenerate on every search)
 - **Artwork Multi-Layer Cache:**
   - Memory Map (instant access, ~100 images)
   - IndexedDB (offline persistence, ~1000 images)
   - Cache API (Service Worker, ~5000 images)
   - **Cost Savings:** Eliminates repeated CDN/S3 requests (bandwidth reduction)
-- **In-Memory Preferences Cache:**
+- **In-Memory User Data Cache (`user_data_cache_service.py`):**
   - User likes/bans/super_likes cached in memory (no DB query per track)
   - **Performance:** <1ms preference lookup vs. ~20ms DB query
   - **Cost Savings:** Reduces database load by ~95% for preference checks
@@ -230,8 +235,7 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
   - **Cost Savings:** ~40% reduction in connection overhead
 - **Efficient WebSocket Broadcasting:**
   - Per-session broadcasting (not global broadcast)
-  - Only sends state diffs (not full state on every change)
-  - **Cost Savings:** ~80% reduction in WebSocket bandwidth
+  - Full `playback_state` snapshots sent only to the affected session's devices
 
 **Total Estimated Cost Savings:** ~60-70% reduction in operational costs (API calls, bandwidth, compute) through intelligent caching and optimization strategies.
 
@@ -242,11 +246,11 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 ### Core Features
 
 **1. AI DJ with Voice Interaction**
-- Natural language processing via Claude API
-- Real-time text-to-speech streaming (ElevenLabs)
+- Natural language processing via Google Gemini
+- Real-time text-to-speech streaming (local Orpheus-3B engine, inline emotion tags like `<laugh>`, `<sigh>`)
 - Personality system with customizable traits
 - Context-aware responses (weather, news, events, track metadata)
-- Command execution ({play}, {seed}, {pause}, etc.)
+- Command execution ({play}, {seed}, {pause}, etc.) via a second LLM pass that extracts brace commands from the spoken reply
 
 **2. Advanced Music Discovery**
 - Semantic vector search (10 search categories: artist, genre, mood, style, theme, lyrics, vocal, etc.)
@@ -336,7 +340,7 @@ FFT processing uses for loops instead of array methods to eliminate garbage coll
 ### 5. Multi-Vector Semantic Search Engine
 Custom-built semantic search system with 10 independent vector embeddings per track:
 - Each track indexed across 10 semantic dimensions (artist, genre, mood, style, theme, lyrics, vocal, etc.)
-- Annoy approximate nearest neighbors (O(log n) search on 1M+ embeddings)
+- Annoy approximate nearest neighbors (O(log n) search; one weighted vector per track)
 - Hybrid ranking (vector similarity + user preference weighting)
 - Enables "find me aggressive industrial tracks with dystopian themes" type queries
 - Separate vector database for user-generated content (voice recordings searchable by semantic meaning)
@@ -364,7 +368,7 @@ Vector-based caching for text-to-speech generation:
 - Generated TTS audio stored with vector embeddings of the text
 - Searches for semantically similar phrases before generating new audio
 - Example: "Here's a song by The Cure" can reuse cached audio from "Here's a track by The Cure"
-- ~70% cost reduction on TTS API calls (massive savings for high-frequency phrases)
+- ~70% fewer TTS synthesis calls (big GPU-time and latency savings for high-frequency phrases)
 - Voice-aware (caches per voice/persona to maintain consistency)
 
 ---
@@ -392,7 +396,7 @@ Vector-based caching for text-to-speech generation:
 
 **Documentation:**
 - Comprehensive CLAUDE.md (project instructions for AI assistant)
-- Architecture documentation (SSOT pattern, crossfade handoff, viewport usage)
+- Architecture documentation in `docs/` (SSOT pattern, playback architecture, vector DB pattern, node system, offline mode)
 - Inline comments for complex logic
 - Service-oriented architecture (single responsibility principle)
 
@@ -404,9 +408,9 @@ Vector-based caching for text-to-speech generation:
 - Optimistic updates
 
 **Code Organization:**
-- 60+ specialized backend services
-- 12 frontend contexts (state management)
-- 40+ React components
+- 75+ specialized backend services
+- 13 frontend contexts (state management)
+- 35+ React components
 - 10+ custom hooks
 - Clear separation of concerns (engines → state → views)
 
@@ -422,7 +426,7 @@ Vector-based caching for text-to-speech generation:
 
 **Backend:**
 - < 50ms API response time (cached)
-- < 200ms vector search (1M+ embeddings)
+- < 200ms vector search
 - Real-time WebSocket latency < 30ms
 - Multi-bitrate transcoding in real-time
 
@@ -431,34 +435,34 @@ Vector-based caching for text-to-speech generation:
 ## Project Statistics
 
 **Lines of Code (estimated):**
-- Frontend: ~15,000 lines (JS/JSX)
-- Backend: ~20,000 lines (Python)
+- Frontend: ~29,000 lines (JS/JSX)
+- Backend: ~36,500 lines (Python)
 - GLSL Shaders: ~500 lines
-- Total: ~35,500 lines
+- Total: ~66,000 lines
 
 **File Count:**
-- Frontend: ~100 files
-- Backend: ~80 services
-- Documentation: ~10 files
-- Total: ~190 files
+- Frontend: ~85 source files
+- Backend: ~120 Python files (76 services)
+- Documentation: ~18 files
+- Total: ~220 files
 
-**Technologies Used:** 15+ (React, FastAPI, WebSocket, GLSL, Python, JavaScript, SQLAlchemy, Annoy, FFmpeg, Whisper, Demucs, Claude API, ElevenLabs, Suno, Stripe)
+**Technologies Used:** 15+ (React, FastAPI, WebSocket, GLSL, Python, JavaScript, PostgreSQL, SQLAlchemy, Annoy, FFmpeg, Whisper, Demucs, Gemini, Orpheus TTS / llama.cpp, Suno, Stripe)
 
-**External APIs Integrated:** 7 (Claude, ElevenLabs, Suno, Stripe, News API, Events API, Geolocation)
+**External APIs Integrated:** 6 (Gemini, Suno, Stripe, News API, Events API, Geolocation)
 
-**Frontend Contexts:** 12 specialized state management contexts
+**Frontend Contexts:** 13 specialized state management contexts
 
-**Backend Services:** 60+ specialized services
+**Backend Services:** 75+ specialized services (51 in `server/services/`, 25 in `server/services_radio/`)
 
 **Audio Formats Supported:** MP3, WAV (multi-bitrate)
 
 **Responsive Breakpoints:** 7 (xs, sm, md, lg, xl, 2xl, 3xl)
 
-**Vector Embeddings:** 10 per track (1M+ total embeddings across catalog)
+**Vector Embeddings:** 10 per track (~33,000 across the ~3,300-track catalog)
 
 **Context Nodes:** 15+ specialized context providers for real-time data gathering
 
-**Caching Layers:** 7 (Memory Map, IndexedDB, Cache API, TTS Vector DB, Prompt Cache, Preferences Cache, Connection Pool)
+**Caching Layers:** 7 (Memory Map, IndexedDB, Cache API, TTS Vector DB, Prompt Cache, User Data Cache, Connection Pool)
 
 **Cost Reduction:** ~60-70% operational cost savings through intelligent caching
 
@@ -468,11 +472,11 @@ Vector-based caching for text-to-speech generation:
 
 1. **Survived a platform shutdown and rebuilt from scratch** - Original PLAiR app was killed by Spotify's Thanksgiving 2024 API shutdown (covered by [The Verge](https://www.theverge.com/2024/12/5/24311523/spotify-locked-down-apis-developers) and [TechCrunch](https://techcrunch.com/2024/11/27/spotify-cuts-developer-access-to-several-of-its-recommendation-features/)). Rather than give up, rebuilt with 100% owned infrastructure in < 3 months. Demonstrates resilience, adaptability, and rapid development capability.
 
-2. **Full-stack mastery** - Frontend (React), Backend (Python/FastAPI), DevOps (Nginx, SSL), Database (SQLAlchemy)
+2. **Full-stack mastery** - Frontend (React), Backend (Python/FastAPI), DevOps (Nginx, SSL), Database (PostgreSQL, SQLAlchemy)
 
 3. **Advanced architecture** - Publisher/Subscriber, SSOT pattern, multi-device orchestration, state machines
 
-4. **AI integration** - LLM (Claude), TTS (ElevenLabs), STT (Whisper), Music Generation (Suno), Source Separation (Demucs)
+4. **AI integration** - LLM (Gemini), TTS (self-hosted Orpheus-3B on llama.cpp), STT (Whisper), Music Generation (Suno), Source Separation (Demucs)
 
 5. **Real-time systems** - WebSocket state sync, audio streaming, TTS broadcasting
 
@@ -488,13 +492,13 @@ Vector-based caching for text-to-speech generation:
 
 11. **Cost optimization** - 60-70% operational cost reduction through intelligent caching (TTS vector cache, prompt cache, multi-layer artwork cache)
 
-12. **Vector search expertise** - Custom multi-vector semantic search engine (10 embeddings per track, 1M+ total, <200ms search)
+12. **Vector search expertise** - Custom multi-vector semantic search engine (10 embeddings per track, <200ms search)
 
 13. **3D graphics** - AI-powered depth map generation, parallax artwork rendering, real-time visual effects
 
 14. **Real-time data integration** - Dynamic context gathering (weather, news, events, user data) with intelligent routing
 
-15. **Cost-conscious engineering** - Semantic TTS caching (~70% savings), prompt caching (~90% savings), efficient WebSocket broadcasting (~80% bandwidth reduction)
+15. **Cost-conscious engineering** - Semantic TTS caching (~70% fewer synthesis calls), LLM query-analysis caching, self-hosted TTS (no per-character API fees), per-session WebSocket broadcasting
 
 ---
 
@@ -537,18 +541,18 @@ PLAiR.fm demonstrates mastery of modern web development, real-time systems, AI i
 
 **Technical Breadth:**
 - **Frontend:** React, GLSL shaders, WebGL, dual-buffer audio, A/B crossfading, 3D parallax effects
-- **Backend:** Python/FastAPI, 60+ microservices, vector databases, semantic search, real-time context gathering
-- **AI/ML:** Claude API, ElevenLabs TTS, Whisper STT, Suno music generation, Demucs source separation, depth map generation
+- **Backend:** Python/FastAPI, 75+ services, PostgreSQL, vector databases, semantic search, real-time context gathering
+- **AI/ML:** Gemini LLM, self-hosted Orpheus-3B TTS, Whisper STT, Suno music generation, Demucs source separation, depth map generation
 - **Real-time:** WebSocket state sync, TTS streaming, multi-device orchestration, context injection
 - **Cost Engineering:** Semantic TTS caching, prompt caching, multi-layer artwork cache (60-70% cost reduction)
 - **Graphics:** GLSL shader programming, FFT audio analysis, parallax depth rendering, zero-allocation processing
 
 **Key Achievements:**
 - Built in **< 3 months** (demonstrates rapid development capability)
-- **35,500+ lines of code** across 15+ technologies
-- **60+ backend services** (microservice architecture at scale)
-- **10 vector embeddings per track** (1M+ total embeddings, <200ms search)
-- **7 caching layers** (memory, IndexedDB, Cache API, TTS vector DB, prompt cache, preferences, connection pool)
+- **65,000+ lines of code** across 15+ technologies
+- **75+ backend services** (service-oriented architecture at scale)
+- **10 vector embeddings per track** (<200ms search)
+- **7 caching layers** (memory, IndexedDB, Cache API, TTS vector DB, prompt cache, user data cache, connection pool)
 - **60-70% operational cost savings** through intelligent caching strategies
 - **3D artwork system** with AI-generated depth maps for parallax effects
 - **Real-time context gathering** from 15+ specialized data sources

@@ -1,5 +1,28 @@
 import { logger } from './logger'
+import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
+
+const THUMB_SIZES = [256, 512, 768]
+
+export function isSlowConnection() {
+  const connection = typeof navigator !== 'undefined' ? navigator.connection : null
+  if (!connection) return false
+  return !!connection.saveData || ['slow-2g', '2g', '3g'].includes(connection.effectiveType)
+}
+
+function pickThumbSize() {
+  if (typeof window === 'undefined') return 512
+  if (isSlowConnection()) return THUMB_SIZES[0]
+  const dpr = Math.min(window.devicePixelRatio || 1, 3)
+  const width = window.innerWidth || 1024
+  const height = window.innerHeight || 768
+  const phoneLandscape = width > height && height < 640
+  const cardCss = width < 1024 ? width / (phoneLandscape ? 4 : 2) : 320
+  const needed = cardCss * dpr * 0.85
+  return THUMB_SIZES.find(size => size >= needed) || THUMB_SIZES[THUMB_SIZES.length - 1]
+}
+
+export const ARTWORK_THUMB_SIZE = pickThumbSize()
 
 const CACHE_CONFIGS = {
   artwork: {
@@ -9,6 +32,17 @@ const CACHE_CONFIGS = {
     metadataKey: 'artwork-metadata',
     getUrl: (id) => `/api/artwork/${id}`,
     logPrefix: '[ArtworkCache]'
+  },
+  artwork_thumb: {
+    cacheName: 'artwork-thumb-cache-v1',
+    maxItems: 1500,
+    maxMemoryItems: 400,
+    expiryMs: 14 * 24 * 60 * 60 * 1000,
+    metadataKey: 'artwork-thumb-metadata',
+    getUrl: (id) => `/api/artwork/${id}/thumb/${ARTWORK_THUMB_SIZE}`,
+    fallbackType: 'artwork',
+    networkFirst: true,
+    logPrefix: '[ArtworkThumbCache]'
   },
   enriched_artwork: {
     cacheName: 'enriched-artwork-cache-v1',
@@ -28,6 +62,17 @@ const CACHE_CONFIGS = {
   }
 }
 
+const MAX_MEMORY_ITEMS = 200
+const OFFLINE_STORE_TYPES = new Set(['artwork', 'artwork_thumb', 'enriched_artwork'])
+const openCaches = new Map()
+const METADATA_SAVE_DELAY_MS = 1000
+
+function revokeBlobUrl(url) {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url)
+  }
+}
+
 class MediaCache {
   constructor(type) {
     if (!CACHE_CONFIGS[type]) {
@@ -40,13 +85,73 @@ class MediaCache {
     this.inFlightRequests = new Map()
     this.metadata = new Map()
     this.initialized = false
+    this.listeners = new Set()
+    this.isPinned = null
+    this.saveTimer = null
+    this.maxMemoryItems = this.config.maxMemoryItems || MAX_MEMORY_ITEMS
+    this.fallbackOnly = false
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', () => this.flushMetadata())
+    }
+  }
+
+  subscribe(listener) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  setPinnedChecker(checker) {
+    this.isPinned = checker
+  }
+
+  _emit(id) {
+    this.listeners.forEach(listener => {
+      try {
+        listener(id)
+      } catch (err) {
+        logger.warn(`${this.config.logPrefix} Listener failed:`, err)
+      }
+    })
+  }
+
+  peekMemory(id) {
+    return this.memoryCache.get(id) || null
+  }
+
+  _setMemory(id, url) {
+    const previous = this.memoryCache.get(id)
+    this.memoryCache.delete(id)
+    this.memoryCache.set(id, url)
+    if (previous !== url) {
+      if (previous) revokeBlobUrl(previous)
+      this._emit(id)
+    }
+    this._trimMemory()
+  }
+
+  releaseMemory(id) {
+    const url = this.memoryCache.get(id)
+    if (url === undefined) return
+    this.memoryCache.delete(id)
+    revokeBlobUrl(url)
+    this._emit(id)
+  }
+
+  _trimMemory() {
+    if (this.memoryCache.size <= this.maxMemoryItems) return
+    for (const id of this.memoryCache.keys()) {
+      if (this.memoryCache.size <= this.maxMemoryItems) break
+      if (this.isPinned?.(id)) continue
+      this.releaseMemory(id)
+    }
   }
 
   async initialize() {
     if (this.initialized) return
 
     try {
-      const metaStr = localStorage.getItem(this.config.metadataKey)
+      const metaStr = safeStorage.get(this.config.metadataKey)
       if (metaStr) {
         const parsed = JSON.parse(metaStr)
         Object.entries(parsed).forEach(([id, data]) => {
@@ -66,26 +171,28 @@ class MediaCache {
 
   getMemory(id) {
     if (this.memoryCache.has(id)) {
+      const url = this.memoryCache.get(id)
+      this.memoryCache.delete(id)
+      this.memoryCache.set(id, url)
       this.touch(id)
-      return this.memoryCache.get(id)
+      return url
     }
     return null
   }
 
-  async getMedia(id) {
+  async getMedia(id, { signal } = {}) {
     if (!this.initialized) await this.initialize()
     if (!id) return null
 
     if (this.memoryCache.has(id)) {
-      this.touch(id)
-      return this.memoryCache.get(id)
+      return this.getMemory(id)
     }
 
     if (this.inFlightRequests.has(id)) {
       return this.inFlightRequests.get(id)
     }
 
-    const fetchPromise = this._fetchAndCache(id)
+    const fetchPromise = this._fetchAndCache(id, signal)
     this.inFlightRequests.set(id, fetchPromise)
 
     try {
@@ -95,68 +202,104 @@ class MediaCache {
     }
   }
 
-  async _fetchAndCache(id) {
-    try {
-      const cache = await caches.open(this.config.cacheName)
-      const mediaUrl = this.config.getUrl(id)
+  _openCache(name = this.config.cacheName) {
+    if (!openCaches.has(name)) {
+      const pending = typeof caches === 'undefined'
+        ? Promise.resolve(null)
+        : caches.open(name).catch(() => null)
+      openCaches.set(name, pending)
+    }
+    return openCaches.get(name)
+  }
 
-      let response = await cache.match(mediaUrl)
+  async _fromOfflineStore(id) {
+    try {
+      const cached = await cacheManager.getCachedTrack(id)
+      const blob = this.type === 'enriched_artwork' ? cached?.enrichedArtworkBlob : cached?.artworkBlob
+      if (!blob) return null
+      const blobUrl = URL.createObjectURL(blob)
+      this._setMemory(id, blobUrl)
+      this.updateMetadata(id, blob.size)
+      return blobUrl
+    } catch (err) {
+      logger.debug(`${this.config.logPrefix} IndexedDB check failed:`, err)
+      return null
+    }
+  }
+
+  async _fetchNetwork(id, cache, mediaUrl, signal) {
+    const response = this.fallbackOnly ? null : await fetch(mediaUrl, { signal })
+    if (response?.ok) {
+      if (cache) {
+        cache.put(mediaUrl, response.clone())
+          .then(() => this.evictIfNeeded(cache))
+          .catch(err => logger.debug(`${this.config.logPrefix} Cache write failed:`, err))
+      }
+      return response
+    }
+    if (!this.config.fallbackType) {
+      logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response?.status)
+      return null
+    }
+    const fallback = await this._fetchFallback(id, signal)
+    if (fallback && response?.status === 404) this.fallbackOnly = true
+    if (!fallback) logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response?.status)
+    return fallback
+  }
+
+  async _fetchAndCache(id, signal) {
+    try {
+      const cache = await this._openCache()
+      const mediaUrl = this.config.getUrl(id)
+      const hasOfflineStore = OFFLINE_STORE_TYPES.has(this.type)
+
+      let response = cache ? await cache.match(mediaUrl) : null
+
+      if (!response && hasOfflineStore && !this.config.networkFirst) {
+        const offlineUrl = await this._fromOfflineStore(id)
+        if (offlineUrl) return offlineUrl
+      }
 
       if (!response) {
-        if (this.type === 'artwork' || this.type === 'enriched_artwork') {
-          try {
-            const cached = await cacheManager.getCachedTrack(id)
-
-            if (mediaUrl.includes('/enriched') && cached?.enrichedArtworkBlob) {
-              const oldBlobUrl = this.memoryCache.get(id)
-              if (oldBlobUrl) URL.revokeObjectURL(oldBlobUrl)
-
-              const blobUrl = URL.createObjectURL(cached.enrichedArtworkBlob)
-              this.memoryCache.set(id, blobUrl)
-              this.updateMetadata(id, cached.enrichedArtworkBlob.size)
-              return blobUrl
-            }
-
-            if (!mediaUrl.includes('/enriched') && cached?.artworkBlob) {
-              const oldBlobUrl = this.memoryCache.get(id)
-              if (oldBlobUrl) URL.revokeObjectURL(oldBlobUrl)
-
-              const blobUrl = URL.createObjectURL(cached.artworkBlob)
-              this.memoryCache.set(id, blobUrl)
-              this.updateMetadata(id, cached.artworkBlob.size)
-              return blobUrl
-            }
-          } catch (err) {
-            logger.debug(`${this.config.logPrefix} IndexedDB check failed:`, err)
-          }
-        }
-
-        response = await fetch(mediaUrl)
-
-        if (response.ok) {
-          await cache.put(mediaUrl, response.clone())
-          await this.evictIfNeeded(cache)
-        } else {
-          logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response.status)
-          return null
+        try {
+          response = await this._fetchNetwork(id, cache, mediaUrl, signal)
+        } catch (err) {
+          if (err?.name === 'AbortError' || !hasOfflineStore || !this.config.networkFirst) throw err
+          response = null
         }
       }
 
+      if (!response && hasOfflineStore && this.config.networkFirst) {
+        return await this._fromOfflineStore(id)
+      }
+
+      if (!response) return null
+
       const blob = await response.blob()
-
-      const oldBlobUrl = this.memoryCache.get(id)
-      if (oldBlobUrl) URL.revokeObjectURL(oldBlobUrl)
-
       const blobUrl = URL.createObjectURL(blob)
 
-      this.memoryCache.set(id, blobUrl)
+      this._setMemory(id, blobUrl)
       this.updateMetadata(id, blob.size)
 
       return blobUrl
     } catch (err) {
-      logger.error(`${this.config.logPrefix} ❌ Error fetching media:`, id, err)
+      if (err?.name !== 'AbortError') logger.error(`${this.config.logPrefix} ❌ Error fetching media:`, id, err)
       return null
     }
+  }
+
+  async _fetchFallback(id, signal) {
+    const fallback = CACHE_CONFIGS[this.config.fallbackType]
+    const url = fallback.getUrl(id)
+    const cache = await this._openCache(fallback.cacheName)
+    const cached = cache ? await cache.match(url) : null
+    if (cached) return cached
+    const response = await fetch(url, { signal })
+    if (!response.ok) return null
+    if (cache) {
+      cache.put(url, response.clone()).catch(err => logger.debug(`${this.config.logPrefix} Cache write failed:`, err))
+    }
+    return response
   }
 
   updateMetadata(id, size) {
@@ -176,9 +319,18 @@ class MediaCache {
   }
 
   saveMetadata() {
+    if (this.saveTimer) return
+    this.saveTimer = setTimeout(() => this.flushMetadata(), METADATA_SAVE_DELAY_MS)
+  }
+
+  flushMetadata() {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
     try {
       const obj = Object.fromEntries(this.metadata)
-      localStorage.setItem(this.config.metadataKey, JSON.stringify(obj))
+      safeStorage.set(this.config.metadataKey, JSON.stringify(obj))
     } catch (err) {
       logger.warn(`${this.config.logPrefix} Failed to save metadata:`, err)
     }
@@ -195,8 +347,9 @@ class MediaCache {
     const toEvict = entries.slice(0, entries.length - this.config.maxItems)
 
     for (const [id] of toEvict) {
+      if (this.isPinned?.(id)) continue
       await cache.delete(this.config.getUrl(id))
-      this.memoryCache.delete(id)
+      this.releaseMemory(id)
       this.metadata.delete(id)
     }
 
@@ -212,7 +365,7 @@ class MediaCache {
     for (const [id, meta] of this.metadata.entries()) {
       if (now - meta.timestamp > this.config.expiryMs) {
         await cache.delete(this.config.getUrl(id))
-        this.memoryCache.delete(id)
+        this.releaseMemory(id)
         this.metadata.delete(id)
         cleaned++
       }
@@ -231,8 +384,8 @@ class MediaCache {
       const cache = await caches.open(this.config.cacheName)
       await cache.delete(this.config.getUrl(id))
 
-      this.memoryCache.delete(id)
       this.metadata.delete(id)
+      this.releaseMemory(id)
       this.saveMetadata()
 
       logger.info(`${this.config.logPrefix} 🔄 Invalidated:`, id)
@@ -243,6 +396,7 @@ class MediaCache {
 }
 
 export const artworkCache = new MediaCache('artwork')
+export const artworkThumbCache = new MediaCache('artwork_thumb')
 export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
 

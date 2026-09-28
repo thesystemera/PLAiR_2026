@@ -1,16 +1,102 @@
 import numpy as np
+import soundfile as sf
 from pydub import AudioSegment
 from pedalboard import Pedalboard, Reverb, Gain, HighShelfFilter, LowShelfFilter  # type: ignore
 from noise import pnoise1
-from typing import Optional
+from typing import Optional, Union
 import io
 
 from config.settings import settings
 from services import log_service
 
+STATION_PAD_MS = 110
+
+def decode_mp3(source: Union[str, bytes]) -> AudioSegment:
+    try:
+        samples, sample_rate = sf.read(io.BytesIO(source) if isinstance(source, bytes) else source, dtype="int16")
+        channels = 1 if samples.ndim == 1 else samples.shape[1]
+        return AudioSegment(data=samples.tobytes(), sample_width=2, frame_rate=sample_rate, channels=channels)
+    except (sf.LibsndfileError, RuntimeError):
+        return AudioSegment.from_file(io.BytesIO(source) if isinstance(source, bytes) else source, format="mp3")
+
+def _segment_to_float(audio: AudioSegment) -> np.ndarray:
+    samples = np.array(audio.get_array_of_samples()).astype(np.float32) / float(1 << (8 * audio.sample_width - 1))
+    return samples.reshape((-1, audio.channels))
+
+
+def _float_to_segment(samples: np.ndarray, frame_rate: int) -> AudioSegment:
+    samples = np.clip(samples, -1.0, 1.0)
+    pcm = np.round(samples * 32767.0).astype(np.int16)
+    return AudioSegment(pcm.tobytes(), frame_rate=frame_rate, sample_width=2, channels=samples.shape[1])
+
+
+def loudness_normalize(audio: AudioSegment, target_lufs: float, peak_ceiling_db: float = -1.0) -> AudioSegment:
+    if len(audio) == 0:
+        return audio
+    import pyloudnorm as pyln
+    samples = _segment_to_float(audio)
+    block = min(0.4, max(0.05, len(samples) / audio.frame_rate / 2))
+    try:
+        loudness = pyln.Meter(audio.frame_rate, block_size=block).integrated_loudness(samples)
+    except ValueError:
+        loudness = float('-inf')
+    if not np.isfinite(loudness):
+        return audio
+    gain = 10 ** ((target_lufs - loudness) / 20.0)
+    peak = float(np.max(np.abs(samples))) * gain
+    ceiling = 10 ** (peak_ceiling_db / 20.0)
+    if peak > ceiling:
+        gain *= ceiling / peak
+    return _float_to_segment(samples * gain, audio.frame_rate)
+
+
+def station_treatment(audio: AudioSegment, config: Optional[dict] = None) -> AudioSegment:
+    from pedalboard import Bitcrush, Compressor, Delay, HighpassFilter, LowpassFilter, PeakFilter
+    if len(audio) == 0:
+        return audio
+    cfg = config or settings.AUDIO_EFFECT_CONFIG['station']
+    rate = audio.frame_rate
+    mono = _segment_to_float(audio).mean(axis=1)
+    band = Pedalboard([
+        HighpassFilter(cutoff_frequency_hz=cfg['highpass_hz']),
+        LowpassFilter(cutoff_frequency_hz=cfg['lowpass_hz']),
+        PeakFilter(cutoff_frequency_hz=cfg['presence_hz'], gain_db=cfg['presence_db'], q=0.9),
+    ])(mono[None, :], rate)[0]
+    t = np.arange(len(band)) / rate
+    ring = band * np.sin(2 * np.pi * cfg['ring_mod_hz'] * t)
+    voiced = band * (1 - cfg['ring_mod_mix']) + ring * cfg['ring_mod_mix']
+    comb = Pedalboard([Delay(delay_seconds=cfg['comb_delay_s'], feedback=cfg['comb_feedback'], mix=1.0)])(
+        voiced[None, :].astype(np.float32), rate)[0]
+    voiced = voiced * (1 - cfg['comb_mix']) + comb * cfg['comb_mix']
+    crushed = Pedalboard([Bitcrush(bit_depth=cfg['crush_bits'])])(voiced[None, :].astype(np.float32), rate)[0]
+    voiced = voiced * (1 - cfg['crush_mix']) + crushed * cfg['crush_mix']
+    stereo = np.stack([voiced, voiced]).astype(np.float32)
+    tail = Pedalboard([
+        Compressor(threshold_db=cfg['compressor_threshold_db'], ratio=cfg['compressor_ratio'], attack_ms=2.0,
+                   release_ms=90.0),
+        Delay(delay_seconds=cfg['slap_delay_s'], feedback=0.0, mix=cfg['slap_mix']),
+        Reverb(room_size=cfg['reverb_room_size'], damping=0.6, wet_level=cfg['reverb_wet'],
+               dry_level=1.0 - cfg['reverb_wet'], width=cfg['reverb_width']),
+    ])
+    processed = tail(stereo, rate).T
+    peak = float(np.max(np.abs(processed))) if processed.size else 0.0
+    if peak > 0.98:
+        processed = processed * (0.98 / peak)
+    return _float_to_segment(processed, rate)
+
+
 class AudioProcessingService:
     def __init__(self):
         pass
+
+    def process_station(self, audio: AudioSegment, audio_process_mix: Optional[float] = None) -> AudioSegment:
+        if len(audio) == 0:
+            return audio
+        treated = station_treatment(audio)
+        pad = AudioSegment.silent(duration=STATION_PAD_MS, frame_rate=treated.frame_rate).set_channels(treated.channels)
+        mix = settings.STATION_PROCESS_MIX if audio_process_mix is None else audio_process_mix
+        processed = self.process_audio(pad + treated + pad, mix, speaker='station')
+        return loudness_normalize(processed, settings.STATION_VOICE_TARGET_LUFS)
 
     def process_audio(
             self,
@@ -22,19 +108,20 @@ class AudioProcessingService:
     ) -> AudioSegment:
         log_service.tts_processing(f"Processing audio: Speaker={speaker}, Mix={audio_process_mix:.2f}")
 
-        if isinstance(audio_input, str):
-            audio = AudioSegment.from_file(audio_input, format="mp3")
-        elif isinstance(audio_input, bytes):
-            audio = AudioSegment.from_file(io.BytesIO(audio_input), format="mp3")
+        if isinstance(audio_input, (str, bytes)):
+            audio = decode_mp3(audio_input)
         elif isinstance(audio_input, AudioSegment):
             audio = audio_input
         else:
             raise ValueError("Invalid audio input type")
 
+        if len(audio) == 0:
+            return audio
+
         if audio.channels == 1:
             audio = audio.set_channels(2)
 
-        FADE_DURATION = 100
+        FADE_DURATION = min(100, len(audio))
         audio = audio.fade_in(FADE_DURATION).fade_out(FADE_DURATION)
 
         SEGMENT_LENGTH_MS = 200
@@ -52,27 +139,28 @@ class AudioProcessingService:
         PAN_VARIATION = 0.08
 
         effective_segment_length = SEGMENT_LENGTH_MS - CROSSFADE_MS
-        num_segments = (len(audio) // effective_segment_length) + 1
+        num_segments = -(-len(audio) // effective_segment_length)
 
-        mix_noise_values = np.array([pnoise1(i * NOISE_SCALE, octaves=1) for i in range(num_segments)])
-        mix_noise_values = (mix_noise_values - np.min(mix_noise_values)) / (
-                np.max(mix_noise_values) - np.min(mix_noise_values)) * 2 - 1
+        def normalize(values):
+            span = np.max(values) - np.min(values)
+            if span <= 0:
+                return np.zeros_like(values)
+            return (values - np.min(values)) / span * 2 - 1
 
-        pan_noise_values = np.array(
-            [pnoise1(i * PAN_NOISE_SCALE, octaves=2, persistence=0.3, base=42) for i in range(num_segments)])
-        pan_noise_values = (pan_noise_values - np.min(pan_noise_values)) / (
-                np.max(pan_noise_values) - np.min(pan_noise_values)) * 2 - 1
+        mix_noise_values = normalize(np.array([pnoise1(i * NOISE_SCALE, octaves=1) for i in range(num_segments)]))
+
+        pan_noise_values = normalize(np.array(
+            [pnoise1(i * PAN_NOISE_SCALE, octaves=2, persistence=0.3, base=42) for i in range(num_segments)]))
 
         base_values = np.full(num_segments, audio_process_mix)
-        if previous_segment_end_mix is not None or next_segment_start_mix is not None:
+        ramp_length = num_segments // 3
+        if ramp_length > 0:
             if previous_segment_end_mix is not None:
-                ramp_length = num_segments // 3
                 ramp = np.cos(np.linspace(np.pi, 2 * np.pi, ramp_length)) * 0.5 + 0.5
                 base_values[:ramp_length] = previous_segment_end_mix + (
                         audio_process_mix - previous_segment_end_mix) * ramp
 
             if next_segment_start_mix is not None:
-                ramp_length = num_segments // 3
                 ramp = np.cos(np.linspace(0, np.pi, ramp_length)) * 0.5 + 0.5
                 base_values[-ramp_length:] = audio_process_mix + (next_segment_start_mix - audio_process_mix) * ramp
 

@@ -12,9 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sqlalchemy import text, inspect
+from sqlalchemy import text
 from database.connection import _sync_engine
-from database.models import Base, User
+from database.models import StripeWebhookEvent, AIUsageEvent, AIUsageDaily, UserRadioSettings
 
 
 def column_exists(conn, table_name, column_name):
@@ -44,6 +44,9 @@ def migrate_users_table(conn):
     # Map of column names to their SQL definitions
     columns = {
         "visual_quality": "VARCHAR DEFAULT 'high' NOT NULL",
+        "stripe_subscription_id": "VARCHAR",
+        "subscription_status": "VARCHAR",
+        "current_period_end": "TIMESTAMP WITH TIME ZONE",
         # Add future columns here
         # "new_column": "VARCHAR DEFAULT 'something'",
     }
@@ -61,6 +64,15 @@ def main():
     
     with _sync_engine.connect() as conn:
         migrate_users_table(conn)
+
+    print("\n[CHECK] stripe_webhook_events table...")
+    StripeWebhookEvent.__table__.create(bind=_sync_engine, checkfirst=True)
+    print("  [OK] stripe_webhook_events")
+
+    for table in (AIUsageEvent.__table__, AIUsageDaily.__table__, UserRadioSettings.__table__):
+        print(f"\n[CHECK] {table.name} table...")
+        table.create(bind=_sync_engine, checkfirst=True)
+        print(f"  [OK] {table.name}")
     
     print("\n[SUCCESS] Migration complete!")
     print("Restart the server to apply changes.")

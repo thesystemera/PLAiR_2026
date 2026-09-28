@@ -1,8 +1,17 @@
 import asyncio
-from datetime import datetime, timezone
+import time
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
-from database.models import User, WeatherData
+from database.models import PlayEvent, User, WeatherData
+from config.settings import settings
 from services import log_service
+from services import usage_tracking
+from services_radio.dj_bank_sources import weather_change_cue
+from services_radio.dj_content_bank import content_bank
+from services_radio import regional_knowledge as regional_kb
+from services_radio import listener_location as location_resolver
+from services_radio.listener_location import guest_locations
 
 class BackgroundTasksService:
     def __init__(self, web_service, tts_vector_db_service, async_session_maker, catalog_vector_db_service=None, catalog_service=None, user_content_vector_db_service=None, user_content_service=None, broadcast_content_func=None, youtube_clip_service=None):
@@ -15,19 +24,23 @@ class BackgroundTasksService:
         self.user_content_service = user_content_service
         self.broadcast_content_func = broadcast_content_func
         self.youtube_clip_service = youtube_clip_service
+        self._guest_weather: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
 
     async def weather_updater(self):
         while True:
             try:
                 async with self.async_session_maker() as db:
-                    result = await db.execute(select(User))
+                    active_since = datetime.now(timezone.utc) - timedelta(days=14)
+                    active_user_ids = select(PlayEvent.user_id).where(PlayEvent.started_at >= active_since).distinct()
+                    result = await db.execute(select(User).where(User.id.in_(active_user_ids)))
                     users = result.scalars().all()
 
                     for user in users:
                         if user.latitude and user.longitude:
-                            weather_desc = await self.web_service.retrieve_weather_data(
-                                user.latitude, user.longitude, 'current'
-                            )
+                            with usage_tracking.subject_scope(user_id=user.id):
+                                weather_desc = await self.web_service.retrieve_weather_data(
+                                    user.latitude, user.longitude, 'current'
+                                )
 
                             if weather_desc:
                                 weather_result = await db.execute(
@@ -35,6 +48,10 @@ class BackgroundTasksService:
                                 )
                                 weather_data = weather_result.scalar_one_or_none()
 
+                                if weather_data and settings.DJ_WEATHER_CUES_ENABLED and weather_data.timestamp and                                         datetime.now(timezone.utc) - weather_data.timestamp < timedelta(hours=3):
+                                    cue = weather_change_cue(weather_data.description, weather_desc)
+                                    if cue:
+                                        content_bank.set_weather_cue(f"user:{user.id}", *cue)
                                 if weather_data:
                                     weather_data.description = weather_desc
                                     weather_data.timestamp = datetime.now(timezone.utc)
@@ -49,6 +66,10 @@ class BackgroundTasksService:
                                 await db.commit()
                                 log_service.external(f"Weather Updater: Updated weather for user {user.id}")
 
+                guests = await self.update_guest_weather()
+                if guests:
+                    log_service.external(f"Weather Updater: Updated weather for {guests} located guest(s)")
+
                 await asyncio.sleep(3600)  # 1 hour
             except asyncio.CancelledError:
                 log_service.info("Weather Updater: Task cancelled")
@@ -56,6 +77,72 @@ class BackgroundTasksService:
             except Exception as e:
                 log_service.error(f"Weather updater error: {e}")
                 await asyncio.sleep(60)
+
+    async def active_regions(self) -> list:
+        regions = {}
+        async with self.async_session_maker() as db:
+            active_since = datetime.now(timezone.utc) - timedelta(days=14)
+            active_user_ids = select(PlayEvent.user_id).where(PlayEvent.started_at >= active_since).distinct()
+            users = (await db.execute(select(User).where(User.id.in_(active_user_ids)))).scalars().all()
+        for user in users:
+            region = regional_kb.resolve_region(user)
+            if region:
+                regions.setdefault(region.key, region)
+        located = guest_locations.active(regional_kb.ACTIVE_GUEST_MAX_AGE_S)
+        for session_id in located:
+            location = await location_resolver.resolve(None, session_id, geocode_wait_s=0)
+            region = regional_kb.resolve_region(None, None, location=location)
+            if region:
+                regions.setdefault(region.key, region)
+        for session_id, zone in content_bank.active_session_timezones(regional_kb.ACTIVE_GUEST_MAX_AGE_S).items():
+            if session_id in located:
+                continue
+            region = regional_kb.resolve_region(None, zone)
+            if region:
+                regions.setdefault(region.key, region)
+        return list(regions.values())
+
+    async def update_guest_weather(self) -> int:
+        if not settings.DJ_WEATHER_CUES_ENABLED or self.web_service is None:
+            return 0
+        guest_locations.prune()
+        updated = 0
+        for session_id, entry in guest_locations.active(3 * 3600).items():
+            with usage_tracking.subject_scope(session_id=session_id):
+                weather_desc = await self.web_service.retrieve_weather_data(entry.latitude, entry.longitude, 'current')
+            if not weather_desc:
+                continue
+            previous = self._guest_weather.get(session_id)
+            if previous and time.time() - previous[0] < 3 * 3600:
+                cue = weather_change_cue(previous[1], weather_desc)
+                if cue:
+                    content_bank.set_weather_cue(f"session:{session_id}", *cue)
+            self._guest_weather.pop(session_id, None)
+            self._guest_weather[session_id] = (time.time(), weather_desc)
+            while len(self._guest_weather) > settings.GUEST_LOCATION_MAX_SESSIONS:
+                self._guest_weather.popitem(last=False)
+            updated += 1
+        for session_id in [s for s in self._guest_weather if guest_locations.get(s) is None]:
+            self._guest_weather.pop(session_id, None)
+        return updated
+
+    async def regional_knowledge_refresher(self):
+        await asyncio.sleep(180)
+        while True:
+            try:
+                service = regional_kb.get_regional_knowledge()
+                if service is not None:
+                    for region in await self.active_regions():
+                        with usage_tracking.system_scope("regional_knowledge"):
+                            await service.refresh(region)
+                        await asyncio.sleep(2)
+                await asyncio.sleep(1800)
+            except asyncio.CancelledError:
+                log_service.info("Regional Knowledge Refresher: Task cancelled")
+                break
+            except Exception as e:
+                log_service.error(f"Regional knowledge refresher error: {e}")
+                await asyncio.sleep(300)
 
     async def vector_database_rebuilder(self):
         while True:
@@ -75,7 +162,7 @@ class BackgroundTasksService:
     async def catalog_index_updater(self):
         await asyncio.sleep(300)
 
-        last_catalog_size = 0
+        last_catalog_size = len(self.catalog_service.tracks) if self.catalog_service else 0
 
         while True:
             try:
@@ -153,38 +240,31 @@ class BackgroundTasksService:
                     await asyncio.sleep(600)
                     continue
 
-                tracks = list(self.catalog_service.tracks.values())
-                total_downloaded = 0
-                tracks_with_terms = 0
+                budget = settings.YOUTUBE_CLIPS_PREFETCH_PER_CYCLE
+                downloaded = 0
 
-                for track in tracks:
+                for track in list(self.catalog_service.tracks.values()):
+                    if downloaded >= budget:
+                        break
                     metadata = track if isinstance(track, dict) else {}
-                    gen_params = metadata.get("generation_params", {})
-                    derived_tags = metadata.get("derived_tags", {})
-                    keywords = gen_params.get("video_search_terms") or derived_tags.get("video_search_terms")
+                    for keyword in self.youtube_clip_service.missing_keywords_for_track(metadata):
+                        if downloaded >= budget:
+                            break
+                        try:
+                            if await self.youtube_clip_service.get_clip_for_keyword(keyword):
+                                downloaded += 1
+                        except Exception as e:
+                            log_service.error(f"[YOUTUBE] Pre-download failed for '{keyword}': {e}")
+                        await asyncio.sleep(2)
 
-                    if not keywords:
-                        continue
-
-                    tracks_with_terms += 1
-
-                    try:
-                        count = await self.youtube_clip_service.pre_download_for_track(metadata)
-                        total_downloaded += count
-                    except Exception as e:
-                        log_service.error(f"[YOUTUBE] Pre-download failed for {metadata.get('id', '?')}: {e}")
-
-                    await asyncio.sleep(2)
-
-                if total_downloaded > 0:
+                if downloaded:
                     stats = self.youtube_clip_service.get_cache_stats()
                     log_service.success(
-                        f"✓ Video clip pre-download complete: "
-                        f"{stats['clip_count']} clips cached ({stats['total_size_mb']}MB) "
-                        f"from {tracks_with_terms} tracks"
+                        f"✓ Video clip prefetch: +{downloaded} clips "
+                        f"({stats['clip_count']} cached, {stats['total_size_mb']}MB)"
                     )
 
-                await self.youtube_clip_service.cleanup_old_clips()
+                await self.youtube_clip_service.enforce_cache_limit()
 
                 await asyncio.sleep(1800)
 

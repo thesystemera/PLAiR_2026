@@ -1,7 +1,7 @@
 # Remaining Performance Issues (Low Priority)
 
 ## 1. Catalog renderTrack Callback
-**File:** `client/src/components/Catalog.jsx` (lines 561-573)
+**File:** `client/src/components/Catalog.jsx` (lines 553-565)
 
 **Issue:** `renderTrack` useCallback recreates when `currentTrackId`, `queuedTrackSet`, etc. change. VirtualScroller's memo comparison checks `renderItem` by reference, so this can invalidate the scroller's optimization.
 
@@ -12,7 +12,7 @@
 ---
 
 ## 2. MediaSession API Updates Too Frequently
-**File:** `client/src/App.jsx` (lines 415-434)
+**File:** `client/src/App.jsx` (lines 466-485)
 
 **Issue:** useEffect runs on `engineState.is_playing` changes, updating MediaSession metadata every play/pause.
 

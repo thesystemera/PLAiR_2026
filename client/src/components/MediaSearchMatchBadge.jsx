@@ -1,23 +1,7 @@
 import { memo, useState } from 'react'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
+import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
 
-const CATEGORY_FALLBACK_COLORS = [
-  '#8b5cf6', // purple
-  '#ec4899', // pink
-  '#06b6d4', // cyan
-  '#10b981', // green
-  '#f59e0b', // orange
-]
-
-function getCategoryColorIndex(category) {
-  if (!category) return 0
-  let hash = 0
-  for (let i = 0; i < category.length; i++) {
-    hash = ((hash << 5) - hash) + category.charCodeAt(i)
-    hash = hash & hash
-  }
-  return Math.abs(hash) % CATEGORY_FALLBACK_COLORS.length
-}
 
 function getCategoryLabel(category) {
   if (!category) return 'General'
@@ -97,7 +81,7 @@ export const MediaSearchMatchBadge = memo(function MediaSearchMatchBadge({
 
       {showTooltip && (
         <div
-          className="absolute bottom-full left-0 mb-2 w-64 rounded-lg shadow-xl p-3 z-50 border"
+          className="ui-pop-in absolute bottom-full left-0 mb-2 w-64 rounded-lg shadow-xl p-3 z-50 border origin-bottom-left"
           style={{
             backgroundColor: getCardBackground(),
             borderColor: getBorder(0.2),

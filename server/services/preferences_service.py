@@ -1,11 +1,14 @@
-from typing import Dict, List, Optional
+import asyncio
+import json
+from typing import Dict, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.models import TrackPreference, PreferenceType, ShoutoutPreference, ShoutoutPreferenceType, User
+from database.models import TrackPreference, PreferenceType, ShoutoutPreference, ShoutoutPreferenceType, User,     UserRadioSettings, utc_now
 from services import log_service
 from services.base_service import SingletonService
 from services.user_data_cache_service import user_data_cache
+from services.user_content_database_service import public_shoutout
 
 class PreferencesService(SingletonService):
     def __init__(self):
@@ -241,21 +244,73 @@ class PreferencesService(SingletonService):
             "bans": []
         }
 
-        for pref_type in ["likes", "super_likes", "bans"]:
+        pref_types = ["likes", "super_likes", "bans"]
+        all_ids = [shoutout_id for pref_type in pref_types for shoutout_id in pref_ids[pref_type]]
+        if not all_ids:
+            return result
+
+        enriched_list = await asyncio.to_thread(user_content_service.get_enriched_shoutouts, all_ids)
+
+        user_ids = set()
+        for shoutout in enriched_list:
+            if shoutout:
+                try:
+                    user_ids.add(int(shoutout.get('user_data', {}).get('user_id', 0)))
+                except (TypeError, ValueError):
+                    pass
+
+        users_map: Dict[int, User] = {}
+        if user_ids:
+            user_res = await db.execute(select(User).where(User.id.in_(user_ids)))
+            users_map = {u.id: u for u in user_res.scalars().all()}  # type: ignore
+
+        position = 0
+        for pref_type in pref_types:
             for shoutout_id in pref_ids[pref_type]:
-                shoutout = user_content_service.get_enriched_shoutout(shoutout_id)
+                shoutout = enriched_list[position]
+                position += 1
                 if shoutout:
                     try:
                         uid = int(shoutout.get('user_data', {}).get('user_id', 0))
-                        user_res = await db.execute(select(User).where(User.id == uid))
-                        u: Optional[User] = user_res.scalar_one_or_none()
+                        u = users_map.get(uid)
 
                         shoutout['username'] = u.username if u else "Unknown"
                         shoutout['profile_picture'] = u.profile_picture if u else None
-                        result[pref_type].append(shoutout)
+                        result[pref_type].append(public_shoutout(shoutout))
                     except Exception as e:
                         log_service.error(f"Error enriching shoutout {shoutout_id}: {e}")
 
         return result
+
+    @staticmethod
+    def _stored_radio_settings(row) -> Dict:
+        if row is None:
+            return {}
+        try:
+            data = json.loads(row.settings or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def get_radio_settings(self, user_id: int, db: AsyncSession) -> Dict:
+        from services_radio.radio_schedule import normalize_prefs
+        row = await db.get(UserRadioSettings, user_id)
+        return normalize_prefs(self._stored_radio_settings(row)).to_dict()
+
+    async def set_radio_settings(self, user_id: int, updates: Dict, db: AsyncSession) -> Dict:
+        from services_radio.radio_schedule import normalize_prefs
+        row = await db.get(UserRadioSettings, user_id)
+        merged = self._stored_radio_settings(row)
+        if isinstance(updates, dict):
+            merged.update(updates)
+        prefs = normalize_prefs(merged).to_dict()
+        if row is None:
+            db.add(UserRadioSettings(user_id=user_id, settings=json.dumps(prefs), updated_at=utc_now()))
+        else:
+            row.settings = json.dumps(prefs)
+            row.updated_at = utc_now()
+        await db.commit()
+        log_service.api(f"Radio Mode settings saved for user {user_id}: {'on' if prefs['enabled'] else 'off'}")
+        return prefs
 
 preferences_service = PreferencesService()

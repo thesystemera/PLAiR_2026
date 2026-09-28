@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useUIState } from './UIStateContext'
 import { logger } from '../lib/logger'
+import { api } from '../lib/api'
 
 const NetworkContext = createContext(null)
 
@@ -28,12 +29,17 @@ const CONNECTION_TYPE_BITRATES = {
   'ethernet': '256k',
 }
 
-// Server health check configuration
 const SERVER_HEALTH = {
-  CHECK_INTERVAL_MS: 10000,      // Check every 10s when uncertain
-  FAST_CHECK_INTERVAL_MS: 5000,  // Check every 5s when recovering
-  TIMEOUT_MS: 5000,              // Request timeout
-  RECOVERY_THRESHOLD: 2,         // Consecutive successes to consider recovered
+  CHECK_INTERVAL_MS: 10000,
+  SUSPECT_CHECK_MS: 1500,
+  RECOVERY_CHECK_MS: 3000,
+  TIMEOUT_MS: 4000,
+  FAILURE_THRESHOLD: 2,
+  RECOVERY_THRESHOLD: 2,
+  FLAP_WINDOW_MS: 2 * 60 * 1000,
+  MAX_FLAP_PENALTY: 3,
+  TROUBLE_DEBOUNCE_MS: 1000,
+  OFFLINE_EVENT_CONFIRM_MS: 2000,
 }
 
 export function NetworkProvider({ children }) {
@@ -41,7 +47,7 @@ export function NetworkProvider({ children }) {
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [isServerAvailable, setIsServerAvailable] = useState(navigator.onLine)
   const [networkQuality, setNetworkQuality] = useState('good')
-  const [connectionMode, setConnectionMode] = useState('full') // 'full' | 'degraded' | 'offline'
+  const [connectionMode, setConnectionMode] = useState(navigator.onLine ? 'full' : 'offline')
 
   const [detectedBitrate, setDetectedBitrate] = useState('192k')
   const [detectedSpeed, setDetectedSpeed] = useState(0)
@@ -51,80 +57,146 @@ export function NetworkProvider({ children }) {
   const lastDetectionTimeRef = useRef(0)
   const detectionCooldown = 60000
   const lastPublishedRef = useRef({ quality: null, bitrate: null, isOnline: null, isServerAvailable: null })
-  const healthCheckTimeoutRef = useRef(null)
-  const consecutiveSuccessesRef = useRef(0)
-  const isCheckingRef = useRef(false)
+  const healthTimerRef = useRef(null)
+  const serverAvailableRef = useRef(navigator.onLine)
+  const failuresRef = useRef(0)
+  const successesRef = useRef(0)
+  const flapPenaltyRef = useRef(0)
+  const lastRecoveryAtRef = useRef(0)
+  const lastProbeAtRef = useRef(0)
+  const probeRef = useRef(null)
+  const offlineConfirmTimerRef = useRef(null)
+  const scheduleHealthRef = useRef(null)
+  const connectionModeRef = useRef(connectionMode)
 
-  // Derived connection mode based on network and server state
   const deriveConnectionMode = useCallback((online, serverAvailable) => {
     if (!online) return 'offline'
     if (!serverAvailable) return 'degraded'
     return 'full'
   }, [])
 
-  // Check server health via HTTP
-  const checkServerHealth = useCallback(async () => {
-    if (!navigator.onLine || isCheckingRef.current) {
-      return isServerAvailable
+  const markServerAvailable = useCallback((available) => {
+    if (serverAvailableRef.current === available) return
+    serverAvailableRef.current = available
+    const now = Date.now()
+    if (available) {
+      lastRecoveryAtRef.current = now
+      logger.info('[Network] Server reachable again - leaving degraded mode')
+    } else {
+      flapPenaltyRef.current = now - lastRecoveryAtRef.current < SERVER_HEALTH.FLAP_WINDOW_MS
+        ? Math.min(flapPenaltyRef.current + 1, SERVER_HEALTH.MAX_FLAP_PENALTY)
+        : 0
+      logger.warn('[Network] Server unreachable (confirmed) - entering degraded mode')
     }
+    setIsServerAvailable(available)
+  }, [])
 
-    isCheckingRef.current = true
+  const recordProbe = useCallback((ok) => {
+    if (ok) {
+      failuresRef.current = 0
+      successesRef.current += 1
+      const needed = SERVER_HEALTH.RECOVERY_THRESHOLD + 2 * flapPenaltyRef.current
+      if (!serverAvailableRef.current && successesRef.current >= needed) markServerAvailable(true)
+    } else {
+      successesRef.current = 0
+      failuresRef.current += 1
+      if (serverAvailableRef.current && failuresRef.current >= SERVER_HEALTH.FAILURE_THRESHOLD) markServerAvailable(false)
+    }
+  }, [markServerAvailable])
 
-    try {
+  const checkServerHealth = useCallback(async () => {
+    if (!navigator.onLine) return false
+    if (probeRef.current) return probeRef.current
+
+    const probe = (async () => {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), SERVER_HEALTH.TIMEOUT_MS)
-
-      const response = await fetch('/api/health', {
-        method: 'GET',
-        cache: 'no-store',
-        signal: controller.signal
-      })
-
-      clearTimeout(timeoutId)
-
-      if (response.ok) {
-        consecutiveSuccessesRef.current += 1
-        if (!isServerAvailable && consecutiveSuccessesRef.current >= SERVER_HEALTH.RECOVERY_THRESHOLD) {
-          logger.info('[Network] Server health check passed - entering full mode')
-          setIsServerAvailable(true)
-        }
-        return true
-      } else {
-        consecutiveSuccessesRef.current = 0
-        if (isServerAvailable) {
-          logger.warn('[Network] Server health check failed - entering degraded mode')
-          setIsServerAvailable(false)
-        }
+      try {
+        const response = await fetch('/api/health', { method: 'GET', cache: 'no-store', signal: controller.signal })
+        return response.ok
+      } catch {
         return false
+      } finally {
+        clearTimeout(timeoutId)
       }
-    } catch (error) {
-      consecutiveSuccessesRef.current = 0
-      if (isServerAvailable) {
-        logger.warn('[Network] Server health check error - entering degraded mode', error)
-        setIsServerAvailable(false)
-      }
-      return false
-    } finally {
-      isCheckingRef.current = false
-    }
-  }, [isServerAvailable])
+    })()
 
-  // Handle online/offline events
+    probeRef.current = probe
+    lastProbeAtRef.current = Date.now()
+    try {
+      const ok = await probe
+      if (navigator.onLine) recordProbe(ok)
+      return ok
+    } finally {
+      probeRef.current = null
+      scheduleHealthRef.current?.()
+    }
+  }, [recordProbe])
+
+  const scheduleHealthCheck = useCallback((delayOverride = null) => {
+    if (healthTimerRef.current) {
+      clearTimeout(healthTimerRef.current)
+      healthTimerRef.current = null
+    }
+    if (!navigator.onLine) return
+    const delay = delayOverride ?? (!serverAvailableRef.current
+      ? SERVER_HEALTH.RECOVERY_CHECK_MS
+      : (failuresRef.current > 0 ? SERVER_HEALTH.SUSPECT_CHECK_MS : SERVER_HEALTH.CHECK_INTERVAL_MS))
+    healthTimerRef.current = setTimeout(() => {
+      healthTimerRef.current = null
+      void checkServerHealth()
+    }, delay)
+  }, [checkServerHealth])
+
+  useEffect(() => { scheduleHealthRef.current = () => scheduleHealthCheck() }, [scheduleHealthCheck])
+
+  useEffect(() => {
+    void checkServerHealth()
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') scheduleHealthCheck(0)
+    }
+    document.addEventListener('visibilitychange', handleVisible)
+    const unsubscribe = api.onConnectivity((event) => {
+      if (event.type !== 'trouble' || probeRef.current) return
+      if (Date.now() - lastProbeAtRef.current < SERVER_HEALTH.TROUBLE_DEBOUNCE_MS) return
+      scheduleHealthCheck(0)
+    })
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisible)
+      unsubscribe()
+      if (healthTimerRef.current) {
+        clearTimeout(healthTimerRef.current)
+        healthTimerRef.current = null
+      }
+    }
+  }, [checkServerHealth, scheduleHealthCheck])
+
   useEffect(() => {
     const handleOnline = () => {
       logger.info('[Network] Online event fired')
+      if (offlineConfirmTimerRef.current) {
+        clearTimeout(offlineConfirmTimerRef.current)
+        offlineConfirmTimerRef.current = null
+      }
       setIsOnline(true)
-      // Trigger immediate health check when coming back online
-      checkServerHealth()
-      publishAudioState({ isOnline: true })
+      scheduleHealthCheck(0)
     }
 
     const handleOffline = () => {
       logger.info('[Network] Offline event fired')
-      setIsOnline(false)
-      setIsServerAvailable(false)
-      consecutiveSuccessesRef.current = 0
-      publishAudioState({ isOnline: false, isServerAvailable: false })
+      if (offlineConfirmTimerRef.current) return
+      offlineConfirmTimerRef.current = setTimeout(() => {
+        offlineConfirmTimerRef.current = null
+        if (navigator.onLine) return
+        setIsOnline(false)
+        failuresRef.current = SERVER_HEALTH.FAILURE_THRESHOLD
+        successesRef.current = 0
+        markServerAvailable(false)
+        if (healthTimerRef.current) {
+          clearTimeout(healthTimerRef.current)
+          healthTimerRef.current = null
+        }
+      }, SERVER_HEALTH.OFFLINE_EVENT_CONFIRM_MS)
     }
 
     window.addEventListener('online', handleOnline)
@@ -133,51 +205,29 @@ export function NetworkProvider({ children }) {
     return () => {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
-    }
-  }, [publishAudioState, checkServerHealth])
-
-  // Health check polling when online but server availability uncertain
-  useEffect(() => {
-    if (!isOnline) {
-      // Clear any pending checks when going offline
-      if (healthCheckTimeoutRef.current) {
-        clearTimeout(healthCheckTimeoutRef.current)
-        healthCheckTimeoutRef.current = null
-      }
-      return
-    }
-
-    const scheduleCheck = (delay) => {
-      healthCheckTimeoutRef.current = setTimeout(async () => {
-        await checkServerHealth()
-        // Schedule next check based on current state
-        const nextDelay = isServerAvailable
-          ? SERVER_HEALTH.CHECK_INTERVAL_MS
-          : SERVER_HEALTH.FAST_CHECK_INTERVAL_MS
-        scheduleCheck(nextDelay)
-      }, delay)
-    }
-
-    // Start polling
-    scheduleCheck(SERVER_HEALTH.CHECK_INTERVAL_MS)
-
-    return () => {
-      if (healthCheckTimeoutRef.current) {
-        clearTimeout(healthCheckTimeoutRef.current)
+      if (offlineConfirmTimerRef.current) {
+        clearTimeout(offlineConfirmTimerRef.current)
+        offlineConfirmTimerRef.current = null
       }
     }
-  }, [isOnline, isServerAvailable, checkServerHealth])
+  }, [markServerAvailable, scheduleHealthCheck])
 
-  // Update connection mode when dependencies change
   useEffect(() => {
     const newMode = deriveConnectionMode(isOnline, isServerAvailable)
-    if (newMode !== connectionMode) {
-      logger.info(`[Network] Connection mode changed: ${connectionMode} → ${newMode}`)
-      setConnectionMode(newMode)
-      publishAudioState({
-        connectionMode: newMode,
-        isServerAvailable: isServerAvailable
-      })
+    const previousMode = connectionModeRef.current
+    connectionModeRef.current = newMode
+    if (newMode !== connectionMode) setConnectionMode(newMode)
+    publishAudioState({
+      isOnline,
+      connectionMode: newMode,
+      isServerAvailable,
+      offlineMode: newMode !== 'full'
+    })
+    if (newMode === previousMode) return
+    logger.info(`[Network] Connection mode changed: ${previousMode} → ${newMode}`)
+    if (newMode === 'full') {
+      api.reportServerRecovered()
+      void api.syncOfflineWrites()
     }
   }, [isOnline, isServerAvailable, connectionMode, deriveConnectionMode, publishAudioState])
 
@@ -425,7 +475,7 @@ export function NetworkProvider({ children }) {
     return detected
   }, [detectedBitrate])
 
-  const value = {
+  const value = useMemo(() => ({
     isOnline,
     isServerAvailable,
     connectionMode,
@@ -439,7 +489,11 @@ export function NetworkProvider({ children }) {
     detectNetworkQuality,
     getEffectiveBitrate,
     checkServerHealth,
-  }
+  }), [
+    isOnline, isServerAvailable, connectionMode, networkQuality, detectedBitrate, detectedSpeed,
+    detectionMethod, isDetecting, acknowledgeOfflineMode, checkOfflineMode, detectNetworkQuality,
+    getEffectiveBitrate, checkServerHealth,
+  ])
 
   return (
     <NetworkContext.Provider value={value}>

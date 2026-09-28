@@ -1,93 +1,289 @@
 import { logger } from './logger'
+import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
 import { getDeviceId } from './session'
 
 const QUEUE_SIZE = 11
 const TARGET_INDEX = 5
+const RECENT_LIMIT = 30
+const MIN_FAVORITES_POOL = 3
 
 const STORAGE_KEYS = {
   TRACK_PREFERENCES: 'offline_track_preferences',
   SHOUTOUT_PREFERENCES: 'offline_shoutout_preferences',
   AUDIO_QUALITY: 'offline_audio_quality',
+  PENDING_PREFERENCES: 'offline_pending_preferences',
+  LAST_SEED_MODE: 'lastSeedMode',
 }
 
-function getOfflinePreferences(type = 'track') {
+const SEED_MATCHERS = {
+  primary_genre: (seed, track) => sameText(seed.derived_tags?.primary_genre, track.derived_tags?.primary_genre) ? 1 : 0,
+  secondary_genres: (seed, track) => overlap(seed.derived_tags?.secondary_genres, track.derived_tags?.secondary_genres),
+  mood: (seed, track) => overlap(seed.derived_tags?.mood_keywords, track.derived_tags?.mood_keywords),
+  primary_artist: (seed, track) => (sameText(seed.artist_name, track.artist_name) || sameText(seed.derived_tags?.inspired_artist, track.derived_tags?.inspired_artist)) ? 1 : 0,
+  similar_artists: (seed, track) => Math.max(
+    overlap(seed.derived_tags?.similar_artists, track.derived_tags?.similar_artists),
+    sameText(seed.derived_tags?.inspired_artist, track.derived_tags?.inspired_artist) ? 1 : 0
+  ),
+  style: (seed, track) => overlap(words(seed.style), words(track.style)),
+  vocal: (seed, track) => overlap(seed.derived_tags?.vocal_style_keywords, track.derived_tags?.vocal_style_keywords),
+}
+
+function sameText(a, b) {
+  return typeof a === 'string' && typeof b === 'string' && a.trim() !== '' && a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
+function words(text) {
+  return typeof text === 'string' ? text.toLowerCase().split(/[\s,/]+/).filter(w => w.length > 2) : []
+}
+
+function overlap(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0
+  const left = new Set(a.map(v => String(v).toLowerCase()))
+  const shared = b.filter(v => left.has(String(v).toLowerCase())).length
+  return shared / Math.max(a.length, b.length)
+}
+
+function readJson(key, fallback) {
   try {
-    const key = type === 'track' ? STORAGE_KEYS.TRACK_PREFERENCES : STORAGE_KEYS.SHOUTOUT_PREFERENCES
-    const data = localStorage.getItem(key)
-    return data ? JSON.parse(data) : {}
+    const data = safeStorage.get(key)
+    return data ? JSON.parse(data) : fallback
   } catch (err) {
-    logger.error(`[OfflineBackend] Failed to load ${type} preferences:`, err)
-    return {}
+    logger.error(`[OfflineBackend] Failed to read ${key}:`, err)
+    return fallback
   }
 }
 
-function saveOfflinePreferences(type = 'track', preferences) {
+function writeJson(key, value) {
   try {
-    const key = type === 'track' ? STORAGE_KEYS.TRACK_PREFERENCES : STORAGE_KEYS.SHOUTOUT_PREFERENCES
-    localStorage.setItem(key, JSON.stringify(preferences))
+    safeStorage.set(key, JSON.stringify(value))
   } catch (err) {
-    logger.error(`[OfflineBackend] Failed to save ${type} preferences:`, err)
+    logger.error(`[OfflineBackend] Failed to save ${key}:`, err)
+  }
+}
+
+function preferenceKey(type) {
+  return type === 'track' ? STORAGE_KEYS.TRACK_PREFERENCES : STORAGE_KEYS.SHOUTOUT_PREFERENCES
+}
+
+function getOfflinePreferences(type = 'track') {
+  return readJson(preferenceKey(type), {})
+}
+
+function saveOfflinePreferences(type = 'track', preferences) {
+  writeJson(preferenceKey(type), preferences)
+}
+
+function idOf(item) {
+  return typeof item === 'string' ? item : item?.id
+}
+
+function queueItem(track) {
+  return {
+    id: track.id,
+    title: track.title || track.generation_params?.title || 'Untitled',
+    artist_name: track.artist_name ?? track.generation_params?.artist_name ?? null,
+    style: track.style || track.generation_params?.style || '',
+    duration_ms: track.duration_ms || track.track_info?.duration || 0,
+    has_artwork: !!track.has_artwork
   }
 }
 
 class OfflineBackend {
   constructor() {
     this.queue = []
-    this.currentIndex = TARGET_INDEX
+    this.currentIndex = 0
     this.history = []
+    this.recent = []
+    this.radioMode = null
+    cacheManager.setEvictionGuard(() => this.likedTrackIds())
+  }
+
+  likedTrackIds() {
+    return Object.entries(getOfflinePreferences('track'))
+      .filter(([, data]) => data.type === 'like' || data.type === 'super_like')
+      .map(([id]) => id)
+  }
+
+  async _libraryTracks() {
+    const list = await cacheManager.getCachedTrackList()
+    return list
+      .filter(entry => entry.playable && entry.metadata?.id)
+      .map(entry => ({
+        ...entry.metadata,
+        has_artwork: entry.hasArtwork || !!entry.metadata.has_artwork,
+        has_enriched_artwork: entry.hasEnrichedArtwork,
+        _addedAt: entry.addedAt || 0
+      }))
+  }
+
+  async getLibraryCount() {
+    const tracks = await this._libraryTracks()
+    return tracks.length
+  }
+
+  _state({ isPlaying = true, progressMs = 0 } = {}) {
+    const current = this.queue[this.currentIndex] || null
+    return {
+      current_track: current ? { ...current } : null,
+      queue: this.queue.map(queueItem),
+      history: [],
+      current_index: this.currentIndex,
+      is_playing: isPlaying,
+      progress_ms: progressMs,
+      active_device_id: getDeviceId(),
+      activeSeedMode: this.radioMode,
+      offline: true
+    }
+  }
+
+  _response(options = {}) {
+    return { status: 'playing', state: this._state(options), offline: true }
+  }
+
+  _remember(trackId) {
+    if (!trackId) return
+    this.recent = [...this.recent.filter(id => id !== trackId), trackId].slice(-RECENT_LIMIT)
+  }
+
+  _preferenceSets() {
+    const liked = new Set()
+    const superLiked = new Set()
+    const banned = new Set()
+    Object.entries(getOfflinePreferences('track')).forEach(([trackId, data]) => {
+      if (data.type === 'like') liked.add(trackId)
+      else if (data.type === 'super_like') superLiked.add(trackId)
+      else if (data.type === 'ban') banned.add(trackId)
+    })
+    return { liked, superLiked, banned }
+  }
+
+  _scoreTrackSimilarity(seedTrack, candidateTrack) {
+    let score = 0
+    const seedStyle = (seedTrack.style || '').toLowerCase()
+    const candidateStyle = (candidateTrack.style || '').toLowerCase()
+
+    if (seedStyle && candidateStyle) {
+      if (seedStyle === candidateStyle) score += 0.5
+      else if (seedStyle.includes(candidateStyle) || candidateStyle.includes(seedStyle)) score += 0.3
+      else score += overlap(words(seedStyle), words(candidateStyle)) * 0.3
+    }
+
+    if (sameText(seedTrack.derived_tags?.primary_genre, candidateTrack.derived_tags?.primary_genre)) score += 0.3
+    score += overlap(seedTrack.derived_tags?.mood_keywords, candidateTrack.derived_tags?.mood_keywords) * 0.2
+    score += overlap(seedTrack.tags, candidateTrack.tags) * 0.3
+    return score
+  }
+
+  _pickUpcoming(seedTrack, tracks, count, excludeIds = new Set()) {
+    if (count <= 0) return []
+    const mode = this.radioMode
+    const { liked, superLiked, banned } = this._preferenceSets()
+    const recent = new Set(this.recent)
+    let pool = tracks.filter(track => track.id && !excludeIds.has(track.id) && !banned.has(track.id))
+    if (mode === 'favorites') {
+      const favorites = pool.filter(track => liked.has(track.id) || superLiked.has(track.id))
+      if (favorites.length >= Math.min(MIN_FAVORITES_POOL, count)) pool = favorites
+    }
+    const fresh = pool.filter(track => !recent.has(track.id))
+    if (fresh.length >= Math.min(count, pool.length)) pool = fresh.length ? fresh : pool
+
+    const matcher = SEED_MATCHERS[mode]
+    const weighted = pool.map(track => {
+      let weight = 1
+      if (superLiked.has(track.id)) weight += 2
+      else if (liked.has(track.id)) weight += 1
+      if (seedTrack) {
+        weight += matcher ? matcher(seedTrack, track) * 4 : this._scoreTrackSimilarity(seedTrack, track)
+      }
+      if (recent.has(track.id)) weight *= 0.2
+      return { track, weight: Math.max(weight, 0.05) }
+    })
+
+    const picked = []
+    let lastArtist = (seedTrack?.artist_name || '').toLowerCase()
+    while (picked.length < count && weighted.length) {
+      const sameArtistOnly = weighted.every(entry => (entry.track.artist_name || '').toLowerCase() === lastArtist)
+      const candidates = weighted.filter(entry => sameArtistOnly || !lastArtist ||
+        (entry.track.artist_name || '').toLowerCase() !== lastArtist)
+      const total = candidates.reduce((sum, entry) => sum + entry.weight, 0)
+      let roll = Math.random() * total
+      let chosen = candidates[candidates.length - 1]
+      for (const entry of candidates) {
+        roll -= entry.weight
+        if (roll <= 0) {
+          chosen = entry
+          break
+        }
+      }
+      picked.push(chosen.track)
+      weighted.splice(weighted.indexOf(chosen), 1)
+      lastArtist = (chosen.track.artist_name || '').toLowerCase()
+    }
+    return picked
+  }
+
+  _trimHistory() {
+    while (this.currentIndex > TARGET_INDEX && this.queue.length > 0) {
+      this.history.push(this.queue.shift())
+      this.currentIndex--
+      if (this.history.length > 50) this.history.shift()
+    }
+  }
+
+  _restoreHistory() {
+    while (this.currentIndex < TARGET_INDEX && this.history.length) {
+      this.queue.unshift(this.history.pop())
+      this.currentIndex++
+    }
+  }
+
+  async _fillQueue(tracks = null) {
+    const needed = QUEUE_SIZE - this.queue.length
+    const current = this.queue[this.currentIndex]
+    if (needed <= 0 || !current) return
+    const library = tracks || await this._libraryTracks()
+    const exclude = new Set(this.queue.map(t => t.id))
+    const lastQueued = this.queue[this.queue.length - 1]
+    this.queue.push(...this._pickUpcoming(lastQueued || current, library, needed, exclude))
+  }
+
+  _setRadioMode(mode) {
+    this.radioMode = mode ?? (safeStorage.get(STORAGE_KEYS.LAST_SEED_MODE) || null)
+  }
+
+  async startLocalSession({ currentTrack = null, radioMode, isPlaying = false, progressMs = 0 } = {}) {
+    this._setRadioMode(radioMode)
+    const tracks = await this._libraryTracks()
+    const libraryIds = new Set(tracks.map(t => t.id))
+    const current = currentTrack?.id
+      ? (tracks.find(t => t.id === currentTrack.id) || currentTrack)
+      : null
+    const keepHistory = this.history.filter(t => libraryIds.has(t.id)).slice(-TARGET_INDEX)
+
+    if (!current) {
+      if (!tracks.length) {
+        this.queue = []
+        this.currentIndex = 0
+        return null
+      }
+      const [first] = this._pickUpcoming(null, tracks, 1)
+      this.queue = [first]
+    } else {
+      this.queue = [current]
+    }
+    this.history = []
+    this.queue = [...keepHistory, ...this.queue]
+    this.currentIndex = keepHistory.length
+    this._remember(this.queue[this.currentIndex].id)
+    await this._fillQueue(tracks)
+    logger.info(`[OfflineBackend] Local session: ${tracks.length} downloaded tracks, queue ${this.queue.length}, mode ${this.radioMode || 'shuffle'}`)
+    return this._state({ isPlaying, progressMs })
   }
 
   async getPlaybackState() {
     try {
-      logger.info('[OfflineBackend] Getting initial playback state for offline cold boot')
-
-      const cachedTracks = await cacheManager.getCachedTrackList()
-
-      if (!cachedTracks || cachedTracks.length === 0) {
-        logger.info('[OfflineBackend] No cached tracks available')
-        return null
-      }
-
-      const preferences = getOfflinePreferences('track')
-      const likedTrackIds = new Set(
-        Object.entries(preferences)
-          .filter(([, data]) => data.type === 'like' || data.type === 'super_like')
-          .map(([id]) => id)
-      )
-
-      let sortedTracks = cachedTracks.map(t => ({
-        ...t.metadata,
-        isLiked: likedTrackIds.has(t.trackId)
-      }))
-
-      sortedTracks.sort((a, b) => {
-        if (a.isLiked && !b.isLiked) return -1
-        if (!a.isLiked && b.isLiked) return 1
-        return 0
-      })
-
-      const shuffled = [...sortedTracks].sort(() => Math.random() - 0.5)
-      this.queue = shuffled.slice(0, QUEUE_SIZE)
-      this.currentIndex = 0
-
-      const currentTrack = this.queue[0]
-      if (!currentTrack) {
-        logger.warn('[OfflineBackend] Failed to select initial track')
-        return null
-      }
-
-      logger.info(`[OfflineBackend] Initialized with ${this.queue.length} tracks, starting with: ${currentTrack.title}`)
-
-      return {
-        current_track: currentTrack,
-        queue: this.queue,
-        current_index: this.currentIndex,
-        is_playing: false,
-        progress_ms: 0,
-        active_device_id: getDeviceId(),
-        radio_mode: 'favorites'
-      }
+      return await this.startLocalSession({ isPlaying: false })
     } catch (err) {
       logger.error('[OfflineBackend] getPlaybackState failed:', err)
       return null
@@ -103,21 +299,16 @@ class OfflineBackend {
 
     if (!cached.metadata) {
       issues.push('Missing metadata')
-    } else {
-
-      if (!cached.metadata.id) {
-        issues.push('Missing metadata.id')
-      }
+    } else if (!cached.metadata.id) {
+      issues.push('Missing metadata.id')
     }
 
     if (!cached.audioBlob) {
       issues.push('Missing audioBlob - track cannot play')
     } else if (!(cached.audioBlob instanceof Blob)) {
       issues.push('audioBlob is not a valid Blob')
-    }
-
-    if (cached.metadata?.has_artwork && !cached.artworkBlob) {
-      issues.push('Metadata claims has_artwork but artworkBlob is missing')
+    } else if (cached.audioBlob.size === 0) {
+      issues.push('audioBlob is empty')
     }
 
     if (cached.artworkBlob && !(cached.artworkBlob instanceof Blob)) {
@@ -152,7 +343,7 @@ class OfflineBackend {
           report.invalid++
           report.issues.push({
             trackId: cached.trackId,
-            trackTitle: cached.metadata?.generation_params?.title || 'Unknown',
+            trackTitle: cached.metadata?.title || 'Unknown',
             problems: validation.issues
           })
           corruptTrackIds.push(cached.trackId)
@@ -186,80 +377,33 @@ class OfflineBackend {
     }
   }
 
-  _simplifyTrackForQueue(track) {
-    const params = track.generation_params || {}
-    const trackInfo = track.track_info || {}
-
-    return {
-      id: track.id,
-      title: params.title || 'Unknown',
-      artist_name: params.artist_name,
-      style: params.style || '',
-      duration_ms: trackInfo.duration || track.duration_ms || 0,
-      has_artwork: track.has_artwork || false
-    }
-  }
-
   async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null) {
     try {
-      const allTracks = await cacheManager.getAllCachedTracks()
-
-      if (!allTracks || allTracks.length === 0) {
-        return { tracks: [], total: 0, skip, limit }
-      }
-
-      let invalidCount = 0
-
-      let tracks = allTracks
-        .map(cached => {
-          const validation = this._validateCachedTrack(cached)
-
-          if (!validation.isValid) {
-            invalidCount++
-            logger.warn(`[OfflineBackend] Skipping invalid cache entry ${cached.trackId}:`, validation.issues)
-            return null
-          }
-
-          return {
-            ...cached.metadata,
-            has_artwork: !!cached.artworkBlob
-          }
-        })
-        .filter(Boolean)
+      let tracks = await this._libraryTracks()
 
       if (genre) {
         const genreLower = genre.toLowerCase()
-        tracks = tracks.filter(track => {
-          const primaryGenre = track.derived_tags?.primary_genre || ''
-          return primaryGenre.toLowerCase() === genreLower
-        })
-        logger.info(`[OfflineBackend] Filtered by genre "${genre}": ${tracks.length} tracks`)
+        tracks = tracks.filter(track => (track.derived_tags?.primary_genre || '').toLowerCase() === genreLower)
       }
 
-      if (invalidCount > 0) {
-        logger.warn(`[OfflineBackend] Found ${invalidCount} invalid cache entries. Consider running validateCache(true) to clean up.`)
-      }
-
-      const sorted = [...tracks].sort((a, b) => {
-        let aVal, bVal
-
+      const valueOf = (track) => {
         switch (sortBy) {
           case 'created_at':
-            aVal = new Date(a.created_at || 0).getTime()
-            bVal = new Date(b.created_at || 0).getTime()
-            break
+            return new Date(track.created_at || track._addedAt || 0).getTime()
           case 'title':
-            aVal = (a.title || '').toLowerCase()
-            bVal = (b.title || '').toLowerCase()
-            break
+            return (track.title || '').toLowerCase()
+          case 'genre':
+            return (track.derived_tags?.primary_genre || '').toLowerCase()
           case 'play_count':
-            aVal = a.play_count || 0
-            bVal = b.play_count || 0
-            break
+            return track.play_count || 0
           default:
             return 0
         }
+      }
 
+      const sorted = [...tracks].sort((a, b) => {
+        const aVal = valueOf(a)
+        const bVal = valueOf(b)
         if (aVal < bVal) return order === 'asc' ? -1 : 1
         if (aVal > bVal) return order === 'asc' ? 1 : -1
         return 0
@@ -267,42 +411,37 @@ class OfflineBackend {
 
       const paginated = sorted.slice(skip, skip + limit)
 
-      logger.info(`[OfflineBackend] getTracks: ${paginated.length}/${sorted.length} tracks (offline cache)`)
-
       return {
         tracks: paginated,
-        total_tracks: sorted.length,  // Match backend key name
+        total_tracks: sorted.length,
         skip,
         limit,
+        offline: true
       }
     } catch (err) {
       logger.error('[OfflineBackend] getTracks failed:', err)
-      return { tracks: [], total_tracks: 0, skip, limit }
+      return { tracks: [], total_tracks: 0, skip, limit, offline: true }
     }
   }
 
-  async getStats() {
+  async getStats(genre = null) {
     try {
-      const allTracks = await cacheManager.getAllCachedTracks()
+      const list = await cacheManager.getCachedTrackList()
+      const genreLower = genre ? genre.toLowerCase() : null
+      const entries = list.filter(entry => entry.playable &&
+        (!genreLower || (entry.metadata?.derived_tags?.primary_genre || '').toLowerCase() === genreLower))
 
       let totalDuration = 0
       let instrumentalCount = 0
       let vocalCount = 0
       let totalSize = 0
 
-      allTracks.forEach(cached => {
-        const metadata = cached.metadata || {}
-        const trackInfo = metadata.track_info || {}
-        const genParams = metadata.generation_params || {}
-
-        totalDuration += trackInfo.duration || 0
-        totalSize += cached.size || 0
-
-        if (genParams.instrumental) {
-          instrumentalCount++
-        } else {
-          vocalCount++
-        }
+      entries.forEach(entry => {
+        const metadata = entry.metadata || {}
+        totalDuration += metadata.duration_ms || 0
+        totalSize += entry.size || 0
+        if (metadata.generation_params?.instrumental) instrumentalCount++
+        else vocalCount++
       })
 
       const formatDuration = (ms) => {
@@ -315,7 +454,7 @@ class OfflineBackend {
       }
 
       return {
-        total_tracks: allTracks.length,
+        total_tracks: entries.length,
         total_duration_ms: totalDuration,
         total_duration_formatted: formatDuration(totalDuration),
         instrumental_count: instrumentalCount,
@@ -339,26 +478,19 @@ class OfflineBackend {
 
   async getGenres() {
     try {
-      const allTracks = await cacheManager.getAllCachedTracks()
+      const tracks = await this._libraryTracks()
       const genreCounts = {}
       const subGenresMap = {}
 
-      allTracks.forEach(cached => {
-        const derivedTags = cached.metadata?.derived_tags || {}
+      tracks.forEach(track => {
+        const derivedTags = track.derived_tags || {}
         const primaryGenre = derivedTags.primary_genre
-        const secondaryGenres = derivedTags.secondary_genres || []
-
-        if (primaryGenre) {
-          genreCounts[primaryGenre] = (genreCounts[primaryGenre] || 0) + 1
-
-          if (!subGenresMap[primaryGenre]) {
-            subGenresMap[primaryGenre] = new Set()
-          }
-
-          secondaryGenres.forEach(sg => {
-            if (sg) subGenresMap[primaryGenre].add(sg)
-          })
-        }
+        if (!primaryGenre) return
+        genreCounts[primaryGenre] = (genreCounts[primaryGenre] || 0) + 1
+        if (!subGenresMap[primaryGenre]) subGenresMap[primaryGenre] = new Set()
+        ;(derivedTags.secondary_genres || []).forEach(sg => {
+          if (sg) subGenresMap[primaryGenre].add(sg)
+        })
       })
 
       const genres = Object.entries(genreCounts)
@@ -368,8 +500,6 @@ class OfflineBackend {
           sub_genres: Array.from(subGenresMap[genre] || []).sort()
         }))
         .sort((a, b) => b.count - a.count)
-
-      logger.info(`[OfflineBackend] Found ${genres.length} genres in cached tracks`)
 
       return {
         genres,
@@ -383,38 +513,28 @@ class OfflineBackend {
 
   async searchSemantic(query, nResults = 100) {
     try {
-      const allTracks = await cacheManager.getAllCachedTracks()
-
-      const tracks = allTracks
-        .map(cached => {
-          const validation = this._validateCachedTrack(cached)
-          if (!validation.isValid) {
-            return null
-          }
-
-          return {
-            ...cached.metadata,
-            has_artwork: !!cached.artworkBlob,
-            has_enriched_artwork: !!cached.enrichedArtworkBlob
-          }
-        })
-        .filter(Boolean)
+      const tracks = await this._libraryTracks()
 
       if (!query || query.trim() === '') {
-        return { results: tracks.slice(0, nResults), count: tracks.length }
+        return { results: tracks.slice(0, nResults), count: tracks.length, offline: true }
       }
 
-      const lowerQuery = query.toLowerCase()
+      const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+      const haystack = (track) => [
+        track.title,
+        track.artist_name,
+        track.style,
+        track.generation_params?.user_request,
+        track.derived_tags?.primary_genre,
+        ...(track.derived_tags?.secondary_genres || []),
+        ...(track.derived_tags?.mood_keywords || []),
+        ...(track.tags || []),
+        typeof track.lyrics === 'string' ? track.lyrics : ''
+      ].filter(Boolean).join(' ').toLowerCase()
 
       const matches = tracks.filter(track => {
-        const params = track.generation_params || {}
-        if (params.title?.toLowerCase().includes(lowerQuery)) return true
-        if (params.style?.toLowerCase().includes(lowerQuery)) return true
-        if (track.tags?.some(tag => tag.toLowerCase().includes(lowerQuery))) return true
-        if (track.lyrics?.toLowerCase().includes(lowerQuery)) return true
-        return !!params.user_request?.toLowerCase().includes(lowerQuery);
-
-
+        const text = haystack(track)
+        return terms.every(term => text.includes(term))
       })
 
       logger.info(`[OfflineBackend] Search "${query}": ${matches.length} matches (offline)`)
@@ -423,410 +543,180 @@ class OfflineBackend {
       return {
         results,
         count: results.length,
+        offline: true
       }
     } catch (err) {
       logger.error('[OfflineBackend] searchSemantic failed:', err)
-      return { results: [], count: 0 }
+      return { results: [], count: 0, offline: true }
     }
   }
 
   async searchShoutouts(_query, _nResults = 20) {
-    logger.info('[OfflineBackend] searchShoutouts: Shoutouts not cached yet (future feature)')
-
     return {
       results: [],
       count: 0,
-      message: 'Shoutout search requires an internet connection',
+      message: 'Shoutouts need a connection',
       offline: true
     }
   }
 
-  _scoreTrackSimilarity(seedTrack, candidateTrack) {
-    let score = 0
-
-    const seedParams = seedTrack.generation_params || {}
-    const candidateParams = candidateTrack.generation_params || {}
-
-    const seedStyle = seedParams.style?.toLowerCase() || ''
-    const candidateStyle = candidateParams.style?.toLowerCase() || ''
-
-    if (seedStyle && candidateStyle) {
-      if (seedStyle === candidateStyle) {
-        score += 0.5
-      } else if (seedStyle.includes(candidateStyle) || candidateStyle.includes(seedStyle)) {
-        score += 0.3
-      }
-    }
-
-    const seedTags = seedTrack.tags || []
-    const candidateTags = candidateTrack.tags || []
-    if (seedTags.length > 0 && candidateTags.length > 0) {
-      const seedTagsLower = seedTags.map(t => t.toLowerCase())
-      const candidateTagsLower = candidateTags.map(t => t.toLowerCase())
-      const overlap = seedTagsLower.filter(t => candidateTagsLower.includes(t)).length
-      const maxTags = Math.max(seedTags.length, candidateTags.length)
-      score += (overlap / maxTags) * 0.3
-    }
-
-    const seedTitle = seedParams.title?.toLowerCase() || ''
-    const candidateTitle = candidateParams.title?.toLowerCase() || ''
-    if (seedTitle && candidateTitle) {
-      const seedWords = seedTitle.split(/\s+/)
-      const candidateWords = candidateTitle.split(/\s+/)
-      const commonWords = seedWords.filter(w => w.length > 3 && candidateWords.includes(w)).length
-      if (commonWords > 0) {
-        score += commonWords * 0.05
-      }
-    }
-
-    return score
-  }
-
-  _getOfflineRecommendations(seedTrack, allTracks, count, excludeIds = new Set()) {
-    const preferences = getOfflinePreferences()
-    const likedIds = new Set()
-    const superLikedIds = new Set()
-    const bannedIds = new Set()
-
-    Object.entries(preferences).forEach(([trackId, data]) => {
-      if (data.type === 'like') likedIds.add(trackId)
-      else if (data.type === 'super_like') superLikedIds.add(trackId)
-      else if (data.type === 'ban') bannedIds.add(trackId)
-    })
-
-    const scored = allTracks
-      .filter(track => {
-        if (!track.id || track.id === seedTrack.id) return false
-        if (excludeIds.has(track.id)) return false
-        return !bannedIds.has(track.id);
-
-      })
-      .map(track => {
-        let score = this._scoreTrackSimilarity(seedTrack, track)
-
-        if (superLikedIds.has(track.id)) {
-          score += 0.3
-        } else if (likedIds.has(track.id)) {
-          score += 0.15
-        }
-
-        return { track, score }
-      })
-
-    scored.sort((a, b) => b.score - a.score)
-
-    return scored.slice(0, count).map(item => item.track)
-  }
-
   async play(trackId = null) {
-    logger.info(`[OfflineBackend] play(${trackId}) - building smart offline queue`)
-
     try {
-      const allTracks = await cacheManager.getAllCachedTracks()
-
-      const tracks = allTracks
-        .map(cached => {
-          const validation = this._validateCachedTrack(cached)
-          if (!validation.isValid) {
-            return null
-          }
-
-          return {
-            ...cached.metadata,
-            has_artwork: !!cached.artworkBlob,
-            has_enriched_artwork: !!cached.enrichedArtworkBlob
-          }
-        })
-        .filter(Boolean)
-
-      if (tracks.length === 0) {
-        return { status: 'error', offline: true, error: 'No cached tracks available' }
+      const tracks = await this._libraryTracks()
+      if (!trackId) {
+        if (this.queue[this.currentIndex]) return this._response()
+        const state = await this.startLocalSession({ isPlaying: true })
+        return state ? { status: 'playing', state, offline: true } : { status: 'error', offline: true, error: 'No downloaded tracks available' }
       }
 
-      let currentTrack = trackId ? tracks.find(t => t.id === trackId) : tracks[0]
-      if (!currentTrack) {
-        currentTrack = tracks[0]
-      }
-
-      const existingIdx = this.queue.findIndex(t => t.id === currentTrack.id)
-
+      const existingIdx = this.queue.findIndex(t => t.id === trackId)
       if (existingIdx !== -1) {
-        logger.info(`[OfflineBackend] Track already in queue at index ${existingIdx}, shifting to target`)
         this.currentIndex = existingIdx
-        this._shiftQueueToTarget()
-
-        await this._autoFillQueue()
       } else {
-        const queueTracks = []
-        const excludeIds = new Set([currentTrack.id])
-
-        const recommendations = this._getOfflineRecommendations(
-          currentTrack,
-          tracks,
-          QUEUE_SIZE - 1,
-          excludeIds
-        )
-
-        const beforeCurrent = recommendations.slice(0, TARGET_INDEX)
-        const afterCurrent = recommendations.slice(TARGET_INDEX)
-
-        queueTracks.push(...beforeCurrent)
-        queueTracks.push(currentTrack)
-        queueTracks.push(...afterCurrent)
-
-        if (queueTracks.length < QUEUE_SIZE) {
-          const remaining = tracks.filter(t => !excludeIds.has(t.id) && !queueTracks.some(q => q.id === t.id))
-          const shuffled = remaining.sort(() => Math.random() - 0.5)
-          queueTracks.push(...shuffled.slice(0, QUEUE_SIZE - queueTracks.length))
+        const track = tracks.find(t => t.id === trackId)
+        if (!track) return { status: 'error', offline: true, error: 'Track is not downloaded' }
+        if (!this.queue.length) {
+          this.queue = [track]
+          this.currentIndex = 0
+        } else {
+          this.queue.splice(this.currentIndex + 1, 0, track)
+          this.currentIndex++
         }
-
-        this.queue = queueTracks
-        this.currentIndex = TARGET_INDEX
-
-        logger.info(`[OfflineBackend] Built new queue: ${this.queue.length} tracks at index ${TARGET_INDEX}`)
       }
 
-      const simplifiedQueue = this.queue.map(t => this._simplifyTrackForQueue(t))
-      const currentTrackData = this.queue[this.currentIndex]
-
-      return {
-        status: 'playing',
-        state: {
-          current_track: currentTrackData,
-          queue: simplifiedQueue,
-          current_index: this.currentIndex,
-          is_playing: true,
-          progress_ms: 0,
-          active_device_id: getDeviceId()
-        },
-        offline: true
-      }
+      this._remember(trackId)
+      this._trimHistory()
+      this.queue = this.queue.slice(0, this.currentIndex + 1).concat(
+        this.queue.slice(this.currentIndex + 1).filter(t => t.id !== trackId)
+      )
+      await this._fillQueue(tracks)
+      return this._response()
     } catch (err) {
       logger.error('[OfflineBackend] play() failed:', err)
       return { status: 'error', offline: true, error: err.message }
     }
   }
 
-  _shiftQueueToTarget() {
-    while (this.currentIndex > TARGET_INDEX && this.queue.length > 0) {
-      const removed = this.queue.shift()
-      this.history.push(removed)
-      this.currentIndex--
-
-      if (this.history.length > 50) {
-        this.history.shift()
-      }
-    }
-  }
-
-  async _autoFillQueue() {
-    if (this.queue.length >= QUEUE_SIZE) {
-      return
-    }
-
-    try {
-      const allTracks = await cacheManager.getAllCachedTracks()
-      const tracks = allTracks
-        .map(cached => {
-          const validation = this._validateCachedTrack(cached)
-          if (!validation.isValid) return null
-          return { ...cached.metadata, has_artwork: !!cached.artworkBlob }
-        })
-        .filter(Boolean)
-
-      const currentTrack = this.queue[this.currentIndex]
-      if (!currentTrack) return
-
-      const existingIds = new Set([...this.queue.map(t => t.id), ...this.history.slice(-20).map(t => t.id)])
-      const needed = QUEUE_SIZE - this.queue.length
-
-      const recommendations = this._getOfflineRecommendations(
-        currentTrack,
-        tracks,
-        needed,
-        existingIds
-      )
-
-      this.queue.push(...recommendations)
-
-      if (this.queue.length < QUEUE_SIZE) {
-        const remaining = tracks.filter(t => !existingIds.has(t.id) && !this.queue.some(q => q.id === t.id))
-        const shuffled = remaining.sort(() => Math.random() - 0.5)
-        this.queue.push(...shuffled.slice(0, QUEUE_SIZE - this.queue.length))
-      }
-
-      logger.info(`[OfflineBackend] Auto-filled queue: ${this.queue.length} tracks`)
-    } catch (err) {
-      logger.error('[OfflineBackend] Auto-fill failed:', err)
-    }
+  async advanceTo(trackId) {
+    const index = this.queue.findIndex((t, i) => i > this.currentIndex && t.id === trackId)
+    if (index === -1) return this.play(trackId)
+    this.currentIndex = index
+    this._remember(trackId)
+    this._trimHistory()
+    await this._fillQueue()
+    return this._response()
   }
 
   async next() {
-    logger.info('[OfflineBackend] next() called')
-
-    if (this.queue.length === 0) {
-      return { status: 'error', offline: true, error: 'Queue is empty' }
+    if (!this.queue.length) {
+      const state = await this.startLocalSession({ isPlaying: true })
+      return state ? { status: 'playing', state, offline: true } : { status: 'error', offline: true, error: 'No downloaded tracks available' }
     }
-
-    if (this.currentIndex + 1 < this.queue.length) {
-      this.currentIndex++
-    } else {
-      logger.warn('[OfflineBackend] Already at end of queue')
+    if (this.currentIndex + 1 >= this.queue.length) await this._fillQueue()
+    if (this.currentIndex + 1 >= this.queue.length) {
       return { status: 'error', offline: true, error: 'No next track' }
     }
-
-    this._shiftQueueToTarget()
-
-    await this._autoFillQueue()
-
-    const simplifiedQueue = this.queue.map(t => this._simplifyTrackForQueue(t))
-    const currentTrackData = this.queue[this.currentIndex]
-
-    logger.info(`[OfflineBackend] Next: now at index ${this.currentIndex}, queue size ${this.queue.length}`)
-
-    return {
-      status: 'playing',
-      state: {
-        current_track: currentTrackData,
-        queue: simplifiedQueue,
-        current_index: this.currentIndex,
-        is_playing: true,
-        progress_ms: 0,
-        active_device_id: getDeviceId()
-      },
-      offline: true
-    }
+    this.currentIndex++
+    this._remember(this.queue[this.currentIndex].id)
+    this._trimHistory()
+    await this._fillQueue()
+    return this._response()
   }
 
   async previous() {
-    logger.info('[OfflineBackend] previous() called')
-
-    if (this.history.length === 0) {
-      logger.warn('[OfflineBackend] No history available')
+    if (this.currentIndex > 0) {
+      this.currentIndex--
+    } else if (this.history.length) {
+      this.queue.unshift(this.history.pop())
+    } else {
       return { status: 'error', offline: true, error: 'No previous track' }
     }
-
-    const prevTrack = this.history.pop()
-    this.queue.unshift(prevTrack)
-    this.currentIndex++
-
-    logger.info(`[OfflineBackend] Previous: restored from history, now at index ${this.currentIndex}`)
-
-    const simplifiedQueue = this.queue.map(t => this._simplifyTrackForQueue(t))
-    const currentTrackData = this.queue[this.currentIndex]
-
-    return {
-      status: 'playing',
-      state: {
-        current_track: currentTrackData,
-        queue: simplifiedQueue,
-        current_index: this.currentIndex,
-        is_playing: true,
-        progress_ms: 0,
-        active_device_id: getDeviceId()
-      },
-      offline: true
-    }
+    this._restoreHistory()
+    this.queue = this.queue.slice(0, QUEUE_SIZE + TARGET_INDEX)
+    return this._response()
   }
 
-  async addToQueue(_trackIds) {
-    logger.warn('[OfflineBackend] addToQueue not fully supported in offline mode - queue managed by PlaybackContext')
-
-    return {
-      status: 'ok',
-      message: 'Queue changes not persisted in offline mode',
-      offline: true,
+  async addToQueue(trackIds = []) {
+    const tracks = await this._libraryTracks()
+    const byId = new Map(tracks.map(t => [t.id, t]))
+    const added = []
+    let insertAt = this.currentIndex + 1
+    for (const id of trackIds) {
+      const track = byId.get(id)
+      if (!track || this.queue.some(t => t.id === id)) continue
+      this.queue.splice(insertAt++, 0, track)
+      added.push(id)
     }
+    return { status: 'ok', added, offline: true, state: this._state() }
   }
 
-  async removeFromQueue(_trackId) {
-    logger.warn('[OfflineBackend] removeFromQueue not fully supported in offline mode - queue managed by PlaybackContext')
-
-    return {
-      status: 'ok',
-      message: 'Queue changes not persisted in offline mode',
-      offline: true,
+  async removeFromQueue(trackId) {
+    const index = this.queue.findIndex((t, i) => i !== this.currentIndex && t.id === trackId)
+    if (index !== -1) {
+      this.queue.splice(index, 1)
+      if (index < this.currentIndex) this.currentIndex--
+      await this._fillQueue()
     }
+    return { status: 'ok', offline: true, state: this._state() }
   }
 
   async seedRadio(category = 'all', trackId = null) {
-    try {
-      logger.info(`[OfflineBackend] seedRadio(category: ${category}, trackId: ${trackId})`)
-
-      const allTracks = await cacheManager.getAllCachedTracks()
-
-      const tracks = allTracks
-        .map(cached => {
-          const validation = this._validateCachedTrack(cached)
-          if (!validation.isValid) {
-            return null
-          }
-
-          return {
-            ...cached.metadata,
-            has_artwork: !!cached.artworkBlob,
-            has_enriched_artwork: !!cached.enrichedArtworkBlob
-          }
-        })
-        .filter(Boolean)
-
-      let currentTrack = null
-
-      if (trackId) {
-        const seedTrack = tracks.find(t => t.id === trackId)
-        if (seedTrack) {
-          currentTrack = seedTrack
-          const excludeIds = new Set([seedTrack.id])
-
-          const recommendations = this._getOfflineRecommendations(
-            seedTrack,
-            tracks,
-            QUEUE_SIZE - 1,
-            excludeIds
-          )
-
-          const beforeCurrent = recommendations.slice(0, TARGET_INDEX)
-          const afterCurrent = recommendations.slice(TARGET_INDEX)
-
-          const queueTracks = []
-          queueTracks.push(...beforeCurrent)
-          queueTracks.push(currentTrack)
-          queueTracks.push(...afterCurrent)
-
-          if (queueTracks.length < QUEUE_SIZE) {
-            const remaining = tracks.filter(t => !excludeIds.has(t.id) && !queueTracks.some(q => q.id === t.id))
-            const shuffled = remaining.sort(() => Math.random() - 0.5)
-            queueTracks.push(...shuffled.slice(0, QUEUE_SIZE - queueTracks.length))
-          }
-
-          this.queue = queueTracks
-          this.currentIndex = TARGET_INDEX
-          this.history = []
-
-          logger.info(`[OfflineBackend] Seeded radio: ${this.queue.length} tracks at index ${TARGET_INDEX} (category: ${category})`)
-        }
-      }
-
-      const simplifiedQueue = this.queue.map(t => this._simplifyTrackForQueue(t))
-      const currentTrackData = this.queue[this.currentIndex]
-
-      return {
-        status: 'seeded',
-        activeSeedMode: category,
-        state: {
-          current_track: currentTrackData,
-          queue: simplifiedQueue,
-          current_index: this.currentIndex,
-          is_playing: true,
-          progress_ms: 0,
-          active_device_id: getDeviceId()
-        },
-        offline: true
-      }
-    } catch (err) {
-      logger.error('[OfflineBackend] seedRadio failed:', err)
-      throw err
+    this.radioMode = category
+    const tracks = await this._libraryTracks()
+    const current = this.queue[this.currentIndex]
+    const seed = (trackId && (tracks.find(t => t.id === trackId) || (current?.id === trackId ? current : null))) || current
+    if (!seed) {
+      const state = await this.startLocalSession({ radioMode: category, isPlaying: true })
+      return { status: 'seeded', activeSeedMode: category, state, offline: true }
     }
+    if (seed.id !== current?.id) {
+      this.queue = [...this.queue.slice(0, this.currentIndex + 1), seed]
+      this.currentIndex++
+      this._remember(seed.id)
+      this._trimHistory()
+    } else {
+      this.queue = this.queue.slice(0, this.currentIndex + 1)
+    }
+    await this._fillQueue(tracks)
+    logger.info(`[OfflineBackend] Seeded local radio (${category}) from ${seed.title}`)
+    return { status: 'seeded', activeSeedMode: category, state: this._state(), offline: true }
+  }
+
+  rememberPreferences(type, data) {
+    if (!data || (type !== 'track' && type !== 'shoutout')) return
+    const snapshot = {}
+    const now = Date.now()
+    const add = (items, prefType) => (items || []).forEach(item => {
+      const id = idOf(item)
+      if (id) snapshot[id] = { type: prefType, timestamp: now }
+    })
+    add(data.likes, 'like')
+    add(data.super_likes, 'super_like')
+    add(data.bans, 'ban')
+    const pending = readJson(STORAGE_KEYS.PENDING_PREFERENCES, []).filter(op => op.type === type)
+    pending.forEach(op => {
+      if (op.preferenceType) snapshot[op.id] = { type: op.preferenceType, timestamp: op.at }
+      else delete snapshot[op.id]
+    })
+    saveOfflinePreferences(type, snapshot)
+  }
+
+  _queuePendingWrite(type, id, preferenceType) {
+    const pending = readJson(STORAGE_KEYS.PENDING_PREFERENCES, []).filter(op => !(op.type === type && op.id === id))
+    pending.push({ type, id, preferenceType: preferenceType || null, at: Date.now() })
+    writeJson(STORAGE_KEYS.PENDING_PREFERENCES, pending.slice(-500))
+  }
+
+  takePendingPreferenceWrites() {
+    const pending = readJson(STORAGE_KEYS.PENDING_PREFERENCES, [])
+    if (pending.length) safeStorage.remove(STORAGE_KEYS.PENDING_PREFERENCES)
+    return pending
+  }
+
+  restorePendingPreferenceWrites(ops) {
+    const current = readJson(STORAGE_KEYS.PENDING_PREFERENCES, [])
+    const keys = new Set(current.map(op => `${op.type}:${op.id}`))
+    writeJson(STORAGE_KEYS.PENDING_PREFERENCES, [...ops.filter(op => !keys.has(`${op.type}:${op.id}`)), ...current].slice(-500))
   }
 
   async setPreference(type, id, preferenceType) {
@@ -837,6 +727,7 @@ class OfflineBackend {
         timestamp: Date.now(),
       }
       saveOfflinePreferences(type, preferences)
+      this._queuePendingWrite(type, id, preferenceType)
 
       logger.info(`[OfflineBackend] Set ${type} preference ${preferenceType} for ${id}`)
 
@@ -858,6 +749,7 @@ class OfflineBackend {
       const preferences = getOfflinePreferences(type)
       delete preferences[id]
       saveOfflinePreferences(type, preferences)
+      this._queuePendingWrite(type, id, null)
 
       logger.info(`[OfflineBackend] Removed ${type} preference for ${id}`)
 
@@ -972,8 +864,12 @@ class OfflineBackend {
     throw new Error('Payment requires an internet connection')
   }
 
-  async getStripeKey() {
-    throw new Error('Payment requires an internet connection')
+  async createBillingPortal() {
+    throw new Error('Managing your subscription requires an internet connection')
+  }
+
+  async getBillingStatus() {
+    throw new Error('Subscription status requires an internet connection')
   }
 
   async uploadTrackArtwork() {
@@ -986,7 +882,7 @@ class OfflineBackend {
 
   async updateAudioQuality(audioQuality) {
     try {
-      localStorage.setItem(STORAGE_KEYS.AUDIO_QUALITY, audioQuality)
+      safeStorage.set(STORAGE_KEYS.AUDIO_QUALITY, audioQuality)
       logger.info(`[OfflineBackend] Audio quality set to ${audioQuality} (will sync when online)`)
 
       return {
@@ -1019,26 +915,16 @@ class OfflineBackend {
   }
 
   async register(_username, _password) {
-    logger.warn('[OfflineBackend] Registration requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Registration requires an internet connection. Please connect to the internet to create an account.',
-      offline: true
-    }
+    throw new Error('Creating an account needs a connection to PLAiR. Please try again when you are back online.')
   }
 
-  async login(username, password) {
-    logger.warn('[OfflineBackend] Login requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Login requires an internet connection. Please connect to the internet to sign in.',
-      offline: true
-    }
+  async login(_username, _password) {
+    throw new Error('Signing in needs a connection to PLAiR. Please try again when you are back online.')
   }
 
   async getMe() {
     try {
-      const cachedUser = localStorage.getItem('cached_user')
+      const cachedUser = safeStorage.get('cached_user')
       if (cachedUser) {
         const userData = JSON.parse(cachedUser)
         logger.info('[OfflineBackend] Returning cached user data')
@@ -1061,7 +947,7 @@ class OfflineBackend {
     }
   }
 
-  async generate({ type, userRequest, sourceTrackId, batchCount }) {
+  async generate(_params) {
     logger.warn('[OfflineBackend] Music generation requires an internet connection')
     return {
       status: 'error',
@@ -1070,7 +956,7 @@ class OfflineBackend {
     }
   }
 
-  async cancelGenerationJob(jobId) {
+  async cancelGenerationJob(_jobId) {
     logger.warn('[OfflineBackend] Generation job cancellation requires an internet connection')
     return {
       status: 'error',
@@ -1088,7 +974,7 @@ class OfflineBackend {
     }
   }
 
-  async djTalk({ audio, text, context, voice_name }) {
+  async djTalk(_params) {
     const offlineResponses = [
       "Sorry buddy, I'm currently offline! 😅 Hit me up when you're back on the grid.",
       "Yo! I'm in airplane mode right now. Can't chat but the beats are still playing! ✈️",
@@ -1108,7 +994,7 @@ class OfflineBackend {
     }
   }
 
-  async getConversationHistory(limit = 3) {
+  async getConversationHistory(_limit = 3) {
     // Return empty history offline
     return {
       conversations: [],
@@ -1143,7 +1029,7 @@ class OfflineBackend {
     }
   }
 
-  async activateDevice(deviceId) {
+  async activateDevice(_deviceId) {
     logger.warn('[OfflineBackend] Device activation requires an internet connection')
     return {
       status: 'error',
@@ -1152,7 +1038,7 @@ class OfflineBackend {
     }
   }
 
-  async renameDevice(deviceId, newName) {
+  async renameDevice(_deviceId, _newName) {
     logger.warn('[OfflineBackend] Device management requires an internet connection')
     return {
       status: 'error',
@@ -1161,7 +1047,7 @@ class OfflineBackend {
     }
   }
 
-  async removeDevice(deviceId) {
+  async removeDevice(_deviceId) {
     logger.warn('[OfflineBackend] Device management requires an internet connection')
     return {
       status: 'error',
@@ -1170,7 +1056,7 @@ class OfflineBackend {
     }
   }
 
-  getHeaders(includeAuth = true) {
+  getHeaders(_includeAuth = true) {
     return {
       'Content-Type': 'application/json',
       'X-Offline-Mode': 'true',

@@ -8,9 +8,13 @@ import torch.nn.functional as F
 import gc
 import numpy as np
 from clearvoice import ClearVoice
+from clearvoice.networks import SpeechModel
 from services import log_service
 from services.base_service import SingletonService
 from config.settings import BASE_DIR
+from models_global import gpu_lease, raise_if_cuda_oom
+
+SpeechModel.get_free_gpu = lambda self: torch.cuda.current_device()
 
 class AudioClearVoiceService(SingletonService):
     def __init__(self):
@@ -204,6 +208,7 @@ class AudioClearVoiceService(SingletonService):
             except Exception:
                 pass
             gc.collect()
+            raise_if_cuda_oom(e, "ClearVoice")
             return None
 
     async def enhance_vocals(self, input_path: Path, output_path: Path) -> Optional[Path]:
@@ -213,7 +218,8 @@ class AudioClearVoiceService(SingletonService):
                 return None
 
             log_service.upscaling(f"Processing Chain: {input_path.name}")
-            return await asyncio.to_thread(self._process_audio_sync, input_path, output_path)
+            async with gpu_lease("ClearVoice"):
+                return await asyncio.to_thread(self._process_audio_sync, input_path, output_path)
 
     async def unload(self):
         self.se_model = None

@@ -8,6 +8,20 @@ import librosa
 from scipy import signal
 from services import log_service
 from services.base_service import SingletonService
+from config import settings
+from services.audio_headroom import (
+    MAX_LIMITER_REDUCTION_DB,
+    TRUE_PEAK_CEILING_DBTP,
+    db_to_linear,
+    limit_true_peak,
+    linear_to_db,
+    peak_envelope,
+    write_pcm16_dithered,
+)
+
+MASTER_TARGET_LUFS = -14.0
+SAFETY_ROLLOFF_ORDER = 3
+MIN_MEASURABLE_LUFS = -70.0
 
 class AudioMasterService(SingletonService):
 
@@ -15,7 +29,8 @@ class AudioMasterService(SingletonService):
         if getattr(self, '_initialized', False):
             return
 
-        self.target_lufs = -14.0
+        self.target_lufs = MASTER_TARGET_LUFS
+        self.true_peak_ceiling_db = TRUE_PEAK_CEILING_DBTP
         self.use_perceptual_weighting = True
         self.master_wet_mix = 0.75
         self._initialized = True
@@ -56,13 +71,15 @@ class AudioMasterService(SingletonService):
     @staticmethod
     def _apply_safety_rolloff(data: np.ndarray, rate: int) -> np.ndarray:
         nyquist = rate / 2
-        cutoff = 18000
-
-        if cutoff >= nyquist:
+        rolloff_hz = settings.MASTER_SAFETY_ROLLOFF_HZ
+        if rolloff_hz <= 0 or rolloff_hz >= nyquist * 0.99:
             return data
 
-        sos = signal.butter(6, cutoff, 'low', fs=rate, output='sos')
-        return signal.sosfilt(sos, data, axis=-1)
+        warped = np.tan(np.pi * rolloff_hz / rate) / (np.sqrt(2.0) - 1.0) ** (1.0 / (2 * SAFETY_ROLLOFF_ORDER))
+        cutoff = rate / np.pi * np.arctan(warped)
+
+        sos = signal.butter(SAFETY_ROLLOFF_ORDER, cutoff, 'low', fs=rate, output='sos')
+        return signal.sosfiltfilt(sos, data, axis=-1)
 
     @staticmethod
     def _apply_bell_boost(data: np.ndarray, rate: int, freq: float, gain_db: float, q: float = 1.0) -> np.ndarray:
@@ -71,7 +88,7 @@ class AudioMasterService(SingletonService):
 
         w0 = 2 * np.pi * freq / rate
         alpha = np.sin(w0) / (2 * q)
-        amp = 10 ** (gain_db / 40)
+        amp = 10 ** ((gain_db / 2) / 40)
 
         b0 = 1 + alpha * amp
         b1 = -2 * np.cos(w0)
@@ -91,7 +108,7 @@ class AudioMasterService(SingletonService):
             return data
 
         w0 = 2 * np.pi * freq / rate
-        amp = 10 ** (gain_db / 40)
+        amp = 10 ** ((gain_db / 2) / 40)
         q_val = 0.71
         alpha = np.sin(w0) / (2 * q_val)
 
@@ -106,14 +123,6 @@ class AudioMasterService(SingletonService):
         a = np.array([1.0, a1 / a0, a2 / a0])
 
         return signal.filtfilt(b, a, data, axis=-1)
-
-    @staticmethod
-    def _soft_clip(data: np.ndarray, threshold: float = 0.95) -> np.ndarray:
-        return np.where(
-            np.abs(data) > threshold,
-            np.sign(data) * (threshold + (1 - threshold) * np.tanh((np.abs(data) - threshold) / (1 - threshold))),
-            data
-        )
 
     @staticmethod
     def _analyze_multiband_tonality(avg_spectrum_db: np.ndarray, freqs: np.ndarray) -> Dict[str, Any]:
@@ -158,7 +167,7 @@ class AudioMasterService(SingletonService):
 
         return result
 
-    def _apply_adaptive_notch_filter(self, data: np.ndarray, rate: int) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def _apply_adaptive_notch_filter(self, data: np.ndarray, rate: int, wet_mix: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         original_data = data.copy()
 
         if data.ndim > 1:
@@ -267,7 +276,7 @@ class AudioMasterService(SingletonService):
             action = "Boost" if gain > 0 else "Cut"
             info["tonal_fixes"].append(f"Air {action}: {gain:+.1f}dB @ 8kHz")
 
-        wet = self.master_wet_mix
+        wet = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         dry = 1.0 - wet
         filtered_data = original_data * dry + filtered_data * wet
 
@@ -277,51 +286,54 @@ class AudioMasterService(SingletonService):
             self,
             input_path: Path,
             output_path: Path,
-            target_lufs: float
+            target_lufs: float,
+            wet_mix: Optional[float] = None
     ) -> Tuple[Optional[Path], dict]:
         try:
-            data, rate = sf.read(str(input_path))
+            data, rate = sf.read(str(input_path), dtype='float32', always_2d=True)
+            data = data.T.astype(np.float64)
 
-            if data.ndim > 1:
-                data = data.T
-
-            data, master_info = self._apply_adaptive_notch_filter(data, rate)
+            data, master_info = self._apply_adaptive_notch_filter(data, rate, wet_mix)
 
             info = master_info.copy()
 
             meter = pyln.Meter(rate)
-            data_for_meter = data.T if data.ndim > 1 else data
-            loudness = meter.integrated_loudness(data_for_meter)
+            loudness = float(meter.integrated_loudness(data.T))
+            measurable = np.isfinite(loudness) and loudness > MIN_MEASURABLE_LUFS
 
-            gain_db = target_lufs - loudness
-            gain_linear = 10 ** (gain_db / 20.0)
+            gain_db = target_lufs - loudness if measurable else 0.0
+            normalized = data * db_to_linear(gain_db)
 
-            normalized = data * gain_linear
+            envelope = peak_envelope(normalized)
+            pre_limit_peak_db = linear_to_db(float(envelope.max()) if envelope.size else 0.0)
+            excess_db = pre_limit_peak_db - self.true_peak_ceiling_db
+            trim_db = max(0.0, excess_db - MAX_LIMITER_REDUCTION_DB)
+            if trim_db > 0.0:
+                trim = db_to_linear(-trim_db)
+                normalized *= trim
+                envelope *= trim
+
+            limited, limiter_info = limit_true_peak(
+                normalized, rate, ceiling_db=self.true_peak_ceiling_db, envelope=envelope
+            )
 
             info["original_loudness"] = loudness
             info["target_lufs"] = target_lufs
-            info["applied_gain_db"] = gain_db
+            info["applied_gain_db"] = gain_db - trim_db
+            info["loudness_trim_db"] = trim_db
+            info["pre_limit_true_peak_db"] = pre_limit_peak_db
+            info["limiter"] = limiter_info
+            info["output_true_peak_db"] = limiter_info["output_true_peak_db"]
+            info["output_loudness"] = float(meter.integrated_loudness(limited.T))
 
-            pre_clip_peak = np.abs(normalized).max()
-            if pre_clip_peak > 0.98:
-                info["soft_clipping_engaged"] = True
-                normalized = self._soft_clip(normalized, threshold=0.95)
-            else:
-                info["soft_clipping_engaged"] = False
-
-            clipped = np.clip(normalized, -1.0, 1.0)
-            info["safety_hard_clip"] = not np.array_equal(normalized, clipped)
-
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            to_save = clipped.T if clipped.ndim > 1 else clipped
-            sf.write(str(output_path), to_save, rate, subtype='PCM_16')
+            write_pcm16_dithered(output_path, limited, rate)
 
             return output_path, info
 
         except Exception as e:
             import traceback
-            traceback.print_exc()
+            log_service.error(f"Mastering failed: {e}")
+            log_service.error(f"Traceback: {traceback.format_exc()}")
             return None, {"error": str(e)}
 
     async def master_audio(
@@ -330,7 +342,22 @@ class AudioMasterService(SingletonService):
             output_path: Path = None,  # type: ignore
             target_lufs: float = None,  # type: ignore
             progress_callback=None,
+            wet_mix: Optional[float] = None,
     ) -> Optional[Path]:
+        result, _info = await self.master_audio_with_report(
+            input_path, output_path, target_lufs, progress_callback, wet_mix
+        )
+        return result
+
+    async def master_audio_with_report(
+            self,
+            input_path: Path,
+            output_path: Path = None,  # type: ignore
+            target_lufs: float = None,  # type: ignore
+            progress_callback=None,
+            wet_mix: Optional[float] = None,
+    ) -> Tuple[Optional[Path], Dict[str, Any]]:
+        effective_wet_mix = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         if output_path is None:
             output_path = input_path
 
@@ -346,12 +373,13 @@ class AudioMasterService(SingletonService):
             self._master_audio_sync,
             input_path,
             output_path,
-            target_lufs
+            target_lufs,
+            effective_wet_mix
         )
 
         if not result:
             log_service.error(f"Final Master failed: {info.get('error', 'Unknown error')}")
-            return None
+            return None, info
 
         if "analysis" in info:
             stats = info["analysis"]
@@ -370,7 +398,7 @@ class AudioMasterService(SingletonService):
             notches = info.get("notches", [])
             if len(notches) > 0:
                 log_service.upscaling(
-                    f"  [SURGICAL EQ] Removed {len(notches)} resonant peaks/whistles (Wet Mix: {self.master_wet_mix:.1f})")
+                    f"  [SURGICAL EQ] Removed {len(notches)} resonant peaks/whistles (Wet Mix: {effective_wet_mix:.2f})")
 
         if info.get("tonal_fixes"):
             log_service.upscaling("  [TONAL SHAPING]")
@@ -379,20 +407,31 @@ class AudioMasterService(SingletonService):
         else:
             log_service.upscaling("  [TONAL SHAPING] Spectral balance is optimal (No EQ needed)")
 
-        if info.get("soft_clipping_engaged"):
-            log_service.upscaling(f"  [SOFT CLIPPER] Engaged to preserve transients while hitting {target_lufs} LUFS")
+        limiter = info.get("limiter", {})
+        if limiter.get("passes"):
+            log_service.upscaling(
+                f"  [LIMITER] True-peak limiting: max {limiter.get('max_reduction_db', 0.0):.1f}dB on "
+                f"{limiter.get('limited_percent', 0.0):.2f}% of samples"
+            )
         else:
             log_service.upscaling("  [LIMITER] Clean normalization (Headroom available)")
+        if info.get("loudness_trim_db", 0.0) > 0.0:
+            log_service.upscaling(
+                f"  [LOUDNESS] Held {info['loudness_trim_db']:.1f}dB below {target_lufs} LUFS to avoid over-limiting"
+            )
+        log_service.upscaling(
+            f"  [OUTPUT] {info.get('output_loudness', float('nan')):.1f} LUFS | "
+            f"true peak {info.get('output_true_peak_db', 0.0):.2f} dBTP (ceiling {self.true_peak_ceiling_db:.1f})"
+        )
 
         log_service.upscaling(f"Final Master complete: {output_path.name}")
-        return result
+        return result, info
 
     @staticmethod
     def _analyze_loudness_sync(audio_path: Path) -> Optional[float]:
-        data, rate = sf.read(str(audio_path))
+        data, rate = sf.read(str(audio_path), dtype='float32')
         meter = pyln.Meter(rate)
-        data_for_meter = data.T if data.ndim > 1 else data
-        loudness = meter.integrated_loudness(data_for_meter)
+        loudness = meter.integrated_loudness(data)
         return float(loudness)
 
     async def unload(self):

@@ -1,5 +1,44 @@
 import {logger} from './logger'
+import {safeStorage} from './safeStorage'
 import {AudioInteractionManager} from './audioInteractionManager'
+
+const MASTER_GAIN_HEADROOM = 1.0
+const STREAM_CANPLAY_TIMEOUT_MS = 20000
+const SEEK_METADATA_TIMEOUT_MS = 8000
+const SOURCE_RESOLVE_TIMEOUT_MS = 10000
+
+function createSlot() {
+  return {
+    element: null,
+    source: null,
+    gain: null,
+    mediaSource: null,
+    sourceBuffer: null,
+    chunks: [],
+    fetchController: null,
+    isComplete: false,
+    trackId: null,
+    metadata: null,
+    blobUrl: null,
+    isFadingOut: false,
+    loaded: false,
+    token: 0,
+  }
+}
+
+function abortError() {
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortError(error) {
+  return error?.name === 'AbortError'
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw abortError()
+}
 
 export class AudioEngine {
   constructor() {
@@ -16,8 +55,8 @@ export class AudioEngine {
     this.isActiveDevice = false
 
     this.slots = {
-      A: { element: null, source: null, gain: null, mediaSource: null, sourceBuffer: null, chunks: [], fetchController: null, isComplete: false, trackId: null, metadata: null, blobUrl: null, isFadingOut: false },
-      B: { element: null, source: null, gain: null, mediaSource: null, sourceBuffer: null, chunks: [], fetchController: null, isComplete: false, trackId: null, metadata: null, blobUrl: null, isFadingOut: false }
+      A: createSlot(),
+      B: createSlot()
     }
 
     this.sfxElement = null
@@ -28,6 +67,7 @@ export class AudioEngine {
 
     this.onCrossfadeStart = null
     this.onCrossfadeStateChange = null
+    this.onHoldReached = null
     this.onChunkReceived = null
     this.onStreamComplete = null
     this.onBufferStatusChange = null
@@ -44,10 +84,8 @@ export class AudioEngine {
     //   vinylSeekDuration    - Seek ramp down/up
     //
     // Methods:
-    //   _vinylRapidRampUp    - Play: 0.1 → 1.0 (motor starting)
-    //   _vinylRapidRampDown  - Pause: 1.0 → 0.1 (motor stopping)
-    //   _vinylSeekRampDown   - Seek: 1.0 → 0.3 (needle lifting)
-    //   _vinylSeekRampUp     - Seek: 0.3 → 1.0 (needle dropping)
+    //   _vinylAnimate(el, from, to, ms) - Unified pitch ramp
+    //   _vinylSlowRampDown(el, ms)      - Eased ramp with wobble (crossfade out)
     //   _vinylSlowRampUp     - Incoming track spin-up during crossfade
     //   _vinylSlowRampDown   - Outgoing track slowdown with wobble
     //   _startVinylWobble    - Pitch wobble while waiting for next track
@@ -63,19 +101,37 @@ export class AudioEngine {
     this.vinylRapidDuration = 150
     this.vinylSeekDuration = 80
     this.timeUpdateHandler = null
+    this.endedHandler = null
     this.timeUpdateElement = null
     this.crossfadeScheduled = false
 
     this.initialized = false
+    this._initPromise = null
     this.isUnlockGestureSetup = false
     this.boundUnlockAudio = this.unlockAudio.bind(this)
     this.onUnlockedCallback = null
-    this.pendingCleanupTimers = []
+    this.pendingCleanups = []
 
-    this._isLoadingAnyTrack = false
-    this._currentLoadAbortController = null
+    this._opChain = Promise.resolve()
+    this._opGen = 0
+    this._latestPreemptGen = 0
+    this._pendingOps = 0
+    this._op = null
+    this._slotToken = 0
+    this._pauseTimer = null
+    this._vinylTimers = new Set()
 
     this.vinylWobbleActive = false
+    this._hold = null
+  }
+
+  _scheduleAudioTick(callback) {
+    const timer = setTimeout(() => {
+      this._vinylTimers.delete(timer)
+      callback()
+    }, 16)
+    this._vinylTimers.add(timer)
+    return timer
   }
 
   setActiveDevice(isActive) {
@@ -83,8 +139,8 @@ export class AudioEngine {
     this.isActiveDevice = isActive
 
     if (wasActive && !isActive) {
-      logger.info('[AudioEngine] 🔕 Device deactivated - stopping audio immediately')
-      this.stopImmediately()
+      logger.info('[AudioEngine] 🔕 Device deactivated - releasing audio')
+      this._releaseAll()
     } else if (!wasActive && isActive) {
       logger.info('[AudioEngine] 🔔 Device activated - audio playback enabled')
     }
@@ -110,6 +166,13 @@ export class AudioEngine {
     }
   }
 
+  _rampGain(gainNode, from, to, durationSec) {
+    const now = this.context.currentTime
+    gainNode.gain.cancelScheduledValues(now)
+    gainNode.gain.setValueAtTime(from, now)
+    gainNode.gain.linearRampToValueAtTime(to, now + durationSec)
+  }
+
   _enforceActiveDevice(operation = 'operation') {
     if (!this.isActiveDevice) {
       logger.warn(`[AudioEngine] ⛔ Blocked ${operation}: Not active device`)
@@ -120,16 +183,23 @@ export class AudioEngine {
 
   async initialize() {
     if (this.initialized) return
+    if (!this._initPromise) {
+      this._initPromise = this._initialize().finally(() => {
+        this._initPromise = null
+      })
+    }
+    return this._initPromise
+  }
 
+  async _initialize() {
     const AudioContext = window.AudioContext || window['webkitAudioContext']
     this.context = new AudioContext({
-      latencyHint: 'playback',
-      sampleRate: 48000
+      latencyHint: 'playback'
     })
 
     AudioInteractionManager.audioContexts.add(this.context)
 
-    const preferredSpeaker = localStorage.getItem('preferredSpeakerId')
+    const preferredSpeaker = safeStorage.get('preferredSpeakerId')
     if (preferredSpeaker) {
       await this.setOutputDevice(preferredSpeaker)
     }
@@ -168,7 +238,7 @@ export class AudioEngine {
 
     this.masterGain.connect(this.context.destination)
 
-    this.masterGain.gain.value = 1.122
+    this.masterGain.gain.value = MASTER_GAIN_HEADROOM
     this.musicGain.gain.value = 1.0
     this.uiSoundsGain.gain.value = 1.0
 
@@ -213,17 +283,20 @@ export class AudioEngine {
   _attachBufferMonitors(slot) {
     if (!slot || !slot.element) return
 
+    const isCurrent = () => this.currentSlot === slot
+
     const handleWaiting = () => {
-      if (slot.element.getAttribute('data-blob-url') === 'true') return
+      if (!isCurrent() || slot.element.getAttribute('data-blob-url') === 'true') return
       this._reportStarvation(true)
     }
 
     const handlePlaying = () => {
+      if (!isCurrent()) return
       this._reportStarvation(false)
     }
 
     const handleStalled = () => {
-      if (slot.element.getAttribute('data-blob-url') === 'true') return
+      if (!isCurrent() || slot.element.getAttribute('data-blob-url') === 'true') return
       this._reportStarvation(true)
     }
 
@@ -334,8 +407,6 @@ export class AudioEngine {
         logger.info('[AudioEngine] Context suspended, waiting for user gesture')
       }
     }
-
-    return Promise.resolve()
   }
 
   getCurrentTrackId() {
@@ -346,41 +417,207 @@ export class AudioEngine {
     return this.nextTrackId
   }
 
-  async _cleanupNextSlot(next) {
-    if (next.fetchController) {
-      next.fetchController.abort()
-      next.fetchController = null
-    }
-
-    if (next.mediaSource) {
-      try {
-        if (next.sourceBuffer && next.sourceBuffer.updating) {
-          await new Promise(resolve => {
-            next.sourceBuffer.addEventListener('updateend', resolve, { once: true })
-          })
-        }
-
-        if (next.mediaSource.readyState === 'open') {
-          next.mediaSource.endOfStream()
-        }
-      } catch (e) {
-        logger.warn('[AudioEngine] Error closing previous MediaSource:', e)
-      }
-      next.mediaSource = null
-      next.sourceBuffer = null
-    }
-
-    if (next.blobUrl) {
-      URL.revokeObjectURL(next.blobUrl)
-      next.blobUrl = null
-    }
-
-    next.chunks = []
-    next.isComplete = false
-    next.isFadingOut = false // Reset state
+  hasCurrentSource() {
+    const slot = this.currentSlot
+    return !!slot && slot.loaded && !!slot.trackId && slot.trackId === this.currentTrackId
   }
 
-  async _loadBlobToElement(element, url, slot, shouldRejectOnError = false) {
+  isNextReady(trackId) {
+    const next = this.nextSlot
+    return !!next && next.loaded && !next.isFadingOut && next.trackId === trackId && this.nextTrackId === trackId
+  }
+
+  isTransportBusy() {
+    return this._pendingOps > 0
+  }
+
+  setCrossfadeHint(trackId, hint) {
+    const slot = this.currentSlot
+    if (slot && slot.trackId === trackId && slot.metadata) {
+      slot.metadata.crossfade_hint = hint
+    }
+  }
+
+  _enqueue(kind, trackId, fn) {
+    const gen = ++this._opGen
+    const preempt = kind === 'switch' || kind === 'reload'
+    if (preempt) {
+      this._latestPreemptGen = gen
+      const inFlight = this._op
+      const sameTrack = kind === 'switch' && inFlight?.trackId === trackId &&
+        (inFlight.kind === 'preload' || inFlight.kind === 'switch')
+      if (inFlight && !sameTrack) {
+        inFlight.controller.abort()
+      }
+    }
+    this._pendingOps++
+
+    const run = async () => {
+      try {
+        const superseded = preempt ? this._latestPreemptGen !== gen : this._opGen !== gen
+        if (superseded) return { status: 'superseded' }
+        const controller = new AbortController()
+        const op = { kind, trackId, controller, gen }
+        this._op = op
+        try {
+          return await fn(controller.signal)
+        } catch (error) {
+          if (isAbortError(error) || controller.signal.aborted) {
+            logger.info(`[Audio] 🚫 ${kind} superseded for ${trackId ? trackId.slice(0, 8) : 'none'}`)
+            return { status: 'superseded' }
+          }
+          throw error
+        } finally {
+          if (this._op === op) this._op = null
+        }
+      } finally {
+        this._pendingOps--
+      }
+    }
+
+    const result = this._opChain.then(run, run)
+    this._opChain = result.catch(() => {})
+    return result
+  }
+
+  _abortAllOps() {
+    this._opGen++
+    this._latestPreemptGen = this._opGen
+    if (this._op) this._op.controller.abort()
+  }
+
+  _awaitAbortable(promise, signal, onLateValue = null) {
+    if (!signal) return promise
+    if (signal.aborted) {
+      if (onLateValue) promise.then(onLateValue, () => {})
+      return Promise.reject(abortError())
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        if (onLateValue) promise.then(onLateValue, () => {})
+        reject(abortError())
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort)
+          if (signal.aborted) {
+            if (onLateValue) onLateValue(value)
+            return
+          }
+          resolve(value)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        }
+      )
+    })
+  }
+
+  _withTimeout(value, timeoutMs) {
+    const promise = Promise.resolve(value)
+    let timer = null
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Source lookup timed out')), timeoutMs)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+  }
+
+  _cancelSlotCleanup(slot) {
+    let hadPending = false
+    this.pendingCleanups = this.pendingCleanups.filter(entry => {
+      if (entry.slot !== slot) return true
+      clearTimeout(entry.timer)
+      hadPending = true
+      return false
+    })
+    if (hadPending) {
+      slot.isFadingOut = false
+      if (this.onCrossfadeStateChange) this.onCrossfadeStateChange(false)
+    }
+  }
+
+  _flushPendingCleanups() {
+    const pending = this.pendingCleanups
+    if (!pending.length) return
+    this.pendingCleanups = []
+    pending.forEach(entry => {
+      clearTimeout(entry.timer)
+      entry.slot.isFadingOut = false
+      if (entry.slot !== this.currentSlot && entry.slot.token === entry.token) {
+        this._resetSlot(entry.slot)
+      }
+    })
+    if (this.onCrossfadeStateChange) this.onCrossfadeStateChange(false)
+  }
+
+  _resetSlot(slot) {
+    if (!slot) return
+    this._cancelSlotCleanup(slot)
+
+    if (slot.fetchController) {
+      slot.fetchController.abort()
+      slot.fetchController = null
+    }
+
+    slot.mediaSource = null
+    slot.sourceBuffer = null
+
+    const element = slot.element
+    if (element) {
+      try {
+        element.pause()
+        element.playbackRate = 1.0
+        if (element.getAttribute('src') !== null) {
+          element.removeAttribute('src')
+          element.load()
+        }
+      } catch (e) {
+        logger.warn('[AudioEngine] Slot reset error:', e)
+      }
+    }
+
+    if (slot.blobUrl) {
+      URL.revokeObjectURL(slot.blobUrl)
+      slot.blobUrl = null
+    }
+
+    if (slot.gain && this.context) {
+      slot.gain.gain.cancelScheduledValues(0)
+      slot.gain.gain.value = 0
+    }
+
+    slot.chunks = []
+    slot.isComplete = false
+    slot.isFadingOut = false
+    slot.loaded = false
+    slot.trackId = null
+    slot.metadata = null
+    slot.token = ++this._slotToken
+  }
+
+  _releaseAll() {
+    this._hold = null
+    this._abortAllOps()
+    this._stopVinylWobble()
+    if (this._pauseTimer) {
+      clearTimeout(this._pauseTimer)
+      this._pauseTimer = null
+    }
+    this._detachAutoCrossfade()
+    const hadPending = this.pendingCleanups.length > 0
+    this.pendingCleanups.forEach(entry => clearTimeout(entry.timer))
+    this.pendingCleanups = []
+    this._resetSlot(this.slots.A)
+    this._resetSlot(this.slots.B)
+    this.currentTrackId = null
+    this.nextTrackId = null
+    this.crossfadeScheduled = false
+    if (hadPending && this.onCrossfadeStateChange) this.onCrossfadeStateChange(false)
+  }
+
+  _loadBlobToElement(element, url, slot, shouldRejectOnError = false, signal = null) {
     element.removeAttribute('crossOrigin')
     element.setAttribute('data-blob-url', 'true')
     element.preload = 'auto'
@@ -392,17 +629,18 @@ export class AudioEngine {
     }
 
     return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        element.removeEventListener('canplay', onCanPlay)
+        element.removeEventListener('error', onError)
+        signal?.removeEventListener('abort', onAbort)
+        clearTimeout(timeout)
+      }
+
       const timeout = setTimeout(() => {
         cleanup()
         logger.warn('[Audio] Blob load timeout, proceeding')
         resolve()
       }, 8000)
-
-      const cleanup = () => {
-        element.removeEventListener('canplay', onCanPlay)
-        element.removeEventListener('error', onError)
-        clearTimeout(timeout)
-      }
 
       const onCanPlay = () => {
         cleanup()
@@ -419,12 +657,24 @@ export class AudioEngine {
         }
       }
 
+      const onAbort = () => {
+        cleanup()
+        reject(abortError())
+      }
+
       element.addEventListener('canplay', onCanPlay, { once: true })
       element.addEventListener('error', onError, { once: true })
+      if (signal) {
+        if (signal.aborted) {
+          onAbort()
+          return
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
     })
   }
 
-  async _setupMediaSourceStream(element, url, trackId, slot, waitForCanPlay = true) {
+  _setupMediaSourceStream(element, url, trackId, slot, waitForCanPlay = true, signal = null) {
     element.crossOrigin = 'anonymous'
     element.removeAttribute('data-blob-url')
     element.preload = 'metadata'
@@ -432,41 +682,51 @@ export class AudioEngine {
     return new Promise((resolve, reject) => {
       const mediaSource = new MediaSource()
       slot.mediaSource = mediaSource
+      const slotToken = slot.token
 
-      let resolved = false
+      let settled = false
+      let timeout = null
 
-      const maybeResolve = () => {
-        if (!waitForCanPlay || resolved) return
-        resolved = true
+      const cleanup = () => {
         element.removeEventListener('canplay', onCanPlay)
         element.removeEventListener('error', onError)
-        resolve()
+        signal?.removeEventListener('abort', onAbort)
+        if (timeout) clearTimeout(timeout)
       }
 
-      const onCanPlay = () => maybeResolve()
+      const finish = (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (error) reject(error)
+        else resolve()
+      }
+
+      const onCanPlay = () => {
+        if (waitForCanPlay) finish()
+      }
       const onError = (e) => {
-        if (resolved) return
-        resolved = true
-        element.removeEventListener('canplay', onCanPlay)
-        element.removeEventListener('error', onError)
-        if (waitForCanPlay) {
-          reject(e)
-        } else {
-          resolve()
+        if (waitForCanPlay) finish(e?.target?.error || new Error('Media element error'))
+        else finish()
+      }
+      const onAbort = () => finish(abortError())
+
+      element.addEventListener('canplay', onCanPlay)
+      element.addEventListener('error', onError)
+      if (signal) {
+        if (signal.aborted) {
+          finish(abortError())
+          return
         }
+        signal.addEventListener('abort', onAbort, { once: true })
       }
-
       if (waitForCanPlay) {
-        element.addEventListener('canplay', onCanPlay, { once: true })
-        element.addEventListener('error', onError, { once: true })
-      } else {
-        element.addEventListener('canplay', onCanPlay)
-        element.addEventListener('error', onError)
+        timeout = setTimeout(() => finish(new Error('Stream start timed out')), STREAM_CANPLAY_TIMEOUT_MS)
       }
 
-      mediaSource.addEventListener('sourceopen', async () => {
+      mediaSource.addEventListener('sourceopen', () => {
         try {
-          if (slot.mediaSource !== mediaSource) return
+          if (slot.mediaSource !== mediaSource || slot.token !== slotToken || (settled && waitForCanPlay)) return
 
           const sourceBuffer = mediaSource.addSourceBuffer('audio/webm; codecs="opus"')
           slot.sourceBuffer = sourceBuffer
@@ -476,6 +736,7 @@ export class AudioEngine {
 
           this._streamToBuffer(url, sourceBuffer, slot.chunks, controller.signal, slot)
             .then(async (isComplete) => {
+              if (slot.token !== slotToken) return
               slot.isComplete = isComplete
 
               while (sourceBuffer.updating) {
@@ -497,27 +758,138 @@ export class AudioEngine {
             })
 
           if (!waitForCanPlay) {
-            resolve()
+            finish()
           } else if (element.readyState >= 2) {
-            maybeResolve()
+            finish()
           }
         } catch (err) {
           logger.error('[Audio] MediaSource setup error:', err)
-          reject(err)
+          finish(err)
         }
       })
 
-      mediaSource.addEventListener('error', (e) => reject(e))
+      mediaSource.addEventListener('error', (e) => finish(e))
       const blobUrl = URL.createObjectURL(mediaSource)
       slot.blobUrl = blobUrl
       element.src = blobUrl
     })
   }
 
-  _setupAutoCrossfade() {
-    if (this.timeUpdateHandler && this.timeUpdateElement) {
-      this.timeUpdateElement.removeEventListener('timeupdate', this.timeUpdateHandler)
+  async _loadIntoSlot(slot, trackId, source, metadata, signal, { waitForCanPlay = true, rejectOnError = true } = {}) {
+    this._resetSlot(slot)
+    const token = slot.token
+    slot.trackId = trackId
+    slot.metadata = metadata || {}
+    if (slot === this.nextSlot) this.nextTrackId = trackId
+
+    try {
+      if (source.isBlobUrl) {
+        await this._loadBlobToElement(slot.element, source.url, slot, rejectOnError, signal)
+      } else {
+        await this._setupMediaSourceStream(slot.element, source.url, trackId, slot, waitForCanPlay, signal)
+      }
+      throwIfAborted(signal)
+      if (slot.token !== token) throw abortError()
+      slot.loaded = true
+    } catch (error) {
+      if (slot.token === token) {
+        this._resetSlot(slot)
+        if (this.nextSlot === slot && this.nextTrackId === trackId) this.nextTrackId = null
+      }
+      throw error
     }
+  }
+
+  _detachAutoCrossfade() {
+    if (this.timeUpdateElement) {
+      if (this.timeUpdateHandler) this.timeUpdateElement.removeEventListener('timeupdate', this.timeUpdateHandler)
+      if (this.endedHandler) this.timeUpdateElement.removeEventListener('ended', this.endedHandler)
+    }
+    this.timeUpdateElement = null
+  }
+
+  _crossfadePlan(currentTrack, metadataDurationMs) {
+    const crossfadeHint = currentTrack?.crossfade_hint
+    let startFromEnd = this.crossfadeDuration
+    let duration = this.crossfadeDuration
+    if (crossfadeHint) {
+      startFromEnd = metadataDurationMs - crossfadeHint.optimal_start_ms
+      duration = crossfadeHint.duration_ms
+    }
+    return { crossfadeHint, startFromEnd, duration }
+  }
+
+  _holdOnCurrent() {
+    return !!this._hold && this._hold.trackId === this.currentTrackId
+  }
+
+  _reachHold() {
+    const hold = this._hold
+    if (!hold || hold.reached || hold.trackId !== this.currentTrackId) return
+    hold.reached = true
+    if (this.vinylWobbleActive) this._stopVinylWobble()
+    logger.info(`[Audio] 🎙️ Holding after ${hold.trackId.slice(0, 8)} for a talk break`)
+    this.onHoldReached?.(hold.trackId)
+  }
+
+  talkUpPointMs(maxMs = 12000, minMs = 800) {
+    const slot = this.currentSlot
+    const durationMs = slot?.metadata?.duration_ms || 0
+    if (!durationMs) return minMs
+    const { startFromEnd } = this._crossfadePlan(slot.metadata, durationMs)
+    return Math.max(minMs, Math.min(maxMs, Number.isFinite(startFromEnd) ? startFromEnd : minMs))
+  }
+
+  armHold(trackId, { talkUpMs = 1000, minLeadMs = 1500 } = {}) {
+    if (!this.isActiveDevice || !trackId || this.currentTrackId !== trackId || !this.hasCurrentSource()) return false
+    if (this._hold?.trackId === trackId) return true
+    if (this.crossfadeScheduled || this.isTransportBusy()) return false
+    const element = this.currentSlot.element
+    const durationMs = this.currentSlot.metadata?.duration_ms ||
+      (Number.isFinite(element?.duration) ? element.duration * 1000 : 0)
+    if (!element || !durationMs || element.ended) return false
+    const remainingMs = durationMs - element.currentTime * 1000
+    if (remainingMs < talkUpMs + minLeadMs) return false
+    this._hold = { trackId, talkUpMs, reached: false }
+    if (this.vinylWobbleActive) this._stopVinylWobble()
+    return true
+  }
+
+  clearHold() {
+    this._hold = null
+  }
+
+  isHolding(trackId = null) {
+    return !!this._hold && (!trackId || this._hold.trackId === trackId)
+  }
+
+  isHoldReached(trackId = null) {
+    return !!this._hold?.reached && (!trackId || this._hold.trackId === trackId)
+  }
+
+  resumeFromHold({ fadeMs = 1500 } = {}) {
+    const hold = this._hold
+    this._hold = null
+    if (!hold || !this.isActiveDevice || this.currentTrackId !== hold.trackId || this.crossfadeScheduled) return false
+    if (!this.nextTrackId || !this.nextSlot.loaded) {
+      this._checkEndedAdvance()
+      return false
+    }
+    const durationMs = Math.max(50, fadeMs)
+    this._startAutoCrossfade(durationMs, {
+      planned_start_from_end_ms: 0,
+      planned_duration_ms: durationMs,
+      actual_start_from_end_ms: 0,
+      actual_duration_ms: durationMs,
+      used_backend_hint: false,
+      backend_confidence: null,
+      talk_break: true
+    })
+    return true
+  }
+
+  _setupAutoCrossfade() {
+    this._detachAutoCrossfade()
 
     this.crossfadeScheduled = false
     this.nextTrackWaitingLogged = false
@@ -526,33 +898,29 @@ export class AudioEngine {
       const currentTrack = this.currentSlot.metadata
       const metadataDurationMs = currentTrack?.duration_ms || 0
 
-      if (!metadataDurationMs) {
+      if (this._holdOnCurrent()) {
+        if (!this._hold.reached && metadataDurationMs &&
+          metadataDurationMs - element.currentTime * 1000 <= this._hold.talkUpMs) {
+          this._reachHold()
+        }
         return
       }
 
-      if (this.crossfadeScheduled) {
+      if (!metadataDurationMs || this.crossfadeScheduled || !this.nextTrackId || this.isTransportBusy()) {
         return
       }
 
-      if (!this.nextTrackId) {
-        return
-      }
+      const { crossfadeHint, startFromEnd, duration } = this._crossfadePlan(currentTrack, metadataDurationMs)
+      const currentTimeMs = element.currentTime * 1000
+      const timeRemaining = metadataDurationMs - currentTimeMs
 
-      if (!this.nextSlot.element.src || this.nextSlot.element.readyState < 2) {
+      if (!this.nextSlot.loaded || this.nextSlot.element.readyState < 2) {
         if (!this.nextTrackWaitingLogged) {
           logger.warn(`[Audio] ⏳ Waiting for next track to load (readyState: ${this.nextSlot.element.readyState})`)
           this.nextTrackWaitingLogged = true
         }
 
-        const crossfadeHint = currentTrack?.crossfade_hint
-        let actualStartFromEnd = this.crossfadeDuration
-        if (crossfadeHint) {
-          actualStartFromEnd = metadataDurationMs - crossfadeHint.optimal_start_ms
-        }
-        const currentTimeMs = element.currentTime * 1000
-        const timeRemaining = metadataDurationMs - currentTimeMs
-
-        if (timeRemaining <= actualStartFromEnd + 2000 && !this.vinylWobbleActive) {
+        if (timeRemaining <= startFromEnd + 2000 && !this.vinylWobbleActive) {
           this.vinylWobbleActive = true
           this._startVinylWobble(element)
           logger.info('[Audio] 🎚️ Vinyl wobble started - next track not ready')
@@ -565,175 +933,196 @@ export class AudioEngine {
         logger.info('[Audio] 🎚️ Vinyl wobble stopped - next track ready')
       }
 
-      const crossfadeHint = currentTrack?.crossfade_hint
-      let actualStartFromEnd = this.crossfadeDuration
-      let actualDuration = this.crossfadeDuration
-
-      if (crossfadeHint) {
-        actualStartFromEnd = metadataDurationMs - crossfadeHint.optimal_start_ms
-        actualDuration = crossfadeHint.duration_ms
-      }
-
-      const duration = metadataDurationMs
-      const currentTime = element.currentTime * 1000
-      const timeRemaining = duration - currentTime
-
-      if (timeRemaining <= actualStartFromEnd) {
-        this.crossfadeScheduled = true
-
-        const oldTrackId = this.currentTrackId
-        const newTrackId = this.nextTrackId
-
-        logger.info(
-          `[Audio] 🔀 AUTO-CROSSFADE: ${oldTrackId} -> ${newTrackId} (${actualDuration}ms)`
-        )
-
-        this.currentTrackId = newTrackId
-        this.nextTrackId = null
-
-        this._executeCrossfade(actualDuration, true, true).then(() => {
-          this._setupAutoCrossfade()
+      if (timeRemaining <= startFromEnd) {
+        this._startAutoCrossfade(duration, {
+          planned_start_from_end_ms: startFromEnd,
+          planned_duration_ms: duration,
+          actual_start_from_end_ms: timeRemaining,
+          actual_duration_ms: duration,
+          used_backend_hint: !!crossfadeHint,
+          backend_confidence: crossfadeHint?.confidence || null
         })
-
-        if (this.onCrossfadeStart) {
-          logger.info(`[Audio] 📡 Calling onCrossfadeStart callback`)
-          this.onCrossfadeStart(oldTrackId, newTrackId, actualDuration, {
-            planned_start_from_end_ms: actualStartFromEnd,
-            planned_duration_ms: actualDuration,
-            actual_start_from_end_ms: timeRemaining,
-            actual_duration_ms: actualDuration,
-            used_backend_hint: !!crossfadeHint,
-            backend_confidence: crossfadeHint?.confidence || null
-          })
-        } else {
-          logger.error(`[Audio] ❌ CALLBACK MISSING! onCrossfadeStart is null`)
-        }
       }
+    }
+
+    this.endedHandler = () => {
+      if (this._holdOnCurrent()) {
+        this._reachHold()
+        return
+      }
+      if (this.crossfadeScheduled || !this.nextTrackId || this.isTransportBusy()) return
+      if (!this.nextSlot.loaded) return
+      this._startAutoCrossfade(50, {
+        planned_start_from_end_ms: 0,
+        planned_duration_ms: 50,
+        actual_start_from_end_ms: 0,
+        actual_duration_ms: 50,
+        used_backend_hint: false,
+        backend_confidence: null
+      })
     }
 
     this.timeUpdateElement = this.currentSlot.element
     this.timeUpdateElement.addEventListener('timeupdate', this.timeUpdateHandler)
-    logger.info(`[Audio] 🎬 Auto-crossfade monitoring active (nextTrackId: ${this.nextTrackId ? this.nextTrackId.slice(0,8) : 'none'})`)
+    this.timeUpdateElement.addEventListener('ended', this.endedHandler)
   }
 
-async loadTrack(trackId, url, options = {}) {
-    if (!this._enforceActiveDevice('loadTrack')) return
-    if (this.nextTrackId === trackId) return // Already loading
+  _startAutoCrossfade(durationMs, info) {
+    this.crossfadeScheduled = true
+    const oldTrackId = this.currentTrackId
+    const newTrackId = this.nextTrackId
 
-    if (options.useCrossfade) {
-      this.nextTrackId = trackId
-    } else {
-      this.currentTrackId = trackId
-    }
+    void this._enqueue('auto', newTrackId, async () => {
+      if (!this.isActiveDevice || this.currentTrackId !== oldTrackId || this.nextTrackId !== newTrackId || !this.nextSlot.loaded) {
+        this.crossfadeScheduled = false
+        return { status: 'skipped' }
+      }
 
-    const { isBlobUrl = false, shouldPlay = true, fadeTimeMs = 3000, useCrossfade = true, metadata = {} } = options
+      logger.info(`[Audio] 🔀 AUTO-CROSSFADE: ${oldTrackId} -> ${newTrackId} (${durationMs}ms)`)
+      const playing = this._swapToNext(durationMs, true, 'natural')
 
-    await this.ensureContext()
-
-    if (this._isLoadingAnyTrack && this._currentLoadAbortController) {
-      logger.warn(`[Audio] 🔄 Cancelling previous load, starting new load for ${trackId.slice(0, 8)}`)
-      this._currentLoadAbortController.abort()
-    }
-
-    this._isLoadingAnyTrack = true
-    this._currentLoadAbortController = new AbortController()
-    const targetSlot = useCrossfade ? this.nextSlot : this.currentSlot
-    const slotName = targetSlot === this.slots.A ? 'A' : 'B'
-    const abortSignal = this._currentLoadAbortController.signal
-
-    const handleAbort = () => {
-      logger.info(`[Audio] 🚫 Load cancelled for ${trackId.slice(0, 8)}`)
-    }
-
-    try {
-      if (useCrossfade) {
-        logger.info(`[Audio] 📀 LOAD & SWAP: ${trackId} into Slot ${slotName}`)
+      if (this.onCrossfadeStart) {
+        this.onCrossfadeStart(oldTrackId, newTrackId, durationMs, info)
       } else {
-        logger.info(`[Audio] 💿 RE-LOAD: ${trackId} into Slot ${slotName}`)
+        logger.error(`[Audio] ❌ CALLBACK MISSING! onCrossfadeStart is null`)
       }
 
-      if (abortSignal.aborted) { handleAbort(); return }
-
-      await this._cleanupNextSlot(targetSlot)
-
-      if (abortSignal.aborted) { handleAbort(); return }
-
-      targetSlot.trackId = trackId
-      targetSlot.metadata = metadata
-
-      if (isBlobUrl) {
-        await this._loadBlobToElement(targetSlot.element, url, targetSlot, true)
-      } else {
-        await this._setupMediaSourceStream(targetSlot.element, url, trackId, targetSlot, true)
-      }
-
-      if (abortSignal.aborted) { handleAbort(); return }
-
-      if (useCrossfade) {
-        this.playVinylScratch()
-      }
-
-      await this._executeCrossfade(fadeTimeMs, shouldPlay, useCrossfade, 'user')
-
-      if (abortSignal.aborted) { handleAbort(); return }
-
-      this.currentTrackId = trackId
-      this.nextTrackId = null
-      this._setupAutoCrossfade()
-
-      logger.info(`[Audio] ✅ PLAYING: ${trackId}`)
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        handleAbort()
-      } else {
-        logger.error('[Audio] Load failed:', error)
-        throw error
-      }
-    } finally {
-      this._isLoadingAnyTrack = false
-      this._currentLoadAbortController = null
-    }
+      await playing
+      return { status: 'crossfaded' }
+    }).then(result => {
+      if (result?.status === 'superseded') this.crossfadeScheduled = false
+    }).catch(err => {
+      this.crossfadeScheduled = false
+      logger.error('[Audio] Auto-crossfade failed:', err)
+    })
   }
 
-  async preloadTrack(trackId, url, options = {}) {
-    if (!this._enforceActiveDevice('preloadTrack')) return
+  _checkEndedAdvance() {
+    const element = this.currentSlot?.element
+    if (element?.ended && this.endedHandler) this.endedHandler()
+  }
 
-    if (this.nextTrackId === trackId) return
-
-    if (this.nextSlot.isFadingOut) {
-        logger.warn(`[Audio] ✋ Skipping preload for ${trackId}: Target slot is busy fading out`)
-        return
-    }
-
-    this.nextTrackId = trackId
-
+  switchTo(trackId, options = {}) {
     const {
-      isBlobUrl = false,
-      metadata = {}
+      resolveSource,
+      metadata = {},
+      fadeTimeMs = 50,
+      preloadedFadeMs = 50,
+      shouldPlay = false,
+      scratch = true
     } = options
 
-    await this.ensureContext()
+    if (!this._enforceActiveDevice('switchTo')) return Promise.resolve({ status: 'inactive' })
 
-    const next = this.nextSlot
-    const nextSlotName = next === this.slots.A ? 'A' : 'B'
+    return this._enqueue('switch', trackId, async (signal) => {
+      await this.ensureContext()
+      throwIfAborted(signal)
 
-    logger.info(`[Audio] ⚡ PRELOAD: ${trackId} into Slot ${nextSlotName}`)
+      if (this.currentTrackId === trackId && this.hasCurrentSource()) {
+        return { status: 'current' }
+      }
 
-    await this._cleanupNextSlot(next)
-    next.trackId = trackId
-    next.metadata = metadata
+      if (this.isNextReady(trackId)) {
+        logger.info(`[Audio] ⏭️ SWITCH to preloaded ${trackId.slice(0, 8)}`)
+        await this._swapToNext(preloadedFadeMs, shouldPlay, 'user')
+        return { status: 'crossfaded' }
+      }
 
-    if (isBlobUrl) {
-      await this._loadBlobToElement(next.element, url, next, false)
-    } else {
-      await this._setupMediaSourceStream(next.element, url, trackId, next, false)
+      const discard = (value) => {
+        if (value?.isBlobUrl && typeof value.url === 'string' && value.url.startsWith('blob:')) {
+          URL.revokeObjectURL(value.url)
+        }
+      }
+      const source = await this._awaitAbortable(this._withTimeout(resolveSource?.(), SOURCE_RESOLVE_TIMEOUT_MS), signal, discard)
+      if (!source) return { status: 'unavailable' }
+
+      const slotName = this.nextSlot === this.slots.A ? 'A' : 'B'
+      logger.info(`[Audio] 📀 LOAD & SWAP: ${trackId} into Slot ${slotName}`)
+
+      await this._loadIntoSlot(this.nextSlot, trackId, source, { ...metadata, bitrate: source.bitrate ?? metadata.bitrate, fromCache: source.fromCache ?? metadata.fromCache }, signal, { waitForCanPlay: true })
+      throwIfAborted(signal)
+
+      if (scratch) this.playVinylScratch()
+      await this._swapToNext(fadeTimeMs, shouldPlay, 'user')
+      logger.info(`[Audio] ✅ SWITCHED: ${trackId}`)
+      return { status: 'loaded' }
+    })
+  }
+
+  reloadCurrent(trackId, source, options = {}) {
+    const { metadata = {}, positionSeconds = 0, shouldPlay = false } = options
+
+    if (!this._enforceActiveDevice('reloadCurrent')) {
+      if (source?.isBlobUrl && source.url?.startsWith('blob:')) URL.revokeObjectURL(source.url)
+      return Promise.resolve({ status: 'inactive' })
     }
 
-    logger.info(`[Audio] 🔋 PRELOAD COMPLETE: ${trackId}`)
+    return this._enqueue('reload', trackId, async (signal) => {
+      await this.ensureContext()
+      throwIfAborted(signal)
+
+      logger.info(`[Audio] 💿 RE-LOAD: ${trackId}`)
+      await this._loadIntoSlot(this.nextSlot, trackId, source, metadata, signal, { waitForCanPlay: true })
+      throwIfAborted(signal)
+
+      await this._swapToNext(0, false, 'natural')
+      if (positionSeconds > 0) {
+        await this.seek(positionSeconds)
+      }
+      throwIfAborted(signal)
+      if (shouldPlay) await this.play()
+      return { status: 'loaded' }
+    })
+  }
+
+  _discardUnusedBlobUrl(url, isBlobUrl) {
+    if (isBlobUrl && typeof url === 'string' && url.startsWith('blob:')) {
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  preloadTrack(trackId, options = {}) {
+    const { resolveSource, metadata = {} } = options
+
+    if (!this._enforceActiveDevice('preloadTrack') || this.nextTrackId === trackId || this.currentTrackId === trackId) {
+      return Promise.resolve({ status: 'skipped' })
+    }
+
+    return this._enqueue('preload', trackId, async (signal) => {
+      if (!this.isActiveDevice) return { status: 'inactive' }
+      const next = this.nextSlot
+      if (next.isFadingOut) {
+        logger.warn(`[Audio] ✋ Skipping preload for ${trackId}: Target slot is busy fading out`)
+        return { status: 'busy' }
+      }
+      if (this.currentTrackId === trackId || (this.nextTrackId === trackId && next.loaded)) {
+        return { status: 'skipped' }
+      }
+
+      await this.ensureContext()
+      throwIfAborted(signal)
+
+      const discard = (value) => {
+        if (value?.isBlobUrl && typeof value.url === 'string' && value.url.startsWith('blob:')) {
+          URL.revokeObjectURL(value.url)
+        }
+      }
+      const source = await this._awaitAbortable(this._withTimeout(resolveSource?.(), SOURCE_RESOLVE_TIMEOUT_MS), signal, discard)
+      if (!source) return { status: 'unavailable' }
+
+      const nextSlotName = next === this.slots.A ? 'A' : 'B'
+      logger.info(`[Audio] ⚡ PRELOAD: ${trackId} into Slot ${nextSlotName}`)
+
+      await this._loadIntoSlot(next, trackId, source, { ...metadata, bitrate: source.bitrate, fromCache: source.fromCache }, signal, { waitForCanPlay: false, rejectOnError: false })
+
+      logger.info(`[Audio] 🔋 PRELOAD COMPLETE: ${trackId}`)
+      setTimeout(() => this._checkEndedAdvance(), 0)
+      return { status: 'preloaded' }
+    })
   }
 
   async _streamToBuffer(url, sourceBuffer, chunkArray, signal, slot) {
-    const CHUNK_SIZE = 512 * 1024
+    const CHUNK_SIZE = 2 * 1024 * 1024
     const BUFFER_LOW_WATERMARK = 10
     const BUFFER_HIGH_WATERMARK = 30
     const INITIAL_BUFFER_TARGET = 2
@@ -850,20 +1239,23 @@ async loadTrack(trackId, url, options = {}) {
 
   async play() {
     if (!this._enforceActiveDevice('play')) return
+    if (this.isHoldReached(this.currentTrackId)) return
 
     await this.ensureContext()
 
-    if (this.currentSlot.element.src) {
+    if (this._pauseTimer) {
+      clearTimeout(this._pauseTimer)
+      this._pauseTimer = null
+    }
+
+    if (this.currentSlot.loaded && this.currentSlot.element.getAttribute('src')) {
       const element = this.currentSlot.element
-      const now = this.context.currentTime
       const rampSec = this.vinylRapidDuration / 1000
 
-      this.currentSlot.gain.gain.cancelScheduledValues(now)
-      this.currentSlot.gain.gain.setValueAtTime(0, now)
-      this.currentSlot.gain.gain.linearRampToValueAtTime(1, now + rampSec)
+      this._rampGain(this.currentSlot.gain, 0, 1, rampSec)
 
       element.playbackRate = 0.1
-      this._vinylRapidRampUp(element, this.vinylRapidDuration)
+      this._vinylAnimate(element, 0.1, 1.0, this.vinylRapidDuration)
 
       try {
         await element.play()
@@ -877,45 +1269,28 @@ async loadTrack(trackId, url, options = {}) {
     if (!this._enforceActiveDevice('pause')) return
 
     if (this.currentSlot?.element && this.context) {
-      const element = this.currentSlot.element
-      const now = this.context.currentTime
+      const slot = this.currentSlot
+      const element = slot.element
       const rampSec = this.vinylRapidDuration / 1000
 
-      this.currentSlot.gain.gain.cancelScheduledValues(now)
-      this.currentSlot.gain.gain.setValueAtTime(this.currentSlot.gain.gain.value, now)
-      this.currentSlot.gain.gain.linearRampToValueAtTime(0, now + rampSec)
+      this._rampGain(slot.gain, slot.gain.gain.value, 0, rampSec)
 
-      this._vinylRapidRampDown(element, this.vinylRapidDuration)
+      this._vinylAnimate(element, 1.0, 0.1, this.vinylRapidDuration)
 
-      setTimeout(() => {
-        if (this.currentSlot?.element) {
-          this.currentSlot.element.pause()
-          this.currentSlot.element.playbackRate = 1.0
-          this.currentSlot.gain.gain.cancelScheduledValues(0)
-          this.currentSlot.gain.gain.value = 0
-        }
+      if (this._pauseTimer) clearTimeout(this._pauseTimer)
+      this._pauseTimer = setTimeout(() => {
+        this._pauseTimer = null
+        element.pause()
+        element.playbackRate = 1.0
+        slot.gain.gain.cancelScheduledValues(0)
+        slot.gain.gain.value = 0
       }, this.vinylRapidDuration + 10)
     }
   }
 
-  _vinylRapidRampUp(element, durationMs) {
-    this._vinylAnimate(element, 0.1, 1.0, durationMs)
-  }
-
-  _vinylRapidRampDown(element, durationMs) {
-    this._vinylAnimate(element, 1.0, 0.1, durationMs)
-  }
-
-  _vinylSlowRampUp(element, durationMs) {
-    this._vinylAnimate(element, 0.85, 1.0, durationMs)
-  }
-
-  _vinylSeekRampDown(element, durationMs) {
-    this._vinylAnimate(element, 1.0, 0.3, durationMs)
-  }
-
-  _vinylSeekRampUp(element, durationMs) {
-    this._vinylAnimate(element, 0.3, 1.0, durationMs)
+  isPlaying() {
+    const element = this.currentSlot?.element
+    return !!element && !element.paused && !this._pauseTimer
   }
 
   _vinylSlowRampDown(element, durationMs) {
@@ -928,12 +1303,10 @@ async loadTrack(trackId, url, options = {}) {
       const wobble = Math.sin(progress * Math.PI * 3) * 0.03 * (1 - progress)
       element.playbackRate = Math.max(0.1, startRate * (1 - eased * 0.85) + wobble)
       if (progress < 1 && !element.paused) {
-        window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-ramp'] = (window.__rafDebug.sources['AudioEngine-ramp'] || 0) + 1)
-        requestAnimationFrame(animate)
+        this._scheduleAudioTick(animate)
       }
     }
-    window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-ramp'] = (window.__rafDebug.sources['AudioEngine-ramp'] || 0) + 1)
-    requestAnimationFrame(animate)
+    this._scheduleAudioTick(animate)
   }
 
   _vinylAnimate(element, from, to, durationMs) {
@@ -944,12 +1317,10 @@ async loadTrack(trackId, url, options = {}) {
       const eased = 1 - Math.pow(1 - progress, 2)
       element.playbackRate = from + (to - from) * eased
       if (progress < 1) {
-        window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-vinyl'] = (window.__rafDebug.sources['AudioEngine-vinyl'] || 0) + 1)
-        requestAnimationFrame(animate)
+        this._scheduleAudioTick(animate)
       }
     }
-    window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-vinyl'] = (window.__rafDebug.sources['AudioEngine-vinyl'] || 0) + 1)
-    requestAnimationFrame(animate)
+    this._scheduleAudioTick(animate)
   }
 
   _startVinylWobble(element) {
@@ -965,11 +1336,9 @@ async loadTrack(trackId, url, options = {}) {
       const wobbleAmount = 0.03 + Math.sin(phase * 2) * 0.02
       element.playbackRate = 1.0 - wobbleAmount + Math.sin(phase) * wobbleAmount
 
-      window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-wobble'] = (window.__rafDebug.sources['AudioEngine-wobble'] || 0) + 1)
-      requestAnimationFrame(wobble)
+      this._scheduleAudioTick(wobble)
     }
-    window.__rafDebug?.sources && (window.__rafDebug.sources['AudioEngine-wobble'] = (window.__rafDebug.sources['AudioEngine-wobble'] || 0) + 1)
-    requestAnimationFrame(wobble)
+    this._scheduleAudioTick(wobble)
   }
 
   _stopVinylWobble() {
@@ -997,18 +1366,13 @@ async loadTrack(trackId, url, options = {}) {
   async handleOfflineTransition(getCurrentTrackId, getCachedVersion) {
     logger.info('[AudioEngine] 🔌 Handling offline transition')
 
-    if (this.currentSlot?.fetchController) {
-      this.currentSlot.fetchController.abort()
-      logger.info('[AudioEngine] Aborted current slot fetch')
-    }
-
     if (this.nextSlot?.fetchController) {
       this.nextSlot.fetchController.abort()
       logger.info('[AudioEngine] Aborted next slot fetch')
     }
 
     const trackId = getCurrentTrackId()
-    if (!trackId) return { switched: false }
+    if (!trackId || trackId !== this.currentTrackId) return { switched: false }
 
     const cached = await getCachedVersion(trackId)
     if (!cached) {
@@ -1022,154 +1386,113 @@ async loadTrack(trackId, url, options = {}) {
 
     const blobUrl = URL.createObjectURL(cached.audioBlob)
 
-    await this.loadTrack(trackId, blobUrl, {
-      isBlobUrl: true,
-      shouldPlay: wasPlaying,
-      fadeTimeMs: 0,
-      useCrossfade: false,
-      metadata: cached.metadata
+    const result = await this.reloadCurrent(trackId, { url: blobUrl, isBlobUrl: true, bitrate: cached.bitrate, fromCache: true }, {
+      metadata: { ...(cached.metadata || {}), bitrate: cached.bitrate, fromCache: true },
+      positionSeconds: currentTime,
+      shouldPlay: wasPlaying
     })
 
-    if (currentTime > 0) {
-      await this.seek(currentTime)
-    }
+    if (result?.status !== 'loaded') return { switched: false }
 
     logger.info(`[AudioEngine] ✅ Switched to cached ${cached.bitrate} version`)
     return { switched: true, bitrate: cached.bitrate }
   }
 
   _scheduleSlotCleanup(slot, actualFadeTime) {
-    const cleanupTimer = setTimeout(() => {
+    const token = slot.token
+    const entry = { slot, token, timer: null }
+    entry.timer = setTimeout(() => {
+      this.pendingCleanups = this.pendingCleanups.filter(e => e !== entry)
       slot.isFadingOut = false
 
-      // Publish crossfade end to UIState
+      if (slot !== this.currentSlot && slot.token === token) {
+        this._resetSlot(slot)
+      }
+
       if (this.onCrossfadeStateChange) {
         this.onCrossfadeStateChange(false)
       }
-
-      if (slot.element && slot !== this.nextSlot) {
-        slot.element.pause()
-        slot.element.playbackRate = 1.0
-        slot.element.currentTime = 0
-        slot.element.src = ''
-        slot.gain.gain.cancelScheduledValues(0)
-        slot.gain.gain.value = 0
-      }
     }, actualFadeTime * 1000 + 100)
-    this.pendingCleanupTimers.push(cleanupTimer)
+    this.pendingCleanups.push(entry)
   }
 
-  async crossfade(fadeTimeMs = 50, shouldPlay = true, useCrossfade = true, transitionType = 'user') {
-    if (!this._enforceActiveDevice('crossfade')) return
-
-    await this._executeCrossfade(fadeTimeMs, shouldPlay, useCrossfade, transitionType)
-
-    this.currentTrackId = this.currentSlot.trackId
-    this.nextTrackId = null
-
-    this._setupAutoCrossfade()
-  }
-
-  async _executeCrossfade(fadeTimeMs = 50, shouldPlay = true, useCrossfade = true, transitionType = 'natural') {
-    await this.ensureContext()
-
+  async _swapToNext(fadeTimeMs = 50, shouldPlay = true, transitionType = 'natural') {
+    this._hold = null
+    this._flushPendingCleanups()
     this._stopVinylWobble()
 
-    this.pendingCleanupTimers.forEach(timer => clearTimeout(timer))
-    this.pendingCleanupTimers = []
-
     const current = this.currentSlot
-
-    if (!useCrossfade) {
-      const actualFadeTime = fadeTimeMs === 0 ? 0.015 : fadeTimeMs / 1000
-      const now = this.context.currentTime
-
-      current.gain.gain.cancelScheduledValues(now)
-      current.gain.gain.setValueAtTime(0, now)
-
-      if (shouldPlay) {
-        current.gain.gain.linearRampToValueAtTime(1, now + actualFadeTime)
-        try {
-          await current.element.play()
-        } catch {
-          // Play errors (e.g., autoplay policy) are intentionally suppressed
-        }
-      } else {
-        current.gain.gain.value = 1
-      }
-      return
-    }
-
     const next = this.nextSlot
+    const actualFadeTime = fadeTimeMs === 0 ? 0.015 : fadeTimeMs / 1000
 
-    if (!next.element.src) {
-        logger.warn('[Audio] ⚠️ Crossfade skipped: Next slot empty. Attempting direct play.')
-        return this._executeCrossfade(fadeTimeMs, shouldPlay, false)
-    }
-
-    // Publish crossfade start to UIState (only for actual A/B crossfades)
     if (this.onCrossfadeStateChange) {
       this.onCrossfadeStateChange(true)
     }
 
-    const actualFadeTime = fadeTimeMs === 0 ? 0.015 : fadeTimeMs / 1000
-    const now = this.context.currentTime
-
     current.isFadingOut = true
-
-    current.gain.gain.cancelScheduledValues(now)
-    current.gain.gain.setValueAtTime(current.gain.gain.value, now)
-    current.gain.gain.linearRampToValueAtTime(0, now + actualFadeTime)
+    if (current.gain) {
+      this._rampGain(current.gain, current.gain.gain.value, 0, actualFadeTime)
+    }
 
     if (transitionType === 'user' && current.element && !current.element.paused) {
       this._vinylSlowRampDown(current.element, actualFadeTime * 1000)
     }
 
-    next.gain.gain.cancelScheduledValues(now)
-    next.gain.gain.setValueAtTime(0, now)
+    this.currentSlot = next
+    this.nextSlot = current
+    this.currentTrackId = next.trackId
+    this.nextTrackId = null
+
+    this._setupAutoCrossfade()
+    this._scheduleSlotCleanup(current, actualFadeTime)
+
+    logger.info(`[Audio] 🔄 SWAPPED SLOTS: New Current is Slot ${this.currentSlot === this.slots.A ? 'A' : 'B'} (${this.currentTrackId?.slice(0, 8)})`)
 
     if (shouldPlay) {
-      next.gain.gain.linearRampToValueAtTime(1, now + actualFadeTime)
+      this._rampGain(next.gain, 0, 1, actualFadeTime)
       if (transitionType === 'user') {
         next.element.playbackRate = 0.85
-        this._vinylSlowRampUp(next.element, actualFadeTime * 1000 * 0.5)
+        this._vinylAnimate(next.element, 0.85, 1.0, actualFadeTime * 1000 * 0.5)
       }
       try {
         await next.element.play()
-      } catch {
-        // Play errors (e.g., autoplay policy) are intentionally suppressed
+      } catch (err) {
+        if (err?.name !== 'AbortError') logger.warn('[AudioEngine] Play after swap blocked:', err?.message || err)
       }
     } else {
-      next.gain.gain.value = 1
+      this._rampGain(next.gain, 0, 1, 0)
     }
-
-    this._scheduleSlotCleanup(current, actualFadeTime)
-
-    this.currentSlot = next
-    this.nextSlot = current
-
-    logger.info(`[Audio] 🔄 SWAPPED SLOTS: New Current is Slot ${this.currentSlot === this.slots.A ? 'A' : 'B'}`)
   }
 
   seek(timeSeconds) {
     if (!this._enforceActiveDevice('seek')) return Promise.resolve()
 
-    if (!this.currentSlot?.element) return Promise.resolve()
+    if (!this.currentSlot?.element || !Number.isFinite(timeSeconds)) return Promise.resolve()
 
     const element = this.currentSlot.element
     const wasPlaying = !element.paused
 
-    if (element.readyState < 2) {
+    if (element.readyState < 1) {
       return new Promise((resolve) => {
-        const onLoadedMetadata = () => {
-          element.currentTime = timeSeconds
+        const done = () => {
+          clearTimeout(timer)
+          element.removeEventListener('loadedmetadata', onLoadedMetadata)
           resolve()
         }
+        const onLoadedMetadata = () => {
+          try {
+            element.currentTime = timeSeconds
+          } catch (err) {
+            logger.error('[AudioEngine] Seek failed:', err)
+          }
+          done()
+        }
+        const timer = setTimeout(done, SEEK_METADATA_TIMEOUT_MS)
         element.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
       })
     }
 
-    this._vinylSeekRampDown(element, this.vinylSeekDuration)
+    this._vinylAnimate(element, 1.0, 0.3, this.vinylSeekDuration)
 
     return new Promise((resolve) => {
       setTimeout(() => {
@@ -1180,7 +1503,7 @@ async loadTrack(trackId, url, options = {}) {
         }
 
         if (wasPlaying) {
-          this._vinylSeekRampUp(element, this.vinylSeekDuration)
+          this._vinylAnimate(element, 0.3, 1.0, this.vinylSeekDuration)
         } else {
           element.playbackRate = 1.0
         }
@@ -1191,13 +1514,13 @@ async loadTrack(trackId, url, options = {}) {
 
   setVolume(value) {
     if (this.masterGain) {
-      this.masterGain.gain.value = Math.max(0, Math.min(1.122, value * 1.122))
+      this.masterGain.gain.value = Math.max(0, Math.min(MASTER_GAIN_HEADROOM, value * MASTER_GAIN_HEADROOM))
     }
   }
 
   getVolume() {
     if (this.masterGain) {
-      return this.masterGain.gain.value / 1.122
+      return this.masterGain.gain.value / MASTER_GAIN_HEADROOM
     }
     return 1
   }
@@ -1215,25 +1538,22 @@ async loadTrack(trackId, url, options = {}) {
   destroy() {
     this.removeUnlockGestures()
 
+    this._abortAllOps()
     this._stopVinylWobble()
+    this._vinylTimers.forEach(timer => clearTimeout(timer))
+    this._vinylTimers.clear()
+    if (this._pauseTimer) clearTimeout(this._pauseTimer)
+    this.pendingCleanups.forEach(entry => clearTimeout(entry.timer))
+    this.pendingCleanups = []
 
     if (this._boundDeviceChangeHandler) {
       window.removeEventListener('audio-output-device-change', this._boundDeviceChangeHandler)
     }
 
-    if (this.timeUpdateHandler && this.timeUpdateElement) {
-      this.timeUpdateElement.removeEventListener('timeupdate', this.timeUpdateHandler)
-    }
+    this._detachAutoCrossfade()
 
-    if (this.slots.A.element) {
-        this.slots.A.element.pause()
-        this.slots.A.element.src = ''
-    }
-
-    if (this.slots.B.element) {
-        this.slots.B.element.pause()
-        this.slots.B.element.src = ''
-    }
+    if (this.slots.A.element) this._resetSlot(this.slots.A)
+    if (this.slots.B.element) this._resetSlot(this.slots.B)
 
     if (this.sfxElement) {
         this.sfxElement.pause()

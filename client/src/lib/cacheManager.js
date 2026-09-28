@@ -1,37 +1,118 @@
 import { logger } from './logger'
-import { audioCacheDB } from './offlineStorage'
+import { audioCacheDB, normalizeTrackMetadata } from './offlineStorage'
 import { api } from './api'
 
-const MAX_CACHE_SIZE = 2 * 1024 * 1024 * 1024
+const isIOS = typeof navigator !== 'undefined' &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1))
+const MAX_CACHE_SIZE = isIOS ? 50 * 1024 * 1024 : 2 * 1024 * 1024 * 1024
 const CLEANUP_THRESHOLD = 0.9
 const TARGET_AFTER_CLEANUP = 0.75
 const CHUNK_SIZE = 256 * 1024
+const MAX_ACTIVE_STREAMS = 3
+const TYPICAL_TRACK_BYTES = 8 * 1024 * 1024
 
 class CacheManager {
   constructor() {
     this.initialized = false
     this.downloadQueue = new Map()
     this.activeStreams = new Map()
+    this.listCache = null
+    this.listPromise = null
+    this.evictionGuard = null
+    this.changeListeners = new Set()
+  }
+
+  get maxCacheSize() {
+    return MAX_CACHE_SIZE
+  }
+
+  get isAvailable() {
+    return !audioCacheDB.unavailable
+  }
+
+  setEvictionGuard(guard) {
+    this.evictionGuard = guard
+  }
+
+  onChange(listener) {
+    this.changeListeners.add(listener)
+    return () => this.changeListeners.delete(listener)
+  }
+
+  _invalidateList() {
+    this.listCache = null
+    this.listPromise = null
+    this.changeListeners.forEach(listener => {
+      try {
+        listener()
+      } catch (err) {
+        logger.warn('[CacheManager] Change listener failed:', err)
+      }
+    })
+  }
+
+  async getCachedTrackList() {
+    if (!this.initialized) await this.initialize()
+    if (this.listCache) return this.listCache
+    if (this.listPromise) return this.listPromise
+    const promise = audioCacheDB.getAllTracks()
+      .then(records => records.map(record => ({
+        trackId: record.trackId,
+        metadata: normalizeTrackMetadata(record.metadata, record.trackId),
+        bitrate: record.bitrate,
+        size: record.size || 0,
+        addedAt: record.addedAt,
+        lastAccessed: record.lastAccessed,
+        playable: record.audioBlob instanceof Blob && record.audioBlob.size > 0,
+        hasArtwork: record.artworkBlob instanceof Blob,
+        hasEnrichedArtwork: record.enrichedArtworkBlob instanceof Blob,
+        hasAudioFeatures: !!record.audioFeatures,
+      })))
+      .catch(error => {
+        logger.error('[CacheManager] Error listing cached tracks:', error)
+        return []
+      })
+    this.listPromise = promise
+    const list = await promise
+    if (this.listPromise === promise) {
+      this.listCache = list
+      this.listPromise = null
+    }
+    return list
+  }
+
+  async hasRoomFor(bytes = TYPICAL_TRACK_BYTES) {
+    if (!this.initialized) await this.initialize()
+    if (audioCacheDB.unavailable) return false
+    const list = await this.getCachedTrackList()
+    const used = list.reduce((sum, track) => sum + track.size, 0)
+    return used + bytes <= MAX_CACHE_SIZE * CLEANUP_THRESHOLD
   }
 
   async initialize() {
     if (this.initialized) return
+    if (this._initPromise) return this._initPromise
 
-    try {
-      await audioCacheDB.initialize()
-      logger.info('[CacheManager] Initialized')
+    this._initPromise = (async () => {
+      try {
+        await audioCacheDB.initialize()
+        logger.info('[CacheManager] Initialized')
 
-      const totalDownloaded = await audioCacheDB.getMetadata('totalDownloaded') || 0
-      if (totalDownloaded === 0) {
-        await audioCacheDB.setMetadata('totalDownloaded', 0)
-        await audioCacheDB.setMetadata('sessionDownloaded', 0)
+        const totalDownloaded = await audioCacheDB.getMetadata('totalDownloaded') || 0
+        if (totalDownloaded === 0) {
+          await audioCacheDB.setMetadata('totalDownloaded', 0)
+          await audioCacheDB.setMetadata('sessionDownloaded', 0)
+        }
+
+        this.initialized = true
+      } catch (error) {
+        logger.error('[CacheManager] Initialization failed:', error)
+        this.initialized = true
+      } finally {
+        this._initPromise = null
       }
-
-      this.initialized = true
-    } catch (error) {
-      logger.error('[CacheManager] Initialization failed:', error)
-      throw error
-    }
+    })()
+    return this._initPromise
   }
 
   async getCachedTrack(trackId) {
@@ -48,8 +129,8 @@ class CacheManager {
 
   async isCached(trackId) {
     if (!this.initialized) await this.initialize()
-    const track = await audioCacheDB.getTrack(trackId)
-    return !!track
+    const list = await this.getCachedTrackList()
+    return list.some(track => track.trackId === trackId && track.playable)
   }
 
   async getAllCachedTracks() {
@@ -63,7 +144,7 @@ class CacheManager {
         audioBlob: cached.audioBlob,
         artworkBlob: cached.artworkBlob,
         enrichedArtworkBlob: cached.enrichedArtworkBlob,
-        metadata: cached.metadata,
+        metadata: normalizeTrackMetadata(cached.metadata, cached.trackId),
         audioFeatures: cached.audioFeatures,
         bitrate: cached.bitrate,
         size: cached.size,
@@ -199,11 +280,16 @@ class CacheManager {
   async _downloadTrack(trackId, fullTrackData, bitrate, onProgress, signal) {
     logger.info(`[CacheManager] Starting download for ${trackId} at ${bitrate}`)
 
-    await this.ensureSpace()
+    await this.ensureSpace(TYPICAL_TRACK_BYTES, [trackId])
 
-    const url = api.getStreamUrl(trackId)
+    const url = api.getStreamUrl(trackId, bitrate)
 
     const result = await this.downloadChunked(url, { onProgress, signal })
+
+    if (signal?.aborted) throw new DOMException('Download aborted', 'AbortError')
+    if (!result.totalBytes || (result.contentLength > 0 && result.totalBytes < result.contentLength)) {
+      throw new Error(`Incomplete download for ${trackId} (${result.totalBytes}/${result.contentLength} bytes)`)
+    }
 
     const audioBlob = new Blob(result.chunks, { type: 'audio/webm' })
     logger.info(`[CacheManager] Downloaded audio ${trackId}: ${(audioBlob.size / 1024 / 1024).toFixed(2)} MB`)
@@ -277,6 +363,7 @@ class CacheManager {
     }
 
     const savedTrack = await audioCacheDB.saveTrack(trackId, trackData)
+    this._invalidateList()
 
     logger.info(`[CacheManager] Cached track ${trackId} at ${bitrate} with complete metadata`)
     return savedTrack
@@ -330,45 +417,58 @@ class CacheManager {
     await audioCacheDB.setMetadata('sessionDownloaded', 0)
   }
 
-  async ensureSpace(requiredSpace = 10 * 1024 * 1024) {
+  async ensureSpace(requiredSpace = 10 * 1024 * 1024, keepIds = []) {
     if (!this.initialized) await this.initialize()
 
-    const currentSize = await audioCacheDB.getTotalSize()
+    const list = await this.getCachedTrackList()
+    const currentSize = list.reduce((sum, track) => sum + track.size, 0)
     const threshold = MAX_CACHE_SIZE * CLEANUP_THRESHOLD
 
     if (currentSize + requiredSpace > threshold) {
       logger.info(`[CacheManager] Cache size (${(currentSize / 1024 / 1024).toFixed(2)} MB) approaching limit, cleaning up...`)
-      await this.evictLRU()
+      await this.evictLRU(requiredSpace, keepIds)
     }
   }
 
-  async evictLRU() {
+  async evictLRU(requiredSpace = 0, keepIds = []) {
     if (!this.initialized) await this.initialize()
 
-    const tracks = await audioCacheDB.getTracksByLastAccessed()
-    const currentSize = tracks.reduce((sum, t) => sum + t.size, 0)
-    const targetSize = MAX_CACHE_SIZE * TARGET_AFTER_CLEANUP
+    const tracks = (await audioCacheDB.getTracksByLastAccessed()).reverse()
+    const currentSize = tracks.reduce((sum, t) => sum + (t.size || 0), 0)
+    const targetSize = Math.max(0, MAX_CACHE_SIZE * TARGET_AFTER_CLEANUP - requiredSpace)
+    const keep = new Set(keepIds)
+    let guarded = new Set()
+    try {
+      guarded = new Set(this.evictionGuard?.() || [])
+    } catch (err) {
+      logger.warn('[CacheManager] Eviction guard failed:', err)
+    }
+    const ordered = [
+      ...tracks.filter(track => !guarded.has(track.trackId)),
+      ...tracks.filter(track => guarded.has(track.trackId)),
+    ].filter(track => !keep.has(track.trackId))
 
     let freedSpace = 0
     let deletedCount = 0
 
-    for (const track of tracks.reverse()) {
+    for (const track of ordered) {
       if (currentSize - freedSpace <= targetSize) {
         break
       }
 
       await audioCacheDB.deleteTrack(track.trackId)
-      freedSpace += track.size
+      freedSpace += track.size || 0
       deletedCount++
     }
 
+    if (deletedCount) this._invalidateList()
     logger.info(`[CacheManager] Evicted ${deletedCount} tracks, freed ${(freedSpace / 1024 / 1024).toFixed(2)} MB`)
   }
 
   async getStorageInfo() {
     if (!this.initialized) await this.initialize()
 
-    const tracks = await audioCacheDB.getAllTracks()
+    const tracks = await this.getCachedTrackList()
     const usedBytes = tracks.reduce((sum, track) => sum + track.size, 0)
 
     let quota = MAX_CACHE_SIZE
@@ -398,16 +498,23 @@ class CacheManager {
   async deleteTrack(trackId) {
     if (!this.initialized) await this.initialize()
     await audioCacheDB.deleteTrack(trackId)
+    this._invalidateList()
     logger.info(`[CacheManager] Deleted cached track ${trackId}`)
   }
 
   async clearAllCache() {
     if (!this.initialized) await this.initialize()
     await audioCacheDB.clearAll()
+    this._invalidateList()
     logger.info('[CacheManager] Cleared all cached tracks')
   }
 
   beginTrackStream(trackId, metadata) {
+    if (audioCacheDB.unavailable) return
+    this.activeStreams.delete(trackId)
+    while (this.activeStreams.size >= MAX_ACTIVE_STREAMS) {
+      this.activeStreams.delete(this.activeStreams.keys().next().value)
+    }
     this.activeStreams.set(trackId, {
       chunks: [],
       metadata,
@@ -428,13 +535,14 @@ class CacheManager {
     const stream = this.activeStreams.get(trackId)
     if (!stream) {
       logger.warn(`[CacheManager] No active stream to finalize for ${trackId}`)
-      return
+      return false
     }
+    this.activeStreams.delete(trackId)
 
     logger.info(`[CacheManager] Finalizing ${trackId}: ${(stream.totalSize / 1024 / 1024).toFixed(2)} MB`)
 
     try {
-      await this.ensureSpace(stream.totalSize)
+      await this.ensureSpace(stream.totalSize, [trackId])
 
       const audioBlob = new Blob(stream.chunks, { type: 'audio/webm' })
       await this._updateDataUsage(audioBlob.size)
@@ -483,12 +591,14 @@ class CacheManager {
         bitrate: metadata.bitrate || '192k'
       }
 
-      await audioCacheDB.saveTrack(trackId, trackData)
+      const saved = await audioCacheDB.saveTrack(trackId, trackData)
+      this._invalidateList()
+      if (!saved) return false
       logger.info(`[CacheManager] SAVED to IndexedDB: ${trackId} (${(audioBlob.size / 1024 / 1024).toFixed(2)} MB)`)
+      return true
     } catch (error) {
       logger.error(`[CacheManager] Failed to finalize ${trackId}:`, error)
-    } finally {
-      this.activeStreams.delete(trackId)
+      return false
     }
   }
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, ChevronDown, ChevronUp, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -10,30 +10,22 @@ import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useDialog } from '../contexts/DialogContext'
 import { api } from '../lib/api'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
-import { useArtwork } from '../contexts/UIStateContext'
+import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { profilePictureCache } from '../lib/mediaCache'
 import { logger } from '../lib/logger'
+import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
 import { Scroller } from './Scroller'
+import { ExpandSection, Expandable, ExpandChevron } from './Motion'
+import { SettingRow, ToggleChip } from './SettingRow'
+import { RadioModeSettings } from './RadioModeSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
-
-const SettingRow = ({ icon: Icon, label, color = "text-purple-400", children, headerContent }) => (
-  <div className="bg-white/5 p-3 rounded-lg">
-    <div className="flex items-center justify-between mb-2">
-      <div className="flex items-center gap-2">
-        <Icon size={14} className={color} />
-        <label className="text-xs font-semibold text-gray-300">{label}</label>
-      </div>
-      {headerContent}
-    </div>
-    {children}
-  </div>
-)
+import { CSS_TRANSITION } from '../lib/motion'
 
 const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
   const [isTesting, setIsTesting] = useState(false)
-  const [level, setLevel] = useState(0)
+  const meterRef = useRef(null)
   const audioContextRef = useRef(null)
   const sourceRef = useRef(null)
   const analyserRef = useRef(null)
@@ -64,7 +56,7 @@ const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
     audioContextRef.current = null
     analyserRef.current = null
     setIsTesting(false)
-    setLevel(0)
+    if (meterRef.current) meterRef.current.style.transform = 'scaleX(0)'
   }, [])
 
   const startTest = useCallback(async () => {
@@ -114,7 +106,7 @@ const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
           sum += dataArray[i]
         }
         const average = sum / dataArray.length
-        setLevel(Math.min(100, (average / 128) * 100))
+        if (meterRef.current) meterRef.current.style.transform = `scaleX(${Math.min(1, average / 128)})`
         rafRef.current = requestAnimationFrame(updateLevel)
       }
       updateLevel()
@@ -132,17 +124,19 @@ const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
     <div className="flex items-center gap-2 mt-2">
       <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
         <div
-          className="h-full transition-all duration-75 ease-out rounded-full"
+          ref={meterRef}
+          className="h-full w-full origin-left rounded-full"
           style={{
-            width: `${level}%`,
+            transform: 'scaleX(0)',
             opacity: isTesting ? 1 : 0.3,
+            transition: CSS_TRANSITION.meter,
             background: `linear-gradient(to right, #a855f7, #3b82f6, #22d3ee)`
           }}
         />
       </div>
       <button
         onClick={startTest}
-        className={`text-xs px-2 py-1 rounded transition-colors flex items-center gap-1 ${
+        className={`ui-press text-xs px-2 py-1 rounded transition-colors flex items-center gap-1 ${
           isTesting
             ? 'text-purple-300 bg-purple-500/20'
             : 'text-gray-400 hover:text-white hover:bg-white/10'
@@ -203,7 +197,7 @@ const MediaRow = memo(function MediaRow({
 
   return (
     <div
-      className={`flex items-center gap-3 p-3 rounded-lg transition-all duration-200 group mb-1 ${isPlaying ? 'bg-white/10 ring-1 ring-purple-500/50' : ''}`}
+      className={`flex items-center gap-3 p-3 rounded-lg transition-[background-color,box-shadow] duration-quick group mb-1 ${isPlaying ? 'bg-white/10 ring-1 ring-purple-500/50' : ''}`}
       onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = hoverBg)}
       onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
     >
@@ -215,7 +209,7 @@ const MediaRow = memo(function MediaRow({
       >
         {image ? (
           <div className="relative">
-            <img src={image} alt={title} className={`w-12 h-12 rounded object-cover flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`} />
+            <img decoding="async" loading="lazy" src={image} alt={title} className={`w-12 h-12 rounded object-cover flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`} />
             {isPlaying && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <Loader2 size={20} className="animate-spin text-white" />
@@ -237,7 +231,7 @@ const MediaRow = memo(function MediaRow({
         onPointerDown={removeInteraction.onPointerDown}
         onPointerMove={removeInteraction.onPointerMove}
         onPointerUp={handleRemove}
-        className="transition p-1 hover:bg-red-500/20 rounded"
+        className="ui-press transition p-1 hover:bg-red-500/20 rounded"
         title="Remove preference"
         disabled={isLoading}
       >
@@ -248,7 +242,8 @@ const MediaRow = memo(function MediaRow({
 })
 
 const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, iconColor, expanded, onToggleExpand, emptyMessage, renderItem }) {
-  const displayItems = expanded ? items : items.slice(0, 5)
+  const previewItems = items.slice(0, 5)
+  const overflowItems = items.slice(5)
 
   return (
     <div>
@@ -261,19 +256,29 @@ const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, 
         {items.length > 5 && (
           <button
             onClick={() => onToggleExpand(!expanded)}
-            className="text-xs text-purple-400 hover:text-purple-300 transition flex items-center gap-1"
+            aria-expanded={expanded}
+            className="ui-press text-xs text-purple-400 hover:text-purple-300 transition flex items-center gap-1"
           >
-            {expanded ? <>Show Less <ChevronUp size={14} /></> : <>Show All <ChevronDown size={14} /></>}
+            {expanded ? 'Show Less' : 'Show All'} <ExpandChevron open={expanded} size={14} />
           </button>
         )}
       </div>
-      {items.length === 0 ? <p className="text-sm text-gray-400 pl-7">{emptyMessage}</p> : <div className="space-y-1">{displayItems.map(item => renderItem(item))}</div>}
+      {items.length === 0 ? (
+        <p className="text-sm text-gray-400 pl-7">{emptyMessage}</p>
+      ) : (
+        <div className="space-y-1">
+          {previewItems.map(item => renderItem(item))}
+          <Expandable open={expanded && overflowItems.length > 0} innerClassName="space-y-1 pt-1">
+            {overflowItems.map(item => renderItem(item))}
+          </Expandable>
+        </div>
+      )}
     </div>
   )
 })
 
 const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, onDeleteUpload, isDeleting }) {
-  const artworkUrl = useArtwork(track?.id, track?.has_artwork)
+  const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track.generation_params || {}
   const title = params.title || track.title || 'Untitled'
   const artist = params.primary_artist || 'Unknown Artist'
@@ -283,7 +288,7 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
     <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition group">
       <div className="w-12 h-12 rounded bg-gradient-to-br from-emerald-600 to-teal-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
         {artworkUrl ? (
-          <img
+          <img decoding="async" loading="lazy"
             src={artworkUrl}
             alt={title}
             className="w-full h-full rounded object-cover"
@@ -303,7 +308,7 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
 
       <button
         onClick={() => onPlayTrack(track.id)}
-        className="p-2 rounded-full bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition"
+        className="ui-press p-2 rounded-full bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition"
         title="Play track"
       >
         <Play size={16} fill="currentColor" />
@@ -312,7 +317,7 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
       <button
         onClick={() => onDeleteUpload(track.id)}
         disabled={isDeleting}
-        className="p-2 rounded-full hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition"
+        className="ui-press p-2 rounded-full hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition"
         title="Delete track"
       >
         {isDeleting ? (
@@ -326,7 +331,7 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
 })
 
 const TrackItem = memo(function TrackItem({ track, icon, iconColor, onPlayTrack, onRemovePreference, isLoading }) {
-  const artworkUrl = useArtwork(track?.id, track?.has_artwork)
+  const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track?.generation_params || {}
   const title = params.title || track?.title || 'Untitled'
   const style = params.style || track?.style || 'No style'
@@ -373,7 +378,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { getPreferences, removePreference, isPending } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor, getPurpleBase } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
-  const { audioState, downloadState, publishDownloadState, settingsState, publishSettings, toastSuccess, toastError, openUploadModal } = useUIState()
+  const { audioState, downloadState, publishDownloadState, settingsState, publishSettings, toastSuccess, toastError, toastInfo, openUploadModal, openUsageModal } = useUIState()
   const success = toastSuccess
   const error = toastError
 
@@ -393,19 +398,21 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [expandedLikedShoutouts, setExpandedLikedShoutouts] = useState(false)
   const [expandedBannedShoutouts, setExpandedBannedShoutouts] = useState(false)
 
-  const [profilePersonaExpanded, setProfilePersonaExpanded] = useState(() => localStorage.getItem('userPanel_profilePersona') === 'true')
-  const [audioDevicesExpanded, setAudioDevicesExpanded] = useState(() => localStorage.getItem('userPanel_audioDevices') === 'true')
-  const [locationExpanded, setLocationExpanded] = useState(() => localStorage.getItem('userPanel_location') === 'true')
-  const [libraryExpanded, setLibraryExpanded] = useState(() => localStorage.getItem('userPanel_library') === 'true')
-  const [storageExpanded, setStorageExpanded] = useState(() => localStorage.getItem('userPanel_storage') === 'true')
-  const [dataManagementExpanded, setDataManagementExpanded] = useState(() => localStorage.getItem('userPanel_dataManagement') === 'true')
-  const [uploadsExpanded, setUploadsExpanded] = useState(() => localStorage.getItem('userPanel_uploads') === 'true')
+  const [profilePersonaExpanded, setProfilePersonaExpanded] = useState(() => safeStorage.get('userPanel_profilePersona') === 'true')
+  const [audioDevicesExpanded, setAudioDevicesExpanded] = useState(() => safeStorage.get('userPanel_audioDevices') === 'true')
+  const [locationExpanded, setLocationExpanded] = useState(() => safeStorage.get('userPanel_location') === 'true')
+  const [libraryExpanded, setLibraryExpanded] = useState(() => safeStorage.get('userPanel_library') === 'true')
+  const [storageExpanded, setStorageExpanded] = useState(() => safeStorage.get('userPanel_storage') === 'true')
+  const [dataManagementExpanded, setDataManagementExpanded] = useState(() => safeStorage.get('userPanel_dataManagement') === 'true')
+  const [uploadsExpanded, setUploadsExpanded] = useState(() => safeStorage.get('userPanel_uploads') === 'true')
 
   const [userUploads, setUserUploads] = useState([])
   const [loadingUploads, setLoadingUploads] = useState(false)
   const [deletingUploadId, setDeletingUploadId] = useState(null)
 
   const [uploadingProfilePicture, setUploadingProfilePicture] = useState(false)
+  const [billingStatus, setBillingStatus] = useState(null)
+  const [billingBusy, setBillingBusy] = useState(false)
   const fileInputRef = useRef(null)
   const profilePictureUrl = useProfilePicture(user?.id, !!user?.profile_picture)
 
@@ -430,13 +437,22 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }, [isAuthenticated])
 
   useEffect(() => {
-    localStorage.setItem('userPanel_profilePersona', String(profilePersonaExpanded))
-    localStorage.setItem('userPanel_audioDevices', String(audioDevicesExpanded))
-    localStorage.setItem('userPanel_location', String(locationExpanded))
-    localStorage.setItem('userPanel_library', String(libraryExpanded))
-    localStorage.setItem('userPanel_storage', String(storageExpanded))
-    localStorage.setItem('userPanel_dataManagement', String(dataManagementExpanded))
-    localStorage.setItem('userPanel_uploads', String(uploadsExpanded))
+    if (!isAuthenticated) return
+    let cancelled = false
+    api.getBillingStatus()
+      .then(status => { if (!cancelled) setBillingStatus(status) })
+      .catch(err => logger.warn('Failed to load billing status:', err))
+    return () => { cancelled = true }
+  }, [isAuthenticated, user?.tier])
+
+  useEffect(() => {
+    safeStorage.set('userPanel_profilePersona', String(profilePersonaExpanded))
+    safeStorage.set('userPanel_audioDevices', String(audioDevicesExpanded))
+    safeStorage.set('userPanel_location', String(locationExpanded))
+    safeStorage.set('userPanel_library', String(libraryExpanded))
+    safeStorage.set('userPanel_storage', String(storageExpanded))
+    safeStorage.set('userPanel_dataManagement', String(dataManagementExpanded))
+    safeStorage.set('userPanel_uploads', String(uploadsExpanded))
   }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded])
 
   const fetchUserUploads = useCallback(async () => {
@@ -718,18 +734,37 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }
 
   const handleUpgradeToPremium = async () => {
+    if (billingBusy) return
+    setBillingBusy(true)
     try {
-      const { id } = await api.createStripeCheckout()
-      const { publishableKey } = await api.getStripeKey()
-
-      if (window['Stripe']) {
-        const stripe = window['Stripe'](publishableKey)
-        await stripe.redirectToCheckout({ sessionId: id })
+      const { url } = await api.createStripeCheckout()
+      window.location.assign(url)
+    } catch (err) {
+      setBillingBusy(false)
+      if (err.status === 409) {
+        await refreshUser()
+        toastInfo(err.message)
       } else {
-        error('Stripe not loaded')
+        error(err.message || 'Could not start checkout. Please try again.')
       }
-    } catch (err) { error(err.message || 'Failed to start checkout') }
+    }
   }
+
+  const handleManageSubscription = async () => {
+    if (billingBusy) return
+    setBillingBusy(true)
+    try {
+      const { url } = await api.createBillingPortal()
+      window.location.assign(url)
+    } catch (err) {
+      setBillingBusy(false)
+      error(err.message || 'Could not open subscription management. Please try again.')
+    }
+  }
+
+  const priceLabel = billingStatus?.price_label || 'US$4.99/mo'
+  const generationUsage = billingStatus?.generation_usage
+  const periodEnd = billingStatus?.current_period_end ? new Date(billingStatus.current_period_end) : null
 
   const getNetworkQualityColor = () => {
     switch (audioState.networkQuality) {
@@ -752,7 +787,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     return (
       <div className="flex flex-col h-full relative">
         <PanelHeader title="Account" />
-        <div className="flex-1 flex items-center justify-center p-6" style={{ paddingTop: `${PANEL.headerHeight}px` }}>
+        <Scroller className="flex-1">
+        <div className="min-h-full flex items-center justify-center p-6" style={{ paddingTop: `${PANEL.headerHeight}px` }}>
           <div className="max-w-sm w-full space-y-4">
             <div className="text-center mb-6">
               <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: getUserAvatarGradient(), color: 'white' }}>
@@ -761,14 +797,16 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <h3 className="text-xl font-bold mb-2">Welcome to PLAiR</h3>
               <p className="text-gray-400 text-sm">Sign in to save your preferences</p>
             </div>
-            <button onClick={onLogin} className="w-full px-4 py-3 bg-dark-hover hover:bg-gray-700 rounded-lg flex items-center justify-center gap-2 transition">
+            <button onClick={onLogin} className="ui-press-soft w-full px-4 py-3 bg-dark-hover hover:bg-gray-700 rounded-lg flex items-center justify-center gap-2 transition">
               <LogIn size={20} /> Login
             </button>
-            <button onClick={onRegister} className="w-full px-4 py-3 rounded-lg transition font-medium" style={{ backgroundColor: getPurpleBase() }}>
+            <button onClick={onRegister} className="ui-press-soft w-full px-4 py-3 rounded-lg transition font-medium" style={{ backgroundColor: getPurpleBase() }}>
               Register
             </button>
+            <RadioModeSettings className="pt-4 border-t border-gray-800" />
           </div>
         </div>
+        </Scroller>
       </div>
     )
   }
@@ -780,17 +818,17 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           <div className="flex items-center gap-3 flex-1 min-w-0">
             <div className="relative group">
               {profilePictureUrl ? (
-                <img src={profilePictureUrl} alt={user?.username} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+                <img decoding="async" src={profilePictureUrl} alt={user?.username} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
               ) : (
                 <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: getUserAvatarGradient(), color: 'white' }}>
                   <UserIcon size={20} />
                 </div>
               )}
               <div className="absolute inset-0 bg-black/60 rounded-full opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
-                <button onClick={() => fileInputRef.current?.click()} disabled={uploadingProfilePicture} className="p-1 text-white hover:text-purple-300 transition">
+                <button onClick={() => fileInputRef.current?.click()} disabled={uploadingProfilePicture} className="ui-press p-1 text-white hover:text-purple-300 transition">
                   {uploadingProfilePicture ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
                 </button>
-                {profilePictureUrl && <button onClick={handleProfilePictureDelete} className="p-1 text-white hover:text-red-400 transition"><Trash2 size={16} /></button>}
+                {profilePictureUrl && <button onClick={handleProfilePictureDelete} className="ui-press p-1 text-white hover:text-red-400 transition"><Trash2 size={16} /></button>}
               </div>
               <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/gif" onChange={handleProfilePictureUpload} className="hidden" />
             </div>
@@ -798,13 +836,13 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               {isEditingUsername ? (
                 <div className="flex items-center gap-2">
                   <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="flex-1 px-2 py-1 bg-dark-hover border border-purple-500 rounded text-sm focus:outline-none" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') void handleUsernameSave(); if (e.key === 'Escape') setIsEditingUsername(false); }} />
-                  <button onClick={handleUsernameSave} className="text-green-400 p-1"><X size={16} className="rotate-45" /></button>
-                  <button onClick={() => setIsEditingUsername(false)} className="text-gray-400 p-1"><X size={16} /></button>
+                  <button onClick={handleUsernameSave} className="ui-press text-green-400 p-1"><X size={16} className="rotate-45" /></button>
+                  <button onClick={() => setIsEditingUsername(false)} className="ui-press text-gray-400 p-1"><X size={16} /></button>
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg md:text-xl font-bold truncate">{user?.username}</h2>
-                  <button onClick={handleUsernameEdit} className="text-gray-400 hover:text-white transition p-1"><Edit2 size={14} /></button>
+                  <button onClick={handleUsernameEdit} className="ui-press text-gray-400 hover:text-white transition p-1"><Edit2 size={14} /></button>
                 </div>
               )}
               <div className="flex items-center gap-2">
@@ -818,328 +856,339 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
       <Scroller className="flex-1">
         {(user?.persona || user?.profile || user?.shoutout_interests) && (
-          <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-            <button
-              onClick={() => setProfilePersonaExpanded(!profilePersonaExpanded)}
-              className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-            >
-              <div className="flex items-center gap-2">
-                <Sparkles size={16} className="text-purple-400" />
-                <span className="text-sm font-semibold text-gray-300">Profile & Persona</span>
-              </div>
-              {profilePersonaExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-
-            {profilePersonaExpanded && (
-              <div className="space-y-3 pl-2 animate-in slide-in-from-top-2 duration-200">
-                {user?.persona && (
-                  <div className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 p-3 rounded-lg border border-purple-500/20">
-                    <div className="flex items-center gap-2 mb-2">
-                      <UserIcon size={14} className="text-purple-400" />
-                      <label className="text-xs font-semibold text-purple-300">AI Persona</label>
-                    </div>
-                    <p className="text-sm text-gray-300 leading-relaxed">{user.persona}</p>
-                  </div>
-                )}
-                {user?.profile && (
-                  <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 p-3 rounded-lg border border-blue-500/20">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Star size={14} className="text-blue-400" />
-                      <label className="text-xs font-semibold text-blue-300">Listener Profile</label>
-                    </div>
-                    <p className="text-sm text-gray-300 leading-relaxed">{user.profile}</p>
-                  </div>
-                )}
-                {user?.shoutout_interests && (
-                  <div className="bg-gradient-to-br from-cyan-500/10 to-teal-500/10 p-3 rounded-lg border border-cyan-500/20">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Mic2 size={14} className="text-cyan-400" />
-                      <label className="text-xs font-semibold text-cyan-300">Shoutout Interests</label>
-                    </div>
-                    <p className="text-sm text-gray-300 leading-relaxed">{user.shoutout_interests}</p>
-                  </div>
-                )}
+          <ExpandSection
+            className="p-4 md:p-6 border-b border-gray-800"
+            open={profilePersonaExpanded}
+            onToggle={setProfilePersonaExpanded}
+            icon={Sparkles}
+            iconClassName="text-purple-400"
+            title="Profile & Persona"
+            contentClassName="space-y-3 pl-2"
+          >
+            {user?.persona && (
+              <div className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 p-3 rounded-lg border border-purple-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <UserIcon size={14} className="text-purple-400" />
+                  <label className="text-xs font-semibold text-purple-300">AI Persona</label>
+                </div>
+                <p className="text-sm text-gray-300 leading-relaxed">{user.persona}</p>
               </div>
             )}
-          </div>
+            {user?.profile && (
+              <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 p-3 rounded-lg border border-blue-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <Star size={14} className="text-blue-400" />
+                  <label className="text-xs font-semibold text-blue-300">Listener Profile</label>
+                </div>
+                <p className="text-sm text-gray-300 leading-relaxed">{user.profile}</p>
+              </div>
+            )}
+            {user?.shoutout_interests && (
+              <div className="bg-gradient-to-br from-cyan-500/10 to-teal-500/10 p-3 rounded-lg border border-cyan-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <Mic2 size={14} className="text-cyan-400" />
+                  <label className="text-xs font-semibold text-cyan-300">Shoutout Interests</label>
+                </div>
+                <p className="text-sm text-gray-300 leading-relaxed">{user.shoutout_interests}</p>
+              </div>
+            )}
+          </ExpandSection>
         )}
 
-        <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-          <button
-            onClick={() => setAudioDevicesExpanded(!audioDevicesExpanded)}
-            className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-          >
-            <div className="flex items-center gap-2">
-              <Headphones size={16} className="text-blue-400" />
-              <span className="text-sm font-semibold text-gray-300">Audio & Devices</span>
-            </div>
-            {audioDevicesExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
+        <ExpandSection
+          className="p-4 md:p-6 border-b border-gray-800"
+          open={audioDevicesExpanded}
+          onToggle={setAudioDevicesExpanded}
+          icon={Headphones}
+          iconClassName="text-blue-400"
+          title="Audio & Devices"
+          contentClassName="space-y-3 pl-2"
+        >
+          <SettingRow icon={Mic2} label="Microphone">
+            <select value={selectedMicrophone} onChange={(e) => { selectMicrophone(e.target.value); success('Microphone updated') }} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
+              <option value="">Default Microphone</option>
+              {devices.microphones.map(mic => <option key={mic.id} value={mic.id}>{mic.label}</option>)}
+            </select>
+            {devices.microphones.length === 0 && (
+              <button onClick={requestPermissions} className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1">
+                Grant microphone access
+              </button>
+            )}
+            <DeviceTester deviceId={selectedMicrophone} type="mic" />
+          </SettingRow>
 
-          {audioDevicesExpanded && (
-            <div className="space-y-3 pl-2 animate-in slide-in-from-top-2 duration-200">
-              <SettingRow icon={Mic2} label="Microphone">
-                <select value={selectedMicrophone} onChange={(e) => { selectMicrophone(e.target.value); success('Microphone updated') }} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
-                  <option value="">Default Microphone</option>
-                  {devices.microphones.map(mic => <option key={mic.id} value={mic.id}>{mic.label}</option>)}
-                </select>
-                {devices.microphones.length === 0 && (
-                  <button onClick={requestPermissions} className="text-xs text-purple-400 hover:text-purple-300 mt-1">
-                    Grant microphone access
-                  </button>
-                )}
-                <DeviceTester deviceId={selectedMicrophone} type="mic" />
-              </SettingRow>
-
-              <SettingRow icon={Volume2} label="Speakers">
-                <select
-                  value={selectedSpeaker}
-                  onChange={async (e) => {
-                    try {
-                      await selectSpeaker(e.target.value)
-                      success('Speakers updated')
-                    } catch (_err) {
-                      error('Failed to change speakers')
-                      logger.error('Failed to change speakers:', _err)
-                    }
-                  }}
-                  className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition"
-                >
-                  <option value="">Default Speakers</option>
-                  {devices.speakers.map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.label}</option>)}
-                </select>
-                <DeviceTester deviceId={selectedSpeaker} type="speaker" />
-              </SettingRow>
-
-              <SettingRow icon={Music} label="Audio Quality" headerContent={null}>
-                <select value={settingsState.audioQuality} onChange={(e) => handleAudioQualityChange(e.target.value)} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
-                  <option value="auto">Auto</option>
-                  <option value="256k">Premium (256kbps)</option>
-                  <option value="192k">Standard (192kbps)</option>
-                  <option value="128k">Economy (128kbps)</option>
-                </select>
-              </SettingRow>
-
-              <SettingRow
-                icon={Radio}
-                label="Sounds"
-                headerContent={
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => handleSetSoundMode('both')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'both' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      DJ+PING
-                    </button>
-                    <button
-                      onClick={() => handleSetSoundMode('notifications')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'notifications' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      PING
-                    </button>
-                    <button
-                      onClick={() => handleSetSoundMode('off')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'off' ? 'bg-red-500/30 text-red-300 border border-red-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      OFF
-                    </button>
-                  </div>
+          <SettingRow icon={Volume2} label="Speakers">
+            <select
+              value={selectedSpeaker}
+              onChange={async (e) => {
+                try {
+                  await selectSpeaker(e.target.value)
+                  success('Speakers updated')
+                } catch (_err) {
+                  error('Failed to change speakers')
+                  logger.error('Failed to change speakers:', _err)
                 }
+              }}
+              className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition"
+            >
+              <option value="">Default Speakers</option>
+              {devices.speakers.map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.label}</option>)}
+            </select>
+            <DeviceTester deviceId={selectedSpeaker} type="speaker" />
+          </SettingRow>
+
+          <SettingRow
+            icon={Smartphone}
+            label="Auto-switch playback to the device I open"
+            color="text-blue-400"
+            headerContent={
+              <ToggleChip
+                on={settingsState.autoClaimOnOpen !== false}
+                onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })}
+                activeClassName="bg-blue-500 text-white"
+                label="Auto-switch playback to the device I open"
               />
-            </div>
-          )}
-        </div>
+            }
+          />
+
+          <SettingRow icon={Music} label="Audio Quality" headerContent={null}>
+            <select value={settingsState.audioQuality} onChange={(e) => handleAudioQualityChange(e.target.value)} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
+              <option value="auto">Auto</option>
+              <option value="256k">Premium (256kbps)</option>
+              <option value="192k">Standard (192kbps)</option>
+              <option value="128k">Economy (128kbps)</option>
+            </select>
+          </SettingRow>
+
+          <SettingRow
+            icon={Radio}
+            label="Sounds"
+            headerContent={
+              <div className="flex gap-1">
+                <button
+                  onClick={() => handleSetSoundMode('both')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'both' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  DJ+PING
+                </button>
+                <button
+                  onClick={() => handleSetSoundMode('notifications')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'notifications' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  PING
+                </button>
+                <button
+                  onClick={() => handleSetSoundMode('off')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'off' ? 'bg-red-500/30 text-red-300 border border-red-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  OFF
+                </button>
+              </div>
+            }
+          />
+        </ExpandSection>
+
+        <RadioModeSettings className="p-4 md:p-6 border-b border-gray-800" />
 
         {(user?.location || user?.timezone || user?.weather_description) && (
-          <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-            <button
-              onClick={() => setLocationExpanded(!locationExpanded)}
-              className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-            >
-              <div className="flex items-center gap-2">
-                <MapPin size={16} className="text-green-400" />
-                <span className="text-sm font-semibold text-gray-300">Location & Environment</span>
-              </div>
-              {locationExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-
-            {locationExpanded && (
-              <div className="space-y-3 pl-2 animate-in slide-in-from-top-2 duration-200">
-                {user?.location && <div className="flex items-center gap-2 text-sm"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user.location}</span></div>}
-                {user?.timezone && <div className="flex items-center gap-2 text-sm"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user.timezone}</span></div>}
-                {user?.weather_description && <div className="flex items-center gap-2 text-sm"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user.weather_description}</span></div>}
-              </div>
-            )}
-          </div>
+          <ExpandSection
+            className="p-4 md:p-6 border-b border-gray-800"
+            open={locationExpanded}
+            onToggle={setLocationExpanded}
+            icon={MapPin}
+            iconClassName="text-green-400"
+            title="Location & Environment"
+            contentClassName="space-y-3 pl-2"
+          >
+            {user?.location && <div className="flex items-center gap-2 text-sm"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user.location}</span></div>}
+            {user?.timezone && <div className="flex items-center gap-2 text-sm"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user.timezone}</span></div>}
+            {user?.weather_description && <div className="flex items-center gap-2 text-sm"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user.weather_description}</span></div>}
+          </ExpandSection>
         )}
 
-        <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-          <button
-            onClick={() => setStorageExpanded(!storageExpanded)}
-            className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-          >
-            <div className="flex items-center gap-2">
-              <Settings size={16} className="text-cyan-400" />
-              <span className="text-sm font-semibold text-gray-300">Storage & Performance</span>
-            </div>
-            {storageExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
+        <ExpandSection
+          className="p-4 md:p-6 border-b border-gray-800"
+          open={storageExpanded}
+          onToggle={setStorageExpanded}
+          icon={Settings}
+          iconClassName="text-cyan-400"
+          title="Storage & Performance"
+          contentClassName="space-y-3 pl-2"
+        >
+          <SettingRow
+            icon={audioState.isOnline ? Wifi : WifiOff}
+            label="Network Status"
+            color={audioState.isOnline ? getNetworkQualityColor() : "text-red-500"}
+            headerContent={
+              <span className="text-xs font-medium" style={{ color: audioState.isOnline ? getNetworkQualityColor() : getNetworkPoor() }}>{audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'}</span>
+            }
+          />
 
-          {storageExpanded && (
-            <div className="space-y-3 pl-2 animate-in slide-in-from-top-2 duration-200">
-              <SettingRow
-                icon={audioState.isOnline ? Wifi : WifiOff}
-                label="Network Status"
-                color={audioState.isOnline ? getNetworkQualityColor() : "text-red-500"}
-                headerContent={
-                  <span className="text-xs font-medium" style={{ color: audioState.isOnline ? getNetworkQualityColor() : getNetworkPoor() }}>{audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'}</span>
-                }
-              />
+          <SettingRow
+            icon={TrendingDown}
+            label="Data Saver Mode"
+            color="text-green-400"
+            headerContent={
+              <button onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.dataSaverMode ? 'ON' : 'OFF'}</button>
+            }
+          />
 
-              <SettingRow
-                icon={TrendingDown}
-                label="Data Saver Mode"
-                color="text-green-400"
-                headerContent={
-                  <button onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} className={`px-3 py-1 rounded text-xs font-medium transition ${settingsState.dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.dataSaverMode ? 'ON' : 'OFF'}</button>
-                }
-              />
+          <SettingRow
+            icon={Gauge}
+            label="FPS Counter"
+            color="text-blue-400"
+            headerContent={
+              <button onClick={handleToggleFpsEnabled} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.fpsEnabled ? 'ON' : 'OFF'}</button>
+            }
+          />
 
-              <SettingRow
-                icon={Gauge}
-                label="FPS Counter"
-                color="text-blue-400"
-                headerContent={
-                  <button onClick={handleToggleFpsEnabled} className={`px-3 py-1 rounded text-xs font-medium transition ${settingsState.fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.fpsEnabled ? 'ON' : 'OFF'}</button>
-                }
-              />
-
-              <SettingRow
-                icon={Image}
-                label="Visual Quality"
-                color="text-purple-400"
-                headerContent={
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => handleSetVisualQuality('high')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'high' ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      HIGH
-                    </button>
-                    <button
-                      onClick={() => handleSetVisualQuality('medium')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'medium' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      MID
-                    </button>
-                    <button
-                      onClick={() => handleSetVisualQuality('low')}
-                      className={`px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'low' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                    >
-                      LOW
-                    </button>
-                  </div>
-                }
-              >
-                <div className="text-xs text-gray-400">
-                  Controls background visual effects intensity. Use LOW for better battery life on mobile devices.
-                </div>
-              </SettingRow>
-
-              <SettingRow
-                icon={Video}
-                label="Video Clips"
-                color="text-pink-400"
-                headerContent={
-                  <button onClick={handleToggleVideoClips} className={`px-3 py-1 rounded text-xs font-medium transition ${settingsState.videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.videoClipsEnabled ? 'ON' : 'OFF'}</button>
-                }
-              >
-                <div className="text-xs text-gray-400">
-                  Video clips in visuals and shared videos (uses more bandwidth)
-                </div>
-              </SettingRow>
-
-              <SettingRow
-                icon={Download}
-                label="Background Downloads"
-                color="text-purple-400"
-                headerContent={
-                  <button onClick={handleToggleBackgroundDownloads} className={`px-3 py-1 rounded text-xs font-medium transition ${downloadState?.isEnabled ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{downloadState?.isEnabled ? 'ON' : 'OFF'}</button>
-                }
-              >
-                {downloadState?.isEnabled && (
-                  <div className="text-xs text-gray-400 space-y-1">
-                    {downloadState.isDownloading && (
-                      <div className="flex items-center gap-2">
-                        <Loader2 size={12} className="animate-spin text-purple-400" />
-                        <span>Downloading: {downloadState.currentTrackTitle}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between">
-                      <span>Today: {formatBytes(downloadState.dailyDownloadedBytes)} / {formatBytes(downloadState.dailyLimit)}</span>
-                      {downloadState.downloadedCount > 0 && <span>{downloadState.downloadedCount} tracks downloaded</span>}
-                    </div>
-                  </div>
-                )}
-              </SettingRow>
-
-              <div className="bg-white/5 p-3 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2"><HardDrive size={14} className="text-blue-400" /><label className="text-xs font-semibold text-gray-300">Local Storage</label></div>
-                  <span className="text-xs text-gray-400">{formatBytes(storageInfo.usedBytes)} / 2 GB</span>
-                </div>
-                <div className="w-full bg-gray-700 rounded-full h-2 mb-2">
-                  <div className={`h-2 rounded-full transition-all duration-300 ${storageInfo.usedPercentage > 80 ? 'bg-red-500' : storageInfo.usedPercentage > 60 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ width: `${Math.min(storageInfo.usedPercentage, 100)}%` }} />
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-gray-400">{storageInfo.trackCount} tracks cached</span>
-                  {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} className="text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
-                </div>
-                {showCachedTracks && storageInfo.trackCount > 0 && (
-                  <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
-                    {storageInfo.tracks.map(track => (
-                      <div key={track.trackId} className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onPlayTrack(track.trackId)}>
-                          <div className="text-xs font-medium truncate">{track.metadata?.generation_params?.title || track.metadata?.title || 'Untitled'}</div>
-                          <div className="text-xs text-gray-500 truncate">{formatBytes(track.size)} • {track.bitrate}</div>
-                        </div>
-                        <button onClick={() => handleDeleteCachedTrack(track.trackId)} className="transition p-1 hover:bg-red-500/20 rounded"><Trash2 size={12} className="text-gray-400 hover:text-red-500" /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
+          {(user?.is_admin || user?.usage_stats_visible) && (
+            <SettingRow
+              icon={DollarSign}
+              label="AI Usage"
+              color="text-violet-400"
+              headerContent={
+                <button onClick={openUsageModal} className="ui-press px-3 py-1 rounded text-xs font-medium transition bg-violet-500/30 text-violet-200 border border-violet-500/50">VIEW</button>
+              }
+            >
+              <div className="text-xs text-gray-400">
+                {user?.is_admin ? 'What PLAiR spends on AI, per listener, with projections' : 'Your AI usage this month'}
               </div>
-
-              <div className="bg-white/5 p-3 rounded-lg">
-                <div className="flex items-center gap-2 mb-2"><Database size={14} className="text-purple-400" /><label className="text-xs font-semibold text-gray-300">Data Usage</label></div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-xs"><span className="text-gray-400">Session:</span><span className="text-gray-300">{formatBytes(dataUsage.sessionDownloaded)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-gray-400">Total:</span><span className="text-gray-300">{formatBytes(dataUsage.totalDownloaded)}</span></div>
-                </div>
-              </div>
-            </div>
+            </SettingRow>
           )}
-        </div>
+
+          {user?.is_admin && (
+            <SettingRow
+              icon={DollarSign}
+              label="Cost Ticker"
+              color="text-violet-400"
+              headerContent={
+                <button onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.costTickerEnabled ? 'bg-violet-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.costTickerEnabled ? 'ON' : 'OFF'}</button>
+              }
+            />
+          )}
+
+          <SettingRow
+            icon={Image}
+            label="Visual Quality"
+            color="text-purple-400"
+            headerContent={
+              <div className="flex gap-1">
+                <button
+                  onClick={() => handleSetVisualQuality('high')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'high' ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  HIGH
+                </button>
+                <button
+                  onClick={() => handleSetVisualQuality('medium')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'medium' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  MID
+                </button>
+                <button
+                  onClick={() => handleSetVisualQuality('low')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'low' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  LOW
+                </button>
+              </div>
+            }
+          >
+            <div className="text-xs text-gray-400">
+              Controls background visual effects intensity. Use LOW for better battery life on mobile devices.
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={Video}
+            label="Video Clips"
+            color="text-pink-400"
+            headerContent={
+              <button onClick={handleToggleVideoClips} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.videoClipsEnabled ? 'ON' : 'OFF'}</button>
+            }
+          >
+            <div className="text-xs text-gray-400">
+              Video clips in visuals and shared videos (uses more bandwidth)
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={Download}
+            label="Background Downloads"
+            color="text-purple-400"
+            headerContent={
+              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${downloadState?.isEnabled ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{downloadState?.isEnabled ? 'ON' : 'OFF'}</button>
+            }
+          >
+            {downloadState?.isEnabled && (
+              <div className="text-xs text-gray-400 space-y-1">
+                {downloadState.isDownloading && (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={12} className="animate-spin text-purple-400" />
+                    <span>Downloading: {downloadState.currentTrackTitle}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span>Today: {formatBytes(downloadState.dailyDownloadedBytes)} / {formatBytes(downloadState.dailyLimit)}</span>
+                  {downloadState.downloadedCount > 0 && <span>{downloadState.downloadedCount} tracks downloaded</span>}
+                </div>
+              </div>
+            )}
+          </SettingRow>
+
+          <div className="bg-white/5 p-3 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2"><HardDrive size={14} className="text-blue-400" /><label className="text-xs font-semibold text-gray-300">Local Storage</label></div>
+              <span className="text-xs text-gray-400">{formatBytes(storageInfo.usedBytes)} / {formatBytes(storageInfo.maxBytes)}</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-2 mb-2 overflow-hidden">
+              <div className={`h-2 w-full origin-left transition-[transform,background-color] duration-base ${storageInfo.usedPercentage > 80 ? 'bg-red-500' : storageInfo.usedPercentage > 60 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ transform: `scaleX(${Math.min(storageInfo.usedPercentage, 100) / 100})` }} />
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-400">{storageInfo.trackCount} tracks cached</span>
+              {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
+            </div>
+            <Expandable open={showCachedTracks && storageInfo.trackCount > 0} innerClassName="pt-3">
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {storageInfo.tracks.map(track => (
+                  <div key={track.trackId} className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onPlayTrack(track.trackId)}>
+                      <div className="text-xs font-medium truncate">{track.metadata?.generation_params?.title || track.metadata?.title || 'Untitled'}</div>
+                      <div className="text-xs text-gray-500 truncate">{formatBytes(track.size)} • {track.bitrate}</div>
+                    </div>
+                    <button onClick={() => handleDeleteCachedTrack(track.trackId)} className="ui-press transition p-1 hover:bg-red-500/20 rounded"><Trash2 size={12} className="text-gray-400 hover:text-red-500" /></button>
+                  </div>
+                ))}
+              </div>
+            </Expandable>
+            {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
+          </div>
+
+          <div className="bg-white/5 p-3 rounded-lg">
+            <div className="flex items-center gap-2 mb-2"><Database size={14} className="text-purple-400" /><label className="text-xs font-semibold text-gray-300">Data Usage</label></div>
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs"><span className="text-gray-400">Session:</span><span className="text-gray-300">{formatBytes(dataUsage.sessionDownloaded)}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-gray-400">Total:</span><span className="text-gray-300">{formatBytes(dataUsage.totalDownloaded)}</span></div>
+            </div>
+          </div>
+        </ExpandSection>
 
         {!loading && (
-          <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-            <button
-              onClick={() => setLibraryExpanded(!libraryExpanded)}
-              className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-            >
-              <div className="flex items-center gap-2">
-                <Library size={16} className="text-pink-400" />
-                <span className="text-sm font-semibold text-gray-300">My Library</span>
-                <span className="text-xs text-gray-400">
-                  ({filteredLikedTracks.length + filteredSuperLikedTracks.length + filteredBannedTracks.length + filteredLikedShoutouts.length + filteredSuperLikedShoutouts.length + filteredBannedShoutouts.length})
-                </span>
-              </div>
-              {libraryExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-
-            {libraryExpanded && (
-              <div className="space-y-6 pl-2 animate-in slide-in-from-top-2 duration-200">
+          <ExpandSection
+            className="p-4 md:p-6 border-b border-gray-800"
+            open={libraryExpanded}
+            onToggle={setLibraryExpanded}
+            icon={Library}
+            iconClassName="text-pink-400"
+            title="My Library"
+            meta={
+              <span className="text-xs text-gray-400">
+                ({filteredLikedTracks.length + filteredSuperLikedTracks.length + filteredBannedTracks.length + filteredLikedShoutouts.length + filteredSuperLikedShoutouts.length + filteredBannedShoutouts.length})
+              </span>
+            }
+            contentClassName="space-y-6 pl-2"
+          >
             <PreferenceList title="Liked Tracks" items={filteredLikedTracks} icon={Heart} iconColor="text-pink-500" expanded={expandedLiked} onToggleExpand={setExpandedLiked} emptyMessage="No liked tracks yet"
               renderItem={(track) => <TrackItem key={track.id} track={track} icon={Heart} iconColor="text-pink-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
 
@@ -1157,99 +1206,105 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
             <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} emptyMessage="No banned shoutouts"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Ban} iconColor="text-red-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
-              </div>
-            )}
-          </div>
+          </ExpandSection>
         )}
 
-        <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
+        <ExpandSection
+          className="p-4 md:p-6 border-b border-gray-800"
+          open={uploadsExpanded}
+          onToggle={setUploadsExpanded}
+          icon={Upload}
+          iconClassName="text-emerald-400"
+          title="My Uploads"
+          meta={userUploads.length > 0 && (
+            <span className="text-xs text-gray-400">({userUploads.length})</span>
+          )}
+          contentClassName="space-y-4 pl-2"
+        >
           <button
-            onClick={() => setUploadsExpanded(!uploadsExpanded)}
-            className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
+            onClick={openUploadModal}
+            className="ui-press-soft w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center justify-center gap-2 transition font-medium"
           >
-            <div className="flex items-center gap-2">
-              <Upload size={16} className="text-emerald-400" />
-              <span className="text-sm font-semibold text-gray-300">My Uploads</span>
-              {userUploads.length > 0 && (
-                <span className="text-xs text-gray-400">({userUploads.length})</span>
-              )}
-            </div>
-            {uploadsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            <Upload size={18} />
+            Upload Your Music
           </button>
 
-          {uploadsExpanded && (
-            <div className="space-y-4 pl-2 animate-in slide-in-from-top-2 duration-200">
-              <button
-                onClick={openUploadModal}
-                className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center justify-center gap-2 transition font-medium"
-              >
-                <Upload size={18} />
-                Upload Your Music
-              </button>
+          {loadingUploads ? (
+            <div className="ui-fade-in flex items-center justify-center py-8">
+              <Loader2 size={24} className="animate-spin text-gray-400" />
+            </div>
+          ) : userUploads.length === 0 ? (
+            <div className="ui-fade-in text-center py-6">
+              <Music size={32} className="mx-auto text-gray-600 mb-2" />
+              <p className="text-sm text-gray-400">No uploads yet</p>
+              <p className="text-xs text-gray-500 mt-1">Upload your music and we&apos;ll analyze it with AI</p>
+            </div>
+          ) : (
+            <div className="ui-fade-in space-y-2">
+              {userUploads.map(track => (
+                <UploadedTrackItem
+                  key={track.id}
+                  track={track}
+                  onPlayTrack={onPlayTrack}
+                  onDeleteUpload={handleDeleteUpload}
+                  isDeleting={deletingUploadId === track.id}
+                />
+              ))}
+            </div>
+          )}
+        </ExpandSection>
 
-              {loadingUploads ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 size={24} className="animate-spin text-gray-400" />
-                </div>
-              ) : userUploads.length === 0 ? (
-                <div className="text-center py-6">
-                  <Music size={32} className="mx-auto text-gray-600 mb-2" />
-                  <p className="text-sm text-gray-400">No uploads yet</p>
-                  <p className="text-xs text-gray-500 mt-1">Upload your music and we&apos;ll analyze it with AI</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {userUploads.map(track => (
-                    <UploadedTrackItem
-                      key={track.id}
-                      track={track}
-                      onPlayTrack={onPlayTrack}
-                      onDeleteUpload={handleDeleteUpload}
-                      isDeleting={deletingUploadId === track.id}
-                    />
-                  ))}
-                </div>
+        <ExpandSection
+          className="p-4 md:p-6 border-b border-gray-800"
+          open={dataManagementExpanded}
+          onToggle={setDataManagementExpanded}
+          icon={Trash2}
+          iconClassName="text-red-400"
+          title="Data Management"
+          contentClassName="space-y-3 pl-2"
+        >
+          <button onClick={handleDeleteConversationHistory} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
+            <MessageSquareX size={16} /> Delete Conversation History
+          </button>
+          <button onClick={handleResetPersona} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-yellow-500/20 text-gray-400 hover:text-yellow-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
+            <RotateCcw size={16} /> Reset Persona & Profile
+          </button>
+        </ExpandSection>
+
+        {user?.tier === 'premium' ? (
+          <div className="p-4 md:p-6 border-b border-gray-800">
+            <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
+              <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">PLAiR Premium</h3></div>
+              {generationUsage && (
+                <p className="text-sm text-gray-300 mb-1">{generationUsage.remaining} of {generationUsage.limit} AI generations left this {generationUsage.period}</p>
+              )}
+              {periodEnd && !Number.isNaN(periodEnd.getTime()) && (
+                <p className="text-xs text-gray-400 mb-1">Current period ends {periodEnd.toLocaleDateString()}</p>
+              )}
+              {billingStatus?.status === 'past_due' && (
+                <p className="text-xs text-red-400 mb-1">Your last payment failed. Update your payment method to keep Premium.</p>
+              )}
+              {billingStatus?.has_billing_account && (
+                <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-3 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">
+                  {billingBusy ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />} Manage subscription
+                </button>
               )}
             </div>
-          )}
-        </div>
-
-        <div className="p-4 md:p-6 space-y-4 border-b border-gray-800">
-          <button
-            onClick={() => setDataManagementExpanded(!dataManagementExpanded)}
-            className="w-full flex items-center justify-between p-3 bg-white/5 hover:bg-white/10 rounded-lg transition"
-          >
-            <div className="flex items-center gap-2">
-              <Trash2 size={16} className="text-red-400" />
-              <span className="text-sm font-semibold text-gray-300">Data Management</span>
-            </div>
-            {dataManagementExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-
-          {dataManagementExpanded && (
-            <div className="space-y-3 pl-2 animate-in slide-in-from-top-2 duration-200">
-              <button onClick={handleDeleteConversationHistory} className="w-full px-4 py-2 bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
-                <MessageSquareX size={16} /> Delete Conversation History
-              </button>
-              <button onClick={handleResetPersona} className="w-full px-4 py-2 bg-white/5 hover:bg-yellow-500/20 text-gray-400 hover:text-yellow-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
-                <RotateCcw size={16} /> Reset Persona & Profile
-              </button>
-            </div>
-          )}
-        </div>
-
-        {user?.tier !== 'premium' && (
+          </div>
+        ) : (
           <div className="p-4 md:p-6 border-b border-gray-800">
             <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
               <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">Upgrade to Premium</h3></div>
-              <p className="text-sm text-gray-300 mb-3">Get 100 tracks per day (vs 20), priority generation, and support development!</p>
-              <button onClick={handleUpgradeToPremium} className="w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2" style={{ background: getPremiumGradient() }}><span>🚀</span> Upgrade to Premium - $9.99/mo</button>
+              <p className="text-sm text-gray-300 mb-3">Get ~100 AI tracks per month and support development!</p>
+              <button onClick={handleUpgradeToPremium} disabled={billingBusy} className="ui-press-soft w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2 disabled:opacity-60" style={{ background: getPremiumGradient() }}>
+                {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <span>🚀</span>} Upgrade to Premium - {priceLabel}
+              </button>
             </div>
           </div>
         )}
 
         <div className="p-4 md:p-6">
-          <button onClick={onLogout} className="w-full px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg flex items-center justify-center gap-2 transition text-sm">
+          <button onClick={onLogout} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg flex items-center justify-center gap-2 transition text-sm">
             <LogOut size={16} /> Logout
           </button>
         </div>

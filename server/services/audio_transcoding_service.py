@@ -1,15 +1,18 @@
 import asyncio
+import json
 import platform
 import traceback
 import aiofiles.os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from services import log_service
 from services.base_service import SingletonService
+from services import track_asset_stages
 from config import settings
 
 FFMPEG_EXE_PATH = r"C:\ffmpeg\bin\ffmpeg.exe"
 FFMPEG_CWD = r"C:\ffmpeg\bin"
+FFPROBE_EXE_PATH = str(Path(FFMPEG_CWD) / "ffprobe.exe")
 
 class AudioTranscodingService(SingletonService):
 
@@ -157,25 +160,12 @@ class AudioTranscodingService(SingletonService):
             self.ffmpeg_available = False
 
     def get_opus_path(self, track_id: str, bitrate: str = "192k") -> Path:
-        if bitrate == "256k":
-            opus_dir = settings.OPUS_256K_DIR
-        elif bitrate == "128k":
-            opus_dir = settings.OPUS_128K_DIR
-        else:
-            opus_dir = settings.OPUS_192K_DIR
-
-        return opus_dir / f"{track_id}.opus"
+        return track_asset_stages.opus_path(track_id, bitrate)
 
     def get_webm_path(self, track_id: str, bitrate: str = "192k") -> Path:
-        if bitrate == "256k":
-            webm_dir = settings.OPUS_256K_DIR / "webm"
-        elif bitrate == "128k":
-            webm_dir = settings.OPUS_128K_DIR / "webm"
-        else:
-            webm_dir = settings.OPUS_192K_DIR / "webm"
-
-        webm_dir.mkdir(parents=True, exist_ok=True)
-        return webm_dir / f"{track_id}.webm"
+        path = track_asset_stages.webm_path(track_id, bitrate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     async def transcode_to_opus(
             self,
@@ -206,7 +196,7 @@ class AudioTranscodingService(SingletonService):
             await self._windows_safe_unlink(temp_output)
 
         try:
-            log_service.upscaling(f"Transcoding {input_path.name} to Opus @ {bitrate}")
+            log_service.transcode(f"Transcoding {input_path.name} to Opus @ {bitrate}")
 
             process = await asyncio.create_subprocess_exec(
                 FFMPEG_EXE_PATH,
@@ -233,7 +223,7 @@ class AudioTranscodingService(SingletonService):
             error_msg = stderr.decode('utf-8', errors='ignore')
 
             if process.returncode == 0:
-                log_service.upscaling("FFmpeg process completed successfully. Attempting to rename file...")
+                log_service.transcode("FFmpeg Opus process completed successfully. Attempting to rename file...")
 
                 if output_path.exists():
                     log_service.upscaling("Destination file exists, removing it first...")
@@ -247,7 +237,7 @@ class AudioTranscodingService(SingletonService):
                     return False
 
                 file_size_mb = output_path.stat().st_size / (1024 * 1024)
-                log_service.upscaling(f"Transcoding complete: {output_path.name} ({file_size_mb:.2f} MB)")
+                log_service.transcode(f"Opus transcoding complete: {output_path.name} ({file_size_mb:.2f} MB)")
                 return True
             else:
                 log_service.error(f"FFmpeg transcoding FAILED. Return code: {process.returncode}")
@@ -265,7 +255,8 @@ class AudioTranscodingService(SingletonService):
             self,
             input_path: Path,
             output_path: Path,
-            bitrate: str = "128k"
+            bitrate: str = "128k",
+            max_duration_seconds: Optional[int] = None
     ) -> bool:
 
         if not self.ffmpeg_available:
@@ -295,7 +286,7 @@ class AudioTranscodingService(SingletonService):
                 encoder = "mp3"
                 log_service.info("Using native MP3 encoder (libmp3lame not available)")
 
-            log_service.info(f"Converting {input_path.name} ({input_size_mb:.1f}MB) to MP3 @ {bitrate} using {encoder}")
+            log_service.transcode(f"Converting {input_path.name} ({input_size_mb:.1f}MB) to MP3 @ {bitrate} using {encoder}")
 
             cmd_args = [
                 FFMPEG_EXE_PATH,
@@ -311,6 +302,10 @@ class AudioTranscodingService(SingletonService):
                 "-y",
                 str(temp_output),
             ]
+
+            if max_duration_seconds:
+                output_index = len(cmd_args) - 1
+                cmd_args[output_index:output_index] = ["-t", str(max_duration_seconds)]
 
             log_service.debug(f"FFmpeg command: {' '.join(cmd_args)}")
 
@@ -332,7 +327,7 @@ class AudioTranscodingService(SingletonService):
                     return False
 
                 file_size_mb = output_path.stat().st_size / (1024 * 1024)
-                log_service.info(f"✓ MP3 conversion complete: {output_path.name} ({file_size_mb:.2f} MB)")
+                log_service.transcode(f"MP3 conversion complete: {output_path.name} ({file_size_mb:.2f} MB)")
                 return True
             else:
                 error_output = stderr.decode('utf-8', errors='ignore')
@@ -354,6 +349,147 @@ class AudioTranscodingService(SingletonService):
             log_service.error(f"MP3 conversion error: {e}")
             await self._windows_safe_unlink(temp_output)
             return False
+
+    async def extract_audio_to_wav(
+            self,
+            input_path: Path,
+            output_path: Path,
+            sample_rate: str = "48000",
+            codec: str = "pcm_s16le"
+    ) -> bool:
+        if not self.ffmpeg_available:
+            log_service.error("FFmpeg not available for media audio extraction")
+            return False
+
+        if not input_path.exists():
+            log_service.error(f"Input media file not found: {input_path}")
+            return False
+
+        if output_path.exists():
+            file_size_mb = output_path.stat().st_size / (1024 * 1024)
+            log_service.info(f"Extracted WAV already exists: {output_path.name} ({file_size_mb:.2f} MB)")
+            return True
+
+        temp_output = output_path.with_suffix(".wav.tmp")
+
+        if temp_output.exists():
+            await self._windows_safe_unlink(temp_output)
+
+        try:
+            log_service.transcode(f"Extracting audio from {input_path.name} to WAV")
+
+            cmd_args = [
+                FFMPEG_EXE_PATH,
+                "-hide_banner",
+                "-threads", "1",
+                "-i", str(input_path),
+                "-map", "0:a:0",
+                "-vn",
+                "-ac", "2",
+                "-ar", sample_rate,
+                "-c:a", codec,
+                "-f", "wav",
+                "-y",
+                str(temp_output),
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=FFMPEG_CWD
+            )
+
+            _stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                rename_success = await self._windows_safe_rename(temp_output, output_path)
+
+                if not rename_success:
+                    log_service.error("Failed to rename extracted WAV temp file")
+                    await self._windows_safe_unlink(temp_output)
+                    return False
+
+                file_size_mb = output_path.stat().st_size / (1024 * 1024)
+                log_service.transcode(f"Audio extraction complete: {output_path.name} ({file_size_mb:.2f} MB)")
+                return True
+
+            error_output = stderr.decode('utf-8', errors='ignore')
+            last_lines = [line.strip() for line in error_output.strip().split('\n')[-5:] if line.strip()]
+            log_service.error(f"Audio extraction failed: {'; '.join(last_lines)}")
+            await self._windows_safe_unlink(temp_output)
+            return False
+
+        except Exception as e:
+            log_service.error(f"Audio extraction error: {e}")
+            await self._windows_safe_unlink(temp_output)
+            return False
+
+    async def probe_media(self, input_path: Path, timeout_s: float = 60.0) -> Optional[Dict[str, Any]]:
+        if not Path(FFPROBE_EXE_PATH).exists() or not input_path.exists():
+            return None
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                FFPROBE_EXE_PATH,
+                "-v", "error",
+                "-print_format", "json",
+                "-show_format",
+                "-show_streams",
+                str(input_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=FFMPEG_CWD
+            )
+            try:
+                stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.communicate()
+                log_service.error(f"ffprobe timed out for {input_path.name}")
+                return None
+
+            if process.returncode != 0:
+                return None
+
+            probe = json.loads(stdout.decode("utf-8", errors="ignore") or "{}")
+        except Exception as e:
+            log_service.error(f"ffprobe failed for {input_path.name}: {e}")
+            return None
+
+        streams = probe.get("streams") or []
+        audio_streams = [st for st in streams if st.get("codec_type") == "audio"]
+        video_streams = [
+            st for st in streams
+            if st.get("codec_type") == "video"
+            and not (st.get("disposition") or {}).get("attached_pic")
+            and st.get("codec_name") not in ("mjpeg", "png", "bmp", "gif")
+        ]
+
+        duration_s = None
+        for candidate in [(probe.get("format") or {}).get("duration")] + [st.get("duration") for st in audio_streams]:
+            try:
+                if candidate is not None and float(candidate) > 0:
+                    duration_s = float(candidate)
+                    break
+            except (TypeError, ValueError):
+                continue
+
+        first_audio = audio_streams[0] if audio_streams else {}
+        try:
+            sample_rate = int(first_audio.get("sample_rate") or 0) or None
+        except (TypeError, ValueError):
+            sample_rate = None
+
+        return {
+            "format_name": (probe.get("format") or {}).get("format_name", ""),
+            "duration_s": duration_s,
+            "has_audio": bool(audio_streams),
+            "has_video": bool(video_streams),
+            "audio_codec": first_audio.get("codec_name"),
+            "sample_rate": sample_rate,
+            "channels": first_audio.get("channels"),
+        }
 
     async def get_or_create_opus(
             self,
@@ -426,7 +562,7 @@ class AudioTranscodingService(SingletonService):
             await self._windows_safe_unlink(temp_output)
 
         try:
-            log_service.upscaling(f"Converting {opus_path.name} to WebM container (fast codec copy)")
+            log_service.transcode(f"Converting {opus_path.name} to WebM container (fast codec copy)")
 
             process = await asyncio.create_subprocess_exec(
                 FFMPEG_EXE_PATH,
@@ -444,7 +580,7 @@ class AudioTranscodingService(SingletonService):
             error_msg = stderr.decode('utf-8', errors='ignore')
 
             if process.returncode == 0:
-                log_service.upscaling("FFmpeg WebM conversion completed. Renaming...")
+                log_service.transcode("FFmpeg WebM conversion completed. Renaming...")
 
                 if webm_path.exists():
                     await self._windows_safe_unlink(webm_path)
@@ -457,7 +593,7 @@ class AudioTranscodingService(SingletonService):
                     return False
 
                 file_size_mb = webm_path.stat().st_size / (1024 * 1024)
-                log_service.upscaling(f"WebM conversion complete: {webm_path.name} ({file_size_mb:.2f} MB)")
+                log_service.transcode(f"WebM conversion complete: {webm_path.name} ({file_size_mb:.2f} MB)")
                 return True
             else:
                 log_service.error(f"FFmpeg WebM conversion FAILED. Return code: {process.returncode}")

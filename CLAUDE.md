@@ -6,7 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI Radio (PLAiR.fm) is a full-stack music streaming application with an AI DJ that controls playback, manages playlists, and interacts with users via voice/text. The system features real-time audio processing, WebSocket-based state synchronization, and advanced audio engine capabilities including dual-buffer crossfading.
 
-**Architecture:** React + Vite frontend, FastAPI backend, SQLAlchemy database, WebSocket for real-time updates.
+**Architecture:** React + Vite frontend, FastAPI backend, PostgreSQL (SQLAlchemy async + psycopg2), WebSocket for real-time updates, Google Gemini (`google-genai`) as the LLM, local Orpheus TTS engine (`tts_server/`) for DJ voices.
+
+**Live site:** `https://plair.live` (nginx at `C:\nginx` proxies to backend :8000 and frontend :3000). "PLAiR.fm" is only the on-air brand name.
+
+## Environment & Infrastructure
+
+All configuration lives in the repo-root `.env` (template: `.env.example`), loaded by `server/config/settings.py`.
+
+- **PostgreSQL 18** on `localhost:5433` with 4 databases: `ai_radio` (users, devices, preferences, conversations, play_events, analytics), `ai_radio_catalog` (tracks), `ai_radio_user_content` (shoutouts), `ai_radio_embeddings` (vector caches). Tables are created at startup; the catalog and shoutouts **self-sync from their JSON metadata files on every boot**, and the TTS clip cache re-indexes from the ID3 tags of files in `data/tts_dj_engine_data/`. A fresh database therefore only needs the 4 empty databases to exist, plus user data restored separately.
+- **Catalog media** (~620 GB) lives outside the repo at `CATALOG_DIR` (currently `D:/catalog`). Only tracks with a mastered WAV in `master_wav/` are loaded into the catalog.
+- **GPU placement:** `CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=0` pin everything to the **Quadro P6000** (Pascal, sm_61). The Quadro RTX 6000 (index 1) is reserved for the owner's other projects. Pascal has no efficient float16, so Whisper runs with `WHISPER_COMPUTE_TYPE=int8`. Never hard-code `cuda:N` indexes.
+- **Vector indexes** (Annoy `.ann` files in `data/embeddings/`) use `rowid - 1` / `id - 1` as item ids. Each vector service checks the index size against the database at startup and rebuilds if stale, so deleting `.ann` files is always safe.
+- **Shared machine:** the same nginx also serves other sites (lifespan.ink, deepmirror.live, moneyprinter.live, realityvirtual.co), and the owner runs other GPU/AI projects on this box. `external_components/restart_all.bat` force-kills **every** python/node/nginx/java process — never run it casually. Don't leave PLAiR running for no reason; start it for testing, stop it after. nginx runs elevated: `nginx -s reload` needs an **admin** shell.
+- **Starting PLAiR:** `external_components/plair_start.bat` (the owner's "PLAiR Start" desktop shortcut should point here) stops only PLAiR, rebuilds the frontend, starts/reloads nginx gracefully, launches the backend window and runs the smoke test. Never use `restart_all.bat` (kills every python/node/nginx/java on the machine).
+- **Running production:** the backend runs in a console window titled `Plair Backend (Port 8000)` (`cmd /k ... start.py`) bound to `127.0.0.1:8000` (`HOST` in `.env`); nginx proxies `plair.live` → it and serves `client/dist` directly. Restart only PLAiR with `taskkill /F /FI "WINDOWTITLE eq Plair Backend*" /T` then relaunch the window. Deploy the frontend with `npm run build` (no nginx reload needed). For private test boots: `HOST=127.0.0.1 PORT=8011 python start.py`.
+- **Smoke test:** `E:/AI_RADIO/.venv/Scripts/python.exe tests/smoke_test.py [--base URL] [--skip-dj]` — health, catalog, MP3/Opus streaming, semantic search, TTS engine, and a guest WebSocket DJ conversation that must produce speech. Run it after every backend restart or deploy.
 
 ## Development Commands
 
@@ -25,15 +40,18 @@ npm run preview
 
 ### Backend (Server)
 ```bash
-# Start backend server (port 8000)
+# Start backend server (port 8000; override with HOST/PORT env vars). Also launches the TTS engine.
 cd server
 E:/AI_RADIO/.venv/Scripts/python.exe start.py
 
-# Database migration
-E:/AI_RADIO/.venv/Scripts/python.exe migrate_database.py
+# Add missing columns after changing models.py
+E:/AI_RADIO/.venv/Scripts/python.exe run_migration.py
 ```
 
-**Note:** Backend uses Windows-specific paths. The project uses a Python virtual environment at `E:/AI_RADIO/.venv/`.
+**Note:** Backend uses Windows-specific paths. The project uses a Python virtual environment at `E:/AI_RADIO/.venv/` (Python 3.11, dependencies pinned in `server/requirements.txt`).
+
+### TTS Engine (tts_server/)
+Separate process with its own venv at `tts_server/.venv`; the backend starts and stops it automatically (`TTS_SERVER_EXTERNAL=true` to manage it yourself via `tts_server/start_tts_server.bat`). Logs go to `data/logs/tts_server.log`. Setup and rebuild instructions: `tts_server/README.md`.
 
 ## Critical Architecture Patterns
 
@@ -41,7 +59,7 @@ E:/AI_RADIO/.venv/Scripts/python.exe migrate_database.py
 
 **File:** `client/src/contexts/UIStateContext.jsx`
 
-This is the **most critical architectural pattern** in the frontend. Read `docs/ARCHITECTURE_SSOT_PATTERN.md` before making any UI state changes.
+This is the **most critical architectural pattern** in the frontend. Read `docs/ARCHITECTURE_SSOT.md` before making any UI state changes.
 
 **Core Principle:**
 - **Engines** (PlaybackContext, useDJAudioStream, VoiceRecordingContext) produce raw data
@@ -100,7 +118,7 @@ This is the **most critical file** on the backend. All playback state lives here
 - `get_state()` - Returns current state (includes `activeSeedMode`)
 
 **Critical Rule for `_playback_loop`:**
-When `active_device_id` is set, the frontend controls playback timing. Backend should NOT auto-advance tracks when progress reaches end. See `docs/CROSSFADE_FIX_HANDOFF.md` for details.
+When `active_device_id` is set, the frontend controls playback timing. Backend should NOT auto-advance tracks when progress reaches end. See `docs/archive/CROSSFADE_RACE_CONDITION_FIX.md` for details.
 
 ### 3. Multi-Device Playback Management - SSOT Pattern
 
@@ -141,11 +159,17 @@ Player: shows device status
 All three layers default `isActiveDevice = false`. Backend explicitly activates via WebSocket. Use `data.active_device_id === deviceId` (exact match) - NOT `!data.active_device_id || ...` which activates all devices when null.
 
 **Device Management Flow:**
-1. **Connection:** Device connects → defaults to INACTIVE
-2. **Backend Activation:** Backend sets `active_device_id` for one device
+1. **Connection:** Device connects → defaults to INACTIVE. A (re)connect never moves playback; the backend only activates a device when the session has no active device yet (`PlaybackState.device_connected`)
+2. **Backend Activation:** Backend sets `active_device_id` for one device (first device, explicit transfer, "Play here instead", or claim-on-open below)
 3. **WebSocket Broadcast:** All devices receive `playback_state` with `active_device_id`
 4. **PlaybackContext:** Calculates `weAreActive`, updates AudioEngine + UIState
 5. **Components:** Read `engineState.isActiveDevice` from UIState
+
+**Claim on open (auto-switch to the device the user opens):**
+- PlaybackContext sends `playback_command {command: 'claim'}` only for a genuine user open: a page load while the page is visible, the first time a page that loaded hidden becomes visible, or the page becoming visible after being hidden for ≥ 3 s (`OPEN_CLAIM_MIN_HIDDEN_MS`). It waits ~400 ms to settle, needs a server `playback_state` on the current socket, `document.hasFocus()`, and is dropped after 20 s or if the page is hidden again.
+- Never claims on WebSocket reconnects/blips, background/hidden tabs reconnecting or loading, quick glances away (< 3 s), or when this device is already active.
+- Setting: "Auto-switch playback to the device I open" (`settingsState.autoClaimOnOpen`, per device in `safeStorage` key `autoClaimOnOpen`, default ON) in User → Audio & Devices.
+- Backend: `ws.py` `claim` → `PlaybackState.claim_on_open()` reuses `_apply_transfer` (hands over the simulated position, bumps `seek_version`, keeps `is_playing`); no-op for the active device; ignored within `OPEN_CLAIM_DEBOUNCE_S` (2 s) of another transfer to prevent ping-pong. Radio Mode `on_transfer` runs first, so talk breaks and DJ streams follow the transfer like any other transfer.
 
 **Key Properties:**
 - `playback_state.active_device_id` (backend) - SSOT for which device is active
@@ -167,7 +191,7 @@ All three layers default `isActiveDevice = false`. Backend explicitly activates 
 
 ### 4. WebSocket State Synchronization
 
-**Backend:** `server/app.py` - `broadcast_playback_state_to_session()`
+**Backend:** `server/services/websocket_service.py` + `server/routers/ws.py` - playback state broadcast to all devices in a session
 **Frontend:** `client/src/contexts/WebSocketContext.jsx`
 
 WebSocket messages use custom format (NOT socket.io):
@@ -187,6 +211,10 @@ useWebSocketSubscribe('playback_state', handlePlaybackState)
 **File:** `server/services_radio/dj_command_executor.py`
 
 Parses and executes commands from AI-generated text. Commands map 1:1 to vector search categories.
+
+**Two-pass flow (current):** the DJ model's reply is spoken as-is (sent to TTS first). A second Gemini pass, the "HAL11000" extractor (`gpt_command_extraction` in `dj_prompt_service.py`, syntax taught by nodes in `context_nodes.py`), reads the listener text + DJ reply and emits lines like `({play}{primary_artist})"Nine Inch Nails"`, which `process_commands()` parses by regex. Consequence: the DJ speaks before commands run and never sees their results. `gpt_*` function names are legacy — the provider is Gemini.
+
+**Tool-use flow (`DJ_TOOL_USE_ENABLED=true`, default false):** one Gemini conversation per DJ turn (`ai_service.run_gemini_tool_turn`, max `DJ_TOOL_MAX_ROUNDS` rounds; the final round forces text). 15 tools are declared in `server/services_radio/dj_tools.py` (search_and_play, playback_control, seed_radio, play_playlist, rate_track, get_news, get_weather, get_events, find_places, get_artist_biography, explain_lyrics, play_shoutouts, save_shoutout, save_shoutout_reply, save_opinion) and dispatch to structured `execute_*` methods on `dj_command_executor` — the same methods the brace-command path uses. The model sees tool results before writing its reply, which keeps today's performance markup. Content tools (news/weather/events/places/bio/lyrics/shoutouts) still trigger the dedicated interpretation prompts as a second spoken segment, released after the main reply. Keep the model's full `Content` objects in history (Gemini 3.x `thought_signature` parts must round-trip). Safety guards (server-side, independent of the model): tools act only on the current session; save_shoutout/save_opinion only from the listener's own voice input that asks for it; bans need negative listener wording; guests can't rate; conversation history, shoutouts and web data are wrapped as untrusted data. On failure before anything is spoken it falls back to the two-pass flow. Watch logs for `[DJ TOOLS] Blocked` / `falling back to two-pass flow`.
 
 **SEARCH Commands (Full Catalog):**
 `{song_title}`, `{primary_artist}`, `{similar_artists}`, `{primary_genre}`, `{secondary_genres}`, `{mood}`, `{style}`, `{theme}`, `{vocal}`, `{lyrics}`
@@ -246,7 +274,6 @@ function Parent() {
 **Breakpoint Ranges & Scaling:**
 xs<640px (phone, 1.0), sm 640-768px (1.0), md 768-1024px (tablet, 1.0), lg 1024-1440px (laptop, 0.8), xl 1440-1920px (desktop, 0.75), 2xl 1920-2560px (1080p, 0.7), 3xl 2560-3840px (QHD, 0.85), 4K 3840px+ (baseline, 1.0). Scaling applies to desktop (≥1024px) only.
 
-See `docs/VIEWPORT_USAGE.md` for usage patterns.
 
 ### 8. Artwork Preloading Architecture - Proactive SSOT Pattern
 
@@ -355,6 +382,64 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 **DO:** Modify effect logic in AudioReactiveCanvas only. Use seeded random for offline, `Math.random` for live.
 **DO NOT:** Duplicate shaders/effects in offlineVideoRenderer.
 
+### 12. Local TTS Engine (Orpheus) - ElevenLabs Replacement
+
+ElevenLabs was retired in 2026-09 (cost). DJ speech is generated by Orpheus-3B (GGUF Q4_K_M via llama.cpp CUDA + SNAC ONNX decoder), ported from the owner's LifeSpan project.
+
+- **Voices:** Orpheus has 8 built-in voices (`tara, leah, jess, leo, dan, mia, zac, zoe`) and **no voice cloning**. The hosts `[SHAQUILLE]`/`[TERRY]` stay as persona names and map to Orpheus voices via `settings.VOICE_PREFERENCES` (`TTS_VOICE_SHAQUILLE` / `TTS_VOICE_TERRY` in `.env`). Changing a host's voice means clearing that host's cached clips (`data/tts_dj_engine_data/*/<host>/`), otherwise old and new voices mix.
+- **Emotion tags:** Orpheus renders `<laugh> <chuckle> <sigh> <gasp> <groan> <yawn> <cough> <sniffle>` inline. "Meta" segments (non-verbal reactions) are converted to these tags by `generate_meta_data_gpt_response` — never phonetic spellings like "hahaha".
+- **Speed:** one shared model instance serves all streams (per-job KV sequence + sampler, SNAC in its own thread). On the P6000 a single stream runs at RTF ~1.2 (~74 tokens/s; real time needs ~82), two concurrent streams produce ~1.0-1.15 s of audio per second in total. Real time for one stream isn't reachable on this card without a smaller quantisation (which changes the audio). Two streams are decoded in one batch only while both KV caches are <=512 (`MAX_BATCHED_KV`), which keeps tokens bit-identical to solo decoding. The engine design absorbs this: impulses fill gaps and the semantic clip cache (`TTS_SIMILARITY_THRESHOLD`) serves repeated lines instantly as it warms up.
+- **Sacred design:** the performance planner (two hosts talking over each other via `@N@` overlaps/blends, `&N&` mix + 3D reverb, `*meta*`, `%sfx%` beds, breaths, impulses) must not change. Only pure delivery/latency/efficiency changes are acceptable — the listener must hear the same audio in the same order. Streaming the LLM reply and re-planning it was tried and rejected.
+- **Delivery (progressive, identical audio):** `tts_queue_manager` starts rendering every segment at once, assembles the timeline in playback order (`IncrementalBlend` emits a blend only once later segments can't change it) and feeds `TimelineMixer` (`tts_broadcast_service.py`) → one persistent ffmpeg WebM/Opus encoder per stream (`tts_live_stream.LiveStreamEncoder`) → `tts_stream_audio_chunk` events. Orpheus requests go through a priority scheduler in playback order (`tts_generation_service`), one generation until first audio then two (`TTS_TURN_GENERATION_PARALLEL_START` / `_PARALLEL`). Fresh PCM goes straight into processing; the MP3 cache file is written in the background.
+- **Fillers:** meta and impulse use a cached clip only at/above `META_/IMPULSE_SIMILARITY_THRESHOLD`, otherwise generate live (original semantics). Breaths are inserted where the planner puts them; the clip is chosen by context similarity to the previous sentence (`breath_embeddings`), with background generation of better matches (LifeSpan's breath prompt) behind a low-priority gate that never delays live speech.
+- **Interrupt:** a new listener text/voice turn calls `TTSQueueManager.cancel_session` — drops queued TTS, cancels the in-flight render, aborts that session's Orpheus jobs via `POST /abort/<job_id>`, and emits `tts_stream_end` + `tts_stream_cancel` (the client clears its queue).
+- **Cache:** new clips are cached per host in `data/tts_dj_engine_data/{tts,meta,impulse,breath}_audio/<host>/`; missing files self-heal (stale rows deleted). The cache evolves: a near match (at/above the similarity threshold but below `TTS_EXACT_REFRESH_BELOW`, 0.97) plays instantly and the exact line (host sentences, meta, impulses) is queued to render in the low-priority background lane (`note_cache_match` -> `schedule_refresh`), capped per hour and never delaying live speech, so the next time that line is said the exact take exists. Breaths work the same way. All cache embeddings (lookups, live saves, startup migration) must use the same method: T5 last-position hidden state padded to `min(512, tokens+128)` — identical to 512-padding but 2x faster. Cached MP3s decode in-process via `tts_processing_service.decode_mp3` (soundfile). The old ElevenLabs cache is archived in `data/_archive_elevenlabs_2026_09/`. Sound effects (`audio_effect_audio/`) are cache-only.
+- **Stings & talking clock (no LLM):** a third Orpheus voice, `station` (`TTS_VOICE_STATION`, default `zac`), with a "station computer" treatment (`tts_processing_service.station_treatment`: radio-band EQ, light ring-mod/comb/bitcrush, slap + short room, then the normal chain via `process_station`). Its clips live in their own exact-key cache (`station_voice.py`, `data/tts_dj_engine_data/station_audio/<voice>/index.json`, FLAC), never the vector cache. The talking clock (`talking_clock.py`: intro + hour + minute + optional daypart, 82 parts) only ever uses exact parts; a missing part means no time check (never a near match), and hours/minutes are checked with the fast Whisper model after rendering. Station IDs (`station_ids.py`, ~36 lines incl. "{city}" lines) play the best cached take and queue the exact line (LifeSpan pattern). Musical stings are cut from 2 Suno idents into `STINGS_DIR` (`manifest.json`, never the catalog); sweeper beds can also come from `audio_effect_audio`. Types are a registry (`sting_types.py`), rules are pure (`sting_schedule.py`), `sting_service.py` pre-renders at low priority, and the announcer asks it first: short windows (`STINGS_SHORT_WINDOW_S`) or every Nth break get a sting instead of an LLM line; they stream as `tts_type="sting"` through `TTSQueueManager.add_clip_request` → `LiveStreamEncoder` (same client path and ducking). Radio Mode talk breaks can open with an ID (`lead_in`). Settings: `STINGS_*` / `STATION_*`. Station name is spelled `Plair` for Orpheus (`STATION_NAME_SPOKEN`; "PLAiR" is read inconsistently).
+- **Build gotchas:** llama-cpp-python must be compiled LAST, after numpy/scipy/onnxruntime, for CUDA archs `61;75`; `nvidia-cudnn-cu12` is pinned to 9.10.2.21 (9.26 breaks SNAC on Pascal) — see `tts_server/README.md`.
+
+### 13. Backend Structure & Security
+
+- **Routers:** `server/app.py` only holds the lifespan (service startup/shutdown), middleware and router includes. Routes live in `server/routers/*.py` by domain; shared dependencies (`get_session_info`, `get_current_user`, `RateLimit(...)`, `require_admin`, `read_upload_limited`) are in `server/routers/deps.py`, request models in `server/routers/schemas.py`. Services are created in the lifespan and published on `server/service_registry.py` (`services.x`) — routers read `services.x` at request time; never import a service instance at module import time.
+- **Request guard:** `server/security_middleware.RequestGuardMiddleware` (HTTP + WebSocket) rejects paths containing `\`, `..`, NUL or `:` and any guest id not matching `guest_<uuid>`. Every file-serving route builds paths from validated ids — never join raw request strings onto directories (Windows `Path(dir) / "E:\\x"` escapes the directory).
+- **Sessions:** user session id = user id; guest session id = the client's `guest_<uuid>`. Invalid tokens fall back to guest; invalid guest ids are rejected. The WebSocket requires a user token or a valid guest id; its first message is `session_info {authenticated, user_id, token_rejected}` (closes with 4401 when a rejected token comes without a guest id). The client (`AuthContext.handleSessionInfo`) re-validates on `token_rejected` and on any 401 to a token-bearing request, then signs out cleanly (toast + login modal) instead of staying half signed-in. Tokens nearing expiry are renewed silently via `POST /api/auth/refresh`. The WebSocket reconnects only when the identity (`sessionKey`) changes, not on token refresh.
+- **Secrets:** `JWT_SECRET_KEY` must be a random ≥32-char value in `.env` (startup refuses weak/placeholder values); tokens last `JWT_ACCESS_TOKEN_EXPIRE_DAYS` (7). Never print `.env` contents, even masked (comment lines can hold secrets).
+- **Abuse limits:** paid AI/GPU endpoints use `RateLimit` token buckets (guests get a small quota on `/api/dj/talk` and `/api/transcribe`; AI analysis in searches is user-only; login/register limited per IP and username); lyric generation is admin-only (`ADMIN_USER_IDS`); uploads are read in chunks with hard caps; API docs are off unless `ENABLE_API_DOCS=true`; shoutout responses never include coordinates (`public_shoutout()`).
+- **nginx hardening** (security headers, per-location body sizes, forwarded client IP, `limit_req`) is prepared but must be applied by the owner from an admin shell; until nginx forwards `X-Real-IP`, per-IP limits stay off.
+
+### 14. Motion System - One Design Language
+
+**Files:** `client/src/lib/motion.js` (tokens + presets), `client/src/lib/microMotion.js` (WAAPI micro-interactions), `client/src/components/Motion.jsx` (Expandable, ExpandSection, MotionList, FadeSwap), `client/src/hooks/useEntranceWindow.js`, `client/src/hooks/useArtPop.js`, `client/src/contexts/QualityContext.jsx` (adaptive quality tiers).
+
+- All durations, easings and springs come from `motion.js` tokens (`DURATION`, `EASE`, `SPRING`, `TWEEN`, `PRESETS`, `VARIANTS`, `MICRO`, `CSS_TRANSITION`); CSS uses the matching `--dur-*` / `--ease-*` variables and Tailwind `duration-*` names. Never hard-code a duration or spring.
+- Tactile feedback: add `ui-tap` (icon buttons) or `ui-press` (wide buttons) and one document-level listener runs the press/release pop. Positive actions use `MICRO.burst`, bans `MICRO.nope`, artwork `useArtPop`.
+- Animate transform/opacity only (no width/height/box-shadow/filter), no per-frame React state, nothing off-screen. `data-motion` (full / lite / off) follows QualityContext tiers and `prefers-reduced-motion`.
+- Visual state priority (Recording > AI Processing > DJ Speaking > Music Playing > Paused > Idle) has an ON AIR modifier during Radio Mode talk breaks (`engineState.talkBreak`: `OnAirBadge`, `OnAirLamp`, `OnAirFrame`, shader tint). The background shader also glows with the speaking DJ's voice colour (`VOICE_*` constants in `AudioReactiveCanvas.jsx`); shared shader exports for `offlineVideoRenderer` must stay unchanged.
+
+### 15. City Pulse, Location, Radio Mode & Cost Systems (Sept 2026)
+
+Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_2026-09-28.md`.
+
+- **Listener location (SSOT):** `context_service.listener_location(user, session_id)` (`services_radio/listener_location.py`). Logged-in users come from the profile; guests send `listener_location` over the WebSocket and are held in memory only (6 h TTL, never stored). Fallback: device location, then the timezone city, then `NEWS_DEFAULT_COUNTRY`. Every location consumer (news, weather, events, places, geocode, air/pollen, local time, Radio Mode, DJ context) goes through it.
+- **Regional knowledge (city pool):** `services_radio/regional_knowledge.py` defines the `Collector` interface, `KnowledgeItem` and `RegionalKnowledgeService.query(...)`. Collectors: Ticketmaster events, Google Places IDs, Google News. Shared per region, targeted per listener by taste (no LLM).
+- **Street-level place memory:** `services_radio/place_memory.py` (`place_cache`, `place_searches`) matches by meaning and distance and reuses results for 30 days.
+- **Area signals:** `area_signals.py` with `area_geocode.py`, `area_air_quality.py` and `area_pollen.py` (Google APIs on the PLAiR project key `GOOGLE_PLACES_API_KEY`), shared per grid cell in `area_cache`.
+- **News store:** `services_radio/news_store.py` persists Google News pulls and items in Postgres, reuses them by meaning plus matching stories, stores the ranking once, and keeps an aired ledger per listener.
+- **Radio Mode:** opt-in scheduled talk breaks (`radio_mode_service.py`, `radio_segments.py`, `radio_schedule.py`, `music_beds.py`; client `lib/talkBreak.js`, `lib/musicBed.js`, `RadioModeSettings.jsx`, `OnAirBadge.jsx`). Music beds are in `CATALOG_DIR/music_beds`, stings in `CATALOG_DIR/stings`, and neither is ever in the main catalog.
+- **Stings & talking clock:** `sting_service.py`, `sting_types.py`, `sting_schedule.py`, `talking_clock.py`, `station_ids.py`, `station_voice.py`. Station voice is Orpheus `zac` with `station_treatment`; the spoken name is `STATION_NAME_SPOKEN` ("Play Air"). Between tracks: musical and voice stings, randomly every 10-15 min. Mid-song: voice-only IDs and time checks on their own timer (Radio Mode only).
+- **LLM routing and cost:** `services/llm_router.py` has role chains (`LLM_LIVE` Gemini 3.5 Flash-Lite; `LLM_ANNOUNCE/INTERPRET/BACKGROUND` DeepSeek flash, then Gemini fallback). `services/llm_telemetry.py` is the one price table. `services/usage_tracking.py` + `usage_middleware.py` attribute every paid call (and cache savings) to a user, guest or system scope; the admin view is `UsageStatsModal.jsx` / `routers/usage.py` (`ADMIN_USER_IDS`).
+- **Artwork thumbnails:** `GET /api/artwork/{id}/thumb/{size}` (`services/artwork_thumbnail_service.py`); the client prefetches through `lib/artworkPrefetcher.js` and `useArtworkThumb`.
+- **Offline mode:** see section 16 and `docs/OFFLINE_MODE.md`.
+
+### 16. Offline Mode
+
+**Files:** `NetworkContext.jsx` (health checks), `lib/api.js` (`_routeRequest`, connectivity events), `lib/offlineAPI.js` (local backend + local radio queue), `lib/cacheManager.js` / `lib/offlineStorage.js` (IndexedDB library), `public/sw.js`. Full notes and the parked work: `docs/OFFLINE_MODE.md`.
+
+- `audioState.offlineMode` (UIState) is the SSOT for "running on the downloads"; it is `connectionMode !== 'full'`. The server counts as down only after 2 failed `/api/health` probes and back up after 2 successes (more if it flapped); never flip on a single failure.
+- API calls that hit a network error or 502/503/504 call `api.reportServerTrouble()` (immediate probe). Unreachable is not rejected: only a 401/403 or WS close 4401 may sign the user out.
+- Cached track metadata is normalized (`normalizeTrackMetadata`); read the library via `cacheManager.getCachedTrackList()` (no blobs, memoized), not `getAllCachedTracks()`.
+- Offline preference changes queue in `offline_pending_preferences` and replay via `api.syncOfflineWrites()` on recovery.
+- Parked: automatic playback hand-off to the local engine in `PlaybackContext.jsx` (it still gates offline paths on `audioState.isOnline`), offline UI pill, SW asset precache.
+
 ## State Flow Architecture
 
 **Frontend → Backend:** Component → Context → API → Service → Database → WebSocket Broadcast → All Clients
@@ -442,7 +527,7 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 
 **Audio Hooks:**
 - `client/src/hooks/useAudio.js` - Audio engine hook (play, pause, seek, volume, crossfade)
-- `client/src/hooks/useDJAudioStream.js` - DJ TTS audio stream (real-time voice playback, device-aware)
+- `client/src/hooks/useDJAudioStream.js` - DJ TTS audio stream (real-time voice playback, device-aware). Mounted once at the App root as `<DJVoiceEngine />` (never inside a panel, so collapsing/remounting panels cannot cut the DJ); owns its own audio element, pauses while the mic records
 - `client/src/hooks/useFFTProcessor.js` - **DRY** Unified FFT processing (DJ/Voice/Shoutout frequency analysis, two modes: frequency_bands & logarithmic)
 - `client/src/hooks/useUISound.js` - UI sound effects (click sounds, haptic feedback)
 - `client/src/hooks/useVoiceRecorder.js` - Voice recording (microphone access, audio processing)
@@ -457,8 +542,9 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 ### Frontend Libraries
 
 **Core Libraries:**
-- `client/src/lib/audioEngine.js` - **CRITICAL** Audio playback engine (dual-buffer A/B crossfading, device enforcement)
-- `client/src/lib/session.js` - Device ID management (localStorage, UUID generation)
+- `client/src/lib/audioEngine.js` - **CRITICAL** Audio playback engine (dual-buffer A/B crossfading, device enforcement, `_rampGain()` for all gain automation)
+- `client/src/lib/safeStorage.js` - **CRITICAL** Safe localStorage wrapper (try-catch with in-memory fallback for iOS private browsing). ALL localStorage access MUST go through `safeStorage.get/set/remove`
+- `client/src/lib/session.js` - Device ID management (safeStorage, UUID generation)
 - `client/src/lib/api.js` - **CRITICAL** API client (ALL backend calls route through `_routeRequest()` for offline/online switching)
 - `client/src/lib/logger.js` - Logging utilities (console formatting, log levels)
 - `client/src/lib/utils.js` - Utility functions (date formatting, string manipulation)
@@ -473,7 +559,8 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 
 **Audio Processing:**
 - `client/src/lib/audioMixer.js` - Audio mixing (volume control, crossfading)
-- `client/src/lib/djBroadcastChain.js` - DJ broadcast chain (audio pipeline)
+- `client/src/lib/djStreamPlayer.js` - DJ stream player (one MediaSource per stream, strictly sequential queue, cancel with fade, stall/reconnect watchdog, mic hold); pure logic with injectable env, node-testable
+- `client/src/lib/djBroadcastChain.js` - DJ broadcast chain (audio pipeline; only processes while the DJ is audible, all gain changes via `_rampGain`)
 - `client/src/lib/audioInteractionManager.js` - Audio interaction manager (click-to-play, autoplay policy)
 
 **Video/Rendering:**
@@ -492,13 +579,16 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 - `server/services/playback_service.py` - Session-level playback management (multi-user coordination)
 - `server/services/device_management_service.py` - Device management (registration, activation, listing)
 - `server/services/websocket_service.py` - WebSocket connection management (session broadcasting, cleanup)
-- `server/app.py` - FastAPI routes and WebSocket handlers
+- `server/app.py` - FastAPI app: lifespan (service startup/shutdown), middleware, router includes
+- `server/routers/` - API routes by domain (auth, playback, catalog, share, media, shoutouts, dj, devices, ws, ...); `deps.py` shared dependencies, `schemas.py` request models
+- `server/service_registry.py` - `services` registry populated by the lifespan and read by routers
+- `server/security_middleware.py` - request guard (path traversal, guest id format)
 
 **Authentication & User:**
 - `server/services/auth_service.py` - Authentication (JWT tokens, password hashing)
 - `server/services/user_profile_service.py` - User profile management (username, settings, location)
 - `server/services/preferences_service.py` - User preferences (audio quality, theme, TTS settings)
-- `server/services/preferences_cache_service.py` - In-memory cache for user likes/bans
+- `server/services/user_data_cache_service.py` - In-memory cache for user likes/bans
 - `server/services/profile_picture_service.py` - Profile picture uploads and serving
 
 **Media Serving:**
@@ -510,15 +600,17 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 - `server/services/analytics_file_service.py` - File-based analytics storage (JSONL, exports)
 
 **AI Services:**
-- `server/services/ai_service.py` - AI/LLM service wrapper (Claude API, prompt management)
+- `server/services/ai_service.py` - Gemini LLM wrapper (`google-genai`: `call_gemini`, `call_gemini_with_tools`, structured output)
 
 ### Backend Data Services
 
 **Catalog Management:**
 - `server/services/catalog_database_service.py` - Track catalog (CRUD operations, metadata queries)
-- `server/services/catalog_vector_database_service.py` - Vector database (Annoy index for embeddings)
+- `server/services/base_vector_database_service.py` - Shared base for the catalog and user-content vector DBs (embedding caches, weighted T5 embeddings, A/B Annoy indexes with stale-index rebuild)
+- `server/services/catalog_vector_database_service.py` - Catalog vector DB (hooks on the base class)
 - `server/services/catalog_vector_search_service.py` - Track similarity search (semantic search, recommendations)
-- `server/services/catalog_vector_search_prompt_cache_service.py` - Prompt caching for vector search (performance optimization)
+- `server/services/base_prompt_cache_service.py` - Shared base for the catalog and user-content query-intent prompt caches
+- `server/services/catalog_vector_search_prompt_cache_service.py` - Prompt caching for vector search (hooks on the base class)
 
 **User Content Management:**
 - `server/services/user_content_database_service.py` - User content database (shoutouts, recordings)
@@ -588,12 +680,16 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 - `server/services_radio/context_nodes.py` - Context node definitions (track, user, weather, news, etc.)
 
 **TTS Pipeline:**
-- `server/services_radio/tts_generation_service.py` - Text-to-speech generation (ElevenLabs, voice cloning)
+- `tts_server/server.py` - **Local Orpheus TTS engine** (separate process, Flask on 127.0.0.1:8090, own venv; streams PCM s16le 24 kHz from `POST /tts`)
+- `server/services_radio/tts_engine_bootstrap.py` - Launches/health-checks/stops the TTS engine with the backend lifespan
+- `server/services_radio/tts_generation_service.py` - Semantic clip cache lookup, else `generate_local_tts()` → MP3 bytes; saves new clips + embeddings
 - `server/services_radio/tts_processing_service.py` - Audio processing (normalization, compression, effects)
 - `server/services_radio/tts_stream_planner.py` - TTS streaming (chunk planning, timing coordination)
 - `server/services_radio/tts_queue_manager.py` - TTS queue management (priority, cancellation)
 - `server/services_radio/tts_broadcast_service.py` - Audio broadcasting (WebSocket streaming, chunking)
 - `server/services_radio/tts_vector_db_service.py` - Vector DB for TTS (voice similarity, caching)
+- `server/services_radio/tts_database_migration_service.py` - Re-indexes clip files from disk into the embeddings DB at startup
+- `server/services_radio/sting_service.py` - Stings & talking clock (station voice cache + renderer in `station_voice.py`, `talking_clock.py`, `station_ids.py`, `sting_library.py`, `sting_types.py` registry, `sting_schedule.py` rules)
 
 **External Data Services:**
 - `server/services_radio/external_web_service.py` - Web scraping (artist info, lyrics, news)
@@ -607,9 +703,11 @@ Both live canvas and offline renderer share shader code from AudioReactiveCanvas
 
 ## Database
 
-**ORM:** SQLAlchemy (async)
+**Engine:** PostgreSQL 18 (see Environment & Infrastructure for the 4 databases)
+**ORM:** SQLAlchemy (async, `asyncpg`) for the `ai_radio` models; catalog, user content and embeddings services use `psycopg2` directly
 **Connection:** `server/database/connection.py`
 **Models:** `server/database/models.py`
+**Schema changes:** add the column to `models.py`, then register it in `server/run_migration.py`
 
 Get database session:
 ```python
@@ -651,6 +749,10 @@ async def my_endpoint(db: AsyncSession = Depends(get_db)):
 ## Common Pitfalls
 
 ### ❌ DON'T
+- Use raw `localStorage` directly - ALWAYS use `safeStorage` from `lib/safeStorage.js` (iOS private browsing crashes without it)
+- Hardcode `sampleRate` in AudioContext constructor (let browser choose — iOS Safari may reject non-native rates)
+- Use `100vh` for full-height layouts (use `100dvh` with `100%` fallback — iOS address bar causes layout shift)
+- Duplicate gain scheduling logic (use `audioEngine._rampGain()` for all gain automation)
 - Use direct `fetch()` for backend calls - ALWAYS use `api.js` methods (enables offline/online routing)
 - Add code comments/notes (no `// ####`, `// TODO`, `// Note:` etc.) - keep code clean
 - Store `activeSeedMode` in PlaybackContext (use UIState only)
@@ -665,6 +767,9 @@ async def my_endpoint(db: AsyncSession = Depends(get_db)):
 - Pass artwork URLs through component props (components subscribe directly)
 - Manually call `preloadArtwork()` or `preloadEnrichedArtwork()` in components
 - Use `useIsMobile()` helper (removed - use `useViewport()` directly)
+- Hard-code GPU indexes (`cuda:1`, `set_device(n)`) or float16 for Whisper/CTranslate2 — the app runs on a Pascal P6000 selected via `CUDA_VISIBLE_DEVICES`
+- Reintroduce cloud TTS (ElevenLabs was retired) or phonetic laugh spellings — use Orpheus emotion tags
+- Compute new row ids with `SELECT MAX(rowid)+1` — let Postgres identity columns assign them (the catalog loads with 50 concurrent upserts)
 - Add multiple timeupdate listeners to audio elements
 - Forget to broadcast state after changing `radio_mode`
 - Forget to set `active_device_id` when user activates a device
@@ -706,14 +811,23 @@ async def my_endpoint(db: AsyncSession = Depends(get_db)):
 ### Backend
 - Service instances initialized once at startup (`@asynccontextmanager`)
 - Vector search uses Annoy index for fast similarity lookups
-- Preferences cached in-memory (`preferences_cache_service.py`)
+- Preferences cached in-memory (`user_data_cache_service.py`)
 - Rate limiting per user (`rate_limit_service.py`)
 
 ## Windows-Specific Notes
 
-This project runs on Windows with specific configurations: Backend uses `WindowsProactorEventLoopPolicy`, disables Quick Edit Mode (`start.py`), Python venv at `E:/AI_RADIO/.venv/`, restart services with `external_components/restart_all.bat`.
+This project runs on Windows with specific configurations: Backend uses `WindowsProactorEventLoopPolicy`, disables Quick Edit Mode (`start.py`), Python venv at `E:/AI_RADIO/.venv/`. `external_components/restart_all.bat` restarts everything but kills ALL python/node/nginx/java processes on the machine (see Environment & Infrastructure).
 
 **CRITICAL:** When editing files with Claude Code, **ALWAYS use relative paths** (e.g., `client/src/App.jsx`) instead of absolute paths (e.g., `E:/AI_RADIO/client/src/App.jsx`). Absolute paths with drive letters cause "file has been unexpectedly modified" errors. Working directory is `E:/AI_RADIO`.
+
+## iOS Safari Compatibility
+
+The app supports iOS Safari with graceful degradation. Key patterns:
+
+- **Storage:** All localStorage goes through `safeStorage.js` (in-memory fallback for private browsing). IndexedDB (`offlineStorage.js`) has `unavailable` flag — returns safe defaults when IndexedDB is blocked. Cache API (`mediaCache.js`) falls back to network-only when `caches.open()` fails. iOS cache quota capped at 50MB in `cacheManager.js`.
+- **Audio:** AudioContext created without `sampleRate` (browser chooses native rate). `AudioInteractionManager` handles iOS autoplay policy (resumes context on user gesture). `pagehide`/`pageshow` listeners supplement `visibilitychange` for reliable tab lifecycle.
+- **Layout:** Body uses `height: 100dvh` (dynamic viewport height) to handle iOS address bar. `position: fixed` elements work correctly because no parent transforms interfere.
+- **Compatibility:** `ViewportContext.isCompatible` is always `true` — iOS is a supported platform. Device detection (`isIOS`, `isSafari`) is available for feature-specific behavior.
 
 ## Debugging Tips
 

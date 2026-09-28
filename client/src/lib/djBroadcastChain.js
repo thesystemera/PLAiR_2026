@@ -1,12 +1,20 @@
+const ATTACK_SEC = 0.015
+const RELEASE_HOLD_MS = 600
+const HISS_LEVEL = 0.0008
+const BACKGROUND_LEVEL = 0.1
+const BACKGROUND_URL = '/audio/studio/background.mp3'
+
 export class DJBroadcastChain {
-  constructor(audioContext, audioElement) {
-    this.ctx = audioContext
+  constructor(engine, audioElement) {
+    this.engine = engine
+    this.ctx = engine.context
     this.audioElement = audioElement
 
     this.source = null
     this.inputGain = null
     this.compressor = null
     this.limiter = null
+    this.hissBuffer = null
     this.analogHiss = null
     this.hissBandpass = null
     this.hissGain = null
@@ -15,9 +23,11 @@ export class DJBroadcastChain {
     this.backgroundGain = null
     this.mixer = null
     this.analyser = null
+    this.destination = null
 
     this.isSetup = false
-    this.isConnected = false
+    this.isActive = false
+    this._releaseTimer = null
   }
 
   setup() {
@@ -42,14 +52,11 @@ export class DJBroadcastChain {
     this.limiter.release.value = 0.05
 
     const bufferSize = 2 * this.ctx.sampleRate
-    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate)
-    const output = noiseBuffer.getChannelData(0)
+    this.hissBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate)
+    const output = this.hissBuffer.getChannelData(0)
     for (let i = 0; i < bufferSize; i++) {
       output[i] = Math.random() * 2 - 1
     }
-    this.analogHiss = this.ctx.createBufferSource()
-    this.analogHiss.buffer = noiseBuffer
-    this.analogHiss.loop = true
 
     this.hissBandpass = this.ctx.createBiquadFilter()
     this.hissBandpass.type = 'bandpass'
@@ -57,16 +64,17 @@ export class DJBroadcastChain {
     this.hissBandpass.Q.value = 0.7
 
     this.hissGain = this.ctx.createGain()
-    this.hissGain.gain.value = 0.0008
+    this.hissGain.gain.value = HISS_LEVEL
 
-    this.backgroundNoise = new Audio('/audio/studio/background.mp3')
+    this.backgroundNoise = new Audio(BACKGROUND_URL)
     this.backgroundNoise.loop = true
+    this.backgroundNoise.preload = 'auto'
     this.backgroundSource = this.ctx.createMediaElementSource(this.backgroundNoise)
     this.backgroundGain = this.ctx.createGain()
-    this.backgroundGain.gain.value = 0.1
+    this.backgroundGain.gain.value = BACKGROUND_LEVEL
 
     this.backgroundNoise.addEventListener('loadedmetadata', () => {
-      if (Number.isFinite(this.backgroundNoise.duration)) {
+      if (this.backgroundNoise && Number.isFinite(this.backgroundNoise.duration)) {
         this.backgroundNoise.currentTime = Math.random() * this.backgroundNoise.duration
       }
     }, { once: true })
@@ -78,7 +86,6 @@ export class DJBroadcastChain {
     this.analyser.fftSize = 2048
     this.analyser.smoothingTimeConstant = 0.8
 
-    this.analogHiss.connect(this.hissBandpass)
     this.hissBandpass.connect(this.hissGain)
     this.hissGain.connect(this.mixer)
 
@@ -90,56 +97,104 @@ export class DJBroadcastChain {
 
     this.mixer.connect(this.compressor)
     this.compressor.connect(this.limiter)
-    this.limiter.connect(this.analyser)
-
-    if (this.analogHiss.context.state !== 'closed') {
-      this.analogHiss.start(0)
-    }
 
     this.isSetup = true
     return this.analyser
   }
 
-  connect(destinationNode) {
-    if (!this.isSetup || !destinationNode) return
+  isUsable() {
+    return this.isSetup && !!this.ctx && this.ctx.state !== 'closed' && this.engine?.context === this.ctx
+  }
 
-    if (!this.isConnected) {
-      try {
-        this.analyser.disconnect()
-        this.analyser.connect(destinationNode)
-      } catch { /* error intentionally suppressed */ }
+  activate() {
+    if (!this.isSetup || !this.engine?.masterGain || this.ctx.state === 'closed') return false
+
+    if (this._releaseTimer) {
+      clearTimeout(this._releaseTimer)
+      this._releaseTimer = null
+    }
+
+    if (!this.isActive) {
+      const destination = this.engine.masterGain
+      if (destination.context !== this.ctx) return false
+
+      this.limiter.connect(this.analyser)
+      this.analyser.connect(destination)
+      this.destination = destination
+
+      const hiss = this.ctx.createBufferSource()
+      hiss.buffer = this.hissBuffer
+      hiss.loop = true
+      hiss.connect(this.hissBandpass)
+      hiss.start()
+      this.analogHiss = hiss
 
       this.backgroundNoise.play().catch(() => {})
-      this.isConnected = true
+      this.isActive = true
     }
 
-    this.mixer.gain.value = 1.0
+    this.engine._rampGain(this.mixer, this.mixer.gain.value, 1.0, ATTACK_SEC)
+    return true
   }
 
-  disconnect() {
-    if (!this.isSetup || !this.isConnected) return
+  deactivate(fadeSec = 0.05) {
+    if (!this.isActive) return
+    if (this._releaseTimer) clearTimeout(this._releaseTimer)
 
-    this.mixer.gain.value = 0
-    this.backgroundNoise.pause()
-    this.isConnected = false
-    try {
-      this.analyser.disconnect()
-    } catch { /* error intentionally suppressed */ }
-  }
-
-  destroy() {
-    this.disconnect()
-
-    if (this.backgroundNoise) {
-      this.backgroundNoise.pause()
-      this.backgroundNoise = null
+    const fade = Math.max(0.005, fadeSec)
+    if (this.ctx.state !== 'closed') {
+      this.engine._rampGain(this.mixer, this.mixer.gain.value, 0, fade)
     }
+    this._releaseTimer = setTimeout(() => {
+      this._releaseTimer = null
+      this._release()
+    }, fade * 1000 + RELEASE_HOLD_MS)
+  }
+
+  _release() {
+    if (!this.isActive) return
+    this.isActive = false
 
     if (this.analogHiss) {
-      try { this.analogHiss.stop() } catch { /* error intentionally suppressed */ }
+      try { this.analogHiss.stop() } catch { /* already stopped */ }
+      try { this.analogHiss.disconnect() } catch { /* already disconnected */ }
       this.analogHiss = null
     }
 
+    this.backgroundNoise?.pause()
+
+    try { this.limiter.disconnect(this.analyser) } catch { /* already disconnected */ }
+    if (this.destination) {
+      try { this.analyser.disconnect(this.destination) } catch { /* already disconnected */ }
+      this.destination = null
+    }
+  }
+
+  destroy() {
+    if (this._releaseTimer) {
+      clearTimeout(this._releaseTimer)
+      this._releaseTimer = null
+    }
+    if (this.isSetup && this.ctx.state !== 'closed') {
+      this.mixer.gain.cancelScheduledValues(0)
+      this.mixer.gain.value = 0
+    }
+    this._release()
+
+    if (this.backgroundNoise) {
+      this.backgroundNoise.pause()
+      this.backgroundNoise.removeAttribute('src')
+      this.backgroundNoise.load()
+      this.backgroundNoise = null
+    }
+
+    const nodes = [this.source, this.inputGain, this.hissBandpass, this.hissGain, this.backgroundSource, this.backgroundGain, this.mixer, this.compressor, this.limiter, this.analyser]
+    nodes.forEach(node => {
+      if (!node) return
+      try { node.disconnect() } catch { /* already disconnected */ }
+    })
+
+    this.hissBuffer = null
     this.isSetup = false
     this.source = null
   }

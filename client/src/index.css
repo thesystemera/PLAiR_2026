@@ -28,6 +28,7 @@ body {
   position: fixed;
   width: 100%;
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -71,7 +72,6 @@ textarea,
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
-  backdrop-filter: blur(10px);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -82,4 +82,283 @@ textarea,
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --ease-decelerate: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --ease-emphasized: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-tap: 90ms;
+  --dur-micro: 140ms;
+  --dur-quick: 200ms;
+  --dur-badge: 220ms;
+  --dur-enter: 260ms;
+  --dur-art: 280ms;
+  --dur-pop: 340ms;
+  --dur-theme: 700ms;
+  --dur-breathe: 2400ms;
+}
+
+@layer components {
+  .ui-press,
+  .ui-press-soft,
+  .ui-tap,
+  .ui-hover,
+  .ui-hover-lg {
+    transition: scale var(--dur-micro) var(--ease-decelerate), background-color var(--dur-micro) ease, border-color var(--dur-micro) ease, color var(--dur-micro) ease, opacity var(--dur-micro) ease;
+  }
+
+  .ui-fade-in {
+    animation: ui-fade-in var(--dur-enter) var(--ease-decelerate) backwards;
+  }
+
+  .ui-pop-in {
+    animation: ui-pop-in var(--dur-badge) var(--ease-decelerate) backwards;
+  }
+
+  .ui-pop {
+    animation: ui-pop var(--dur-pop) var(--ease-decelerate) backwards;
+  }
+
+  .ui-badge-in {
+    animation: ui-badge-in var(--dur-pop) var(--ease-decelerate) var(--dur-micro) backwards;
+  }
+
+  .ui-fill {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .ui-fill > .ui-fill-on {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transform: scale(0.3);
+    transition: opacity var(--dur-micro) ease-out, transform var(--dur-pop) var(--ease-pop);
+  }
+
+  .ui-fill[data-on="true"] > .ui-fill-on {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .ui-burst {
+    position: fixed;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .ui-burst-ring,
+  .ui-burst-dot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    border-radius: 9999px;
+    opacity: 0;
+    will-change: transform, opacity;
+  }
+
+  .ui-burst-ring {
+    border: 2px solid currentColor;
+  }
+
+  .ui-burst-dot {
+    background: currentColor;
+  }
+
+  .ui-eq {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1.5px;
+    height: 10px;
+    animation: ui-eq-in var(--dur-art) var(--ease-decelerate) var(--dur-micro) backwards;
+  }
+
+  .ui-eq > span {
+    width: 2px;
+    height: 100%;
+    border-radius: 1px;
+    background: currentColor;
+    transform-origin: 50% 100%;
+    transform: scaleY(0.35);
+    animation: ui-eq 820ms ease-in-out infinite alternate;
+    animation-play-state: paused;
+  }
+
+  .ui-eq > span:nth-child(2) {
+    animation-duration: 620ms;
+    animation-delay: -240ms;
+  }
+
+  .ui-eq > span:nth-child(3) {
+    animation-duration: 940ms;
+    animation-delay: -520ms;
+  }
+
+  .ui-eq[data-playing="true"]:not([data-offscreen="true"]) > span {
+    animation-play-state: running;
+  }
+
+  .ui-breathe {
+    animation: ui-breathe var(--dur-breathe) ease-in-out infinite alternate;
+  }
+
+  .ui-breathe[data-paused="true"] {
+    animation: none;
+  }
+}
+
+.np-split-art {
+  width: min(42%, calc(100vh - var(--np-offset)));
+  width: min(42%, calc(100dvh - var(--np-offset)));
+}
+
+@layer utilities {
+  @media (hover: hover) and (pointer: fine) {
+    .ui-hover:hover:not(:disabled) {
+      scale: 1.05;
+    }
+
+    .ui-hover-lg:hover:not(:disabled) {
+      scale: 1.1;
+    }
+  }
+
+  .ui-press:active:not(:disabled) {
+    scale: 0.95;
+  }
+
+  .ui-tap:active:not(:disabled) {
+    scale: 0.88;
+  }
+
+  .ui-press-soft:active:not(:disabled) {
+    scale: 0.985;
+  }
+}
+
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes ui-pop-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes ui-pop {
+  0% {
+    opacity: 0;
+    scale: 0.6;
+  }
+  55% {
+    opacity: 1;
+    scale: 1.15;
+  }
+  100% {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes ui-badge-in {
+  0% {
+    opacity: 0;
+    scale: 0.7;
+    translate: 0 -6px;
+  }
+  60% {
+    opacity: 1;
+    scale: 1.08;
+    translate: 0 0;
+  }
+  100% {
+    opacity: 1;
+    scale: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes ui-eq {
+  from {
+    transform: scaleY(0.3);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes ui-eq-in {
+  from {
+    opacity: 0;
+    scale: 0.4;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes ui-breathe {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+:root[data-motion="lite"] .ui-eq > span,
+:root[data-motion="lite"] .ui-breathe {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-pulse,
+  .animate-bounce,
+  .animate-ping,
+  .ui-fade-in,
+  .ui-pop-in,
+  .ui-pop,
+  .ui-badge-in,
+  .ui-eq,
+  .ui-eq > span,
+  .ui-breathe {
+    animation: none !important;
+  }
+
+  .ui-hover:hover,
+  .ui-hover-lg:hover,
+  .ui-press:active,
+  .ui-tap:active,
+  .ui-press-soft:active {
+    scale: none !important;
+  }
 }

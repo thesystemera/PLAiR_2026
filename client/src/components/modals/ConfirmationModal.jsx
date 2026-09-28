@@ -72,7 +72,7 @@ export function ConfirmationModal({ isOpen, config }) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={config.placeholder}
-            className="w-full px-4 py-3 rounded-lg font-medium transition-all outline-none"
+            className="w-full px-4 py-3 rounded-lg font-medium transition outline-none"
             style={{
               backgroundColor: 'rgba(255,255,255,0.05)',
               border: `1px solid ${getBorder(0.2)}`,

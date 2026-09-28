@@ -1,35 +1,63 @@
 import { logger } from '../lib/logger'
-import { useState } from 'react'
-import { Heart, Star, Ban, Loader2 } from 'lucide-react'
+import { Heart, Star, Ban } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
-import { useUIState } from '../contexts/UIStateContext'
+import { useUIActions } from '../contexts/UIStateContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { triggerHaptic } from '../lib/haptics'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
+import { CSS_TRANSITION } from '../lib/motion'
+import { burst, nope, pop } from '../lib/microMotion'
+
+const BURST_COLORS = {
+  like: '#ec4899',
+  super_like: '#facc15'
+}
+
+const ACTIONS = [
+  { type: 'like', icon: Heart, title: 'Like', activeClassName: 'bg-pink-600 text-white', fill: true },
+  { type: 'super_like', icon: Star, title: 'Super Like', activeClassName: 'bg-yellow-600 text-white', fill: true },
+  { type: 'ban', icon: Ban, title: 'Ban', activeClassName: 'bg-red-600 text-white', fill: false }
+]
+
+function ActionIcon({ icon: Icon, size, on, fill }) {
+  if (!fill) {
+    return (
+      <span className="inline-flex" data-icon>
+        <Icon size={size} />
+      </span>
+    )
+  }
+  return (
+    <span className="ui-fill" data-on={on ? 'true' : 'false'} data-icon>
+      <Icon size={size} />
+      <Icon size={size} fill="currentColor" className="ui-fill-on" />
+    </span>
+  )
+}
 
 export default function MediaActions({ type = 'track', itemId, compact = false, overlay = false }) {
   const { isAuthenticated } = useAuth()
-  const { getPreference, setPreference, removePreference, isPending } = usePreferences()
-  const { toastError } = useUIState()
+  const { getPreference, setPreference, removePreference } = usePreferences()
+  const { toastError } = useUIActions()
   const { getGrey800, getGrey700, getGrey400, triggerEffect } = useDynamicTheme()
-  const error = toastError
-  const [clickedType, setClickedType] = useState(null)
   const likeInteraction = usePointerInteraction()
   const superLikeInteraction = usePointerInteraction()
   const banInteraction = usePointerInteraction()
+  const interactions = { like: likeInteraction, super_like: superLikeInteraction, ban: banInteraction }
 
-  const isLoading = isPending(type, itemId)
   const preference = getPreference(type, itemId)
 
   const handleAction = async (e, preferenceType, interaction) => {
     e?.preventDefault()
     e?.stopPropagation()
 
-    if (!isAuthenticated || isLoading) return
+    if (!isAuthenticated) return
     if (!interaction.shouldTrigger()) return
 
-    setClickedType(preferenceType)
+    const removing = preference === preferenceType
+    const button = e?.currentTarget
+    const icon = button?.querySelector('[data-icon]')
 
     if (e.clientX !== undefined && e.clientY !== undefined) {
       triggerEffect('click', {
@@ -41,21 +69,24 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
 
     if (preferenceType === 'ban') {
       triggerHaptic('error')
+      if (!removing) nope(icon)
     } else {
       triggerHaptic('success')
+      if (!removing) {
+        pop(icon)
+        burst(button, BURST_COLORS[preferenceType])
+      }
     }
 
     try {
-      if (preference === preferenceType) {
+      if (removing) {
         await removePreference(type, itemId)
       } else {
         await setPreference(type, itemId, preferenceType)
       }
     } catch (err) {
       logger.error(`Failed to set ${type} preference:`, err)
-      error('Failed to update preference. Please try again.')
-    } finally {
-      setClickedType(null)
+      toastError('Failed to update preference. Please try again.')
     }
   }
 
@@ -66,11 +97,11 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
   const baseButtonStyle = (compact || overlay) ? {
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     color: 'rgba(255, 255, 255, 0.9)',
-    transition: 'all 150ms ease-in-out'
+    transition: CSS_TRANSITION.quick
   } : {
     backgroundColor: getGrey800(),
     color: getGrey400(),
-    transition: 'all 700ms ease-in-out, transform 150ms ease-in-out'
+    transition: CSS_TRANSITION.theme
   }
 
   const hoverStyle = (compact || overlay) ? {
@@ -81,74 +112,31 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
 
   const iconSize = overlay ? 20 : (compact ? 14 : 16)
   const buttonPadding = overlay ? 'p-2.5' : (compact ? 'p-1.5' : 'p-2')
+  const activeStyle = { transition: CSS_TRANSITION.quick }
 
   return (
     <div className={`flex ${overlay ? 'gap-2' : (compact ? 'gap-1' : 'gap-2')}`}>
-      <button
-        onPointerDown={likeInteraction.onPointerDown}
-        onPointerMove={likeInteraction.onPointerMove}
-        onPointerUp={(e) => handleAction(e, 'like', likeInteraction)}
-        disabled={isLoading}
-        className={`${buttonPadding} rounded-lg transition-all ${
-          preference === 'like'
-            ? 'bg-pink-600 text-white'
-            : ''
-        }`}
-        style={preference !== 'like' ? baseButtonStyle : { transition: 'all 150ms ease-in-out' }}
-        onMouseEnter={(e) => preference !== 'like' && Object.assign(e.currentTarget.style, hoverStyle)}
-        onMouseLeave={(e) => preference !== 'like' && Object.assign(e.currentTarget.style, baseButtonStyle)}
-        title="Like"
-      >
-        {isLoading && clickedType === 'like' ? (
-          <Loader2 size={iconSize} className="animate-spin" />
-        ) : (
-          <Heart size={iconSize} fill={preference === 'like' ? 'currentColor' : 'none'} />
-        )}
-      </button>
-
-      <button
-        onPointerDown={superLikeInteraction.onPointerDown}
-        onPointerMove={superLikeInteraction.onPointerMove}
-        onPointerUp={(e) => handleAction(e, 'super_like', superLikeInteraction)}
-        disabled={isLoading}
-        className={`${buttonPadding} rounded-lg transition-all ${
-          preference === 'super_like'
-            ? 'bg-yellow-600 text-white'
-            : ''
-        }`}
-        style={preference !== 'super_like' ? baseButtonStyle : { transition: 'all 150ms ease-in-out' }}
-        onMouseEnter={(e) => preference !== 'super_like' && Object.assign(e.currentTarget.style, hoverStyle)}
-        onMouseLeave={(e) => preference !== 'super_like' && Object.assign(e.currentTarget.style, baseButtonStyle)}
-        title="Super Like"
-      >
-        {isLoading && clickedType === 'super_like' ? (
-          <Loader2 size={iconSize} className="animate-spin" />
-        ) : (
-          <Star size={iconSize} fill={preference === 'super_like' ? 'currentColor' : 'none'} />
-        )}
-      </button>
-
-      <button
-        onPointerDown={banInteraction.onPointerDown}
-        onPointerMove={banInteraction.onPointerMove}
-        onPointerUp={(e) => handleAction(e, 'ban', banInteraction)}
-        disabled={isLoading}
-        className={`${buttonPadding} rounded-lg transition-all ${
-          preference === 'ban'
-            ? 'bg-red-600 text-white'
-            : ''
-        }`}
-        style={preference !== 'ban' ? baseButtonStyle : { transition: 'all 150ms ease-in-out' }}
-        onMouseEnter={(e) => preference !== 'ban' && Object.assign(e.currentTarget.style, hoverStyle)}
-        onMouseLeave={(e) => preference !== 'ban' && Object.assign(e.currentTarget.style, baseButtonStyle)}
-        title="Ban"
-      >
-        {isLoading && clickedType === 'ban' ? (
-          <Loader2 size={iconSize} className="animate-spin" />
-        ) : (
-          <Ban size={iconSize} />
-        )}
-      </button>
+      {ACTIONS.map(({ type: actionType, icon, title, activeClassName, fill }) => {
+        const active = preference === actionType
+        const interaction = interactions[actionType]
+        return (
+          <button
+            key={actionType}
+            onPointerDown={interaction.onPointerDown}
+            onPointerMove={interaction.onPointerMove}
+            onPointerUp={(e) => handleAction(e, actionType, interaction)}
+            className={`ui-tap relative ${buttonPadding} rounded-lg ${active ? activeClassName : ''}`}
+            style={active ? activeStyle : baseButtonStyle}
+            onMouseEnter={(e) => !active && Object.assign(e.currentTarget.style, hoverStyle)}
+            onMouseLeave={(e) => !active && Object.assign(e.currentTarget.style, baseButtonStyle)}
+            title={title}
+            aria-label={title}
+            aria-pressed={active}
+          >
+            <ActionIcon icon={icon} size={iconSize} on={active} fill={fill} />
+          </button>
+        )
+      })}
     </div>
   )
 }

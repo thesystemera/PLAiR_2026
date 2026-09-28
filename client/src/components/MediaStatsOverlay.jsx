@@ -57,8 +57,8 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
       <div className="relative px-3 md:px-4 pt-2 md:pt-3 pb-2 md:pb-3 w-full rounded-2xl overflow-hidden">
         <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.catalogHeader} />
         <div className="relative z-10 flex flex-col gap-1.5 md:gap-2 text-white">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+            <div className="flex flex-wrap items-center gap-2 md:gap-3 min-w-0">
               <div className="flex items-center gap-1.5 md:gap-2">
                 <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.music}`}>
                   <Music className={CATALOG_HEADER.statIcon.size} />
@@ -127,11 +127,11 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
             </div>
 
             {!stats.is_search_mode && (
-              <div className="flex items-center gap-1.5 md:gap-2 pointer-events-auto">
+              <div className="flex items-center gap-1.5 md:gap-2 ml-auto pointer-events-auto">
                 {selectedGenre && onBackToGenres ? (
                   <button
                     onClick={onBackToGenres}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors"
+                    className="ui-press flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors"
                     title="Back to genres"
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -143,7 +143,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                   <>
                     <button
                       onClick={() => onSortChange('recent')}
-                      className={`p-2 rounded transition-colors ${sortMode === 'recent' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'recent' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
                       style={sortMode !== 'recent' ? { color: getGrey400() } : {}}
                       title="Recent"
                     >
@@ -151,7 +151,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                     </button>
                     <button
                       onClick={() => onSortChange('alphabetical')}
-                      className={`p-2 rounded transition-colors ${sortMode === 'alphabetical' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'alphabetical' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
                       style={sortMode !== 'alphabetical' ? { color: getGrey400() } : {}}
                       title="A-Z"
                     >
@@ -159,7 +159,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                     </button>
                     <button
                       onClick={() => onSortChange('genre')}
-                      className={`p-2 rounded transition-colors ${sortMode === 'genre' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'genre' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
                       style={sortMode !== 'genre' ? { color: getGrey400() } : {}}
                       title="Genre"
                     >

@@ -1,5 +1,9 @@
 # Prompt System Audit - Data Sources & Debug Logging
 
+> **Note (2026-09-26):** The LLM provider is Google Gemini (`google-genai` SDK; models configured in `server/config/settings.py`). The `gpt_*` function names in `dj_prompt_service.py` are legacy naming only - no OpenAI/GPT models are used.
+>
+> **Status update:** The Priority 1 debug-logging fix below has since been implemented. `_save_prompt_debug(gpt_type=...)` is now called from `_get_nodes_unified()`, which every `gpt_*` function uses, so all prompts are saved as `data/prompt_debug/{gpt_type}_{timestamp}.json`. Line numbers below are from the original audit.
+
 ## Executive Summary
 
 ### ✅ External Services ARE Being Called Correctly
@@ -20,7 +24,7 @@ All GPT functions that need external data are calling their respective services:
 
 This is CORRECT - lyrics are already in the database from Suno generation.
 
-### ⚠️ Prompt Debug Only Saves for Interactive
+### ✅ (Resolved) Prompt Debug Only Saves for Interactive
 
 **Current state:**
 - `_save_prompt_debug()` is only called in `gpt_dj_interactive()` (line 427)
@@ -208,7 +212,7 @@ def get_station_format(self, sections=None, num_tags=10, num_correlated=5):
 
 ## Recommended Fixes
 
-### Priority 1: Universal Prompt Debug Saving
+### Priority 1: Universal Prompt Debug Saving (✅ Done - see note at top)
 
 **Problem:** Only Interactive saves debug prompts
 **Fix:** Add `_save_prompt_debug()` call to ALL GPT functions
