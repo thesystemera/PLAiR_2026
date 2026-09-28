@@ -377,7 +377,7 @@ const ShoutoutItem = memo(function ShoutoutItem({ shoutout, icon, iconColor, onP
 export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTrack, onReloadTrackQuality }) {
   const { isAuthenticated, user, refreshUser } = useAuth()
   const { getPreferences, removePreference, isPending } = usePreferences()
-  const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor, getPurpleBase } = useDynamicTheme()
+  const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
   const {
     audioState,
@@ -826,17 +826,15 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
         <div className="min-h-full flex items-center justify-center p-6" style={{ paddingTop: `${PANEL.headerHeight}px` }}>
           <div className="max-w-sm w-full space-y-4">
             <div className="text-center mb-6">
-              <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: getUserAvatarGradient(), color: 'white' }}>
-                <UserIcon size={40} />
-              </div>
+              <img src="/images/plair_icon_192.png" alt="PLAiR" width="80" height="80" decoding="async" className="w-20 h-20 rounded-2xl mx-auto mb-4 shadow-lg" />
               <h3 className="text-xl font-bold mb-2">Welcome to PLAiR</h3>
-              <p className="text-gray-400 text-sm">Sign in to save your preferences</p>
+              <p className="text-gray-400 text-sm">Sign in to save your likes, downloads and settings</p>
             </div>
-            <button onClick={onLogin} className="ui-press-soft w-full px-4 py-3 bg-dark-hover hover:bg-gray-700 rounded-lg flex items-center justify-center gap-2 transition">
-              <LogIn size={20} /> Login
+            <button onClick={onRegister} className="ui-press-soft w-full px-4 py-3 rounded-lg transition font-semibold bg-amber-500 hover:bg-amber-400 text-zinc-950">
+              Create account
             </button>
-            <button onClick={onRegister} className="ui-press-soft w-full px-4 py-3 rounded-lg transition font-medium" style={{ backgroundColor: getPurpleBase() }}>
-              Register
+            <button onClick={onLogin} className="ui-press-soft w-full px-4 py-3 rounded-lg border border-amber-500/60 text-amber-300 hover:bg-amber-500/10 flex items-center justify-center gap-2 transition">
+              <LogIn size={20} /> Login
             </button>
             <RadioModeSettings className="pt-4 border-t border-gray-800" />
           </div>

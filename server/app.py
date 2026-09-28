@@ -600,7 +600,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1000)
+app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1000, compresslevel=6)
 app.add_middleware(UsageAttributionMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 
