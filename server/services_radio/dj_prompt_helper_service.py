@@ -68,28 +68,28 @@ def filter_response_by_role(text: str, role: str) -> str:
 
     role_rules = {
         'dj_interactive': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE'],
             'forbidden_tags': ['HAL11000', 'STUDIO TOOLS'],
             'description': 'Interactive DJ'
         },
         'dj_onboarding': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE'],
-            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'TASK'],
             'description': 'Onboarding DJ'
         },
         'dj_announcements': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
-            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE', 'TASK'],
             'description': 'Announcements DJ'
         },
         'dj_content': {
             'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA'],
-            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE'],
+            'forbidden_tags': ['HAL11000', 'STUDIO TOOLS', 'INTERNAL DIALOGUE', 'TASK'],
             'description': 'Content DJ'
         },
         'command': {
             'allowed_tags': [],
-            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'IMPULSE', 'HAL11000', 'STUDIO TOOLS'],
+            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'TARA', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE', 'HAL11000', 'STUDIO TOOLS'],
             'description': 'Command extraction'
         }
     }
@@ -235,7 +235,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     def keep_valid_tags(text):
         valid_tags = [
-            'BROADCAST', 'TXT', 'TARA', 'LEO', 'INTERNAL DIALOGUE', 'IMPULSE'
+            'BROADCAST', 'TXT', 'TARA', 'LEO', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE'
         ]
         pattern = r'\[(' + '|'.join(valid_tags) + r')\]|' + r'\[(.*?)\](.*?)(?=\[|$)'
 

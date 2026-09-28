@@ -484,15 +484,13 @@ Set needs_tools=true when the hosts must find something out or make something ha
 - anything local, current or factual beyond the context nodes: gigs and events, places nearby, news, weather detail,
   air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what the city is playing or asking about
   (pulse_search, pulse_detail, city_trends, listener_context);
-- a music request where the hosts should know what was found so they can name it (search_and_play);
-- whether the catalog has an artist, song or sound ("do you have any Sneaker Pimps?", "got anything like Portishead?",
-  "can you check if you have X"): pulse_search(query=<artist or sound>, kinds=[track, artist]), plus search_and_play
-  when they also ask to hear it;
-- the listener explicitly asks the hosts to check, look up or search for something;
+- a music request or a question about what the catalog has (search_and_play, pulse_search);
 - saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_opinion);
 - any command: skip, go back, pause, resume (playback_control), like or ban a track (rate_track), more like this
-  (seed_radio), a playlist (play_playlist), a full bulletin, forecast, gig guide, places rundown, artist story, lyrics
-  breakdown or shoutouts (the segment tools). Nothing happens unless a tool is called, so every action needs its step.
+  (seed_radio), a playlist (play_playlist). Nothing happens unless a tool is called, so every action needs its step.
+- the segment tools (get_news, get_weather, get_events, find_places, get_artist_biography, explain_lyrics,
+  play_shoutouts) air a full produced segment. Put the matching one in the plan whenever the subject comes up, as an
+  option: the hosts decide whether a quick answer is enough or the listener wants the full rundown.
 Set needs_tools=false only for banter, greetings, opinions and questions the context nodes already answer.
 
 tool_plan is a bare numbered list of function-call steps with <placeholders> for values, never invented values.

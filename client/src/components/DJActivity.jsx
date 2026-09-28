@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  Ban, BookOpen, Brain, Check, CircleSlash, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
+  Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
   Newspaper, Radio, Save, Search, SkipForward, Ticket, TrendingUp, User, Wrench, X
 } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
@@ -37,6 +37,7 @@ const TOOL_ICONS = {
   pulse_detail: FileText,
   hal11000: Cpu,
   producer: Brain,
+  review: ClipboardCheck,
 }
 
 const KIND_ICONS = {
@@ -55,6 +56,7 @@ const KIND_ICONS = {
 export const SOURCES = {
   producer: { name: 'Producer', icon: Brain, bubble: 'bg-violet-500/10 border-violet-500/30 text-violet-300', chip: 'border-violet-400/40 text-violet-300' },
   tool: { name: 'Studio tool', icon: Wrench, bubble: 'bg-teal-500/10 border-teal-500/30 text-teal-300', chip: 'border-teal-400/40 text-teal-300' },
+  review: { name: 'Review', icon: ClipboardCheck, bubble: 'bg-sky-500/10 border-sky-500/30 text-sky-300', chip: 'border-sky-400/40 text-sky-300' },
   hal11000: { name: 'HAL 11000', icon: Cpu, bubble: 'bg-green-500/10 border-green-500/30 text-green-300', chip: 'border-green-400/40 text-green-300' },
 }
 
@@ -75,6 +77,12 @@ function iconKey(call) {
   }
   if (TOOL_ICONS[call.tool]) return call.tool
   return call.source === 'hal11000' ? 'hal11000' : call.source === 'producer' ? 'producer' : 'tool'
+}
+
+const COSTS = {
+  memory: 'from memory',
+  live: 'may go online',
+  segment: 'full segment',
 }
 
 function sentenceCase(text) {
@@ -110,9 +118,11 @@ export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = fal
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2 mb-1">
-              <span className="text-xs font-medium tracking-wide opacity-70">{source.name}</span>
+              <span className="text-xs font-medium tracking-wide opacity-70">
+                {source.name}
+                {call.cost && <span className="ml-1.5 opacity-80">· {call.live ? 'went online' : COSTS[call.cost]}</span>}
+              </span>
               <span className={`flex items-center gap-1 text-xs ${state.text}`}>
-                {call.live && <span className="uppercase tracking-wide">live</span>}
                 <StateIcon className={`w-4 h-4 ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
               </span>
             </div>
@@ -185,6 +195,7 @@ export function DJActivityBridge() {
         tool: data.tool,
         source: data.source || 'tool',
         kinds: data.kinds || [],
+        cost: data.cost || '',
         label: data.label || data.tool,
         state: 'running',
         summary: '',

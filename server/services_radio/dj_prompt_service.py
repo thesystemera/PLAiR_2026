@@ -806,10 +806,9 @@ class DJPromptService:
 
     @staticmethod
     def _split_interactive_response(response_text: str) -> tuple[str, str]:
-        parts = response_text.split("[INTERNAL DIALOGUE]", 1)
-        main_response = parts[0].strip()
-        notes_section = f"[INTERNAL DIALOGUE]{parts[1]}" if len(parts) > 1 else ""
-        return main_response, notes_section
+        cut = min((index for index in (response_text.find("[INTERNAL DIALOGUE]"), response_text.find("[TASK]"))
+                   if index >= 0), default=len(response_text))
+        return response_text[:cut].strip(), response_text[cut:].strip()
 
     @gpt_error_handler
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
@@ -817,7 +816,6 @@ class DJPromptService:
         from services_radio.dj_tools import (
             declarations_for,
             PLAN_GATED_TOOLS,
-            SEGMENT_TOOLS,
             READ_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
@@ -854,12 +852,15 @@ class DJPromptService:
         log_service.gpt(f"Interactive Tools: Prompt User: {user_message}")
 
         spoken_preambles = []
+        preamble_notes = []
 
         async def handle_preamble(raw_text, calls=()):
             preamble_main = ""
             if raw_text and raw_text.strip() and NA_MARKER not in raw_text:
                 cleaned = clean_gpt_output(raw_text, role='dj_interactive')
-                preamble_main, _ = self._split_interactive_response(cleaned)
+                preamble_main, notes = self._split_interactive_response(cleaned)
+                if notes:
+                    preamble_notes.append(notes)
             if preamble_main:
                 spoken_preambles.append(preamble_main)
             if on_preamble is not None:
@@ -870,7 +871,7 @@ class DJPromptService:
             user_message=user_message,
             function_declarations=declarations_for(tool_runtime.ctx.planned),
             refresh_tools=lambda: declarations_for(tool_runtime.ctx.planned, tool_runtime.ctx.granted),
-            expected_tools=(tool_runtime.ctx.planned or set()) & (PLAN_GATED_TOOLS | SEGMENT_TOOLS),
+            expected_tools=(tool_runtime.ctx.planned or set()) & PLAN_GATED_TOOLS,
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
             max_tokens=self.config['dj_tokens'],
@@ -904,7 +905,7 @@ class DJPromptService:
         return {
             "status": "ok",
             "main": main_response,
-            "notes": notes_section,
+            "notes": " ".join(preamble_notes + [notes_section]).strip(),
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
             "rounds": result.get("rounds")

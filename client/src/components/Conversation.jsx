@@ -38,7 +38,8 @@ const DJ_SPEAKERS = {
 const MESSAGE_TYPES = {
   BROADCAST: 'broadcast',
   TXT: 'txt',
-  INTERNAL: 'internal'
+  INTERNAL: 'internal',
+  TASK: 'task'
 }
 
 function cleanMetadata(text) {
@@ -52,7 +53,7 @@ function cleanMetadata(text) {
 function parseMessage(message) {
   if (!message) return []
 
-  const parts = message.split(/(\[BROADCAST]|\[TXT]|\[TARA]|\[LEO]|\[INTERNAL DIALOGUE])/g)
+  const parts = message.split(/(\[BROADCAST]|\[TXT]|\[TARA]|\[LEO]|\[INTERNAL DIALOGUE]|\[TASK])/g)
   const result = []
 
   let currentType = MESSAGE_TYPES.BROADCAST
@@ -65,7 +66,7 @@ function parseMessage(message) {
       let finalSpeaker = currentSpeaker || 'computer'
       let finalType = currentType
 
-      if (finalType !== MESSAGE_TYPES.INTERNAL) {
+      if (finalType !== MESSAGE_TYPES.INTERNAL && finalType !== MESSAGE_TYPES.TASK) {
         if (!currentSpeaker) {
           finalSpeaker = 'computer'
           finalType = MESSAGE_TYPES.TXT
@@ -100,6 +101,8 @@ function parseMessage(message) {
         currentType = MESSAGE_TYPES.TXT
       } else if (tag === 'INTERNAL DIALOGUE') {
         currentType = MESSAGE_TYPES.INTERNAL
+      } else if (tag === 'TASK') {
+        currentType = MESSAGE_TYPES.TASK
       } else if (tag === 'TARA' || tag === 'LEO') {
         currentSpeaker = tag.toLowerCase()
       } else {
@@ -342,6 +345,24 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
       return <InternalDialogueBubble key={key} speaker={speaker} content={displayContent} />
     }
 
+    if (type === MESSAGE_TYPES.TASK) {
+      const text = String(displayContent)
+      const complete = /\b(complete|completed|done)\b/i.test(text) && !/\b(partial|partly|incomplete)\b/i.test(text)
+      const summary = text.replace(/^\s*(status\s*[:-]\s*)?(complete|completed|done|partial|partly done|incomplete)\b[\s.;:,|-]*(action\s*[:-]\s*)?/i, '')
+      return (
+        <ActivityCard
+          key={key}
+          call={{
+            source: 'review',
+            tool: 'review',
+            label: complete ? 'Task complete' : 'Task partly done',
+            summary: summary || text,
+            state: complete ? 'done' : 'empty'
+          }}
+        />
+      )
+    }
+
     const getMessageStyle = () => {
       if (type === MESSAGE_TYPES.INTERNAL) {
         return 'bg-gray-500/10 border-gray-500/30 text-gray-400 italic'
@@ -567,6 +588,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
         source: data.source || 'tool',
         tool: data.tool,
         kinds: data.kinds || [],
+        cost: data.cost || '',
         label: data.label || data.tool,
         command: data.command || '',
         state: 'running',

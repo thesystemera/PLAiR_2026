@@ -237,6 +237,34 @@ DJ_FUNCTION_DECLARATIONS = [
     ),
 ]
 
+COST_TEXT = {
+    "memory": "instant, from station memory",
+    "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
+    "segment": "expensive: a web lookup plus a full produced segment of 30-60 s on air",
+}
+TOOL_COSTS = {name: "segment" for name in SEGMENT_TOOLS}
+TOOL_COSTS["pulse_search"] = "live"
+for _declaration in DJ_FUNCTION_DECLARATIONS:
+    _declaration.description = f"{_declaration.description} Cost: {COST_TEXT[TOOL_COSTS.get(_declaration.name, 'memory')]}."
+
+KIND_SEGMENTS = {"event": "get_events", "place": "find_places", "news": "get_news", "weather": "get_weather",
+                 "area": "get_weather", "artist": "get_artist_biography", "community": "play_shoutouts"}
+SHORTFALL_OUTCOMES = {"empty", "failed"}
+
+
+def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
+    if name == "pulse_search":
+        kinds = args.get("kinds") or list(KIND_SEGMENTS)
+        return list(dict.fromkeys(KIND_SEGMENTS[kind] for kind in kinds if kind in KIND_SEGMENTS))
+    if name == "search_and_play":
+        return ["pulse_search", "seed_radio"]
+    if name == "pulse_detail":
+        return ["pulse_search"]
+    if name in SEGMENT_TOOLS:
+        return ["pulse_search"]
+    return []
+
+
 EXTRA_TOOL_NAMES = [declaration.name for declaration in DJ_FUNCTION_DECLARATIONS]
 READ_TOOLS.add("request_tools")
 TOOL_NAMES = set(EXTRA_TOOL_NAMES)
@@ -651,7 +679,7 @@ class DJToolRuntime:
         call_id = f"{self.ctx.turn_id}:{self.ctx.calls_made}"
         await self.ctx.activity("start", call_id=call_id, tool=name, source="tool", label=activity_label(name, args),
                                 command=record["command"], query=str(args.get("query") or "")[:80],
-                                kinds=list(args.get("kinds") or []))
+                                kinds=list(args.get("kinds") or []), cost=TOOL_COSTS.get(name, "memory"))
         log_service.detail(f"[DJ TOOLS] {record['command']} for session {self.session_dict.get('session_id')}",
                            "commands")
         try:
@@ -664,10 +692,17 @@ class DJToolRuntime:
         record["result"] = result
         outcome, summary = activity_summary(name, result)
         record["outcome"], record["summary"] = outcome, summary
+        live = bool(isinstance(result, dict) and result.get("live"))
         await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome=outcome, summary=summary,
-                                live=bool(isinstance(result, dict) and result.get("live")))
-        if isinstance(result, dict) and result.get("status") in FAILED_STATUSES:
-            result = {**result, "on_air": FAILED_ACTION_NOTE}
+                                live=live)
+        if isinstance(result, dict):
+            result = {**result, "came_from": "live" if live else TOOL_COSTS.get(name, "memory")}
+            if result.get("status") in FAILED_STATUSES:
+                result["on_air"] = FAILED_ACTION_NOTE
+            options = [option for option in next_options(name, args, result) if option in EXTRA_TOOL_NAMES]
+            if outcome in SHORTFALL_OUTCOMES and options:
+                self.ctx.granted.update(options)
+                result["could_try_next"] = options
         return result
 
     async def _flash(self, name: str, args: Dict[str, Any], outcome: str, summary: str) -> None:
