@@ -23,6 +23,7 @@ from config.settings import settings
 from services import log_service
 from services import usage_tracking
 from services_radio.tts_processing_service import decode_mp3
+from services_radio.tts_voice_threads import voice_thread
 from services.task_utils import spawn
 
 PRIORITY_HIGH = "high"
@@ -559,7 +560,7 @@ class TTSGenerationService:
             rank: Tuple = RANK_UNRANKED_HIGH
     ) -> AudioSegment:
         async with self.processing_slots.slot(rank):
-            return await asyncio.to_thread(
+            return await voice_thread(
                 self.audio_processing_service.process_audio,
                 audio_input,
                 audio_process_mix,
@@ -587,7 +588,7 @@ class TTSGenerationService:
             else:
                 async with aiofiles.open(file_path, 'rb') as f:
                     audio_data = await f.read()
-                audio = await asyncio.to_thread(decode_mp3, audio_data)
+                audio = await voice_thread(decode_mp3, audio_data)
                 self._remember_clip_audio(key, audio)
         except OSError as e:
             log_service.error(f"Failed to read cached clip {file_path}: {e}")
@@ -613,7 +614,7 @@ class TTSGenerationService:
     @staticmethod
     async def clip_rate(file_path: str) -> Optional[int]:
         try:
-            info = await asyncio.to_thread(sf.info, file_path)
+            info = await voice_thread(sf.info, file_path)
             return int(info.samplerate)
         except Exception:
             return None
@@ -633,7 +634,7 @@ class TTSGenerationService:
             return None
 
         async with self.lookup_slots.slot(rank):
-            matches = await asyncio.to_thread(
+            matches = await voice_thread(
                 self.vector_db_service.query_embeddings,
                 tag, content_voice, embeddings_type, 5, listener, respect_cooldown
             )

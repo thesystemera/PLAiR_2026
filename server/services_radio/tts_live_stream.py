@@ -9,6 +9,7 @@ import soxr
 from pydub import AudioSegment
 
 from services import log_service
+from services_radio.tts_voice_threads import voice_thread
 
 ENCODER_SAMPLE_RATE = 48000
 ENCODER_BITRATE = "128k"
@@ -231,7 +232,7 @@ class LiveStreamEncoder:
             return
         if not self.started:
             await self.start()
-        pcm = await asyncio.to_thread(self._resampler.process, audio)
+        pcm = await voice_thread(self._resampler.process, audio)
         if self.first_audio_at is None:
             self.first_audio_at = time.perf_counter()
         self._mark_starts.append(self._samples_fed)

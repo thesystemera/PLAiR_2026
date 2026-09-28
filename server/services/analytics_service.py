@@ -13,6 +13,7 @@ from services.task_utils import spawn
 
 ANALYTICS_MAX_FLUSH_ATTEMPTS = 5
 ANALYTICS_CACHE_SIZE = 100
+AGGREGATE_CHUNK = 500
 TOP_HITS_PERIOD_DAYS = {"week": 7, "day": 1}
 
 async def safe_background_task(coro, task_name="background_task"):
@@ -291,6 +292,127 @@ class AnalyticsService(SingletonService):
                 log_service.error(f"Failed to aggregate analytics for track {track_id}: {e}")
                 return False
 
+    async def _aggregate_tracks_bulk(self, track_ids: List[str]) -> bool:
+        try:
+            changed = 0
+            for start in range(0, len(track_ids), AGGREGATE_CHUNK):
+                changed += await self._aggregate_track_chunk(track_ids[start:start + AGGREGATE_CHUNK])
+            if changed:
+                log_service.analytics(f"Track analytics changed for {changed} of {len(track_ids)} tracks")
+            return True
+        except Exception as e:
+            log_service.error(f"Failed to aggregate track analytics: {e}")
+            return False
+
+    async def _aggregate_track_chunk(self, chunk: List[str]) -> int:
+        written = []
+        async with AsyncSessionLocal() as session:
+            stats_rows = await session.execute(
+                select(
+                    PlayEvent.track_id,
+                    func.count(PlayEvent.id),  # pylint: disable=E1102
+                    func.sum(case((PlayEvent.event_type == "play", 1), else_=0)),
+                    func.sum(case((PlayEvent.event_type == "skip", 1), else_=0)),
+                    func.count(func.distinct(func.coalesce(cast(PlayEvent.user_id, String), PlayEvent.session_id))),  # pylint: disable=E1102
+                    func.max(PlayEvent.started_at),
+                    func.avg(PlayEvent.completion_pct)
+                ).where(PlayEvent.track_id.in_(chunk)).group_by(PlayEvent.track_id)
+            )
+            day_bucket = self._day_bucket(session)
+            day_rows = await session.execute(
+                select(PlayEvent.track_id, day_bucket, func.count(PlayEvent.id))  # pylint: disable=E1102
+                .where(PlayEvent.track_id.in_(chunk))
+                .group_by(PlayEvent.track_id, day_bucket)
+            )
+            pref_rows = await session.execute(
+                select(TrackPreference.track_id, TrackPreference.preference_type, func.count(TrackPreference.id))  # pylint: disable=E1102
+                .where(TrackPreference.track_id.in_(chunk))
+                .group_by(TrackPreference.track_id, TrackPreference.preference_type)
+            )
+            existing_rows = await session.execute(select(TrackAnalytics).where(TrackAnalytics.track_id.in_(chunk)))
+            existing = {row.track_id: row for row in existing_rows.scalars()}
+
+            days: Dict[str, List] = {}
+            for track_id, day, count in day_rows.all():
+                days.setdefault(track_id, []).append((day, count))
+            prefs: Dict[str, Dict] = {}
+            for track_id, pref_type, count in pref_rows.all():
+                prefs.setdefault(track_id, {})[pref_type] = int(count)
+
+            now = datetime.now(timezone.utc)
+            for track_id, event_count, total_plays, skip_count, unique_listeners, last_played, avg_completion in stats_rows.all():
+                if not event_count:
+                    continue
+                daily_plays: Dict[str, int] = {}
+                weekly_plays: Dict[str, int] = {}
+                for day, count in days.get(track_id, []):
+                    day_key = str(day)[:10]
+                    week_key = datetime.strptime(day_key, "%Y-%m-%d").strftime("%Y-W%U")
+                    daily_plays[day_key] = daily_plays.get(day_key, 0) + int(count)
+                    weekly_plays[week_key] = weekly_plays.get(week_key, 0) + int(count)
+                total_plays = int(total_plays or 0)
+                skip_count = int(skip_count or 0)
+                pref_counts = prefs.get(track_id, {})
+                like_count = pref_counts.get(PreferenceType.LIKE, 0)
+                superlike_count = pref_counts.get(PreferenceType.SUPER_LIKE, 0)
+                ban_count = pref_counts.get(PreferenceType.BAN, 0)
+                values = {
+                    "total_plays": total_plays,
+                    "unique_listeners": int(unique_listeners or 0),
+                    "last_played": last_played,
+                    "like_count": like_count,
+                    "superlike_count": superlike_count,
+                    "ban_count": ban_count,
+                    "avg_completion_pct": float(avg_completion) if avg_completion is not None else 0.0,
+                    "skip_count": skip_count,
+                    "skip_rate": skip_count / total_plays if total_plays > 0 else 0.0,
+                    "popularity_score": self._popularity_score(total_plays, like_count, superlike_count, ban_count, skip_count),
+                }
+
+                row = existing.get(track_id)
+                if row is None:
+                    session.add(TrackAnalytics(track_id=track_id, daily_plays=json.dumps(daily_plays),
+                                               weekly_plays=json.dumps(weekly_plays), **values))
+                elif (any(getattr(row, key) != value for key, value in values.items())
+                      or json.loads(row.daily_plays or "{}") != daily_plays
+                      or json.loads(row.weekly_plays or "{}") != weekly_plays):
+                    for key, value in values.items():
+                        setattr(row, key, value)
+                    row.daily_plays = json.dumps(daily_plays)  # type: ignore
+                    row.weekly_plays = json.dumps(weekly_plays)  # type: ignore
+                    row.updated_at = now  # type: ignore
+                else:
+                    continue
+                written.append((track_id, values, daily_plays, weekly_plays))
+
+            if written:
+                await session.commit()
+
+        for track_id, values, daily_plays, weekly_plays in written:
+            await analytics_file_service.write_track_analytics(track_id, {
+                "track_id": track_id,
+                "total_plays": values["total_plays"],
+                "unique_listeners": values["unique_listeners"],
+                "last_played": values["last_played"].isoformat() if values["last_played"] is not None else None,
+                "engagement": {
+                    "likes": values["like_count"],
+                    "superlikes": values["superlike_count"],
+                    "bans": values["ban_count"]
+                },
+                "quality": {
+                    "avg_completion_pct": round(float(values["avg_completion_pct"]), 2),
+                    "skip_count": values["skip_count"],
+                    "skip_rate": round(float(values["skip_rate"]), 4)
+                },
+                "time_series": {
+                    "daily": daily_plays,
+                    "weekly": weekly_plays
+                },
+                "popularity_score": round(float(values["popularity_score"]), 2),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+        return len(written)
+
     async def aggregate_all(self, full_rebuild: bool = False):
         try:
             async with AsyncSessionLocal() as session:
@@ -317,7 +439,7 @@ class AnalyticsService(SingletonService):
             tasks = []
             if track_ids:
                 log_service.analytics(f"Aggregating analytics for {len(track_ids)} tracks...")
-                tasks.extend([self.aggregate_track_analytics(track_id) for track_id in track_ids])
+                tasks.append(self._aggregate_tracks_bulk(track_ids))
 
             if shoutout_ids:
                 log_service.analytics(f"Aggregating analytics for {len(shoutout_ids)} shoutouts...")

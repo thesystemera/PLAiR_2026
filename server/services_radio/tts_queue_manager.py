@@ -14,6 +14,7 @@ from services_radio.tts_broadcast_service import TimelineMixer, limit_peaks, CLI
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE
 from services_radio.tts_live_stream import LiveStreamEncoder
 from services_radio.tts_processing_service import decode_mp3
+from services_radio.tts_voice_threads import voice_thread
 
 SHOUTOUT_AUDIO_URL = re.compile(r'/api/user_content/shoutouts/audio/(\d+)/([A-Za-z0-9_-]+)\.mp3$')
 SHOUTOUT_AUDIO_ID = re.compile(r'^(\d+)_([A-Za-z0-9_-]+)$')
@@ -439,16 +440,16 @@ class TTSQueueManager:
                 if processed is None:
                     continue
                 if processed['type'] == 'audio':
-                    await asyncio.to_thread(
+                    await voice_thread(
                         mixer.add_background, processed['audio'], processed['speaker_intensities']
                     )
                 else:
-                    chunks = await asyncio.to_thread(
+                    chunks = await voice_thread(
                         self._mix_main_item, mixer, processed['audio'], processed['speaker_intensities']
                     )
                     await self._feed(encoder, chunks, turn)
 
-            await self._feed(encoder, await asyncio.to_thread(mixer.mix_tail), turn)
+            await self._feed(encoder, await voice_thread(mixer.mix_tail), turn)
             completed = True
         finally:
             self.tts_generation_service.allow_low_priority()
@@ -528,7 +529,7 @@ class TTSQueueManager:
         for index, render in enumerate(renders):
             processed = await render.task
             if processed is not None:
-                await asyncio.to_thread(blend.add, processed)
+                await voice_thread(blend.add, processed)
 
             upcoming = renders[index + 1:]
             if not upcoming or blend.total_duration == 0 or blend.audio.channels != 2:
@@ -540,11 +541,11 @@ class TTSQueueManager:
             safe_end = blend.safe_end([pending.segment for pending in upcoming])
             if safe_end <= position:
                 continue
-            chunks, position = await asyncio.to_thread(self._mix_blend_range, mixer, blend, position, safe_end)
+            chunks, position = await voice_thread(self._mix_blend_range, mixer, blend, position, safe_end)
             await self._feed(encoder, chunks, turn)
 
         if len(blend.audio) > 0:
-            chunks, position = await asyncio.to_thread(self._mix_blend_range, mixer, blend, position, None)
+            chunks, position = await voice_thread(self._mix_blend_range, mixer, blend, position, None)
             await self._feed(encoder, chunks, turn)
 
     async def _render_segment(self, turn: _Turn, render: _SegmentRender, ordered_content: List[Dict],
@@ -610,7 +611,7 @@ class TTSQueueManager:
                 file_path = self._resolve_user_content(segment['content'])
                 render.resolve(await generation.clip_rate(file_path) if file_path else NO_AUDIO)
                 if file_path:
-                    audio_segment = await asyncio.to_thread(decode_mp3, file_path)
+                    audio_segment = await voice_thread(decode_mp3, file_path)
                     log_service.detail(
                         f"TTS: Successfully loaded user content: {os.path.basename(file_path)}", "tts_queue_manager")
                 else:
