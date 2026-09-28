@@ -21,7 +21,7 @@ from service_registry import services
 from services import log_service
 from services.listener_request_service import daypart
 from services.task_utils import spawn
-from services_radio import area_signals, local_knowledge, place_memory
+from services_radio import area_signals, geo, local_knowledge, place_memory
 from services_radio import regional_knowledge as regional_kb
 from services_radio.dj_bank_sources import listener_taste
 from services_radio.listener_location import ListenerLocation
@@ -37,6 +37,7 @@ KIND_COMMUNITY = "community"
 KIND_CHART = "chart"
 KIND_TREND = "trend"
 KIND_TRACK = "track"
+PLACED_KINDS = frozenset(("event", "place", "news", "community"))
 ALL_KINDS = (KIND_EVENT, KIND_PLACE, KIND_NEWS, KIND_WEATHER, KIND_AREA, KIND_ARTIST, KIND_COMMUNITY, KIND_CHART,
              KIND_TREND, KIND_TRACK)
 WHEN_VALUES = ("now", "today", "tonight", "tomorrow", "weekend", "week", "month")
@@ -49,7 +50,6 @@ LISTENER_CACHE_S = 60
 LISTENER_CACHE_MAX = 2000
 OFFERED_MAX = 4000
 CONTEXT_MEMO_S = 15
-NEAR_RADIUS_M = 3000
 LINK_NAME_MIN_CHARS = 4
 LINK_STOP_NAMES = {"the", "live", "music", "tour", "night", "show", "festival", "auckland", "wellington", "sydney",
                    "melbourne", "london", "new york", "los angeles", "tba", "n/a", "various artists", "concert"}
@@ -92,7 +92,6 @@ class PulseItem:
     title: str
     text: str = ""
     when: Optional[datetime] = None
-    distance_m: Optional[int] = None
     source: str = ""
     url: str = ""
     score: float = 0.0
@@ -100,9 +99,10 @@ class PulseItem:
     live: bool = False
     payload: dict = field(default_factory=dict)
     published: Optional[datetime] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    where: Optional[geo.Where] = None
     area: str = ""
+    near: str = ""
+    gap_m: Optional[float] = None
     entities: list = field(default_factory=list)
     links: list = field(default_factory=list)
 
@@ -114,10 +114,11 @@ class PulseItem:
             entry["when"] = _local_when(self.when, tz_name)
         if self.published and self.kind in (KIND_COMMUNITY, KIND_NEWS):
             entry["age"] = _age(self.published)
-        if self.area:
-            entry["area"] = _clip(self.area, 60)
-        if self.distance_m is not None:
-            entry["distance"] = f"{self.distance_m} m" if self.distance_m < 1000 else f"{self.distance_m / 1000:.1f} km"
+        where = self.where.label if self.where and self.where.label else self.area
+        if where:
+            entry["where"] = _clip(where, 70)
+        if self.near:
+            entry["near"] = self.near
         if self.source:
             entry["source"] = self.source
         if self.links:
@@ -128,7 +129,7 @@ class PulseItem:
 
     def line(self, tz_name: Optional[str] = None) -> str:
         brief = self.brief(tz_name)
-        extras = " | ".join(str(brief[k]) for k in ("text", "when", "age", "area", "distance") if k in brief)
+        extras = " | ".join(str(brief[k]) for k in ("text", "when", "age", "where", "near") if k in brief)
         if brief.get("linked"):
             extras += " | linked: " + "; ".join(brief["linked"])
         return f"- [{self.kind}] {brief['title']}" + (f" ({extras})" if extras else "") + (
@@ -143,10 +144,6 @@ def _age(moment: datetime) -> str:
         return f"{int(seconds // 3600)} h ago"
     days = int(seconds // 86400)
     return "yesterday" if days == 1 else f"{days} days ago" if days < 60 else f"{days // 30} months ago"
-
-
-def _distance_m(a: tuple, b: tuple) -> float:
-    return place_memory.distance_m(a[0], a[1], b[0], b[1])
 
 
 def _local_when(moment: datetime, tz_name: Optional[str]) -> str:
@@ -166,6 +163,7 @@ class PulseListener:
     region: Optional[regional_kb.Region]
     taste: regional_kb.Taste
     tz_name: Optional[str]
+    where: Optional[geo.Where] = None
 
     @property
     def asker(self) -> str:
@@ -241,9 +239,14 @@ class KnowledgeNode:
 def from_regional(item: regional_kb.KnowledgeItem, score: float) -> PulseItem:
     return from_meta({
         "id": f"{item.kind}:{item.item_id}", "kind": item.kind, "title": item.title, "text": item.text,
-        "tags": item.tags, "entities": item.entities, "area": item.area, "latitude": item.latitude,
-        "longitude": item.longitude, "starts_at": item.starts_at, "published_at": item.published_at,
+        "tags": item.tags, "entities": item.entities, "area": item.area,
+        "where": _where_dict(geo.from_row(item.area, item.latitude, item.longitude)),
+        "starts_at": item.starts_at, "published_at": item.published_at,
         "url": item.url, "attribution": item.attribution}, score)
+
+
+def _where_dict(where: Optional[geo.Where]) -> Optional[dict]:
+    return where.as_dict() if where else None
 
 
 def from_meta(meta: Dict[str, Any], score: float) -> PulseItem:
@@ -257,8 +260,8 @@ def from_meta(meta: Dict[str, Any], score: float) -> PulseItem:
     return PulseItem(
         id=meta.get("id") or "", kind=kind, title=meta.get("title") or "", text=text,
         when=starts or (published if kind == KIND_NEWS else None), source=meta.get("attribution") or "",
-        url=meta.get("url") or "", score=score, published=published, latitude=meta.get("latitude"),
-        longitude=meta.get("longitude"), area=meta.get("area") or "", entities=list(meta.get("entities") or []))
+        url=meta.get("url") or "", score=score, published=published, where=geo.Where.from_dict(meta.get("where")),
+        area=meta.get("area") or "", entities=list(meta.get("entities") or []))
 
 
 def taste_boost(meta: Dict[str, Any], taste: regional_kb.Taste) -> float:
@@ -348,9 +351,10 @@ class PlacesNode(KnowledgeNode):
         if result.get("address"):
             details.append(result["address"])
         return PulseItem(id=f"place:{result['place_id']}", kind=KIND_PLACE, title=result.get("name") or "",
-                         text=", ".join(d for d in details if d), distance_m=result.get("distance_m"),
-                         source="Google Maps", score=score, payload={"website": result.get("website")},
-                         entities=[result.get("name") or ""])
+                         text=", ".join(d for d in details if d), source="Google Maps", score=score,
+                         where=geo.from_row(result.get("address") or result.get("name"), result.get("latitude"),
+                                            result.get("longitude")),
+                         payload={"website": result.get("website")}, entities=[result.get("name") or ""])
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
         coords = q.listener.location.coords
@@ -368,7 +372,8 @@ class PlacesNode(KnowledgeNode):
             if hydrated and hydrated.title:
                 items.append(PulseItem(id=f"place:{item.external_id.split('|', 1)[0]}", kind=KIND_PLACE,
                                        title=hydrated.title, text=hydrated.text, source="Google Maps", score=base,
-                                       latitude=hydrated.latitude, longitude=hydrated.longitude,
+                                       where=geo.from_row(hydrated.area or hydrated.title, hydrated.latitude,
+                                                          hydrated.longitude),
                                        entities=[hydrated.title]))
         return items
 
@@ -399,7 +404,8 @@ class NewsNode(KnowledgeNode):
                 id=f"news:{article.get('id')}", kind=KIND_NEWS, title=article.get("title") or "",
                 text=(article.get("source") or {}).get("name", ""), when=published, source="Google News",
                 url=article.get("url") or "", score=max(0.1, score - rank * 0.04), aired=bool(article.get("aired")),
-                payload={"article_id": article.get("id")}, published=published))
+                payload={"article_id": article.get("id")}, published=published,
+                where=geo.Where.from_dict(article.get("where"))))
         return items
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
@@ -411,14 +417,15 @@ class NewsNode(KnowledgeNode):
         if not q.text or search is None:
             articles = await news.stored_articles(q.text, country, subject=q.listener.session_id, limit=q.limit)
             return self._items(articles, 0.5)
-        local_only = q.near_me and q.listener.region is not None
-        region_key = q.listener.region.key if q.listener.region else None
+        here = q.listener.where if q.near_me else None
+        radius = q.radius_m or settings.PULSE_NEAR_RADIUS_M
         oldest = (q.listener.now - timedelta(days=q.max_age_days or 7)).isoformat()
 
         def keep(meta: Dict[str, Any]) -> bool:
-            if (meta.get("country") or "").upper() != country:
-                return False
-            if local_only and meta.get("region_key") != region_key:
+            if here is not None:
+                if not geo.near(here, geo.Where.from_dict(meta.get("where")), radius):
+                    return False
+            elif (meta.get("country") or "").upper() != country:
                 return False
             return not meta.get("published_at") or meta["published_at"] >= oldest
 
@@ -430,8 +437,7 @@ class NewsNode(KnowledgeNode):
             items.append(PulseItem(
                 id=meta["id"], kind=KIND_NEWS, title=meta.get("title") or "", text=meta.get("source") or "",
                 when=published, source="Google News", url=meta.get("url") or "",
-                score=match.score, published=published,
-                area=region_key and meta.get("region_key") == region_key and q.listener.region.name or "",
+                score=match.score, published=published, where=geo.Where.from_dict(meta.get("where")),
                 payload={"article_id": meta.get("article_id")}))
         return items
 
@@ -493,8 +499,7 @@ class WeatherNode(KnowledgeNode):
         if not report:
             return []
         return [PulseItem(id=f"weather:{forecast}", kind=KIND_WEATHER, title=f"Weather ({forecast})",
-                          text=_clip(report, 400), source="OpenWeatherMap",
-                          score=0.8)]
+                          text=_clip(report, 400), source="OpenWeatherMap", score=0.8, where=q.listener.where)]
 
 
 class AreaNode(KnowledgeNode):
@@ -512,7 +517,7 @@ class AreaNode(KnowledgeNode):
                                                 subject=q.listener.session_id)
         points = await area_signals.talking_points(context)
         return [PulseItem(id=f"area:{point.key}", kind=KIND_AREA, title=point.category or "area", text=point.text,
-                          source=point.source, score=0.6) for point in points]
+                          source=point.source, score=0.6, where=q.listener.where) for point in points]
 
 
 class ArtistNode(KnowledgeNode):
@@ -553,6 +558,7 @@ def shoutout_meta(shoutout: Dict[str, Any]) -> Dict[str, Any]:
     address = user_data.get("location") or ""
     parts = [p.strip() for p in address.split(",") if p.strip() and not any(ch.isdigit() for ch in p)]
     shoutout_id = str(shoutout.get("id") or "")
+    where = geo.Where.from_dict(meta.get("where")) or geo.resolver.cached(shoutout_place(shoutout))
     return {
         "id": f"community:shoutouts:{shoutout_id}", "shoutout_id": shoutout_id,
         "title": f"{'Reply' if shoutout.get('parent_id') else 'Shoutout'} from {user_data.get('username') or 'a listener'}",
@@ -562,17 +568,32 @@ def shoutout_meta(shoutout: Dict[str, Any]) -> Dict[str, Any]:
         "published_at": shoutout.get("timestamp"),
         "audio": shoutout.get("audio_url") or (
             f"/api/user_content/shoutouts/audio/{shoutout_id.replace('_', '/', 1)}.mp3" if "_" in shoutout_id else ""),
-        "latitude": user_data.get("latitude"), "longitude": user_data.get("longitude"),
+        "where": _where_dict(where),
     }
+
+
+def shoutout_place(shoutout: Dict[str, Any]) -> str:
+    from services.user_content_database_service import coarse_location
+    meta = shoutout.get("transcription_metadata") or shoutout.get("metadata") or {}
+    return meta.get("about_place") or coarse_location((shoutout.get("user_data") or {}).get("location")) or ""
+
+
+async def place_shoutouts() -> int:
+    placed = 0
+    for shoutout in list((getattr(services.user_content_service, "shoutouts", None) or {}).values()):
+        meta = shoutout.get("transcription_metadata") or shoutout.get("metadata") or {}
+        phrase = shoutout_place(shoutout)
+        if not meta.get("where") and phrase and await geo.resolver.resolve(phrase):
+            placed += 1
+    return placed
 
 
 def shoutout_item(shoutout: Dict[str, Any], score: float, listener: PulseListener) -> PulseItem:
     meta = shoutout_meta(shoutout)
-    distance = shoutout.get("distance_km")
     return PulseItem(
         id=meta["id"], kind=KIND_COMMUNITY, title=meta["title"], text=f'"{_clip(meta["text"], 160)}"',
         source="PLAiR listeners", score=score, published=_parse_time(meta["published_at"]), area=meta["area"],
-        distance_m=int(distance * 1000) if isinstance(distance, (int, float)) else None,
+        where=geo.Where.from_dict(meta["where"]),
         payload={"audio_path": meta["audio"], "shoutout_id": meta["shoutout_id"]})
 
 
@@ -747,6 +768,9 @@ class DemandLedger:
 
     async def _record(self, meta: dict) -> None:
         try:
+            where = await geo.resolver.resolve(meta.get("area")) if meta.get("area") else None
+            if where is not None:
+                meta["where"] = where.as_dict()
             rowid = await asyncio.to_thread(services.request_store.add, meta)
             await run_on_gpu_executor(services.request_vector_db_service.add_request, meta, rowid)
             self._topics = {k: v for k, v in self._topics.items() if k[0] != meta["region_key"]}
@@ -881,7 +905,7 @@ class Pulse:
         region = regional_kb.resolve_region(user, tz_name, location=location)
         taste = await listener_taste(user, user_id, session_id, AsyncSessionLocal, services.catalog_service)
         resolved = PulseListener(user=user, user_id=user_id, session_id=session_id, location=location, region=region,
-                                 taste=taste, tz_name=tz_name)
+                                 taste=taste, tz_name=tz_name, where=await geo.listener_where(location))
         self._listeners[key] = (time.monotonic(), resolved)
         self._listeners.move_to_end(key)
         while len(self._listeners) > LISTENER_CACHE_MAX:
@@ -972,21 +996,21 @@ class Pulse:
 
 
     def _apply_facets(self, q: PulseQuery, items: list[PulseItem]) -> list[PulseItem]:
-        point = q.listener.location.coords
-        radius = q.radius_m or (NEAR_RADIUS_M if q.near_me else None)
+        here = q.listener.where
+        radius = q.radius_m or settings.PULSE_NEAR_RADIUS_M
         kept = []
         for item in items:
-            if point and item.latitude is not None and item.longitude is not None and item.distance_m is None:
-                item.distance_m = int(_distance_m(point, (item.latitude, item.longitude)))
-            if radius and item.distance_m is not None and item.distance_m > radius:
+            if here is not None and item.where is not None:
+                item.near = geo.relation(here, item.where)
+                item.gap_m = geo.gap_m(here, item.where)
+            if (q.near_me or q.radius_m) and here is not None and item.kind in PLACED_KINDS and \
+                    not geo.near(here, item.where, radius):
                 continue
             if q.max_age_days is not None and item.published is not None and \
                     (q.listener.now - item.published).total_seconds() > q.max_age_days * 86400:
                 continue
             if item.kind in (KIND_NEWS, KIND_COMMUNITY):
                 item.score *= 0.6 + 0.4 * _recency(item.published)
-            if (q.near_me or q.sort == "nearest") and item.distance_m is not None:
-                item.score *= 0.5 + 0.5 * math.exp(-item.distance_m / 2000.0)
             kept.append(item)
         return kept
 
@@ -998,7 +1022,7 @@ class Pulse:
         if q.sort == "soonest":
             return sorted(items, key=lambda i: i.when if i.when and i.when >= q.listener.now else far)
         if q.sort == "nearest":
-            return sorted(items, key=lambda i: i.distance_m if i.distance_m is not None else 10 ** 9)
+            return sorted(items, key=lambda i: i.gap_m if i.gap_m is not None else math.inf)
         return sorted(items, key=lambda item: item.score, reverse=True)
 
     def _region_index(self, region_key: str) -> dict:
@@ -1039,23 +1063,58 @@ class Pulse:
 
     def _region_shoutouts(self, listener: PulseListener) -> list[Dict[str, Any]]:
         store = services.user_content_service
-        point = listener.location.coords
         found = []
         for shoutout in list((getattr(store, "shoutouts", None) or {}).values()):
             if shoutout.get("content_type", "shoutout") != "shoutout":
                 continue
             user_data = shoutout.get("user_data") or {}
-            try:
-                there = (float(user_data.get("latitude")), float(user_data.get("longitude")))
-            except (TypeError, ValueError):
-                there = None
-            if point and there:
-                if _distance_m(point, there) > settings.PULSE_COMMUNITY_RADIUS_KM * 1000:
+            there = geo.from_row("", user_data.get("latitude"), user_data.get("longitude"))
+            if listener.where is not None and there is not None:
+                if geo.gap_m(listener.where, there) > settings.PULSE_COMMUNITY_RADIUS_KM * 1000:
                     continue
             elif not (listener.region and listener.region.name.lower() in (user_data.get("location") or "").lower()):
                 continue
             found.append(shoutout)
         return found
+
+    def _spatial_pool(self, listener: PulseListener, index: dict) -> list[dict]:
+        pool = []
+        for meta in index["by_id"].values():
+            where = geo.Where.from_dict(meta.get("where"))
+            if where is not None and where.fine:
+                pool.append({"id": meta["id"], "kind": meta.get("kind"), "title": meta.get("title") or "", "where": where})
+        for shoutout in self._region_shoutouts(listener):
+            sm = shoutout_meta(shoutout)
+            where = geo.Where.from_dict(sm["where"])
+            if where is not None and where.fine:
+                pool.append({"id": sm["id"], "kind": KIND_COMMUNITY, "title": f"{sm['title']}: {_clip(sm['text'], 60)}",
+                             "where": where})
+        for meta in self._news_pool(listener):
+            where = geo.Where.from_dict(meta.get("where"))
+            if where is not None and where.fine:
+                pool.append({"id": meta["id"], "kind": KIND_NEWS, "title": meta.get("title") or "", "where": where})
+        return pool
+
+    @staticmethod
+    def _news_pool(listener: PulseListener) -> list[Dict[str, Any]]:
+        db = local_knowledge.news_vector_db
+        country = (listener.location.country_code or settings.NEWS_DEFAULT_COUNTRY).upper()
+        return [meta for meta in list(db._metadata_cache.values()) if (meta.get("country") or "").upper() == country] \
+            if db is not None else []
+
+    @staticmethod
+    def _nearby(here: Optional[geo.Where], pool: list[dict], exclude: str, limit: int = 3) -> list[dict]:
+        own_kind = exclude.split(":", 1)[0]
+        found = []
+        for entry in pool:
+            if entry["id"] == exclude or (entry["kind"] == own_kind and own_kind in (KIND_EVENT, KIND_PLACE)):
+                continue
+            gap = geo.overlap(here, entry["where"], settings.PULSE_LINK_DISTANCE_M)
+            if gap is not None:
+                found.append((gap, entry))
+        found.sort(key=lambda pair: pair[0])
+        return [{"id": entry["id"], "kind": entry["kind"], "title": entry["title"],
+                 "reason": "same spot" if gap == 0 else f"{geo.span(gap)} away"} for gap, entry in found[:limit]]
 
     async def related(self, listener: PulseListener, pulse_id: str, limit: int = 6) -> list[dict]:
         if listener.region is None:
@@ -1077,11 +1136,13 @@ class Pulse:
             shoutout = (getattr(services.user_content_service, "shoutouts", None) or {}).get(pulse_id.split(":", 2)[2])
             if shoutout is None:
                 return []
-            text = shoutout_meta(shoutout)["text"]
-            for target, name in self._mentions(index, text):
+            sm = shoutout_meta(shoutout)
+            for target, name in self._mentions(index, sm["text"]):
                 meta = index["by_id"].get(target)
                 if meta:
                     add(target, meta["kind"], meta["title"], f"mentions {name}")
+            for link in self._nearby(geo.Where.from_dict(sm["where"]), self._spatial_pool(listener, index), pulse_id):
+                add(link["id"], link["kind"], link["title"], link["reason"])
             return list(found.values())[:limit]
 
         meta = index["by_id"].get(pulse_id)
@@ -1096,22 +1157,12 @@ class Pulse:
             if hit:
                 sm = shoutout_meta(shoutout)
                 add(sm["id"], KIND_COMMUNITY, sm["title"], f"shoutout mentioning {hit}")
-        for other in index["by_id"].values():
-            if other.get("kind") != KIND_NEWS:
-                continue
+        for other in self._news_pool(listener):
             if any(re.search(r"\b" + re.escape(name) + r"\b", (other.get("title") or "").lower())
                    for name in own_names if name not in LINK_STOP_NAMES):
                 add(other["id"], KIND_NEWS, other["title"], "in the news")
-        here = (meta.get("latitude"), meta.get("longitude"))
-        partner = {KIND_EVENT: KIND_PLACE, KIND_PLACE: KIND_EVENT}.get(meta.get("kind"))
-        if here[0] is not None and partner:
-            nearby = sorted(
-                ((_distance_m(here, (other["latitude"], other["longitude"])), other) for other in index["by_id"].values()
-                 if other.get("kind") == partner and other.get("latitude") is not None),
-                key=lambda pair: pair[0])
-            for distance, other in nearby[:3]:
-                if distance <= settings.PULSE_LINK_DISTANCE_M:
-                    add(other["id"], other["kind"], other["title"], f"{int(distance)} m away")
+        for link in self._nearby(geo.Where.from_dict(meta.get("where")), self._spatial_pool(listener, index), pulse_id):
+            add(link["id"], link["kind"], link["title"], link["reason"])
         return list(found.values())[:limit]
 
     async def annotate_links(self, listener: PulseListener, items: list[PulseItem]) -> None:
@@ -1121,6 +1172,7 @@ class Pulse:
             log_service.warning(f"[PULSE] link index failed: {type(e).__name__}: {e}")
             return
         shoutouts = None
+        pool = None
         for item in items:
             links = []
             if item.kind in (KIND_COMMUNITY, KIND_NEWS):
@@ -1139,6 +1191,11 @@ class Pulse:
                     if hit:
                         links.append({"id": sm["id"], "title": f"{sm['title']}: {_clip(sm['text'], 60)}",
                                       "reason": f"shoutout mentioning {hit}"})
+            if item.where is not None and item.where.fine:
+                if pool is None:
+                    pool = self._spatial_pool(listener, index)
+                known = {link["id"] for link in links}
+                links.extend(link for link in self._nearby(item.where, pool, item.id) if link["id"] not in known)
             item.links = links[:3]
 
     def _rank(self, q: PulseQuery, items: list[PulseItem]) -> list[PulseItem]:
@@ -1169,7 +1226,7 @@ class Pulse:
             if shoutout is not None:
                 sm = shoutout_meta(shoutout)
                 entry = {"id": item_id, "kind": kind, "title": sm["title"], "said": sm["text"], "area": sm["area"],
-                         "tags": sm["tags"]}
+                         "tags": sm["tags"], **_where_entry(listener, sm["where"])}
                 published = _parse_time(sm["published_at"])
                 if published:
                     entry["age"] = _age(published)
@@ -1194,6 +1251,7 @@ class Pulse:
                     entry["age"] = _age(published)
                 if meta.get("area"):
                     entry["area"] = meta["area"]
+                entry.update(_where_entry(listener, meta.get("where")))
                 if meta.get("entities"):
                     entry["names"] = meta["entities"]
         if entry is None and kind == KIND_NEWS and services.news_service is not None and key.isdigit():
@@ -1204,7 +1262,8 @@ class Pulse:
                 entry = {"id": item_id, "kind": kind, "title": article.get("title"),
                          "details": article.get("description") or "",
                          "source": (article.get("source") or {}).get("name"),
-                         "published": article.get("publishedAt"), "tags": article.get("tags")}
+                         "published": article.get("publishedAt"), "tags": article.get("tags"),
+                         **_where_entry(listener, article.get("where"))}
         if entry is None and kind == KIND_ARTIST:
             found = await self.node("artists").search(PulseQuery(listener=listener, text=key, kinds={KIND_ARTIST}))
             if found:
@@ -1234,6 +1293,17 @@ class Pulse:
             if notes:
                 context["notes"] = notes
         return {k: v for k, v in context.items() if v not in (None, "", [])}
+
+
+def _where_entry(listener: PulseListener, data: Any) -> dict:
+    where = geo.Where.from_dict(data)
+    if where is None:
+        return {}
+    entry = {"where": where.label, "scope": where.scope}
+    near = geo.relation(listener.where, where)
+    if near:
+        entry["near"] = near
+    return entry
 
 
 pulse: Optional[Pulse] = None

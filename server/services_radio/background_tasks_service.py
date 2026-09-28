@@ -153,11 +153,14 @@ class BackgroundTasksService:
         from service_registry import services
         from services.semantic_source import rebuild_if_dirty
         from services_radio import local_knowledge
-        from services_radio.pulse import demand
+        from services_radio.pulse import demand, place_shoutouts
         last_prune = 0.0
         while True:
             try:
                 await asyncio.sleep(settings.PULSE_REQUEST_REBUILD_S)
+                if services.news_service is not None:
+                    await services.news_service.locate_pending()
+                await place_shoutouts()
                 await rebuild_if_dirty(local_knowledge.local_vector_db)
                 await rebuild_if_dirty(local_knowledge.news_vector_db)
                 await rebuild_if_dirty(services.request_vector_db_service)

@@ -82,6 +82,7 @@ class NewsService:
         self._embedding: set[int] = set()
         self._last_prune = 0.0
         self._embed_failed_at = 0.0
+        self._locating = asyncio.Lock()
         log_service.external("News Service initialized (Google News RSS"
                              + (", persistent semantic store)" if self.store_enabled else ")"))
 
@@ -316,6 +317,33 @@ class NewsService:
         finally:
             self._embedding.difference_update(todo)
 
+    async def locate_pending(self, limit: Optional[int] = None) -> int:
+        from services_radio import geo
+        if not self.store_enabled or self._locating.locked() or not geo.resolver.available():
+            return 0
+        located = 0
+        async with self._locating:
+            pending = await self.store.unlocated(limit or settings.GEO_LOCATE_PER_RUN)
+            by_country: dict[str, list] = {}
+            for row in pending:
+                by_country.setdefault((row[3] or settings.NEWS_DEFAULT_COUNTRY).upper(), []).append(row)
+            for country, rows in by_country.items():
+                for start in range(0, len(rows), settings.GEO_LOCATE_BATCH):
+                    batch = rows[start:start + settings.GEO_LOCATE_BATCH]
+                    texts = [f"{title} | {(description or '')[:160]}" for _, title, description, _ in batch]
+                    try:
+                        with usage_tracking.system_scope("news"):
+                            phrases = await geo.locate_texts(self.ai_service, texts, country_name(country))
+                    except Exception as e:
+                        log_service.warning(f"News: locating stories failed: {type(e).__name__}: {e}")
+                        return located
+                    wheres = await geo.resolver.resolve_many(phrases, country)
+                    await self.store.set_where({row[0]: where for row, where in zip(batch, wheres)})
+                    located += sum(1 for where in wheres if where)
+        if pending:
+            log_service.detail(f"News: placed {located} of {len(pending)} stories on the map", "pulse")
+        return located
+
     async def _maybe_prune(self) -> None:
         if time.monotonic() - self._last_prune < PRUNE_INTERVAL_S:
             return
@@ -338,6 +366,7 @@ class NewsService:
                                          ask_vector, "ok" if ids else "empty")
         pull_text = "" if ask_vector is not None or kind == KIND_TOP else fetch_query
         spawn(self._embed_pending(ids, pull.id, pull_text), name="news_embed")
+        spawn(self.locate_pending(), name="news_locate")
         spawn(self._maybe_prune(), name="news_prune")
         return pull
 

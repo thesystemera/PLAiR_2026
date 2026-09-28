@@ -297,6 +297,8 @@ class RegionalItem(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
     area = Column(String, nullable=True)
+    geo_radius_m = Column(Float, nullable=True)
+    geo_scope = Column(String, nullable=True)
     entities = Column(Text, nullable=False, default="[]")
 
     __table_args__ = (UniqueConstraint("region_key", "source", "external_id", name="uq_regional_items_source_id"),)
@@ -320,6 +322,19 @@ class PlaceCache(Base):
     tags = Column(Text, nullable=False, default="[]")
     fetched_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class GeoPlace(Base):
+    __tablename__ = "geo_places"
+
+    key = Column(String, primary_key=True)
+    phrase = Column(String, nullable=False, default="")
+    label = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    radius_m = Column(Float, nullable=True)
+    scope = Column(String, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
 
 
 class AreaCache(Base):
@@ -360,6 +375,12 @@ class NewsItem(Base):
     region_key = Column(String, nullable=True)
     tags = Column(Text, nullable=False, default="[]")
     embedding = Column(LargeBinary, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    geo_radius_m = Column(Float, nullable=True)
+    geo_scope = Column(String, nullable=True)
+    geo_label = Column(String, nullable=True)
+    geo_checked = Column(Boolean, nullable=False, default=False)
     first_seen_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     last_seen_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)

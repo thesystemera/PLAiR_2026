@@ -69,6 +69,14 @@ def main():
                                               ("regional_items", "longitude", "DOUBLE PRECISION"),
                                               ("regional_items", "area", "VARCHAR"),
                                               ("regional_items", "entities", "TEXT DEFAULT '[]' NOT NULL"),
+                                              ("regional_items", "geo_radius_m", "DOUBLE PRECISION"),
+                                              ("regional_items", "geo_scope", "VARCHAR"),
+                                              ("news_items", "latitude", "DOUBLE PRECISION"),
+                                              ("news_items", "longitude", "DOUBLE PRECISION"),
+                                              ("news_items", "geo_radius_m", "DOUBLE PRECISION"),
+                                              ("news_items", "geo_scope", "VARCHAR"),
+                                              ("news_items", "geo_label", "VARCHAR"),
+                                              ("news_items", "geo_checked", "BOOLEAN DEFAULT false NOT NULL"),
                                               ("play_events", "region_key", "VARCHAR")):
             print(f"\n[CHECK] {table_name}.{col_name}...")
             if not column_exists(conn, table_name, col_name):

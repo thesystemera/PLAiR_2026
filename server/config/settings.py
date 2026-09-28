@@ -290,6 +290,11 @@ class Settings:
     PULSE_CONTEXT_ITEMS: int = int(os.getenv("PULSE_CONTEXT_ITEMS", "4"))
     PULSE_RECENCY_HALF_LIFE_DAYS: float = float(os.getenv("PULSE_RECENCY_HALF_LIFE_DAYS", "7"))
     PULSE_LINK_DISTANCE_M: float = float(os.getenv("PULSE_LINK_DISTANCE_M", "300"))
+    PULSE_NEAR_RADIUS_M: float = float(os.getenv("PULSE_NEAR_RADIUS_M", "3000"))
+    GEO_ENABLED: bool = os.getenv("GEO_ENABLED", "true").lower() == "true"
+    GEO_MISS_RETRY_DAYS: int = int(os.getenv("GEO_MISS_RETRY_DAYS", "30"))
+    GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))
+    GEO_LOCATE_PER_RUN: int = int(os.getenv("GEO_LOCATE_PER_RUN", "200"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))

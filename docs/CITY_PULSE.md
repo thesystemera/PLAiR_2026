@@ -581,6 +581,15 @@ The first passes built their own matching next to the existing vector architectu
 - "Radiohead near me" searches gigs, shoutouts, news, bios and catalog tracks at once. Tested live: no Radiohead gigs said honestly, a Radiohead-style catalog track offered; "any comedy on?" named the two real comedy shows with dates.
 - The data is still thin (few shoutouts, few place searches, one events sweep per city). The design is meant to grow with it; tune only once real data exists.
 
+### Built 29 Sep 2026 (fifth pass): one "where" for everything
+
+- Every piece of knowledge can carry the same optional **where** (`services_radio/geo.py` `Where`): a label, a centre, a radius and a scope (spot, street, neighbourhood, city, region, country). A gig at a venue is a spot; "Karangahape Road" is a street about 540 m across; Auckland is a city about 40 km across; Turkey is a country. Things with no place (songs, markets, celebrity news) simply have none.
+- The radius and scope come from Google Geocoding (the result's viewport and type), not from numbers we pick. Every place phrase is geocoded once and cached forever in `geo_places` (misses retried after `GEO_MISS_RETRY_DAYS`).
+- Where each source gets it: events and places from their own coordinates (Ticketmaster venue, Google place); news from a background pass (`NewsService.locate_pending`: headlines in batches of `GEO_LOCATE_BATCH` to the background LLM, "where does this happen", then geocoded; international stories are placed where they happen); shoutouts from the analysis pass they already get (`about_place`, "my street" resolved against the speaker's area), else their recording area; listener requests from the asker's area; weather and area signals from the listener's own spot. The listener is a `Where` too (device position with its accuracy, or their city).
+- One set of rules uses it everywhere: `relation()` tells the DJ how a thing sits relative to the listener ("the listener is in Grafton", "1.2 km from the listener", "10,458 km from the listener"); `near()` is "near me" (the item is at most city-scale and its edge is within `PULSE_NEAR_RADIUS_M` of the listener); `sort=nearest` orders by the gap between edges; `overlap()` links fine-grained things (spot, street, neighbourhood) within `PULSE_LINK_DISTANCE_M`, so a gig links to the bar next door and to a news story or shoutout on the same street. Gigs don't link to other gigs, or places to places, just for being close.
+- News search also gained a `news_place` category, so "what happened on K Road" matches by meaning as well as by distance. Shoutout coordinates never leave the server: public shoutouts show only the where's label and scope.
+- First run: all 327 stored stories were placed in one pass (238 got a place, 89 had none). Live test: "anything near me?" brought the Grafton substation theft ("right from the K-Road area"), "what's been going on in Grafton?" found it by place.
+
 ### What to add (on top; nothing removed)
 
 The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.

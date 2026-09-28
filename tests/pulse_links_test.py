@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
 
 from service_registry import services  # noqa: E402
-from services_radio import local_knowledge  # noqa: E402
+from services_radio import geo, local_knowledge  # noqa: E402
 from services_radio import pulse as pulse_kb  # noqa: E402
 from services_radio import regional_knowledge as rk  # noqa: E402
 from services_radio.listener_location import ListenerLocation  # noqa: E402
@@ -17,7 +17,8 @@ REGION = rk.Region(key="tz:Test/City", name="Testville", country="NZ", center=(-
 
 def nugget(kind, ext, title, text="", entities=(), lat=None, lon=None):
     return {"id": f"{kind}:src:{ext}", "kind": kind, "region_key": REGION.key, "title": title, "text": text,
-            "tags": [], "entities": list(entities), "latitude": lat, "longitude": lon,
+            "tags": [], "entities": list(entities), "country": "NZ",
+            "where": {"label": text, "lat": lat, "lon": lon, "radius_m": 0, "scope": "spot"} if lat is not None else None,
             "starts_at": (NOW + timedelta(days=2)).isoformat() if kind == "event" else None}
 
 
@@ -62,13 +63,16 @@ async def main():
                -36.8481, 174.7722),
         nugget("event", "e2", "Sonu Nigam Live", "Spark Arena", ["Spark Arena", "Sonu Nigam"], -36.8485, 174.7720),
         nugget("place", "p1", "Brothers Beer", "Bar", ["Brothers Beer"], -36.8490, 174.7725),
+    ]), FakeSearch(), FakeVectorDb([
         nugget("news", "n9", "Sonu Nigam adds second Auckland show", "RNZ"),
+        nugget("news", "n10", "Burst pipe floods City Works Depot", "RNZ", (), -36.8491, 174.7726),
     ]), FakeSearch())
     services.user_content_service = FakeShoutouts()
     pulse = pulse_kb.Pulse([])
     listener = pulse_kb.PulseListener(user=None, user_id=None, session_id="guest_x",
-                                      location=ListenerLocation(latitude=-36.85, longitude=174.76), region=REGION,
-                                      taste=rk.Taste(), tz_name="Pacific/Auckland")
+                                      location=ListenerLocation(latitude=-36.85, longitude=174.76, country_code="NZ"),
+                                      region=REGION, taste=rk.Taste(), tz_name="Pacific/Auckland",
+                                      where=geo.Where("Testville", -36.85, 174.76, 0, "spot"))
     checks = []
 
     def check(name, ok, detail=""):
@@ -81,6 +85,7 @@ async def main():
     check("gig links back to the shoutout", any(l["id"] == "community:shoutouts:1_1" for l in gig), str(gig))
     check("gig links to the bar next door", any(l["id"] == "place:src:p1" for l in gig), str(gig))
     check("gig does not link to another gig just for being close", not any(l["id"] == "event:src:e2" for l in gig))
+    check("gig links to news on the same street", any(l["id"] == "news:src:n10" for l in gig), str(gig))
     sonu = await pulse.related(listener, "event:src:e2")
     check("gig links to news that names it", any(l["id"] == "news:src:n9" for l in sonu), str(sonu))
     birthday = await pulse.related(listener, "community:shoutouts:1_2")

@@ -87,6 +87,8 @@ def _as_result(row: PlaceCache, lat: float, lon: float) -> dict:
         "opening_hours": json.loads(row.opening_hours) if row.opening_hours else None,
         "price_level": row.price_level,
         "distance_m": round(distance_m(lat, lon, row.latitude, row.longitude)),
+        "latitude": row.latitude,
+        "longitude": row.longitude,
     }
 
 

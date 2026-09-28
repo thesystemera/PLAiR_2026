@@ -17,7 +17,9 @@ SELECT id AS rowid,
            'external_id', external_id, 'region_key', region_key, 'title', title, 'text', text,
            'tags', tags::json, 'entities', entities::json, 'area', area, 'latitude', latitude,
            'longitude', longitude, 'starts_at', starts_at, 'published_at', published_at,
-           'expires_at', expires_at, 'url', url, 'attribution', attribution
+           'expires_at', expires_at, 'url', url, 'attribution', attribution,
+           'where', CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN json_build_object(
+               'label', area, 'lat', latitude, 'lon', longitude, 'radius_m', geo_radius_m, 'scope', geo_scope) END
        )::text AS metadata_json
 FROM regional_items
 WHERE title <> '' AND expires_at > now() AND kind <> 'news'
@@ -30,7 +32,9 @@ SELECT id AS rowid,
        json_build_object(
            'id', 'news:' || id, 'kind', 'news', 'article_id', id, 'title', title, 'text', description,
            'source', source, 'url', url, 'published_at', published_at, 'country', country,
-           'region_key', region_key, 'tags', tags::json
+           'region_key', region_key, 'tags', tags::json,
+           'where', CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN json_build_object(
+               'label', geo_label, 'lat', latitude, 'lon', longitude, 'radius_m', geo_radius_m, 'scope', geo_scope) END
        )::text AS metadata_json
 FROM news_items
 WHERE expires_at > now()
@@ -65,6 +69,10 @@ def when_phrase(item: Dict[str, Any]) -> str:
     return f"{local.strftime('%A')} {part}, {weekend}"
 
 
+def where_label(item: Dict[str, Any]) -> str:
+    return ((item.get("where") or {}).get("label") or "") if isinstance(item.get("where"), dict) else ""
+
+
 def place_text(item: Dict[str, Any]) -> str:
     venue = (item.get("text") or "").split(",", 1)[0] if item.get("kind") == "event" else ""
     return ", ".join(part for part in (venue, item.get("area") or "") if part)
@@ -96,10 +104,11 @@ class LocalKnowledgeVectorDatabaseService(SemanticVectorDatabaseService):
 
 class NewsVectorDatabaseService(SemanticVectorDatabaseService):
     category_specs = (
-        Category("news_title", 0.45, field_text("title"), "The headline"),
-        Category("news_tags", 0.25, field_text("tags"), "Topics of the story (rugby, election, music, weather)"),
-        Category("news_details", 0.20, field_text("text"), "The story's summary"),
-        Category("news_outlet", 0.10, field_text("source"), "The publisher"),
+        Category("news_title", 0.40, field_text("title"), "The headline"),
+        Category("news_tags", 0.22, field_text("tags"), "Topics of the story (rugby, election, music, weather)"),
+        Category("news_details", 0.18, field_text("text"), "The story's summary"),
+        Category("news_place", 0.12, where_label, "Where the story happens: street, suburb, city or country"),
+        Category("news_outlet", 0.08, field_text("source"), "The publisher"),
     )
     log_channel = "system"
     service_label = "News"
@@ -142,7 +151,8 @@ NewsPromptCache = make_prompt_cache(
     NewsVectorDatabaseService, "news_query_intent_cache", "news stories",
     "- 'Radiohead': news_title and news_tags high.\n"
     "- 'rugby': news_tags high, news_title some.\n"
-    "- 'what's RNZ saying about the election': news_outlet and news_tags high.")
+    "- 'what's RNZ saying about the election': news_outlet and news_tags high.\n"
+    "- 'what happened on K Road': news_place high, news_title some.")
 
 local_vector_db: Optional[LocalKnowledgeVectorDatabaseService] = None
 local_search: Optional[SemanticSearch] = None

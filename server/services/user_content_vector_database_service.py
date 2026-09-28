@@ -94,7 +94,7 @@ class UserContentVectorDatabaseService(BaseVectorDatabaseService):
         tags = metadata.get("tags") or []
         tags_text = ', '.join(tags) if isinstance(tags, list) else ""
         username = user_data.get("username", "")
-        location = user_data.get("location", "")
+        location = ", ".join(dict.fromkeys(p for p in (metadata.get("about_place"), user_data.get("location")) if p))
         target_audience = metadata.get("target_audience", "")
         sentiment = metadata.get("sentiment", "")
 

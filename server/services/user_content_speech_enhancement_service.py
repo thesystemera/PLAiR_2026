@@ -73,6 +73,7 @@ class TranscriptionMetadata(BaseModel):
     quality_rating: int = Field(..., ge=1, le=5)
     opinion_type: Optional[str] = None
     sentiment: Optional[str] = None
+    about_place: Optional[str] = None
 
 class ShoutoutOpinionResponse(BaseModel):
     full_transcription: str
@@ -88,6 +89,12 @@ PROMPT_SETTINGS = {
                     2. KEEP: The core opinion, the exact words used, and the natural tone.
                     3. REMOVE ONLY: Stutters (um, uh), false starts (restarted sentences), and unintelligible glitches.
 
+                    PLACE:
+                    - about_place: the real place the message is about, as specific as the speaker makes it, written so a
+                      map search finds it ("Karangahape Road, Auckland, New Zealand", "Ponsonby, Auckland, New Zealand").
+                      Resolve "my street", "round here" or "down the road" against the given location at the level they
+                      imply. Use null when the message isn't about a place.
+
                     Input JSON:
                     {text}
 
@@ -100,7 +107,8 @@ PROMPT_SETTINGS = {
                             "language_probability": 1.0,
                             "opinion_type": "loves new restaurant",
                             "quality_rating": 4,
-                            "sentiment": "positive"
+                            "sentiment": "positive",
+                            "about_place": null
                         }}
                     }}"""
     },
@@ -118,6 +126,12 @@ PROMPT_SETTINGS = {
                     - Category: Short descriptive topic (e.g., "birthday_wishes")
                     - Urgency (0.0-1.0): 1.0 = Emergency, 0.5 = Event Soon, 0.0 = Casual
                     - Importance (0.0-1.0): 1.0 = Citywide, 0.5 = Local, 0.0 = Personal
+
+                    PLACE:
+                    - about_place: the real place the message is about, as specific as the speaker makes it, written so a
+                      map search finds it ("Karangahape Road, Auckland, New Zealand", "Ponsonby, Auckland, New Zealand").
+                      Resolve "my street", "round here" or "down the road" against the given location at the level they
+                      imply. Use null when the message isn't about a place.
 
                     Input JSON:
                     {text}
@@ -138,7 +152,8 @@ PROMPT_SETTINGS = {
                             "location_relevant": false,
                             "time_sensitive": false,
                             "target_audience": "personal",
-                            "quality_rating": 4
+                            "quality_rating": 4,
+                            "about_place": null
                         }}
                     }}"""
     }
@@ -179,6 +194,12 @@ def _default_transcription_metadata(content_type: str) -> dict:
         "target_audience": "general",
         "quality_rating": 3,
     }
+
+
+async def shoutout_where(metadata: dict, user_data: dict):
+    from services_radio import geo
+    phrase = metadata.get('about_place') or coarse_location(user_data.get('location'))
+    return await geo.resolver.resolve(phrase) if phrase else None
 
 
 class UserContentSpeechEnhancementService:
@@ -546,7 +567,7 @@ class UserContentSpeechEnhancementService:
 
             payload = {"transcription": original_data.get("full_transcription", "")}
             location = coarse_location((original_data.get("user_data") or {}).get("location"))
-            if location and content_type == "shoutout":
+            if location:
                 payload["location"] = location
 
             prompt_settings = PROMPT_SETTINGS[content_type]
@@ -732,6 +753,10 @@ class UserContentSpeechEnhancementService:
                 metadata = dict(transcript.get('transcription_metadata') or {})
                 metadata['total_words'] = len(words) if words else len(transcript.get('full_transcription', '').split())
                 metadata['duration'] = round(duration_s, 3)
+                if not metadata.get('where'):
+                    where = await shoutout_where(metadata, transcript.get('user_data') or {})
+                    if where is not None:
+                        metadata['where'] = where.as_dict()
                 transcript['transcription_metadata'] = metadata
                 transcript['word_level_transcription'] = words
                 transcript['audio_enhanced'] = enhanced_ok

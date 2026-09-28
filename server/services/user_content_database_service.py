@@ -36,6 +36,11 @@ def public_shoutout(item: Optional[Dict]) -> Optional[Dict]:
         public["user_data"] = safe_user_data
     if "location" in public and isinstance(public.get("location"), str):
         public["location"] = coarse_location(public["location"])
+    for key in ("transcription_metadata", "metadata"):
+        meta = public.get(key)
+        if isinstance(meta, dict) and isinstance(meta.get("where"), dict):
+            where = meta["where"]
+            public[key] = {**meta, "where": {"label": where.get("label"), "scope": where.get("scope")}}
     return public
 
 

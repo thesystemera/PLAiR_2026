@@ -138,6 +138,7 @@ class StoredItem:
     tags: list = field(default_factory=list)
     first_seen_at: Optional[datetime] = None
     embedding: Optional[np.ndarray] = None
+    where: Optional[dict] = None
 
     @property
     def token_set(self) -> set:
@@ -156,6 +157,7 @@ class StoredItem:
             "url": self.url,
             "publishedAt": _iso(self.published_at),
             "tags": list(self.tags),
+            "where": self.where,
             "aired": aired,
         }
 
@@ -196,7 +198,14 @@ def _item(row: NewsItem, with_embedding: bool) -> StoredItem:
         id=row.id, item_key=row.item_key, title=row.title, source=row.source or "", url=row.url or "",
         description=row.description or "", published_at=row.published_at, tags=json.loads(row.tags or "[]"),
         first_seen_at=row.first_seen_at, embedding=unpack(row.embedding) if with_embedding else None,
+        where=_where(row),
     )
+
+
+def _where(row: NewsItem) -> Optional[dict]:
+    from services_radio import geo
+    where = geo.from_row(row.geo_label, row.latitude, row.longitude, row.geo_radius_m, row.geo_scope)
+    return where.as_dict() if where else None
 
 
 async def _update_many(db, column: str, values: list[tuple]) -> None:
@@ -341,6 +350,27 @@ class NewsStore:
         async with self._sessions()() as db:
             rows = (await db.execute(query)).scalars().all()
         return {row.id: _item(row, with_embeddings) for row in rows}
+
+    async def unlocated(self, limit: int) -> list[tuple]:
+        async with self._sessions()() as db:
+            rows = (await db.execute(
+                select(NewsItem.id, NewsItem.title, NewsItem.description, NewsItem.country)
+                .where(NewsItem.geo_checked.is_(False), NewsItem.expires_at > datetime.now(timezone.utc))
+                .order_by(NewsItem.published_at.desc().nullslast()).limit(limit))).all()
+        return [tuple(row) for row in rows]
+
+    async def set_where(self, located: dict) -> None:
+        if not located:
+            return
+        async with self._sessions()() as db:
+            for item_id, where in located.items():
+                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(
+                    geo_checked=True, latitude=where.lat if where else None, longitude=where.lon if where else None,
+                    geo_radius_m=where.radius_m if where else None, geo_scope=where.scope if where else None,
+                    geo_label=where.label if where else None))
+            await db.commit()
+        if any(located.values()):
+            self._mark_dirty()
 
     async def missing_embeddings(self, ids: Iterable[int]) -> list[tuple]:
         ids = list(ids)
