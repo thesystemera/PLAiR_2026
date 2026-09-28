@@ -75,6 +75,7 @@ class KnowledgeItem:
     url: str = ""
     attribution: str = ""
     cost_usd: float = 0.0
+    vector: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
 
     @property
     def item_id(self) -> str:
@@ -206,6 +207,14 @@ def lexical_similarity(a: str, b: str) -> float:
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / min(len(ta), len(tb))
+
+
+def _unit(blob: Optional[bytes]) -> Optional[np.ndarray]:
+    if not blob:
+        return None
+    vector = np.frombuffer(blob, dtype=np.float32)
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 0 else None
 
 
 def _days_ahead(item: KnowledgeItem, now: datetime) -> Optional[float]:
@@ -427,12 +436,36 @@ class RegionalKnowledgeStore:
             source=row.source, kind=row.kind, region_key=row.region_key, external_id=row.external_id,
             title=row.title or "", text=row.text or "", tags=json.loads(row.tags or "[]"), starts_at=row.starts_at,
             expires_at=row.expires_at, url=row.url or "", attribution=row.attribution or "",
+            vector=_unit(row.embedding),
         ) for row in rows]
         if self._generations.get(region_key, 0) == generation:
             now_s = time.monotonic()
             self._read_cache = {k: v for k, v in self._read_cache.items() if now_s - v[0] < READ_CACHE_S}
             self._read_cache[cache_key] = (now_s, items)
         return items
+
+    async def missing_embeddings(self, region_key: Optional[str], limit: int = 200) -> list[tuple]:
+        query = select(RegionalItem.id, RegionalItem.region_key, RegionalItem.title, RegionalItem.text,
+                       RegionalItem.tags).where(RegionalItem.embedding.is_(None), RegionalItem.title != "")
+        if region_key:
+            query = query.where(RegionalItem.region_key == region_key)
+        async with self.async_session_maker() as db:
+            rows = (await db.execute(query.limit(limit))).all()
+        return [(row.id, row.region_key, " ".join(part for part in (
+            row.title, row.text, " ".join(json.loads(row.tags or "[]"))) if part)) for row in rows]
+
+    async def set_embeddings(self, vectors: dict, region_keys: Iterable[str]) -> None:
+        if not vectors:
+            return
+        async with self.async_session_maker() as db:
+            for item_id, vector in vectors.items():
+                await db.execute(RegionalItem.__table__.update().where(RegionalItem.id == item_id).values(
+                    embedding=np.asarray(vector, dtype=np.float32).tobytes()))
+            await db.commit()
+        keys = set(region_keys)
+        for key in keys:
+            self._generations[key] = self._generations.get(key, 0) + 1
+        self._read_cache = {k: v for k, v in self._read_cache.items() if k[0] not in keys}
 
     async def region_count(self) -> int:
         async with self.async_session_maker() as db:
@@ -447,6 +480,7 @@ class RegionalKnowledgeService:
         self.embedder = embedder
         self._vectors: dict[str, np.ndarray] = {}
         self._warming: set[str] = set()
+        self._embedding_regions: set[str] = set()
 
     def collector_for(self, item: KnowledgeItem) -> Optional[Collector]:
         return next((c for c in self.collectors.values() if c.kind == item.kind and item.source in c.name), None)
@@ -471,6 +505,7 @@ class RegionalKnowledgeService:
                 continue
             await self.store.save(region, collector.name, collector.kind, items, status)
             self.warm(tag for item in items for tag in item.tags)
+            self.embed_items(region.key)
             results[collector.name] = len(items)
             log_service.external(f"[REGIONAL] {collector.name}: {len(items)} items for {region.name}")
         return results
@@ -481,8 +516,55 @@ class RegionalKnowledgeService:
         try:
             await self.store.touch_region(region)
             await self.store.save(region, "", items[0].kind, items, "ingested")
+            self.embed_items(region.key)
         except Exception as e:
             log_service.warning(f"[REGIONAL] ingest failed for {region.name}: {type(e).__name__}: {e}")
+
+    def embed_items(self, region_key: Optional[str] = None) -> None:
+        marker = region_key or "*"
+        if self.embedder is None or marker in self._embedding_regions:
+            return
+        self._embedding_regions.add(marker)
+        spawn(self._embed_items(region_key, marker), name="regional_embed_items")
+
+    async def _embed_items(self, region_key: Optional[str], marker: str) -> None:
+        try:
+            while True:
+                pending = await self.store.missing_embeddings(region_key)
+                if not pending:
+                    return
+                vectors = {}
+                for item_id, _, text in pending:
+                    vector = await self.embedder(text)
+                    if vector is not None:
+                        vectors[item_id] = vector
+                if not vectors:
+                    return
+                await self.store.set_embeddings(vectors, {key for _, key, _ in pending})
+                log_service.detail(f"[REGIONAL] embedded {len(vectors)} items", "pulse")
+                if len(pending) < 200:
+                    return
+        except Exception as e:
+            log_service.warning(f"[REGIONAL] item embedding failed: {type(e).__name__}: {e}")
+        finally:
+            self._embedding_regions.discard(marker)
+
+    async def embed_text(self, text: str) -> Optional[np.ndarray]:
+        if self.embedder is None or not text:
+            return None
+        key = text.lower()
+        if key in self._vectors:
+            return self._vectors[key]
+        try:
+            vector = np.asarray(await self.embedder(text), dtype=np.float32)
+        except Exception as e:
+            log_service.warning(f"[REGIONAL] embedding failed: {type(e).__name__}: {e}")
+            return None
+        norm = float(np.linalg.norm(vector))
+        if norm <= 0:
+            return None
+        self._vectors[key] = vector / norm
+        return self._vectors[key]
 
     def warm(self, labels: Iterable[str]) -> None:
         if self.embedder is None:

@@ -511,6 +511,26 @@ class NewsService:
         return await self.get_top_news("", country=country, top_n=top_n, subject=subject, geo=place,
                                        region_key=region_key)
 
+    async def stored_articles(self, query: Optional[str], country: Optional[str], subject: Optional[str] = None,
+                              limit: int = 6) -> list[dict]:
+        if not self.store_enabled:
+            return []
+        country = (country or settings.NEWS_DEFAULT_COUNTRY).upper()
+        kind, query_norm, _ = self.classify(query)
+        since = datetime.now(timezone.utc) - timedelta(seconds=settings.NEWS_RETENTION_S)
+        try:
+            if kind == KIND_SEARCH:
+                articles = await self._semantic_match(query_norm, country, "7d", await self._embed(query_norm)) or []
+            else:
+                pull = await self.store.latest_pull(kind, country, query_norm, "", since)
+                articles = await self._serve(pull, cached=True) if pull is not None else []
+            if subject and articles:
+                articles = await self._flag_aired(str(subject), articles)
+        except Exception as e:
+            log_service.warning(f"News: stored read failed ({type(e).__name__}: {e})")
+            return []
+        return articles[:limit]
+
     async def mark_aired(self, subject: Optional[str], articles) -> None:
         if not self.store_enabled or not subject:
             return

@@ -126,6 +126,7 @@ class PlayEvent(Base):
     event_type = Column(String, nullable=False)
     skip_reason = Column(String, nullable=True)
     session_id = Column(String, nullable=True)
+    region_key = Column(String, nullable=True, index=True)
 
 class TrackAnalytics(Base):
     __tablename__ = "track_analytics"
@@ -292,8 +293,35 @@ class RegionalItem(Base):
     url = Column(String, nullable=True)
     attribution = Column(String, nullable=True)
     fetched_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
+    embedding = Column(LargeBinary, nullable=True)
 
     __table_args__ = (UniqueConstraint("region_key", "source", "external_id", name="uq_regional_items_source_id"),)
+
+
+class PulseDemand(Base):
+    __tablename__ = "pulse_demand"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    region_key = Column(String, nullable=False, index=True)
+    node = Column(String, nullable=False)
+    query_norm = Column(String, nullable=False)
+    query = Column(String, nullable=False, default="")
+    day = Column(Date, nullable=False, index=True)
+    asks = Column(Integer, nullable=False, default=0)
+    askers = Column(Integer, nullable=False, default=0)
+    store_hits = Column(Integer, nullable=False, default=0)
+    live_hits = Column(Integer, nullable=False, default=0)
+    last_asked_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
+
+    __table_args__ = (UniqueConstraint("region_key", "node", "query_norm", "day", name="uq_pulse_demand"),)
+
+
+class PulseDemandAsker(Base):
+    __tablename__ = "pulse_demand_askers"
+
+    demand_id = Column(BigInteger, primary_key=True)
+    asker_hash = Column(String, primary_key=True)
+    day = Column(Date, nullable=False, index=True)
 
 
 class PlaceCache(Base):

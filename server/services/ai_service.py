@@ -26,6 +26,9 @@ def build_gemini_http_options(timeout_ms: int = GEMINI_HTTP_TIMEOUT_MS,
         )
     )
 
+RESULTS_NUDGE = ("[STUDIO] The results are in above. Now perform the on-air reply to the listener using them, in the "
+                 "usual performance format. Don't repeat the line you already said while looking.")
+
 class _GeminiMessage:
     def __init__(self, content):
         self.content = content
@@ -327,67 +330,80 @@ class AIService(SingletonService):
             call_timeout_s: float = 8.0,
             on_preamble: Optional[Callable[[str], Awaitable[None]]] = None
     ) -> Dict[str, Any]:
-        if model is None:
-            model = settings.GEMINI_DJ_MODEL
         if temperature is None:
             temperature = settings.GEMINI_DJ_TEMPERATURE
         if max_tokens is None:
             max_tokens = 2048
 
-        tool_config = types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens,
-            system_instruction=system_instruction,
-            tools=[types.Tool(function_declarations=function_declarations)],
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
-        )
-        final_config = tool_config.model_copy(update={
-            "tool_config": types.ToolConfig(
-                function_calling_config=types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
+        base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
+        if function_declarations:
+            tool_config = types.GenerateContentConfig(
+                **base,
+                tools=[types.Tool(function_declarations=function_declarations)],
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
             )
-        })
+            final_config = tool_config.model_copy(update={
+                "tool_config": types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
+                )
+            })
+        else:
+            tool_config = final_config = types.GenerateContentConfig(**base)
 
         contents: list = [types.Content(role="user", parts=[types.Part.from_text(text=user_message)])]
         calls_log: list = []
         preambles: list = []
         round_usage: list = []
+        strikes = 0
+        tool_rounds = 0
+        rounds = 0
 
-        for round_index in range(max_rounds + 1):
-            is_last = round_index == max_rounds
-            log_service.ai(f"DJ tool round {round_index + 1}/{max_rounds + 1}: {model}")
+        while True:
+            rounds += 1
+            is_last = not function_declarations or tool_rounds >= max_rounds
+            log_service.detail(f"DJ tool round {rounds} (tool rounds {tool_rounds}/{max_rounds})", "ai")
 
-            if round_index > 1:
+            if tool_rounds > 1:
                 compressed = self._compress_prior_tool_responses(contents, settings.LLM_TOOL_COMPRESS_MIN_CHARS)
                 if compressed:
-                    log_service.ai(f"Compressed {compressed} prior tool result(s) before round {round_index + 1}")
+                    log_service.ai(f"Compressed {compressed} prior tool result(s) before round {rounds}")
 
-            response, usage, _ = await llm_router.gemini_generate(
+            response, usage, _, model = await llm_router.gemini_generate_chain(
                 spec=llm_router.LLM_LIVE,
                 client=self.client,
-                model=model,
                 contents=contents,
-                config=final_config if is_last else tool_config
+                config=final_config if is_last else tool_config,
+                prefer=model
             )
             round_usage.append(usage)
 
             candidate = response.candidates[0] if response.candidates else None
             content = candidate.content if candidate else None
             parts = list(content.parts) if content and content.parts else []
-            function_calls = [p.function_call for p in parts if p.function_call]
+            function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
             text = self._visible_text(parts)
 
-            if not function_calls or is_last:
-                if not text:
-                    finish_reason = candidate.finish_reason if candidate else "NO_CANDIDATE"
-                    log_service.error(f"DJ tool turn returned no text (finish reason: {finish_reason})")
+            if not function_calls:
+                finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
+                recovery = None if text.strip() else self._recovery_message(finish, bool(calls_log))
+                if recovery and strikes < settings.LLM_RECOVERY_MAX_STRIKES:
+                    strikes += 1
+                    log_service.warning(f"DJ tool turn: no reply (finish {finish}) - recovery {strikes}")
+                    if parts:
+                        contents.append(content)
+                    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=recovery)]))
+                    continue
+                if not text.strip():
+                    log_service.error(f"DJ tool turn returned no text (finish reason: {finish})")
                 return {
                     "text": text,
                     "preambles": preambles,
                     "tool_calls": calls_log,
-                    "rounds": round_index + 1,
+                    "rounds": rounds,
                     "usage": round_usage
                 }
 
+            tool_rounds += 1
             if text.strip():
                 preambles.append(text)
             if on_preamble is not None:
@@ -413,7 +429,18 @@ class AIService(SingletonService):
                 )))
             contents.append(types.Content(role="user", parts=response_parts))
 
-        return {"text": "", "preambles": preambles, "tool_calls": calls_log, "rounds": max_rounds + 1, "usage": round_usage}
+    @staticmethod
+    def _recovery_message(finish: str, used_tools: bool) -> Optional[str]:
+        if finish == "MALFORMED_FUNCTION_CALL":
+            return ("[STUDIO] Your last function call was malformed. Call the tool again with valid arguments, "
+                    "or perform the on-air reply.")
+        if finish == "MAX_TOKENS":
+            return "[STUDIO] Your reply was cut off. Perform a shorter on-air reply now."
+        if finish in ("STOP", "NO_CANDIDATE", "FINISH_REASON_UNSPECIFIED", "OTHER"):
+            return RESULTS_NUDGE if used_tools else (
+                "[STUDIO] Your previous turn produced no reply. Either call the tool you need now, or perform the "
+                "on-air reply to the listener.")
+        return None
 
     @staticmethod
     def _result_size(result: Any) -> int:

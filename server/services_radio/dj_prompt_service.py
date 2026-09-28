@@ -156,7 +156,7 @@ class DJPromptService:
                     'format_station_characteristics',
                     'format_dialogue_examples',
                     'station_recent_airings',
-                    'local_happenings'
+                    'city_pulse'
                 ],
                 'use_ai_picker': True
             },
@@ -170,8 +170,9 @@ class DJPromptService:
                     'format_station_characteristics',
                     'format_dialogue_examples',
                     'instruction_dj_tools',
+                    'tool_guidance',
                     'station_recent_airings',
-                    'local_happenings'
+                    'city_pulse'
                 ],
                 'use_ai_picker': True
             },
@@ -449,6 +450,7 @@ class DJPromptService:
         user_input: str | None = None,
         time_remaining: float | None = None,
         dependencies: Dict | None = None,
+        route_out: Dict | None = None,
         **extra_kwargs
     ) -> tuple[Dict[str, str], List[str], str | None]:
 
@@ -476,10 +478,13 @@ class DJPromptService:
             if not user_input:
                 raise ValueError(f"GPT type '{gpt_type}' requires user_input for AI picker")
 
-            dynamic_nodes = await context_router_service.determine_nodes(
-                user_input=user_input,
-                use_cache=True
-            )
+            route = await context_router_service.determine_route(user_input=user_input, use_cache=True)
+            dynamic_nodes = route["nodes"]
+            if route_out is not None:
+                route_out.update(route)
+                from services_radio.context_nodes import resolve_tool_route
+                await resolve_tool_route(route_out, **raw_data)
+                raw_data['route'] = route_out
 
             for node in dynamic_nodes:
                 if node not in final_nodes:
@@ -907,16 +912,22 @@ class DJPromptService:
 
         start_time = time.perf_counter()
 
+        route = {}
         context_data, selected_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='interactive_tools',
             user_id=user_id,
             session_id=session_id,
-            user_input=transcription
+            user_input=transcription,
+            route_out=route
         )
 
         fetch_time = (time.perf_counter() - start_time) * 1000
+        use_tools = bool(route.get("use_tools"))
 
-        ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
+        if use_tools:
+            ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
+        else:
+            ordered_nodes = [node for node in selected_nodes if node != 'instruction_dj_tools']
 
         system_prompt = assemble_prompt(context_data, ordered_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
 
@@ -940,9 +951,8 @@ class DJPromptService:
         result = await self.gemini_service.run_gemini_tool_turn(
             system_instruction=system_prompt,
             user_message=user_message,
-            function_declarations=DJ_FUNCTION_DECLARATIONS,
+            function_declarations=DJ_FUNCTION_DECLARATIONS if use_tools else [],
             dispatch=tool_runtime.dispatch,
-            model=self.config['dj_model'],
             temperature=self.config['dj_temperature'],
             max_tokens=self.config['dj_tokens'],
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
@@ -977,7 +987,8 @@ class DJPromptService:
             "notes": notes_section,
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
-            "rounds": result.get("rounds")
+            "rounds": result.get("rounds"),
+            "used_tools": use_tools
         }
 
     def _save_prompt_debug(

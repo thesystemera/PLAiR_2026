@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from sqlalchemy import text
 from database.connection import _sync_engine
-from database.models import StripeWebhookEvent, AIUsageEvent, AIUsageDaily, UserRadioSettings
+from database.models import StripeWebhookEvent, AIUsageEvent, AIUsageDaily, UserRadioSettings, PulseDemand, PulseDemandAsker
 
 
 def column_exists(conn, table_name, column_name):
@@ -64,12 +64,23 @@ def main():
     
     with _sync_engine.connect() as conn:
         migrate_users_table(conn)
+        for table_name, col_name, col_def in (("regional_items", "embedding", "BYTEA"),
+                                              ("play_events", "region_key", "VARCHAR")):
+            print(f"\n[CHECK] {table_name}.{col_name}...")
+            if not column_exists(conn, table_name, col_name):
+                add_column(conn, table_name, col_name, col_def)
+            else:
+                print(f"  [OK] {col_name} already exists")
+        if column_exists(conn, "play_events", "region_key"):
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_play_events_region_key ON play_events (region_key)"))
+            conn.commit()
 
     print("\n[CHECK] stripe_webhook_events table...")
     StripeWebhookEvent.__table__.create(bind=_sync_engine, checkfirst=True)
     print("  [OK] stripe_webhook_events")
 
-    for table in (AIUsageEvent.__table__, AIUsageDaily.__table__, UserRadioSettings.__table__):
+    for table in (AIUsageEvent.__table__, AIUsageDaily.__table__, UserRadioSettings.__table__,
+                  PulseDemand.__table__, PulseDemandAsker.__table__):
         print(f"\n[CHECK] {table.name} table...")
         table.create(bind=_sync_engine, checkfirst=True)
         print(f"  [OK] {table.name}")

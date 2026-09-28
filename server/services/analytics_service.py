@@ -87,6 +87,14 @@ class AnalyticsService(SingletonService):
             events_to_flush = list(self.event_buffer)
             self.event_buffer.clear()
 
+        from services_radio.pulse import get_pulse
+        pulse = get_pulse()
+        if pulse is not None:
+            for event_data in events_to_flush:
+                if "region_key" not in event_data:
+                    event_data["region_key"] = await pulse.region_key_for(event_data["user_id"],
+                                                                          event_data["session_id"])
+
         try:
             async with AsyncSessionLocal() as session:
                 for event_data in events_to_flush:
@@ -99,7 +107,8 @@ class AnalyticsService(SingletonService):
                         skip_reason=event_data["skip_reason"],
                         started_at=datetime.fromisoformat(event_data["started_at"]),
                         duration_ms=event_data["duration_ms"],
-                        completion_pct=event_data["completion_pct"]
+                        completion_pct=event_data["completion_pct"],
+                        region_key=event_data.get("region_key")
                     )
                     session.add(play_event)
 

@@ -84,13 +84,9 @@ class Settings:
     STUDIO_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "studio_audio"
 
     # All vector databases and embeddings stored here
-    EMBEDDINGS_DIR: Path = BASE_DIR / "data" / "embeddings"
-    
-    # Catalog Annoy indexes stored here (same as embeddings for now)
-    CATALOG_EMBEDDINGS_DIR: Path = BASE_DIR / "data" / "embeddings"
-    
-    # User content Annoy indexes stored here (same as embeddings for now)
-    USER_CONTENT_EMBEDDINGS_DIR: Path = BASE_DIR / "data" / "embeddings"
+    EMBEDDINGS_DIR: Path = Path(os.getenv("EMBEDDINGS_DIR") or BASE_DIR / "data" / "embeddings")
+    CATALOG_EMBEDDINGS_DIR: Path = EMBEDDINGS_DIR
+    USER_CONTENT_EMBEDDINGS_DIR: Path = EMBEDDINGS_DIR
 
     # NOTE: Main databases (catalog, user_content, users) migrated to PostgreSQL 2026-02-01
     # See: ai_radio_catalog, ai_radio_user_content, ai_radio databases
@@ -279,10 +275,26 @@ class Settings:
     GEMINI_DJ_TEMPERATURE: float = float(os.getenv("GEMINI_DJ_TEMPERATURE", "0.9"))
     GEMINI_DJ_MAX_TOKENS: int = int(os.getenv("GEMINI_DJ_MAX_TOKENS", "1000"))
 
-    DJ_TOOL_USE_ENABLED: bool = os.getenv("DJ_TOOL_USE_ENABLED", "false").lower() == "true"
+    DJ_TOOL_USE_ENABLED: bool = os.getenv("DJ_TOOL_USE_ENABLED", "true").lower() == "true"
+    DJ_TOOL_MAX_LIVE_FETCHES: int = int(os.getenv("DJ_TOOL_MAX_LIVE_FETCHES", "2"))
+    PULSE_ENABLED: bool = os.getenv("PULSE_ENABLED", "true").lower() == "true"
+    PULSE_NODE_TIMEOUT_S: float = float(os.getenv("PULSE_NODE_TIMEOUT_S", "2.5"))
+    PULSE_FETCH_TIMEOUT_S: float = float(os.getenv("PULSE_FETCH_TIMEOUT_S", "7"))
+    PULSE_FETCH_BELOW: int = int(os.getenv("PULSE_FETCH_BELOW", "2"))
+    PULSE_SEMANTIC_ONLY_MIN: float = float(os.getenv("PULSE_SEMANTIC_ONLY_MIN", "0.9"))
+    PULSE_PLACE_RADIUS_M: float = float(os.getenv("PULSE_PLACE_RADIUS_M", "2000"))
+    PULSE_OFFERED_MEMORY_S: float = float(os.getenv("PULSE_OFFERED_MEMORY_S", "7200"))
+    PULSE_AIRED_PENALTY: float = float(os.getenv("PULSE_AIRED_PENALTY", "0.35"))
+    PULSE_DEMAND_ENABLED: bool = os.getenv("PULSE_DEMAND_ENABLED", "true").lower() == "true"
+    PULSE_TREND_MIN_ASKERS: int = int(os.getenv("PULSE_TREND_MIN_ASKERS", "3"))
+    PULSE_CHART_MIN_LISTENERS: int = int(os.getenv("PULSE_CHART_MIN_LISTENERS", "2"))
+    PULSE_CHART_CACHE_S: float = float(os.getenv("PULSE_CHART_CACHE_S", "900"))
+    PULSE_CONTEXT_ITEMS: int = int(os.getenv("PULSE_CONTEXT_ITEMS", "4"))
+    PULSE_COVERAGE_MIN_SCORE: float = float(os.getenv("PULSE_COVERAGE_MIN_SCORE", "0.6"))
+    PULSE_COVERAGE_MIN_ITEMS: int = int(os.getenv("PULSE_COVERAGE_MIN_ITEMS", "2"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
-    DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "8"))
+    DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))
     DJ_MICRO_MAX_TOKENS: int = int(os.getenv("DJ_MICRO_MAX_TOKENS", "48"))
     DJ_TURN_CANCEL_TIMEOUT_S: float = float(os.getenv("DJ_TURN_CANCEL_TIMEOUT_S", "2"))
     BIOGRAPHY_DEADLINE_S: float = float(os.getenv("BIOGRAPHY_DEADLINE_S", "20"))
@@ -320,7 +332,8 @@ class Settings:
     LLM_CIRCUIT_COOLDOWN_SECONDS: int = int(os.getenv("LLM_CIRCUIT_COOLDOWN_SECONDS", "300"))
     LLM_USAGE_LOG_INTERVAL_S: int = int(os.getenv("LLM_USAGE_LOG_INTERVAL_S", "600"))
 
-    LLM_TOOL_RESULT_MAX_CHARS: int = int(os.getenv("LLM_TOOL_RESULT_MAX_CHARS", "2000"))
+    LLM_TOOL_RESULT_MAX_CHARS: int = int(os.getenv("LLM_TOOL_RESULT_MAX_CHARS", "3000"))
+    LLM_RECOVERY_MAX_STRIKES: int = int(os.getenv("LLM_RECOVERY_MAX_STRIKES", "2"))
     LLM_TOOL_COMPRESS_MIN_CHARS: int = int(os.getenv("LLM_TOOL_COMPRESS_MIN_CHARS", "600"))
 
     LLM_RESULT_CACHE_DIR: Path = BASE_DIR / "data" / "llm_result_cache"

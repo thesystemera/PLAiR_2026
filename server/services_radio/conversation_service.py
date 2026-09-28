@@ -473,6 +473,16 @@ class ConversationService:
                 "persist_conversation_turn"
             ), name=f"persist_conversation_turn:{session_id}")
 
+    async def _computer_pass(self, full_response, transcription, session_dict, session_id):
+        commands = await self.dj_prompt_service.gpt_command_extraction(full_response, transcription, session_dict)
+        if not commands or not commands.strip() or commands.strip() == "{N/A}":
+            return None
+        command_lines = [line.strip() for line in commands.replace('[HAL11000]', '').splitlines() if line.strip()]
+        log_service.commands(f"{log_service.who(session_id)}: DJ commands: {' | '.join(command_lines)}")
+        if self.command_executor:
+            await self.command_executor.process_commands(commands, session_dict)
+        return commands if commands.strip().startswith('[HAL11000]') else f"[HAL11000]{commands}"
+
     async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
         from services_radio.dj_tools import DJToolRuntime, DJTurnContext
 
@@ -503,20 +513,16 @@ class ConversationService:
         try:
             result = await self.dj_prompt_service.gpt_dj_interactive_tools(transcription, session_dict, runtime,
                                                                            speak_preamble)
-            if not result:
-                if not ctx.records and not spoken:
-                    log_service.error(
-                        f"{log_service.who(session_id)}: tool-mode DJ turn failed before acting - falling back to two-pass flow")
-                    return False
-                log_service.error(f"{log_service.who(session_id)}: tool-mode DJ turn failed after acting")
-                return True
+            if result and result["status"] == "na":
+                log_service.detail(f"{log_service.who(session_id)}: DJ response not applicable", "listener")
+                return
 
-            if result["status"] == "na":
-                log_service.detail(f"{log_service.who(session_id)}: tool-mode DJ response not applicable", "listener")
-                return True
+            main_response = (result or {}).get("main") or ""
+            notes = (result or {}).get("notes") or ""
 
-            main_response = result["main"]
-            notes = result["notes"]
+            if not main_response and not spoken:
+                log_service.error(f"{log_service.who(session_id)}: DJ turn produced no reply")
+                return
 
             if main_response and main_response not in spoken:
                 await self._speak_dj_text(main_response, user_id, session_id, is_guest)
@@ -530,9 +536,13 @@ class ConversationService:
                                      f"{record['name']} {record['args']}"
                                      f"{' -> ' + record['reason'] if record.get('reason') else ''}")
 
-            await asyncio.shield(self._publish_turn(transcription, full_response, runtime.commands_for_display(),
+            commands_for_display = runtime.commands_for_display()
+            if not (result or {}).get("used_tools") and full_main:
+                commands_for_display = await self._computer_pass(full_response, transcription, session_dict,
+                                                                 session_id)
+
+            await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display,
                                                     user_id, session_id, is_guest))
-            return True
         finally:
             ctx.gate.set()
 
@@ -545,8 +555,8 @@ class ConversationService:
                 raise RuntimeError("dj_prompt_service not initialized")
 
             if settings.DJ_TOOL_USE_ENABLED and self.command_executor is not None:
-                if await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin):
-                    return
+                await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin)
+                return
 
             result = await self.dj_prompt_service.gpt_dj_interactive(transcription, session_dict)
             if not result:

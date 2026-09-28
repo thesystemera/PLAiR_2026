@@ -198,6 +198,39 @@ async def gemini_generate(
     return response, usage, ms
 
 
+async def gemini_generate_chain(
+    *,
+    spec: str,
+    client,
+    contents,
+    config: types.GenerateContentConfig,
+    prefer: Optional[str] = None,
+):
+    models = [model for provider, model in candidates_for(spec) if provider == "gemini"]
+    if not models:
+        models = [model for provider, model in resolve_llm(spec) if provider == "gemini"][:1]
+    if not models:
+        raise ValueError(f"No Gemini model configured for {spec}")
+    if prefer in models:
+        models.remove(prefer)
+        models.insert(0, prefer)
+    for idx, model in enumerate(models):
+        key = _circuit_key(spec, "gemini", model)
+        try:
+            response, usage, ms = await gemini_generate(spec=spec, client=client, model=model, contents=contents,
+                                                        config=config)
+        except LLM_ERRORS as err:
+            _record_failure(key, err)
+            if idx == len(models) - 1:
+                log_service.error(f"[LLM] {role_label(spec)} gemini:{model} failed: {_err_line(err)}")
+                raise
+            record_fallback(role_label(spec), f"gemini:{model}", f"gemini:{models[idx + 1]}", _err_line(err))
+            continue
+        _record_success(key)
+        return response, usage, ms, model
+    raise RuntimeError(f"No Gemini model available for {spec}")
+
+
 async def _generate_once(
     *,
     spec: str,

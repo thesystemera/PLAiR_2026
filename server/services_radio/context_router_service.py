@@ -43,6 +43,43 @@ class NodeSelection(BaseModel):
         ge=0.0,
         le=1.0
     )
+    needs_tools: bool = Field(
+        default=False,
+        description="True only when the hosts must look something up, or search the catalog, before they can reply well"
+    )
+    tool_plan: List[str] = Field(
+        default_factory=list,
+        description="Numbered function-call steps with <placeholders>, e.g. 'pulse_search(query=<topic>, kinds=[event])'"
+    )
+
+
+def tool_names() -> set:
+    from services_radio.dj_tools import TOOL_NAMES
+    return TOOL_NAMES
+
+
+def clean_plan(plan: List[str]) -> List[str]:
+    names = tool_names()
+    steps = []
+    for step in plan or []:
+        text = str(step).strip().lstrip("0123456789.) ").strip()
+        name = text.split("(", 1)[0].strip()
+        if name in names:
+            steps.append(text[:200])
+    return steps[:6]
+
+
+def tool_menu() -> str:
+    from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS
+    lines = []
+    for declaration in DJ_FUNCTION_DECLARATIONS:
+        schema = declaration.parameters_json_schema or {}
+        params = ", ".join((schema.get("properties") or {}).keys())
+        lines.append(f"- {declaration.name}({params}): {declaration.description}")
+    return "\n".join(lines)
+
+DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide"]
+
 
 class ContextRouterService(SingletonService):
     def __init__(self):
@@ -93,6 +130,13 @@ class ContextRouterService(SingletonService):
                     last_used REAL
                 )
             ''')
+            c.execute("SELECT 1 FROM information_schema.columns WHERE table_name = 'context_routing_cache' "
+                      "AND column_name = 'tool_plan'")
+            if c.fetchone() is None:
+                c.execute("DELETE FROM context_routing_cache")
+                c.execute("ALTER TABLE context_routing_cache ADD COLUMN needs_tools BOOLEAN DEFAULT FALSE, "
+                          "ADD COLUMN tool_plan TEXT DEFAULT '[]'")
+                log_service.node_producer("  Routing cache reset for tool planning")
             conn.commit()
         finally:
             conn.close()
@@ -105,7 +149,7 @@ class ContextRouterService(SingletonService):
             try:
                 c = conn.cursor()
                 c.execute("SELECT input_hash, user_input, embedding, selected_nodes, reasoning, "
-                          "confidence, created_at, times_reused, last_used "
+                          "confidence, created_at, times_reused, last_used, needs_tools, tool_plan "
                           "FROM context_routing_cache")
 
                 rows = c.fetchall()
@@ -114,7 +158,7 @@ class ContextRouterService(SingletonService):
 
             for row in rows:
                 input_hash, user_input, embedding_blob, selected_nodes_json, reasoning, \
-                    confidence, created_at, times_reused, last_used = row
+                    confidence, created_at, times_reused, last_used, needs_tools, tool_plan_json = row
 
                 if embedding_blob:
                     embedding = np.frombuffer(bytes(embedding_blob), dtype=np.float32)
@@ -131,7 +175,9 @@ class ContextRouterService(SingletonService):
                     "confidence": confidence,
                     "created_at": created_at,
                     "times_reused": times_reused,
-                    "last_used": last_used
+                    "last_used": last_used,
+                    "needs_tools": bool(needs_tools),
+                    "tool_plan": json.loads(tool_plan_json or "[]"),
                 }
 
             elapsed = time.perf_counter() - start_time
@@ -145,17 +191,26 @@ class ContextRouterService(SingletonService):
     def _hash_input(user_input: str) -> str:
         return hashlib.md5(user_input.lower().strip().encode()).hexdigest()
 
-    async def determine_nodes(
+    async def determine_nodes(self, user_input: str, use_cache: bool = True,
+                              similarity_threshold: Optional[float] = None) -> List[str]:
+        return (await self.determine_route(user_input, use_cache, similarity_threshold))["nodes"]
+
+    @staticmethod
+    def _route(nodes: List[str], needs_tools: bool = False, tool_plan: Optional[List[str]] = None) -> Dict:
+        plan = clean_plan(tool_plan or [])
+        return {"nodes": nodes, "needs_tools": bool(needs_tools and plan), "tool_plan": plan}
+
+    async def determine_route(
         self,
         user_input: str,
         use_cache: bool = True,
         similarity_threshold: Optional[float] = None
-    ) -> List[str]:
+    ) -> Dict:
         if similarity_threshold is None:
             similarity_threshold = settings.GEMINI_NODE_PRODUCER_SIMILARITY_THRESHOLD
 
         if not user_input or not user_input.strip():
-            return ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide"]
+            return self._route(DEFAULT_NODES)
 
         user_input = user_input.strip()
         input_hash = self._hash_input(user_input)
@@ -171,7 +226,7 @@ class ContextRouterService(SingletonService):
                 f"  ✅ CACHE HIT (Exact) - Reused {cached['times_reused']}x → {cached['selected_nodes']}"
             )
 
-            return cached['selected_nodes']
+            return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'))
 
         if use_cache and self.vector_db_service:
             input_embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
@@ -195,7 +250,7 @@ class ContextRouterService(SingletonService):
                     f"  ✅ CACHE HIT (Semantic {best_similarity:.3f}) → {cached['selected_nodes']}"
                 )
 
-                return cached['selected_nodes']
+                return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'))
 
         self.llm_calls += 1
         log_service.node_producer("  🤖 CACHE MISS - Calling Producer AI...")
@@ -205,10 +260,12 @@ class ContextRouterService(SingletonService):
         if selection:
             await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
             self._log_cache_performance()
-            log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}")
-            return selection.selected_nodes
+            route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan)
+            log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}"
+                                      f" | tools: {route['tool_plan'] if route['needs_tools'] else 'none'}")
+            return route
 
-        return ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide"]
+        return self._route(DEFAULT_NODES)
 
     async def _call_producer_ai(self, user_input: str) -> tuple[NodeSelection | None, str, str]:
         if not self.ai_service:
@@ -216,11 +273,11 @@ class ContextRouterService(SingletonService):
             return None, "", ""
 
         system_prompt = self._build_producer_prompt()
-        user_prompt = f"""Analyze this user input and select the MINIMAL set of nodes needed to respond:
+        user_prompt = f"""Analyze this user input, select the context nodes needed to respond, and plan the studio tools:
 
 User Input: "{user_input}"
 
-Return the selected nodes in order of importance."""
+Return the selected nodes in order of importance, needs_tools, and the tool_plan."""
 
         prompt_chars = len(system_prompt) + len(user_prompt)
         prompt_tokens = prompt_chars // 4
@@ -327,7 +384,28 @@ User: "Play something upbeat"
 Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
 Reasoning: "Music request - core formatting + roles for personality + user taste profile + current context + conversation history"
 
-Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
+Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more.
+
+TOOL PLANNING (needs_tools + tool_plan):
+The hosts can use these studio tools while they reply:
+{tool_menu()}
+
+Set needs_tools=true ONLY when the hosts must find something out before they can reply well:
+- anything local, current or factual beyond the context nodes: gigs and events, places nearby, news, weather detail,
+  air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what the city is playing or asking about
+  (pulse_search, pulse_detail, city_trends, listener_context);
+- a music request where the hosts should know what was found so they can name it (search_and_play);
+- saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_opinion).
+Set needs_tools=false for banter, greetings, opinions, questions the context nodes already answer, and plain commands
+the hosts simply announce (skip, go back, pause, resume, like or ban this track, more like this, a playlist, "give me
+the news/weather bulletin"): the station computer carries those out from what the hosts say.
+
+tool_plan is a bare numbered list of function-call steps with <placeholders> for values, never invented values.
+GOOD: ["1. pulse_search(query=<kind of music>, kinds=[event], when=weekend)", "2. pulse_detail(item_id=<best match>)"]
+GOOD: ["1. pulse_search(query=<allergy topic>, kinds=[area, weather])"]
+GOOD: ["1. search_and_play(category=primary_artist, query=<artist>, mode=play)"]
+BAD: ["Look up jazz gigs"] (not a function call), ["pulse_search(query='Blue Note Friday 9pm')"] (invented value)
+Leave tool_plan empty when needs_tools is false."""
 
     def _update_cache_stats(self, input_hash: str):
         usage_tracking.record_cache_hit("context_router")
@@ -374,7 +452,9 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
             "confidence": selection.confidence,
             "created_at": current_time,
             "times_reused": 0,
-            "last_used": current_time
+            "last_used": current_time,
+            "needs_tools": selection.needs_tools,
+            "tool_plan": clean_plan(selection.tool_plan),
         }
 
         await asyncio.to_thread(
@@ -399,8 +479,8 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
         try:
             c.execute(
                 """
-                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (input_hash) DO NOTHING
                 """,
                 (
@@ -412,7 +492,9 @@ Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more."""
                     selection.confidence,
                     current_time,
                     0,
-                    current_time
+                    current_time,
+                    bool(selection.needs_tools),
+                    json.dumps(clean_plan(selection.tool_plan))
                 )
             )
             conn.commit()

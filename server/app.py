@@ -57,6 +57,7 @@ from services_radio.news_store import NewsStore
 from services_radio.external_location_service import LocationService
 from services_radio.external_events_service import EventsService
 from services_radio import regional_knowledge as regional_kb
+from services_radio import pulse as pulse_kb
 from services_radio import area_signals
 from services_radio.area_geocode import ReverseGeocodeSignal
 from services_radio.area_air_quality import AirQualitySignal
@@ -423,6 +424,9 @@ async def lifespan(_app: FastAPI):
          regional_kb.GoogleNewsCollector(news_service)],
         embedder=text_embedder
     ))
+    regional_kb.get_regional_knowledge().embed_items()
+    if settings.PULSE_ENABLED:
+        pulse_kb.install(pulse_kb.Pulse(pulse_kb.default_nodes()))
     area_signals.install([ReverseGeocodeSignal(area_store), AirQualitySignal(area_store), PollenSignal(area_store)])
     log_service.success("✓ External services initialized")
 

@@ -550,6 +550,14 @@ A new Radio Mode feature, `personal` ("For you"), is a segment class like the ot
   - An empty final text leaves the turn silent.
 - **The announcer and Radio Mode use no tools.** Their facts go straight into the prompt.
 
+### Built 28 Sep 2026 (phases 6-7, first pass)
+
+- `services_radio/pulse.py`: the facade with nine knowledge nodes (events, places, news, weather, area, artists, community, charts, trends), hybrid ranking, one budgeted live fetch with write-through, the demand ledger (`pulse_demand`, `pulse_demand_askers`) and region charts (`play_events.region_key`, backfilled for users).
+- `regional_items.embedding`: T5 vectors filled in the background after every sweep or ingest.
+- Read tools `pulse_search`, `pulse_detail`, `listener_context`, `city_trends`; the `city_pulse` node replaces `local_happenings`.
+- Tool mode is on and is the only DJ path. The Producer AI plans the tools (`needs_tools`, `tool_plan`), coverage decides whether the plan is needed, and the nodes `tool_guidance` and route-aware `guidelines_critical` carry the decision into the prompt. Tool-free turns use HAL11000 for actions by design. Design notes taken from LifeSpan: planner before the loop, tool discipline in the prompt, capped recovery on empty replies, fillers outside the model.
+- Test (guest on K Road, 28 Sep): gigs, jazz, All Blacks, coffee, city trends and the current band were all answered with real specifics in 3.6-6.4 s. Live Ticketmaster and Places fetches ran only on misses and were saved for everyone.
+
 ### What to add (on top; nothing removed)
 
 The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.

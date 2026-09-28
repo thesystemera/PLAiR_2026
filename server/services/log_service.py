@@ -45,6 +45,7 @@ LOG_CATEGORIES = {
     'ai': {'color': 'MAGENTA', 'enabled': False},
     'api': {'color_fg': 'GREEN', 'color_bg': 'BG_BLUE', 'enabled': False},
     'external': {'color': 'CYAN', 'enabled': False},
+    'pulse': {'color': 'CYAN', 'enabled': True},
 
     'conversation': {'color_fg': 'WHITE', 'color_bg': 'BG_GREEN', 'enabled': False},
     'listener': {'color_fg': 'BLACK', 'color_bg': 'BG_WHITE', 'enabled': True},
