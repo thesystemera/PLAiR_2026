@@ -565,6 +565,15 @@ A new Radio Mode feature, `personal` ("For you"), is a segment class like the ot
 - **Announcer menu.** Between tracks, the announcer gets a menu of pulse items sized to the window and decides what to use, or nothing.
 - **For You.** A rare Radio Mode feature, about every two hours per listener. It is a free-roaming read-only agent: told only to research a two-minute narrative for this listener, it discovers the listener's taste, recent conversation and what's on air through tools, explores the city's nuggets and picks its own angle. First test (owner account): "Your Eden Terrace Local Loop", 8 tool calls in 8 s, every beat grounded in a tool result.
 
+### Built 29 Sep 2026 (third pass): one semantic pattern
+
+The first passes built their own matching next to the existing vector architecture. That is replaced: everything searchable is now a source on the same `BaseVectorDatabaseService` pattern as tracks and shoutouts. Each source has named semantic categories with weights, per-query category weights from the query-intent prompt cache, and a search-then-re-rank step. Categories are declared as a list (`Category(name, weight, extractor, description)`), so a new category is one line.
+
+- **Local knowledge**: events and local news, a view over `regional_items`.
+- **Listener requests**: every ask plus what the station answered, clustered into city trends that steer the news and gig sweeps.
+- **Shoutouts**: searched by the existing shoutout search service.
+- **Encoder:** City Pulse sources use a sentence encoder (all-mpnet-base-v2). Mean-pooled flan-T5 scored "Comedy" against "Family" at 0.81. On the same data mpnet returns the four real comedy shows for "comedy", the three Tuning Fork gigs for "what's on at the Tuning Fork" and The Wiggles for "family show for the kids". Tracks and shoutouts stay on T5 for now; moving them is a per-source setting.
+
 ### What to add (on top; nothing removed)
 
 The two-pass flow, the brace commands and the segment tools all stay. The knowledge layer adds two things.

@@ -10,7 +10,7 @@ from typing import Awaitable, Callable, Iterable, Optional
 
 import numpy as np
 import pytz
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config import settings
@@ -23,7 +23,6 @@ from services_radio.external_news_service import resolve_country
 KIND_EVENT = "event"
 KIND_PLACE = "place"
 KIND_NEWS = "news"
-KIND_COMMUNITY = "community"
 
 EVENTS_COLLECTOR_ENABLED = settings.REGIONAL_EVENTS_ENABLED
 EVENTS_REFRESH_S = settings.REGIONAL_EVENTS_REFRESH_S
@@ -40,7 +39,6 @@ MAX_ITEMS_PER_REGION_KIND = settings.REGIONAL_MAX_ITEMS_PER_KIND
 READ_CACHE_S = settings.REGIONAL_READ_CACHE_S
 TZ_CITY_MATCH_KM = settings.REGIONAL_CITY_MATCH_KM
 ACTIVE_GUEST_MAX_AGE_S = settings.REGIONAL_ACTIVE_GUEST_MAX_AGE_S
-PULSE_GRID_DEG = 0.01
 
 _IGNORED_TAGS = {"", "undefined", "other", "miscellaneous", "n/a"}
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -77,7 +75,6 @@ class KnowledgeItem:
     url: str = ""
     attribution: str = ""
     cost_usd: float = 0.0
-    vector: Optional[np.ndarray] = field(default=None, compare=False, repr=False)
     published_at: Optional[datetime] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -216,18 +213,21 @@ def lexical_similarity(a: str, b: str) -> float:
     return len(ta & tb) / min(len(ta), len(tb))
 
 
-def _unit(blob: Optional[bytes]) -> Optional[np.ndarray]:
-    if not blob:
-        return None
-    vector = np.frombuffer(blob, dtype=np.float32)
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 0 else None
-
-
 def _days_ahead(item: KnowledgeItem, now: datetime) -> Optional[float]:
     if not item.starts_at:
         return None
     return (item.starts_at - now).total_seconds() / 86400.0
+
+
+async def hot_topics(region: Region, node: str) -> list[str]:
+    from services_radio.pulse import demand
+    try:
+        topics = await demand.hot(region.key, days=7, min_askers=settings.PULSE_PREFETCH_MIN_ASKERS,
+                                  limit=settings.PULSE_PREFETCH_TOPICS, node=node)
+    except Exception as e:
+        log_service.warning(f"[REGIONAL] hot topics unavailable: {type(e).__name__}: {e}")
+        return []
+    return [topic["label"] for topic in topics if topic.get("label")]
 
 
 class TicketmasterEventsCollector(Collector):
@@ -273,9 +273,17 @@ class TicketmasterEventsCollector(Collector):
         if not region.center:
             return []
         now = datetime.now(timezone.utc)
-        raw = await self.events_service.fetch_event_pages(
-            f"{region.center[0]:.2f},{region.center[1]:.2f}", region.country, now,
-            now + timedelta(days=EVENTS_DAYS_AHEAD), EVENTS_PAGES)
+        latlong = f"{region.center[0]:.2f},{region.center[1]:.2f}"
+        raw = await self.events_service.fetch_event_pages(latlong, region.country, now,
+                                                          now + timedelta(days=EVENTS_DAYS_AHEAD), EVENTS_PAGES)
+        seen = {event.get("id") for event in raw}
+        for keyword in await hot_topics(region, "events"):
+            for event in await self.events_service.get_ticketmaster_events(
+                    latlong, region.country, now, now + timedelta(days=EVENTS_DAYS_AHEAD), keyword,
+                    fallback=False) or []:
+                if event.get("id") not in seen:
+                    seen.add(event.get("id"))
+                    raw.append(event)
         return [item for item in (self.to_item(region, event, now) for event in raw) if item]
 
 
@@ -293,6 +301,9 @@ class GoogleNewsCollector(Collector):
 
     async def fetch(self, region: Region) -> list[KnowledgeItem]:
         articles = await self.news_service.refresh_region(region.country, region.name, region.key)
+        hot = await hot_topics(region, "news")
+        if hot:
+            await self.news_service.prefetch_queries(region.country, hot)
         now = datetime.now(timezone.utc)
         items = []
         for article in articles:
@@ -358,86 +369,6 @@ class GooglePlacesCollector(Collector):
         return replace(item, title=summary["name"], text=summary.get("type") or "")
 
 
-class CommunityCollector(Collector):
-    name = "shoutouts"
-    kind = KIND_COMMUNITY
-    refresh_s = settings.PULSE_COMMUNITY_REFRESH_S
-    enabled = settings.PULSE_COMMUNITY_ENABLED
-
-    def __init__(self, content_service_getter: Callable[[], object]):
-        self.content_service_getter = content_service_getter
-        self._regions: dict[str, Optional[str]] = {}
-
-    def available(self) -> bool:
-        return self.enabled and self.content_service_getter() is not None
-
-    def region_key_of(self, shoutout: dict) -> Optional[str]:
-        shoutout_id = str(shoutout.get("id") or "")
-        if shoutout_id in self._regions:
-            return self._regions[shoutout_id]
-        from services_radio.listener_location import ListenerLocation, address_city, nearest_timezone
-        user_data = shoutout.get("user_data") or {}
-        address = user_data.get("location") or ""
-        try:
-            lat, lon = float(user_data.get("latitude")), float(user_data.get("longitude"))
-        except (TypeError, ValueError):
-            lat = lon = None
-        country = resolve_country(address) or ""
-        location = ListenerLocation(latitude=lat, longitude=lon, city=address_city(address), country_code=country,
-                                    timezone=nearest_timezone(lat, lon, country) if lat is not None else None)
-        region = resolve_region(None, None, location=location) if lat is not None else None
-        self._regions[shoutout_id] = region.key if region else None
-        return self._regions[shoutout_id]
-
-    @staticmethod
-    def to_item(region_key: str, shoutout: dict, now: datetime) -> Optional[KnowledgeItem]:
-        text = (shoutout.get("full_transcription") or shoutout.get("transcription") or "").strip()
-        if not text or not shoutout.get("id"):
-            return None
-        meta = shoutout.get("transcription_metadata") or {}
-        user_data = shoutout.get("user_data") or {}
-        try:
-            published = datetime.fromisoformat(str(shoutout.get("timestamp")).replace("Z", "+00:00"))
-            published = published if published.tzinfo else published.replace(tzinfo=timezone.utc)
-        except ValueError:
-            published = now
-        expires = published + timedelta(days=settings.PULSE_COMMUNITY_TTL_DAYS)
-        if expires <= now:
-            return None
-        address = user_data.get("location") or ""
-        parts = [p.strip() for p in address.split(",") if p.strip() and not any(ch.isdigit() for ch in p)]
-        area = ", ".join(dict.fromkeys(parts[1:3] if len(parts) > 2 else parts[:2]))
-        try:
-            lat = round(float(user_data.get("latitude")) / PULSE_GRID_DEG) * PULSE_GRID_DEG
-            lon = round(float(user_data.get("longitude")) / PULSE_GRID_DEG) * PULSE_GRID_DEG
-        except (TypeError, ValueError):
-            lat = lon = None
-        tags = [t for t in [meta.get("category"), *(meta.get("tags") or [])] if t][:6]
-        kind_label = "reply" if shoutout.get("parent_id") else "shoutout"
-        return KnowledgeItem(
-            source="shoutouts", kind=KIND_COMMUNITY, region_key=region_key, external_id=str(shoutout["id"]),
-            title=f"{kind_label.title()} from {user_data.get('username') or 'a listener'}",
-            text=text[:200], tags=tags, expires_at=expires, published_at=published,
-            url=f"/api/user_content/shoutouts/audio/{str(shoutout['id']).replace('_', '/', 1)}.mp3",
-            attribution="PLAiR listeners",
-            latitude=lat, longitude=lon, area=area[:120],
-        )
-
-    async def fetch(self, region: Region) -> list[KnowledgeItem]:
-        service = self.content_service_getter()
-        now = datetime.now(timezone.utc)
-        items = []
-        for shoutout in list((getattr(service, "shoutouts", None) or {}).values()):
-            if shoutout.get("content_type", "shoutout") != "shoutout" or shoutout.get("private"):
-                continue
-            if self.region_key_of(shoutout) != region.key:
-                continue
-            item = self.to_item(region.key, shoutout, now)
-            if item:
-                items.append(item)
-        return items
-
-
 class RegionalKnowledgeStore:
     def __init__(self, async_session_maker):
         self.async_session_maker = async_session_maker
@@ -475,13 +406,10 @@ class RegionalKnowledgeStore:
                     "area": item.area or None, "entities": json.dumps(item.entities),
                 } for item in items]
                 stmt = pg_insert(RegionalItem).values(rows)
-                changed = (stmt.excluded.title != RegionalItem.title) | (stmt.excluded.text != RegionalItem.text) | \
-                    (stmt.excluded.tags != RegionalItem.tags)
                 stmt = stmt.on_conflict_do_update(constraint="uq_regional_items_source_id", set_={
-                    **{column: stmt.excluded[column] for column in
-                       ("kind", "title", "text", "tags", "starts_at", "expires_at", "url", "attribution", "fetched_at",
-                        "published_at", "latitude", "longitude", "area", "entities")},
-                    "embedding": case((changed, None), else_=RegionalItem.embedding)})
+                    column: stmt.excluded[column] for column in
+                    ("kind", "title", "text", "tags", "starts_at", "expires_at", "url", "attribution", "fetched_at",
+                     "published_at", "latitude", "longitude", "area", "entities")})
                 await db.execute(stmt)
             await db.execute(delete(RegionalItem).where(RegionalItem.expires_at < now))
             overflow = (
@@ -501,6 +429,8 @@ class RegionalKnowledgeStore:
             await db.commit()
         self._generations[region.key] = self._generations.get(region.key, 0) + 1
         self._read_cache = {k: v for k, v in self._read_cache.items() if k[0] != region.key}
+        from services_radio import local_knowledge
+        local_knowledge.mark_dirty()
 
     def _cached_items(self, cache_key: tuple) -> Optional[list[KnowledgeItem]]:
         cached = self._read_cache.get(cache_key)
@@ -535,7 +465,7 @@ class RegionalKnowledgeStore:
             source=row.source, kind=row.kind, region_key=row.region_key, external_id=row.external_id,
             title=row.title or "", text=row.text or "", tags=json.loads(row.tags or "[]"), starts_at=row.starts_at,
             expires_at=row.expires_at, url=row.url or "", attribution=row.attribution or "",
-            vector=_unit(row.embedding), published_at=row.published_at, latitude=row.latitude,
+            published_at=row.published_at, latitude=row.latitude,
             longitude=row.longitude, area=row.area or "", entities=json.loads(row.entities or "[]"),
         ) for row in rows]
         if self._generations.get(region_key, 0) == generation:
@@ -543,29 +473,6 @@ class RegionalKnowledgeStore:
             self._read_cache = {k: v for k, v in self._read_cache.items() if now_s - v[0] < READ_CACHE_S}
             self._read_cache[cache_key] = (now_s, items)
         return items
-
-    async def missing_embeddings(self, region_key: Optional[str], limit: int = 200) -> list[tuple]:
-        query = select(RegionalItem.id, RegionalItem.region_key, RegionalItem.title, RegionalItem.text,
-                       RegionalItem.tags).where(RegionalItem.embedding.is_(None), RegionalItem.title != "")
-        if region_key:
-            query = query.where(RegionalItem.region_key == region_key)
-        async with self.async_session_maker() as db:
-            rows = (await db.execute(query.limit(limit))).all()
-        return [(row.id, row.region_key, " ".join(part for part in (
-            row.title, row.text, " ".join(json.loads(row.tags or "[]"))) if part)) for row in rows]
-
-    async def set_embeddings(self, vectors: dict, region_keys: Iterable[str]) -> None:
-        if not vectors:
-            return
-        async with self.async_session_maker() as db:
-            for item_id, vector in vectors.items():
-                await db.execute(RegionalItem.__table__.update().where(RegionalItem.id == item_id).values(
-                    embedding=np.asarray(vector, dtype=np.float32).tobytes()))
-            await db.commit()
-        keys = set(region_keys)
-        for key in keys:
-            self._generations[key] = self._generations.get(key, 0) + 1
-        self._read_cache = {k: v for k, v in self._read_cache.items() if k[0] not in keys}
 
     async def region_count(self) -> int:
         async with self.async_session_maker() as db:
@@ -580,7 +487,6 @@ class RegionalKnowledgeService:
         self.embedder = embedder
         self._vectors: dict[str, np.ndarray] = {}
         self._warming: set[str] = set()
-        self._embedding_regions: set[str] = set()
 
     def collector_for(self, item: KnowledgeItem) -> Optional[Collector]:
         return next((c for c in self.collectors.values() if c.kind == item.kind and item.source in c.name), None)
@@ -605,7 +511,6 @@ class RegionalKnowledgeService:
                 continue
             await self.store.save(region, collector.name, collector.kind, items, status)
             self.warm(tag for item in items for tag in item.tags)
-            self.embed_items(region.key)
             results[collector.name] = len(items)
             log_service.external(f"[REGIONAL] {collector.name}: {len(items)} items for {region.name}")
         return results
@@ -616,55 +521,8 @@ class RegionalKnowledgeService:
         try:
             await self.store.touch_region(region)
             await self.store.save(region, "", items[0].kind, items, "ingested")
-            self.embed_items(region.key)
         except Exception as e:
             log_service.warning(f"[REGIONAL] ingest failed for {region.name}: {type(e).__name__}: {e}")
-
-    def embed_items(self, region_key: Optional[str] = None) -> None:
-        marker = region_key or "*"
-        if self.embedder is None or marker in self._embedding_regions:
-            return
-        self._embedding_regions.add(marker)
-        spawn(self._embed_items(region_key, marker), name="regional_embed_items")
-
-    async def _embed_items(self, region_key: Optional[str], marker: str) -> None:
-        try:
-            while True:
-                pending = await self.store.missing_embeddings(region_key)
-                if not pending:
-                    return
-                vectors = {}
-                for item_id, _, text in pending:
-                    vector = await self.embedder(text)
-                    if vector is not None:
-                        vectors[item_id] = vector
-                if not vectors:
-                    return
-                await self.store.set_embeddings(vectors, {key for _, key, _ in pending})
-                log_service.detail(f"[REGIONAL] embedded {len(vectors)} items", "pulse")
-                if len(pending) < 200:
-                    return
-        except Exception as e:
-            log_service.warning(f"[REGIONAL] item embedding failed: {type(e).__name__}: {e}")
-        finally:
-            self._embedding_regions.discard(marker)
-
-    async def embed_text(self, text: str) -> Optional[np.ndarray]:
-        if self.embedder is None or not text:
-            return None
-        key = text.lower()
-        if key in self._vectors:
-            return self._vectors[key]
-        try:
-            vector = np.asarray(await self.embedder(text), dtype=np.float32)
-        except Exception as e:
-            log_service.warning(f"[REGIONAL] embedding failed: {type(e).__name__}: {e}")
-            return None
-        norm = float(np.linalg.norm(vector))
-        if norm <= 0:
-            return None
-        self._vectors[key] = vector / norm
-        return self._vectors[key]
 
     def warm(self, labels: Iterable[str]) -> None:
         if self.embedder is None:
@@ -713,7 +571,7 @@ class RegionalKnowledgeService:
 
     async def query(self, region: Optional[Region], kinds: Iterable[str], taste: Optional[Taste] = None,
                     window: Optional[tuple] = None, exclude: Iterable[str] = (), limit: int = 5,
-                    text_query: Optional[str] = None, min_score: float = 0.0,
+                    min_score: float = 0.0,
                     record_hit: bool = False) -> list[tuple[float, KnowledgeItem]]:
         if region is None:
             return []
@@ -726,7 +584,6 @@ class RegionalKnowledgeService:
         start, end = window or (now, now + timedelta(days=14))
         window_days = max((end - now).total_seconds() / 86400.0, 1.0)
         excluded = set(exclude)
-        needle = (text_query or "").strip().lower()
         if taste is not None:
             self.warm(taste.genres)
         scored = []
@@ -734,9 +591,6 @@ class RegionalKnowledgeService:
             if item.item_id in excluded:
                 continue
             if item.kind == KIND_EVENT and item.starts_at and not (start <= item.starts_at <= end):
-                continue
-            if needle and needle not in item.embed_text.lower() and not any(
-                    lexical_similarity(needle, tag) > 0 for tag in item.tags):
                 continue
             value = self.score(item, taste, now, window_days)
             if value >= min_score:

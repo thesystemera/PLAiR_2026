@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from sqlalchemy import text
 from database.connection import _sync_engine
-from database.models import StripeWebhookEvent, AIUsageEvent, AIUsageDaily, UserRadioSettings, PulseDemand, PulseDemandAsker
+from database.models import StripeWebhookEvent, AIUsageEvent, AIUsageDaily, UserRadioSettings
 
 
 def column_exists(conn, table_name, column_name):
@@ -64,8 +64,7 @@ def main():
     
     with _sync_engine.connect() as conn:
         migrate_users_table(conn)
-        for table_name, col_name, col_def in (("regional_items", "embedding", "BYTEA"),
-                                              ("regional_items", "published_at", "TIMESTAMP WITH TIME ZONE"),
+        for table_name, col_name, col_def in (("regional_items", "published_at", "TIMESTAMP WITH TIME ZONE"),
                                               ("regional_items", "latitude", "DOUBLE PRECISION"),
                                               ("regional_items", "longitude", "DOUBLE PRECISION"),
                                               ("regional_items", "area", "VARCHAR"),
@@ -76,6 +75,12 @@ def main():
                 add_column(conn, table_name, col_name, col_def)
             else:
                 print(f"  [OK] {col_name} already exists")
+        for table in ("pulse_demand_answers", "pulse_demand_askers", "pulse_demand"):
+            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+        conn.execute(text("DROP VIEW IF EXISTS local_nuggets"))
+        conn.execute(text("ALTER TABLE regional_items DROP COLUMN IF EXISTS embedding"))
+        conn.execute(text("DELETE FROM regional_items WHERE kind = 'community'"))
+        conn.commit()
         if column_exists(conn, "play_events", "region_key"):
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_play_events_region_key ON play_events (region_key)"))
             conn.commit()
@@ -84,8 +89,7 @@ def main():
     StripeWebhookEvent.__table__.create(bind=_sync_engine, checkfirst=True)
     print("  [OK] stripe_webhook_events")
 
-    for table in (AIUsageEvent.__table__, AIUsageDaily.__table__, UserRadioSettings.__table__,
-                  PulseDemand.__table__, PulseDemandAsker.__table__):
+    for table in (AIUsageEvent.__table__, AIUsageDaily.__table__, UserRadioSettings.__table__):
         print(f"\n[CHECK] {table.name} table...")
         table.create(bind=_sync_engine, checkfirst=True)
         print(f"  [OK] {table.name}")

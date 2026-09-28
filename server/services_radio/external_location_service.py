@@ -167,7 +167,7 @@ class LocationService:
         while len(self._cache) > CACHE_MAX_ENTRIES:
             self._cache.pop(next(iter(self._cache)))
 
-    async def get_location_search_report(self, query, location):
+    async def get_location_search_report(self, query, location, on_results=None):
         search_terms = query.replace("nearby", "").replace("around", "").strip()
         try:
             results = await self.get_nearby_places(search_terms, location)
@@ -181,6 +181,8 @@ class LocationService:
         if not results:
             log_service.external(f"Location search: no results for '{search_terms}'")
             return ""
+        if on_results is not None:
+            await on_results(results)
 
         lines = [f"Search Results for '{search_terms}':", ""]
         for i, place in enumerate(results, 1):

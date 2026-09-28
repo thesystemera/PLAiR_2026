@@ -58,6 +58,9 @@ from services_radio.external_location_service import LocationService
 from services_radio.external_events_service import EventsService
 from services_radio import regional_knowledge as regional_kb
 from services_radio import pulse as pulse_kb
+from services.listener_request_service import ListenerRequestPromptCache, ListenerRequestStore,     ListenerRequestVectorDatabaseService
+from services.semantic_source import SemanticSearch
+from services_radio import local_knowledge
 from services_radio import area_signals
 from services_radio.area_geocode import ReverseGeocodeSignal
 from services_radio.area_air_quality import AirQualitySignal
@@ -288,6 +291,30 @@ async def lifespan(_app: FastAPI):
         log_service.warning("User content vector search will not be available")
         services.user_content_vector_search_service = user_content_vector_search_service = None
 
+    try:
+        services.request_store = request_store = ListenerRequestStore()
+        await asyncio.to_thread(request_store.initialize)
+        services.request_vector_db_service = ListenerRequestVectorDatabaseService(request_store)
+        await asyncio.to_thread(services.request_vector_db_service.load_initial_data)
+        services.request_search = SemanticSearch(services.request_vector_db_service, ListenerRequestPromptCache())
+        await services.request_search.prompt_cache.initialize(ai_service, services.request_vector_db_service)
+        log_service.success("✓ Listener request vectors initialized")
+    except Exception as e:
+        log_service.warning(f"⚠️  Listener request vectors unavailable: {e}")
+        services.request_store = services.request_vector_db_service = services.request_search = None
+
+    try:
+        nugget_source = local_knowledge.LocalNuggetSource()
+        await asyncio.to_thread(nugget_source.initialize)
+        local_vector_db = local_knowledge.LocalKnowledgeVectorDatabaseService(nugget_source)
+        await asyncio.to_thread(local_vector_db.load_initial_data)
+        local_search = SemanticSearch(local_vector_db, local_knowledge.LocalKnowledgePromptCache())
+        await local_search.prompt_cache.initialize(ai_service, local_vector_db)
+        local_knowledge.install(local_vector_db, local_search)
+        log_service.success("✓ Local knowledge vectors initialized")
+    except Exception as e:
+        log_service.warning(f"⚠️  Local knowledge vectors unavailable: {e}")
+
     log_service.system("Initializing TTS Vector DB service...")
     try:
         services.tts_vector_db_service = tts_vector_db_service = VectorDBService()
@@ -421,13 +448,13 @@ async def lifespan(_app: FastAPI):
     regional_kb.set_regional_knowledge(regional_kb.RegionalKnowledgeService(
         regional_kb.RegionalKnowledgeStore(AsyncSessionLocal),
         [regional_kb.TicketmasterEventsCollector(events_service), regional_kb.GooglePlacesCollector(location_service),
-         regional_kb.GoogleNewsCollector(news_service),
-         regional_kb.CommunityCollector(lambda: services.user_content_service)],
+         regional_kb.GoogleNewsCollector(news_service)],
         embedder=text_embedder
     ))
-    regional_kb.get_regional_knowledge().embed_items()
     if settings.PULSE_ENABLED:
         pulse_kb.install(pulse_kb.Pulse(pulse_kb.default_nodes()))
+        if local_knowledge.local_vector_db is not None:
+            await pulse_kb.router.scores("warm up")
     area_signals.install([ReverseGeocodeSignal(area_store), AirQualitySignal(area_store), PollenSignal(area_store)])
     log_service.success("✓ External services initialized")
 
@@ -503,6 +530,7 @@ async def lifespan(_app: FastAPI):
     user_content_index_task_handle = asyncio.create_task(background_tasks_service.user_content_index_updater())
     video_clip_task_handle = asyncio.create_task(background_tasks_service.video_clip_pre_downloader())
     regional_task_handle = asyncio.create_task(background_tasks_service.regional_knowledge_refresher())
+    request_task_handle = asyncio.create_task(background_tasks_service.listener_request_maintainer())
     await websocket_service.start_background_tasks()
     log_service.success("✓ Background tasks started (weather, TTS vector DB, catalog indexes, user content indexes, video clips, websocket cleanup)")
 
@@ -561,6 +589,7 @@ async def lifespan(_app: FastAPI):
     user_content_index_task_handle.cancel()
     video_clip_task_handle.cancel()
     regional_task_handle.cancel()
+    request_task_handle.cancel()
 
     log_service.system("Shutting down...")
 

@@ -149,6 +149,25 @@ class BackgroundTasksService:
                 log_service.error(f"Regional knowledge refresher error: {e}")
                 await asyncio.sleep(300)
 
+    async def listener_request_maintainer(self):
+        from service_registry import services
+        from services.semantic_source import rebuild_if_dirty
+        from services_radio import local_knowledge
+        from services_radio.pulse import demand
+        last_prune = 0.0
+        while True:
+            try:
+                await asyncio.sleep(settings.PULSE_REQUEST_REBUILD_S)
+                await rebuild_if_dirty(local_knowledge.local_vector_db)
+                await rebuild_if_dirty(services.request_vector_db_service)
+                if time.monotonic() - last_prune > 86400:
+                    await demand.prune()
+                    last_prune = time.monotonic()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_service.error(f"Listener request maintainer error: {e}")
+
     async def vector_database_rebuilder(self):
         while True:
             try:

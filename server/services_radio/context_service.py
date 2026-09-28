@@ -491,6 +491,7 @@ async def get_news_data(
     news_service = dj_service.news_service
     scope = (location or "WORLD").upper()
     general = not query or query == "general news"
+    asked = None if general else query
 
     try:
         home_country = (await _listener(listener, user, session_id)).country_code or None
@@ -521,6 +522,10 @@ async def get_news_data(
             return ""
         if session_id and hasattr(news_service, "mark_aired"):
             await news_service.mark_aired(session_id, articles)
+        if asked:
+            from services_radio.pulse import note_request
+            await note_request(user, getattr(user, "id", None), session_id, "news", asked,
+                               [(f"news:{a.get('id')}", a.get("title")) for a in articles[:5]])
         cat_str = ', '.join(categories) if categories else 'N/A'
         return f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\nLOCATION: {location}"
     except Exception as e:
@@ -555,8 +560,14 @@ async def get_location_data(dj_service, user, query: Optional[str] = None, sessi
     if not user_location:
         return ""
 
+    async def served(results):
+        from services_radio.pulse import note_request
+        await note_request(user, getattr(user, "id", None), session_id, "places", query,
+                           [(f"place:{r.get('place_id')}", r.get("name")) for r in results[:5] if r.get("place_id")])
+
     try:
-        search_report = await dj_service.location_service.get_location_search_report(query, user_location)
+        search_report = await dj_service.location_service.get_location_search_report(query, user_location,
+                                                                                       on_results=served)
         if not search_report:
             return ""
         return f"LOCATION SEARCH REPORT:\n{search_report}"
@@ -564,11 +575,16 @@ async def get_location_data(dj_service, user, query: Optional[str] = None, sessi
         log_service.warning(f"[Context] Failed to fetch location: {e}")
         return ""
 
+def _pulse_id(item) -> str:
+    return item.id if hasattr(item, "id") else f"event:{item.item_id}"
+
+
 def format_regional_events(scored_items) -> str:
     lines = []
     for _, item in scored_items:
-        tags = " / ".join(item.tags[1:] or item.tags)
-        lines.append(f"- {item.title} ({' | '.join(part for part in (item.text, tags) if part)})")
+        tags = getattr(item, "tags", None) or []
+        detail = " | ".join(part for part in (item.text, " / ".join(tags[1:] or tags)) if part)
+        lines.append(f"- {item.title} ({detail})")
     return "\n".join(lines)
 
 async def get_regional_events_data(
@@ -590,18 +606,30 @@ async def get_regional_events_data(
     from services_radio.external_events_service import GENERIC_EVENT_WORDS
     from services_radio.dj_bank_sources import listener_taste
 
+    from services_radio.pulse import KIND_EVENT as PULSE_EVENT, PulseQuery, get_pulse, note_request
+
     listener = await _listener(listener, user, session_id)
     regional = get_regional_knowledge()
     region = resolve_region(user, tz_name, location=listener) if regional is not None else None
     needle = (keyword or "").strip()
     if needle.lower() in GENERIC_EVENT_WORDS:
         needle = ""
+    pulse = get_pulse()
     if region is not None and start_date and end_date:
-        taste = await listener_taste(user, user_id, session_id, async_session_maker, catalog_service)
-        pooled = await regional.query(region, (KIND_EVENT,), taste, window=(start_date, end_date), limit=12,
-                                      text_query=needle or None, record_hit=True)
+        if needle and pulse is not None:
+            pulse_listener = await pulse.listener(user_id, session_id, user)
+            window = "week" if (end_date - start_date).days <= 7 else None
+            items = await pulse.query(PulseQuery(listener=pulse_listener, text=needle, kinds={PULSE_EVENT},
+                                                 when=window, limit=12, record_demand=False))
+            pooled = [(item.score, item) for item in items]
+        else:
+            taste = await listener_taste(user, user_id, session_id, async_session_maker, catalog_service)
+            pooled = await regional.query(region, (KIND_EVENT,), taste, window=(start_date, end_date), limit=12,
+                                          record_hit=True)
         if len(pooled) >= (1 if needle else 3):
             log_service.external(f"[Context] Events served from the {region.name} pool ({len(pooled)})")
+            await note_request(user, user_id, session_id, "events", needle,
+                               [(_pulse_id(item), item.title) for _, item in pooled[:5]])
             return f"EVENTS DATA:\n{format_regional_events(pooled)}"
 
     if location is None and country_code is None:
@@ -616,6 +644,8 @@ async def get_regional_events_data(
         now = datetime.now(timezone.utc)
         items = [item for item in (TicketmasterEventsCollector.to_item(region, event, now) for event in events) if item]
         await regional.ingest(region, items)
+        await note_request(user, user_id, session_id, "events", needle,
+                           [(f"event:{item.item_id}", item.title) for item in items[:5]], live=True)
 
     return await get_events_data(dj_service, location, country_code, start_date, end_date, keyword, feed_pool)
 

@@ -531,6 +531,22 @@ class NewsService:
             return []
         return articles[:limit]
 
+    async def prefetch_queries(self, country: Optional[str], queries: list[str]) -> int:
+        if not self.store_enabled:
+            return 0
+        country = (country or settings.NEWS_DEFAULT_COUNTRY).upper()
+        fetched = 0
+        for query in queries:
+            kind, query_norm, fetch_query = self.classify(query)
+            if kind == KIND_TOP:
+                continue
+            _, cached = await self._get_pull(kind, query_norm, fetch_query, country,
+                                             "7d" if kind == KIND_SEARCH else "")
+            if not cached:
+                fetched += 1
+                await asyncio.sleep(PREFETCH_GAP_S)
+        return fetched
+
     async def mark_aired(self, subject: Optional[str], articles) -> None:
         if not self.store_enabled or not subject:
             return

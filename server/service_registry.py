@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from services.audio_transcoding_service import AudioTranscodingService
     from services.catalog_database_service import CatalogDatabaseService
     from services.user_content_database_service import UserContentDatabaseService
+    from services.listener_request_service import ListenerRequestStore, ListenerRequestVectorDatabaseService
+    from services.semantic_source import SemanticSearch
     from services.playback_service import PlaybackService
     from services.catalog_vector_search_service import CatalogVectorSearchService
     from services.catalog_vector_search_prompt_cache_service import CatalogVectorSearchPromptCacheService
@@ -53,6 +55,9 @@ class ServiceRegistry:
         self.transcoding_service: Optional["AudioTranscodingService"] = None
         self.catalog_service: Optional["CatalogDatabaseService"] = None
         self.user_content_service: Optional["UserContentDatabaseService"] = None
+        self.request_store: Optional["ListenerRequestStore"] = None
+        self.request_vector_db_service: Optional["ListenerRequestVectorDatabaseService"] = None
+        self.request_search: Optional["SemanticSearch"] = None
         self.playback_service: Optional["PlaybackService"] = None
         self.vector_search_service: Optional["CatalogVectorSearchService"] = None
         self.vector_search_prompt_cache_service: Optional["CatalogVectorSearchPromptCacheService"] = None

@@ -46,13 +46,14 @@ class EventsService:
             return []
         return None
 
-    async def get_ticketmaster_events(self, location, country_code, start_date, end_date, keyword=None) -> list[dict]:
+    async def get_ticketmaster_events(self, location, country_code, start_date, end_date, keyword=None,
+                                      fallback: bool = True) -> list[dict]:
         keyword = (keyword or "").strip()
         if keyword.lower() in GENERIC_EVENT_WORDS:
             keyword = ""
         if keyword:
             events = await self._fetch_events(location, country_code, start_date, end_date, keyword)
-            if events:
+            if events or not fallback:
                 return events
             log_service.external(f"Events: nothing matched '{keyword}', using all events")
         return await self._fetch_events(location, country_code, start_date, end_date)

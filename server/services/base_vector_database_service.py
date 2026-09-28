@@ -15,6 +15,7 @@ EMBEDDING_DIM = 1024
 
 
 class BaseVectorDatabaseService:
+    embedding_dim: int = EMBEDDING_DIM
     categories: Tuple[str, ...] = ()
     default_weights: Dict[str, float] = {}
     log_channel: str = ""
@@ -49,7 +50,8 @@ class BaseVectorDatabaseService:
             self._log(f"✓ GPU Device: {gpu_name}")
             self._log("✓ T5 Embedding Model: google/flan-t5-large (1024-dim)")
 
-        self.embedding_tables = getattr(settings, self.tables_setting_name)
+        self.embedding_tables = getattr(settings, self.tables_setting_name) if self.tables_setting_name else \
+            [f"{category}_embeddings" for category in self.categories]
 
         self.caches: Dict[str, Dict[str, np.ndarray]] = {}
         for category in self.categories:
@@ -57,8 +59,8 @@ class BaseVectorDatabaseService:
             self.caches[category] = cache
             setattr(self, f"{category}_embeddings", cache)
 
-        self.annoy_index_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-        self.annoy_index_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_1 = AnnoyIndex(self.embedding_dim, 'angular')
+        self.annoy_index_2 = AnnoyIndex(self.embedding_dim, 'angular')
 
         self.current_index = 1
         self.index_lock = Lock()
@@ -173,8 +175,8 @@ class BaseVectorDatabaseService:
                 log_service.warning("  🔨 Triggering rebuild...")
                 self.annoy_index_1.unload()
                 self.annoy_index_2.unload()
-                self.annoy_index_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-                self.annoy_index_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+                self.annoy_index_1 = AnnoyIndex(self.embedding_dim, 'angular')
+                self.annoy_index_2 = AnnoyIndex(self.embedding_dim, 'angular')
                 self._trigger_rebuild()
                 return
 
@@ -216,7 +218,7 @@ class BaseVectorDatabaseService:
 
     def _generate_embedding(self, text: str) -> np.ndarray:
         if not text or not text.strip():
-            return np.zeros(EMBEDDING_DIM, dtype=np.float32)
+            return np.zeros(self.embedding_dim, dtype=np.float32)
 
         inputs = self.tokenizer.encode_plus(
             text,
@@ -266,7 +268,7 @@ class BaseVectorDatabaseService:
 
             for j, embedding in enumerate(embeddings):
                 if not batch[j] or not batch[j].strip():
-                    all_embeddings.append(np.zeros(EMBEDDING_DIM, dtype=np.float32))
+                    all_embeddings.append(np.zeros(self.embedding_dim, dtype=np.float32))
                 else:
                     norm = np.linalg.norm(embedding)
                     if norm > 0:
@@ -278,7 +280,7 @@ class BaseVectorDatabaseService:
 
     def get_or_create_embedding(self, text: str, db_type: str, cache: Dict[str, np.ndarray]) -> np.ndarray:
         if not text or not text.strip():
-            return np.zeros(EMBEDDING_DIM, dtype=np.float32)
+            return np.zeros(self.embedding_dim, dtype=np.float32)
 
         text = text.strip()
 
@@ -451,7 +453,7 @@ class BaseVectorDatabaseService:
         self._log("\n📊 Step 3: Building Annoy index (TTS pattern - using rowid)...")
         self._log(f"  Creating index for {total_items} {self.item_noun}...")
 
-        new_index = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        new_index = AnnoyIndex(self.embedding_dim, 'angular')
         items_processed = 0
 
         for rowid, category_texts in items_to_index:
@@ -522,7 +524,7 @@ class BaseVectorDatabaseService:
         if weights is None:
             weights = self.default_weights
 
-        combined = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        combined = np.zeros(self.embedding_dim, dtype=np.float32)
         for category, weight in weights.items():
             if category in category_embeddings:
                 combined += category_embeddings[category] * weight
