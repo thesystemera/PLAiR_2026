@@ -28,3 +28,10 @@ The auth artwork was generated with the built-in image tool. Desktop prompt dire
 - Capture current real app screenshots if the PWA manifest screenshot should be refreshed. `screenshot-frame.png` is only an empty frame; the existing manifest screenshot was left as-is.
 - Review the login/register styling in the context of any larger theme changes. The warm amber buttons and background are already wired.
 - No production build or backend restart was run. `CLAUDE.md` says the live nginx site serves `client/dist` directly, so `npm run build` publishes the frontend to plair.live. Obtain the user's live-publish approval before that step. Never run `external_components/restart_all.bat` for this work.
+
+## Follow-up (28 Sep, offline/mobile session)
+- **Install screenshots.**
+  - Files: `client/public/images/screenshot-narrow-1..3.png` (1080×1920, captured app views placed in `screenshot-frame.png` with the headlines "Radio that plays what you love", "1,300+ original songs to explore" and "Your music, your voice") and `screenshot-wide-1.png` (1920×1080 desktop view). They're wired into `manifest.json` with `form_factor` narrow/wide.
+  - Captures come from headless Chrome against a local mock that served real catalog artwork and titles. Artist names were hidden so no real artist appears credited. The WebGL background isn't in the captures.
+  - Recapture after big UI changes.
+- **Guest Account panel.** It now uses the radio icon, an amber "Create account" primary button and an amber-outlined "Login" (it was the old purple-blue avatar and a pale-blue button).

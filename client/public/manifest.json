@@ -41,11 +41,32 @@
   ],
   "screenshots": [
     {
-      "src": "/images/screenshot1.png",
+      "src": "/images/screenshot-narrow-1.png",
       "type": "image/png",
-      "sizes": "540x720",
+      "sizes": "1080x1920",
       "form_factor": "narrow",
-      "label": "PLAiR on your phone"
+      "label": "Radio that plays what you love"
+    },
+    {
+      "src": "/images/screenshot-narrow-2.png",
+      "type": "image/png",
+      "sizes": "1080x1920",
+      "form_factor": "narrow",
+      "label": "1,300+ original songs to explore"
+    },
+    {
+      "src": "/images/screenshot-narrow-3.png",
+      "type": "image/png",
+      "sizes": "1080x1920",
+      "form_factor": "narrow",
+      "label": "Your music, your voice"
+    },
+    {
+      "src": "/images/screenshot-wide-1.png",
+      "type": "image/png",
+      "sizes": "1920x1080",
+      "form_factor": "wide",
+      "label": "PLAiR on desktop"
     }
   ],
   "categories": [

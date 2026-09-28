@@ -274,8 +274,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     contentUpdateCounter: state.contentUpdates.tracks,
     toastInfo: state.toastInfo,
     toastError: state.toastError,
-    connectionMode: state.connectionMode,
-    isOnline: state.isOnline,
+    connectionMode: state.audioState.connectionMode,
+    isOnline: state.audioState.isOnline,
     offlineMode: state.audioState.offlineMode,
     hasActiveJobs: state.queueState.hasActiveJobs,
   }))
