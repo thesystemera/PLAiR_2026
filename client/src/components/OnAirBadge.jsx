@@ -23,43 +23,6 @@ export const OnAirLamp = memo(function OnAirLamp({ paused = false, large = false
   )
 })
 
-export const OnAirBadge = memo(function OnAirBadge(props) {
-  const { engineState } = useUISelector(state => ({ engineState: state.engineState }))
-  return <OnAirBadgeView talkBreak={engineState.talkBreak} {...props} />
-})
-
-const OnAirBadgeView = memo(function OnAirBadgeView({ talkBreak, className = '', compact = false, variant = 'inline' }) {
-  const segment = getOnAirSegment(talkBreak)
-  const isBar = variant === 'bar'
-  const sizing = isBar
-    ? 'px-3 py-1 text-xs gap-2'
-    : (compact ? 'px-2 py-0.5 text-[10px] gap-1.5' : 'px-2.5 py-0.5 text-xs gap-1.5')
-
-  return (
-    <AnimatePresence initial={false}>
-      {talkBreak && (
-        <motion.span
-          key={talkBreak.id}
-          {...(isBar ? PRESETS.pop : PRESETS.fadeSlide)}
-          className={`inline-flex items-center rounded-full border font-semibold tracking-wide whitespace-nowrap max-w-full ${sizing} ${className}`}
-          style={{
-            borderColor: `${segment.color}80`,
-            backgroundColor: isBar ? 'rgba(10, 10, 12, 0.82)' : `${ON_AIR_LAMP}26`,
-            boxShadow: isBar ? `0 0 18px ${ON_AIR_LAMP}40, inset 0 0 0 1px ${ON_AIR_LAMP}33` : undefined
-          }}
-          title={talkBreak.title || segment.label}
-          role="status"
-          aria-live="polite"
-        >
-          <OnAirLamp paused={talkBreak.paused} large={isBar} />
-          <span className="text-red-100 font-bold">ON AIR</span>
-          <span className="font-medium truncate" style={{ color: segment.color }}>· {segment.label}</span>
-        </motion.span>
-      )}
-    </AnimatePresence>
-  )
-})
-
 const ON_AIR_NOTICE = 'on-air'
 
 export function OnAirNotice() {

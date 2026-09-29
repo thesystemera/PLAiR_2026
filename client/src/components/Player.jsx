@@ -8,7 +8,6 @@ import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useDevicePicker, DevicePickerButton, DeviceNotice, DevicePickerPanel } from './DevicePicker'
 import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './BitratePicker'
 import { GenerationQueuePanel } from './GenerationQueuePanel'
-import { OnAirBadge } from './OnAirBadge'
 import { useArtwork, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -623,9 +622,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
 
   const progressRow = currentTrack ? (
     <div className={`relative flex items-center ${compact ? 'gap-1.5 flex-1 min-w-0' : 'gap-2'}`}>
-      <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none px-12">
-        <OnAirBadge variant="bar" />
-      </div>
       <span
         ref={progressTimeRef}
         className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-theme"
