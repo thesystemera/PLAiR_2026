@@ -1,43 +1,41 @@
 import os
 import time
 import numpy as np
-import torch
 import random
 from collections import OrderedDict
 from annoy import AnnoyIndex
 from threading import Lock
 from typing import List, Optional, Tuple
 
-from models_global import get_tokenizer, get_vector_model, get_device
+from models_global import get_sentence_encoder
 from config.settings import settings
 from database.pg_pool import get_pooled_connection
 from services import log_service
 
 SHOTGUN_PRUNE_AT = 20000
 EMBEDDING_CACHE_MAX = 4096
+EMBEDDING_DIM = settings.SEMANTIC_ENCODER_DIM
 
 
 class VectorDBService:
     def __init__(self):
         log_service.tts_vector_db("Initializing VectorDBService (PostgreSQL)")
 
-        self.tokenizer = get_tokenizer()
-        self.vector_matching_model = get_vector_model()
-        self.device = get_device()
+        self.encoder = get_sentence_encoder(settings.SEMANTIC_ENCODER)
 
         self.db_pools = settings.TTS_DB_POOLS
 
 
-        self.annoy_index_tts_1 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_tts_2 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_meta_1 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_meta_2 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_impulse_1 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_impulse_2 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_audio_1 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_audio_2 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_breath_1 = AnnoyIndex(1024, 'angular')
-        self.annoy_index_breath_2 = AnnoyIndex(1024, 'angular')
+        self.annoy_index_tts_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_tts_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_meta_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_meta_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_impulse_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_impulse_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_audio_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_audio_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_breath_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_breath_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
 
         self.index_pairs = {
             "tts_embeddings": (self.annoy_index_tts_1, self.annoy_index_tts_2),
@@ -147,6 +145,7 @@ class VectorDBService:
 
     def load_initial_data(self):
         start_time = time.perf_counter()
+        self.drop_stale_encoder_rows()
         self.purge_missing_files()
 
         db_data_results = {}
@@ -216,7 +215,7 @@ class VectorDBService:
                 self.rebuild_indexes()
 
     def _index_is_stale(self, table_name: str, ann_file: str) -> bool:
-        probe = AnnoyIndex(1024, 'angular')
+        probe = AnnoyIndex(EMBEDDING_DIM, 'angular')
         try:
             probe.load(ann_file)
             index_items = probe.get_n_items()
@@ -305,23 +304,31 @@ class VectorDBService:
         return embedding
 
     def _generate_embedding(self, text: str) -> np.ndarray:
-        token_count = len(self.tokenizer.encode_plus(text, max_length=512, truncation=True)["input_ids"])
-        inputs = self.tokenizer.encode_plus(
-            text,
-            return_tensors='pt',
-            max_length=min(512, token_count + 128),
-            truncation=True,
-            padding='max_length'
-        )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        return self.encoder.encode(text, normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
 
-        with torch.no_grad():
-            outputs = self.vector_matching_model(**inputs)
-
-        last_hidden_state = outputs.last_hidden_state
-        embedding = last_hidden_state[0][-1].cpu().numpy()
-
-        return embedding
+    def drop_stale_encoder_rows(self):
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            for table_name in self.index_pairs:
+                c.execute("SELECT to_regclass(%s)", (table_name,))
+                if c.fetchone()[0] is None:
+                    continue
+                c.execute(f"SELECT COUNT(*) FROM {table_name} WHERE octet_length(embedding) <> %s",
+                          (EMBEDDING_DIM * 4,))
+                stale = c.fetchone()[0]
+                if not stale:
+                    continue
+                c.execute(f"TRUNCATE {table_name} RESTART IDENTITY")
+                for slot in (1, 2):
+                    ann_file = os.path.join(str(settings.EMBEDDINGS_DIR), f"{table_name}_{slot}.ann")
+                    if os.path.exists(ann_file):
+                        os.remove(ann_file)
+                log_service.system(f"[TTS CACHE] {table_name}: {stale} rows were made with another encoder - "
+                                   f"cleared, re-embedding from the clip files")
+            conn.commit()
+        finally:
+            conn.close()
 
     def save_embedding(self, audio_path: str, text: str, voice_name: str, db_type: str):
         embedding = self._embedding_for(text)
@@ -488,7 +495,7 @@ class VectorDBService:
         for db_name, (index_1, index_2) in self.index_pairs.items():
             new_index = None
             try:
-                new_index = AnnoyIndex(1024, 'angular')
+                new_index = AnnoyIndex(EMBEDDING_DIM, 'angular')
                 ann_file_1 = os.path.join(str(settings.EMBEDDINGS_DIR), f"{db_name}_1.ann")
                 ann_file_2 = os.path.join(str(settings.EMBEDDINGS_DIR), f"{db_name}_2.ann")
 

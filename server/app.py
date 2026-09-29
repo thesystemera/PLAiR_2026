@@ -217,7 +217,7 @@ async def lifespan(_app: FastAPI):
     await prompt_service.initialize()
 
     log_service.system("Initializing shared T5 encoder models...")
-    await models_global.initialize_tts_models()
+    await models_global.initialize_semantic_encoder()
     log_service.system("✓ Shared T5 encoder loaded (used by music search & TTS)")
 
     log_service.system("Initializing catalog vector database service...")

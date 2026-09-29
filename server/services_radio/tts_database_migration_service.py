@@ -1,11 +1,10 @@
 import os
 import psycopg2
 import numpy as np
-import torch
 from mutagen._util import MutagenError
 from mutagen.id3 import ID3
 from typing import List, Tuple, Dict, Optional
-from models_global import get_tokenizer, get_vector_model, get_device
+from models_global import get_sentence_encoder
 from config.settings import settings
 from services import log_service
 
@@ -15,9 +14,7 @@ class TTSDatabaseMigrationService:
     def __init__(self):
         log_service.tts_vector_db("Initializing TTSDatabaseMigrationService (PostgreSQL)")
 
-        self.tokenizer = get_tokenizer()
-        self.vector_model = get_vector_model()
-        self.device = get_device()
+        self.encoder = get_sentence_encoder(settings.SEMANTIC_ENCODER)
 
         self.directory_map = {
             "tts_embeddings": settings.TTS_AUDIO_DIR,
@@ -66,41 +63,8 @@ class TTSDatabaseMigrationService:
             return None, None
 
     def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
-        batch_size = 32
-        embeddings = []
-
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i + batch_size]
-
-            longest = max(len(ids) for ids in self.tokenizer.batch_encode_plus(
-                batch_texts, truncation=True, max_length=512)["input_ids"])
-            inputs = self.tokenizer.batch_encode_plus(
-                batch_texts,
-                return_tensors='pt',
-                padding='max_length',
-                truncation=True,
-                max_length=min(512, longest + 128)
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            with torch.no_grad():
-                outputs = self.vector_model.forward(**inputs)
-
-            last_hidden_states = outputs.last_hidden_state  # type: ignore
-            if last_hidden_states is None:
-                continue
-
-            for j, _text in enumerate(batch_texts):
-                if j >= len(last_hidden_states):
-                    break
-                embedding = last_hidden_states[j][-1].cpu().numpy()
-                embedding = embedding / np.linalg.norm(embedding)
-                embeddings.append(embedding)
-
-                if (i + j + 1) % 100 == 0:
-                    log_service.tts_vector_db(f"  Generated {i + j + 1}/{len(texts)} embeddings")
-
-        return embeddings
+        vectors = self.encoder.encode(texts, batch_size=64, normalize_embeddings=True, convert_to_numpy=True)
+        return [vector.astype(np.float32) for vector in vectors]
 
     def get_existing_entries(self, table_name: str) -> Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]]:
         """Get existing entries from PostgreSQL table."""

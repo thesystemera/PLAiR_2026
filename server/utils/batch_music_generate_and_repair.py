@@ -78,7 +78,7 @@ async def initialize_generation_stack(
     if not getattr(catalog_service, '_initialized', False):
         await catalog_service.initialize()
 
-    await models_global.initialize_tts_models()
+    await models_global.initialize_semantic_encoder()
 
     catalog_db = CatalogVectorDatabaseService()
     catalog_db.load_initial_data()
