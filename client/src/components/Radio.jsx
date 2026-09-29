@@ -2,7 +2,7 @@ import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
-import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle, Keyboard, Mic } from 'lucide-react'
+import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
 import { useRadioUI, uiState, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
@@ -15,7 +15,7 @@ import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { OnAirBadge } from './OnAirBadge'
 import { registerKeyboardRecordingCallback } from './KeyboardControls'
-import { PanelHeader } from './Panel'
+import { PanelHeader, TextRadioIcon } from './Panel'
 import { Scroller } from './Scroller'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
@@ -181,12 +181,13 @@ export function Radio() {
           {!isMobile && (
             <button
               onClick={toggleRadioInput}
-              aria-label={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
-              title={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
+              aria-pressed={isTextInput}
+              aria-label="Text Radio"
+              title={isTextInput ? 'Text Radio on: back to talking' : 'Text Radio: type to the DJs'}
               className="ui-press p-1.5 rounded transition-colors border ml-1"
-              style={getFilterInactive()}
+              style={isTextInput ? getFilterAllActive() : getFilterInactive()}
             >
-              {isTextInput ? <Mic size={16} /> : <Keyboard size={16} />}
+              <TextRadioIcon className="w-4 h-4" />
             </button>
           )}
         </div>

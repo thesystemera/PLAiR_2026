@@ -44,6 +44,15 @@ export const PANEL_IDS = {
   SHOUTOUTS: 'shoutouts'
 }
 
+export function TextRadioIcon({ className = 'w-6 h-6 mb-1' }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7.227 16.774a6.75 6.75 0 010-9.546m9.546 0a6.75 6.75 0 010 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.79" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M9.5 10.25c0-.414.336-.75.75-.75h3.5c.414 0 .75.336.75.75v2c0 .414-.336.75-.75.75H11.5l-1.25 1v-1c-.414 0-.75-.336-.75-.75v-2z" />
+    </svg>
+  )
+}
+
 export const PANEL_TRANSITION = TRANSITIONS.panel
 
 export const PANEL_FADE_TRANSITION = TRANSITIONS.fade

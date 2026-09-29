@@ -1,6 +1,5 @@
 import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {AnimatePresence, motion} from 'framer-motion'
-import {Keyboard, Mic} from 'lucide-react'
 import {api} from './lib/api'
 import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
 import {logger} from './lib/logger'
@@ -33,7 +32,8 @@ import {
     Panel,
     PANEL_CONFIG,
     PANEL_FADE_TRANSITION,
-    PANEL_IDS
+    PANEL_IDS,
+    TextRadioIcon
 } from './components/Panel'
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
@@ -964,15 +964,15 @@ function App() {
                         <>
                           {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
                             ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon(navIconClass)
-                            : id === PANEL_IDS.RADIO && isActive
-                              ? (radioInput === 'text' ? <Mic className={navIconClass} /> : <Keyboard className={navIconClass} />)
+                            : id === PANEL_IDS.RADIO && radioInput === 'text'
+                              ? <TextRadioIcon className={navIconClass} />
                               : config.mobileIcon(navIconClass)
                           }
                           <span className={isPhoneLandscape ? 'text-[10px] leading-tight' : 'text-xs'}>
                             {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
                               ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileLabel
-                              : id === PANEL_IDS.RADIO && isActive
-                                ? (radioInput === 'text' ? 'Talk' : 'Type')
+                              : id === PANEL_IDS.RADIO && radioInput === 'text'
+                                ? 'Text'
                                 : config.mobileLabel
                             }
                           </span>
