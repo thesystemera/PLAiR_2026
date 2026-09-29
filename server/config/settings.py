@@ -345,7 +345,6 @@ class Settings:
     LLM_TOOL_COMPRESS_MIN_CHARS: int = int(os.getenv("LLM_TOOL_COMPRESS_MIN_CHARS", "600"))
 
     LLM_RESULT_CACHE_DIR: Path = BASE_DIR / "data" / "llm_result_cache"
-    LLM_CACHE_META_TTL_S: int = int(os.getenv("LLM_CACHE_META_TTL_S", str(30 * 86400)))
     LLM_CACHE_BREATH_TTL_S: int = int(os.getenv("LLM_CACHE_BREATH_TTL_S", str(30 * 86400)))
     LLM_CACHE_NEWS_TTL_S: int = int(os.getenv("LLM_CACHE_NEWS_TTL_S", "1200"))
     LLM_CACHE_WEATHER_TTL_S: int = int(os.getenv("LLM_CACHE_WEATHER_TTL_S", "3600"))

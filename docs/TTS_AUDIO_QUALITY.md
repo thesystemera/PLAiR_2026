@@ -25,7 +25,7 @@ WebSocket Streaming to Frontend
 - **Launch:** The backend starts it via `server/services_radio/tts_engine_bootstrap.py` (set `TTS_SERVER_EXTERNAL=true` to manage it yourself).
 - **GPU:** Pinned to the Quadro P6000 via `CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=0` in `.env`.
 - **Voices:** Hosts are named after their Orpheus voices and hard-wired in `settings.VOICE_PREFERENCES`: Leo = `leo`, Jess = `jess`, station = `zac`, each with its own sampling temperature. No env overrides, no fallback voices.
-- **Emotion tags:** Inline `<laugh>`, `<chuckle>`, `<sigh>`, `<gasp>`, `<groan>`, `<yawn>`, `<cough>`, `<sniffle>`. "Meta" segments (non-verbal reactions) are generated with these tags.
+- **Emotion tags:** Orpheus renders inline `<laugh>`, `<chuckle>`, `<sigh>`, `<gasp>`, `<groan>`, `<yawn>`, `<cough>`, `<sniffle>`. "Meta" segments (non-verbal reactions) are spelled out phonetically instead (see CLAUDE.md section 12).
 - **Sound effects:** `audio_effect_audio` segments are cache-only (no generation).
 - **Cache:** Rebuilds from Orpheus output. It was purged on 2026-09-28 after the end-of-speech/length-cap engine fix and the host rename.
 

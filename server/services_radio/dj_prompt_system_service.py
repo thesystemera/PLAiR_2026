@@ -1,6 +1,6 @@
 from services import log_service
 from services.llm_router import LLM_LIVE, LLM_BACKGROUND
-from services.llm_result_cache import breath_script_cache, cache_key, meta_script_cache
+from services.llm_result_cache import breath_script_cache, cache_key
 from config.settings import settings
 
 def gpt_error_handler(func):
@@ -93,39 +93,35 @@ class DJPromptSystemService:
 
     @gpt_error_handler
     async def generate_meta_data_gpt_response(self, meta_tag):
-        meta_key = cache_key(meta_tag.strip().lower())
-        cached_script = meta_script_cache.get(meta_key)
-        if cached_script:
-            log_service.gpt(f"Meta: {meta_tag} -> {cached_script} (cached)")
-            return meta_tag, cached_script
-
         system_prompt = (
-            "You convert a radio DJ's stage direction (a meta tag describing a non-verbal reaction) into a very short "
-            "script for the Orpheus text-to-speech engine.\n\n"
-            "Orpheus renders these inline emotion tags as real vocal sounds: "
-            "<laugh> <chuckle> <sigh> <gasp> <groan> <yawn> <cough> <sniffle>.\n\n"
-            "Rules:\n"
-            "1. Use one or two emotion tags, optionally with a short natural interjection "
-            "(e.g. 'Mm-hmm.', 'Ooh.', 'Ha!', 'Whoa.', 'Ugh.', 'Hmm.').\n"
-            "2. Never write phonetic spellings of sounds (no 'hahaha', 'aarrgg', 'phhth').\n"
-            "3. Never repeat the stage direction itself. Maximum six words plus tags.\n\n"
+            "You are a language model responsible for converting meta tags or action descriptions into phonetic or "
+            "onomatopoeic prompts suitable for text-to-speech synthesis.\n"
+            "Your task is to take the provided meta tag or action description and generate a concise prompt that represents "
+            "the intended action or sound using only phonetic transcriptions or onomatopoeic words, without including any "
+            "English words, the original meta tag/action description, or any meta tag syntax such as asterisks (*).\n"
+            "When generating the prompt, focus solely on capturing the verbal sounds or noises associated with the action, "
+            "rather than providing descriptive phrases.\n\n"
             "Examples:\n"
-            "- 'laughs hysterically' -> '<laugh> Oh man! <laugh>'\n"
-            "- 'laughs sincerely' -> '<chuckle> Ha!'\n"
-            "- 'sighs' -> '<sigh>'\n"
-            "- 'clears throat' -> '<cough> Right.'\n"
-            "- 'nods' -> 'Mm-hmm.'\n"
-            "- 'shocked' -> '<gasp> Whoa!'\n"
-            "- 'annoyed' -> '<groan> Ugh.'\n"
-            "- 'tired' -> '<yawn>'\n"
-            "- 'approves' -> 'Mmm, yeah.'\n"
-            "- 'smirks' -> '<chuckle> Hmm.'\n\n"
-            "Respond with the script only."
+            "- For the meta tag 'scratches head', the prompt could be 'aahha-aha-mmm'\n"
+            "- For 'pauses briefly', the prompt could be '.......oooo......'\n"
+            "- For 'laughs hysterically', the prompt could be 'phhaaahhhaahhaahahaha...'\n"
+            "- For 'clears throat', the prompt could be '---h-hm---'\n"
+            "- For 'pleasure', the prompt could be '....aaooowwwhwhwh....'\n"
+            "- For 'laughs sincerely', the prompt could be 'hhhhaaaahhhaaahhaahaha'\n"
+            "- For 'approves', the prompt could be 'mmmnnn-mmnn-mn'\n"
+            "- For 'annoyed', the prompt could be 'aarrrgg....'\n"
+            "- For 'shocked', the prompt could be 'ffaarrrkk'\n"
+            "- For 'disgusted', the prompt could be '....eeeeaak...'\n"
+            "- For 'nods', the prompt could be 'mm-hmm'\n"
+            "- For 'playful', the prompt could be '--phhth--'\n"
+            "- For 'smirks', the prompt could be 'hmph'\n"
+            "Do not use any English words, meta tag syntax, or the original meta tag/action description in the generated prompt. "
+            "Respond with the generated prompt only, without any additional context or explanation."
         )
 
         meta_data_prompt = await self._execute_gpt_stream(
             model=self.config['dj_model'],
-            max_tokens=settings.DJ_MICRO_MAX_TOKENS,
+            max_tokens=self.config['dj_tokens'],
             temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -133,12 +129,11 @@ class DJPromptSystemService:
             ]
         )
 
-        meta_data_prompt = meta_data_prompt.strip().strip("'\"") if meta_data_prompt else ""
+        meta_data_prompt = meta_data_prompt.strip() if meta_data_prompt else ""
         if not meta_data_prompt:
             log_service.gpt(f"Meta: No prompt generated for meta tag: {meta_tag}")
             return None
         log_service.gpt(f"Meta: {meta_tag} -> {meta_data_prompt}")
-        meta_script_cache.set(meta_key, meta_data_prompt)
         return meta_tag, meta_data_prompt
 
     @gpt_error_handler
