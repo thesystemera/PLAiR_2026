@@ -19,11 +19,13 @@ class ContextNodeRegistry:
         self._nodes: Dict[str, Callable] = {}
         self._descriptions: Dict[str, str] = {}
         self._costs: Dict[str, str] = {}
+        self._roles: Dict[str, str] = {}
         self._stats: Dict[str, Dict[str, Any]] = {}
 
-    def register(self, name: str, description: str, cost: str = "low", visible: bool = True):
+    def register(self, name: str, description: str, cost: str = "low", visible: bool = True, role: str = "live"):
         def decorator(func: Callable):
             self._nodes[name] = func
+            self._roles[name] = role
 
             if visible:
                 self._descriptions[name] = description
@@ -94,6 +96,9 @@ class ContextNodeRegistry:
             elapsed = time.perf_counter() - start
             log_service.error(f"[NODE REGISTRY] Error in node '{key}' after {elapsed*1000:.1f}ms: {e}")
             raise
+
+    def is_system(self, name: str) -> bool:
+        return self._roles.get(name) == "system"
 
     def get_menu_for_ai(self) -> str:
         menu_items = []

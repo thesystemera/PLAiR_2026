@@ -333,6 +333,7 @@ class AIService(SingletonService):
             review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
             thinking_budget: Optional[int] = None,
+            cache_label: Optional[str] = None,
             spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
         if temperature is None:
@@ -386,7 +387,8 @@ class AIService(SingletonService):
                 client=self.client,
                 contents=contents,
                 config=final_config if is_last else tool_config,
-                prefer=model
+                prefer=model,
+                cache_label=cache_label
             )
             round_usage.append(usage)
 
@@ -400,7 +402,7 @@ class AIService(SingletonService):
                 prompt = review(text, calls_log)
                 if prompt:
                     reviewed = True
-                    log_service.ai(f"DJ tool turn: review step ({prompt[:80]})")
+                    log_service.commands(f"DJ tool turn: review step ({prompt[:80]})")
                     if text.strip():
                         preambles.append(text)
                         if on_preamble is not None:
@@ -450,7 +452,7 @@ class AIService(SingletonService):
             if done_with:
                 released = self._release_done_results(contents, done_with)
                 if released:
-                    log_service.ai(f"Released {released} used tool result(s): {', '.join(sorted(done_with))}")
+                    log_service.commands(f"Released {released} used tool result(s): {', '.join(sorted(done_with))}")
 
             for fc in function_calls:
                 log_service.ai(f"🔧 DJ tool call: {fc.name}({dict(fc.args) if fc.args else {}})")

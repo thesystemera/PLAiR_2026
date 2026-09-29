@@ -357,6 +357,9 @@ class Settings:
     USAGE_TRACKING_ENABLED: bool = os.getenv("USAGE_TRACKING_ENABLED", "true").lower() == "true"
     USAGE_FLUSH_INTERVAL_S: float = float(os.getenv("USAGE_FLUSH_INTERVAL_S", "5"))
     USAGE_FLUSH_BATCH: int = int(os.getenv("USAGE_FLUSH_BATCH", "200"))
+    GEMINI_CACHE_ENABLED: bool = os.getenv("GEMINI_CACHE_ENABLED", "true").lower() == "true"
+    GEMINI_CACHE_TTL_S: int = int(os.getenv("GEMINI_CACHE_TTL_S", "1800"))
+    GEMINI_CACHE_RETRY_S: int = int(os.getenv("GEMINI_CACHE_RETRY_S", "300"))
     USAGE_BUFFER_MAX: int = int(os.getenv("USAGE_BUFFER_MAX", "20000"))
     USAGE_WRITE_TIMEOUT_S: float = float(os.getenv("USAGE_WRITE_TIMEOUT_S", "10"))
     USAGE_RAW_RETENTION_DAYS: int = int(os.getenv("USAGE_RAW_RETENTION_DAYS", "90"))

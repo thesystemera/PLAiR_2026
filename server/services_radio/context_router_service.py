@@ -119,7 +119,8 @@ def _selection_pulse(selection) -> Dict:
     return clean_pulse(selection.pulse_topic, selection.pulse_kinds, selection.pulse_near_me, selection.pulse_when)
 
 
-DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide"]
+DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide",
+                 "format_meta_tag_examples"]
 
 
 class ContextRouterService(SingletonService):

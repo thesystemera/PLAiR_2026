@@ -75,6 +75,20 @@ async def run_turn(base: str, ws, headers: dict, text: str, timeout: float) -> d
 
 
 ACCOUNT_FILE = Path(__file__).with_name(".dj_test_account.json")
+LOG_FILE = Path(__file__).resolve().parent.parent / "data" / "logs" / "radio.log"
+ERROR_MARKERS = ("[ERROR]", "Traceback", "[CRITICAL]")
+
+
+def new_log_errors(offset: int) -> tuple[int, list]:
+    if not LOG_FILE.exists():
+        return offset, []
+    size = LOG_FILE.stat().st_size
+    if size < offset:
+        offset = 0
+    with LOG_FILE.open("r", encoding="utf-8", errors="replace") as handle:
+        handle.seek(offset)
+        lines = handle.read().splitlines()
+    return size, [line[:300] for line in lines if any(marker in line for marker in ERROR_MARKERS)]
 
 
 async def signed_in_token(base: str) -> str:
@@ -104,6 +118,7 @@ async def main() -> None:
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--signed-in", action="store_true",
                         help="talk as the test account in tests/.dj_test_account.json (created on first use)")
+    parser.add_argument("--keep-going", action="store_true", help="don't stop at the first error in radio.log")
     parser.add_argument("turns", nargs="*")
     args = parser.parse_args()
     guest = f"guest_{uuid.uuid4()}"
@@ -122,9 +137,15 @@ async def main() -> None:
     async with websockets.connect(ws_url, max_size=None, subprotocols=protocols) as ws:
         await ws.send(json.dumps({"type": "listener_location", "data": AUCKLAND}))
         await asyncio.sleep(1.5)
+        log_offset = LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
         for text in args.turns or DEFAULT_TURNS:
             result = await run_turn(args.base, ws, headers, text, args.timeout)
-            print(json.dumps(result, ensure_ascii=False, indent=1))
+            log_offset, errors = new_log_errors(log_offset)
+            result["log_errors"] = errors
+            print(json.dumps(result, ensure_ascii=False, indent=1), flush=True)
+            if errors and not args.keep_going:
+                print(f"STOPPED after '{text}': {len(errors)} error line(s) in radio.log", flush=True)
+                break
 
 
 if __name__ == "__main__":

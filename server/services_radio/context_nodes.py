@@ -32,7 +32,8 @@ from config.settings import settings
     "core_dj_identity",
     "Base DJ personality and station identity",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_core_identity(**_) -> str:
     return (
@@ -44,7 +45,8 @@ async def get_core_identity(**_) -> str:
     "format_roles_detailed",
     "Detailed DJ personality descriptions",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_format_roles_detailed(**_) -> str:
     return (
@@ -61,7 +63,8 @@ async def get_format_roles_detailed(**_) -> str:
     "format_station_characteristics",
     "Station vibe and characteristics",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_format_station_characteristics(**_) -> str:
     return (
@@ -76,7 +79,8 @@ async def get_format_station_characteristics(**_) -> str:
     "format_tone",
     "Language and tone guidelines",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_format_tone(**_) -> str:
     return (
@@ -92,7 +96,8 @@ async def get_format_tone(**_) -> str:
     "format_channels",
     "Communication channel rules ([BROADCAST] vs [TXT])",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_format_channels(**_) -> str:
     return (
@@ -114,7 +119,8 @@ async def get_format_channels(**_) -> str:
     "station_capabilities",
     "What PLAiR.fm can do (services available)",
     cost="low",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_station_capabilities(**_) -> str:
     return (
@@ -128,7 +134,8 @@ async def get_station_capabilities(**_) -> str:
     "station_capabilities_detailed",
     "Detailed list of all station capabilities and available commands",
     cost="medium",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_station_capabilities_detailed(**_) -> str:
     return (
@@ -200,51 +207,28 @@ async def get_station_capabilities_detailed(**_) -> str:
     "format_meta_tags_guide",
     "Meta-tag formatting guide (paralanguage, audio, timeshift, proximity)",
     cost="medium",
-    visible=False
+    visible=False,
+    role="system"
 )
-async def get_format_meta_tags(dj_service=None, **_) -> str:
-    import random
-    import time
-
-    if dj_service:
-        all_paralanguage_tags = sorted(dj_service.get_all_paralanguage_meta_tags())
-        all_audio_tags = sorted(dj_service.get_all_audio_meta_tags())
-        all_correlated_tags = sorted(dj_service.get_all_correlated_tags())
-
-        num_tags = 10
-        num_correlated = 5
-
-        hourly = random.Random(int(time.time() // 3600))
-        selected_paralanguage_tags = hourly.sample(all_paralanguage_tags, min(num_tags, len(all_paralanguage_tags)))
-        selected_audio_tags = hourly.sample(all_audio_tags, min(num_tags, len(all_audio_tags)))
-        selected_correlated_tags = hourly.sample(all_correlated_tags, min(num_correlated, len(all_correlated_tags)))
-
-        example_paralanguage_tags = ", ".join([f"*{tag}*" for tag in selected_paralanguage_tags])
-        example_audio_tags = ", ".join([f"%{tag}%" for tag in selected_audio_tags])
-        example_correlated_tags = ", ".join([f"{meta} {audio}" for meta, audio in selected_correlated_tags])
-    else:
-        example_paralanguage_tags = "*laughs*, *sighs*, *chuckles*, *groans*, *scoffs*"
-        example_audio_tags = "%microphone feedback%, %door slam%, %papers rustling%, %coffee sip%"
-        example_correlated_tags = "*laughs* %mic bump%, *sighs* %chair creak%"
-
+async def get_format_meta_tags(**_) -> str:
     return (
         "META-TAG USAGE GUIDELINES:\n"
         "1. PARALANGUAGE TAGS: *example*\n"
         "   Purpose: Represent non-verbal vocal sounds and expressions\n"
         "   Usage: Convey hosts' constant reactions and engagement\n"
-        f"   Examples: {example_paralanguage_tags}\n"
+        "   Examples: see META-TAG EXAMPLES in this message\n"
         "   Key Point: Use frequently to maintain interaction\n\n"
 
         "2. AUDIO TAGS: %example%\n"
         "   Purpose: Create a detailed environmental soundscape\n"
         "   Usage: ONLY for studio noises, object interactions, ambient sounds\n"
-        f"   Examples: {example_audio_tags}\n"
+        "   Examples: see META-TAG EXAMPLES in this message\n"
         "   Key Point: Enhance the dynamic studio atmosphere\n\n"
 
         "3. ASSOCIATED PARALANGUAGE TAGS / AUDIO TAGS: *example* before %example%\n"
         "   Purpose: Link vocalizations with corresponding sounds\n"
         "   Usage: Place paralanguage tag immediately before audio tag\n"
-        f"   Examples: {example_correlated_tags}\n"
+        "   Examples: see META-TAG EXAMPLES in this message\n"
         "   Key Point: Keep tags separate and complete\n\n"
 
         "4. MIC-PROXIMITY TAGS: &X&\n"
@@ -283,10 +267,33 @@ async def get_format_meta_tags(dj_service=None, **_) -> str:
     )
 
 @node_registry.register(
+    "format_meta_tag_examples",
+    "Fresh example paralanguage and audio tags for this reply",
+    cost="low",
+    visible=False
+)
+async def get_format_meta_tag_examples(dj_service=None, **_) -> str:
+    import random
+
+    if not dj_service:
+        return ""
+    paralanguage = sorted(dj_service.get_all_paralanguage_meta_tags())
+    audio = sorted(dj_service.get_all_audio_meta_tags())
+    correlated = sorted(dj_service.get_all_correlated_tags())
+    return (
+        "META-TAG EXAMPLES (fresh picks for this reply):\n"
+        f"Paralanguage: {', '.join(f'*{tag}*' for tag in random.sample(paralanguage, min(10, len(paralanguage))))}\n"
+        f"Audio: {', '.join(f'%{tag}%' for tag in random.sample(audio, min(10, len(audio))))}\n"
+        f"Paired: {', '.join(f'{meta} {sound}' for meta, sound in random.sample(correlated, min(5, len(correlated))))}"
+    )
+
+
+@node_registry.register(
     "format_dialogue_examples",
     "Example dynamic dialogue with proper meta-tag usage",
     cost="medium",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_format_dialogue_examples(**_) -> str:
     host_1 = '[LEO]'
@@ -308,7 +315,8 @@ async def get_format_dialogue_examples(**_) -> str:
     "guidelines_critical",
     "Critical guidelines for NON-MUSIC/PODCAST requests",
     cost="low",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_guidelines_critical(**_) -> str:
     return (
@@ -325,7 +333,8 @@ async def get_guidelines_critical(**_) -> str:
     "guidelines_general",
     "General interaction guidelines and best practices",
     cost="low",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_guidelines_general(**_) -> str:
     return (
@@ -345,7 +354,8 @@ async def get_guidelines_general(**_) -> str:
     "guidelines_internal_dialogue",
     "Instructions for INTERNAL DIALOGUE section",
     cost="low",
-    visible=True
+    visible=True,
+    role="system"
 )
 async def get_guidelines_internal_dialogue(**_) -> str:
     return (
@@ -358,7 +368,8 @@ async def get_guidelines_internal_dialogue(**_) -> str:
     "instruction_announcements",
     "Comprehensive instructions for DJ announcements between tracks",
     cost="medium",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_announcements(transition_duration_ms: Optional[int] = None, **_) -> str:
     if transition_duration_ms:
@@ -418,7 +429,8 @@ async def get_instruction_announcements(transition_duration_ms: Optional[int] = 
     "instruction_biography",
     "System prompt for Artist Biography interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_biography(**_) -> str:
     return (
@@ -441,7 +453,8 @@ async def get_data_biography(artist_name: Optional[str] = None, current_track: O
     "instruction_lyrics",
     "System prompt for Lyrics interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_lyrics(**_) -> str:
     return (
@@ -480,7 +493,8 @@ async def get_data_lyrics(lyrics: Optional[str] = None, artist_name: Optional[st
     "instruction_news",
     "System prompt for News interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_news(**_) -> str:
     return (
@@ -511,7 +525,8 @@ async def get_data_news_report(query: Optional[str] = None, is_topic: bool = Fal
     "instruction_weather",
     "System prompt for Weather interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_weather(**_) -> str:
     return (
@@ -539,7 +554,8 @@ async def get_data_weather_report(forecast_type: str = "current", user=None, dj_
     "instruction_location_search",
     "System prompt for Location Search interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_location_search(**_) -> str:
     return (
@@ -577,7 +593,8 @@ async def get_data_location_report(query: Optional[str] = None, user=None, dj_se
     "instruction_events",
     "System prompt for Events interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_events(**_) -> str:
     return (
@@ -612,7 +629,8 @@ async def get_data_events_report(location: Optional[str] = None, country_code: O
     "instruction_shoutouts",
     "System prompt for Shoutouts interpretation",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_shoutouts(**_) -> str:
     return (
@@ -654,7 +672,8 @@ async def get_data_shoutouts_data(
     "instruction_dj_tools",
     "Studio tool usage rules for the interactive DJ (tool-calling mode)",
     cost="low",
-    visible=False
+    visible=False,
+    role="system"
 )
 async def get_instruction_dj_tools(**_) -> str:
     return (
@@ -669,8 +688,7 @@ async def get_instruction_dj_tools(**_) -> str:
         "TOOL DISCIPLINE:\n"
         "Every lookup or action you say you'll take must be backed by its tool call in this same response. Never "
         "end a turn by describing a check, search or action you haven't called. If you don't need a tool, just answer. "
-        "Tools are the ONLY way anything happens (a skip, a like, a track, a segment); if the tool you'd need isn't "
-        "available this turn, call request_tools for it (the producer sometimes misreads a message), then use it.\n\n"
+        "Tools are the ONLY way anything happens (a skip, a like, a track, a segment).\n\n"
         "TALK WHILE YOU WORK:\n"
         "- The moment you call a tool you can start talking: write a short on-air line in the SAME response as the "
         "call. It airs immediately while the tool runs, so the listener never sits in silence. Never state facts "

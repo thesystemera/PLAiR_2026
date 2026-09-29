@@ -57,6 +57,7 @@ RADIO_SEGMENT_BASE_NODES = [
     'format_channels',
     'format_tone',
     'format_meta_tags_guide',
+    'format_meta_tag_examples',
     'format_roles_detailed',
     'format_station_characteristics',
     'format_dialogue_examples',
@@ -148,12 +149,17 @@ class DJPromptService:
             'interactive_tools': {
                 'required_nodes': [
                     'core_dj_identity',
+                    'station_capabilities',
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
+                    'guidelines_general',
+                    'guidelines_critical',
+                    'guidelines_internal_dialogue',
                     'instruction_dj_tools',
                     'tool_guidance',
                     'station_recent_airings',
@@ -167,6 +173,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -185,6 +192,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -203,6 +211,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -223,6 +232,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -239,6 +249,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -259,6 +270,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -279,6 +291,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -297,6 +310,7 @@ class DJPromptService:
                     'format_channels',
                     'format_tone',
                     'format_meta_tags_guide',
+                    'format_meta_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -826,7 +840,7 @@ class DJPromptService:
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
                                        on_route=None) -> dict:
         from services_radio.dj_tools import (
-            declarations_for,
+            DJ_FUNCTION_DECLARATIONS,
             READ_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
@@ -853,13 +867,17 @@ class DJPromptService:
         if on_route is not None:
             await on_route(route)
 
-        ordered_nodes = [node for node in selected_nodes if node not in TOOL_MODE_REPLACED_NODES]
-
-        system_prompt = assemble_prompt(context_data, ordered_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
+        system_nodes = [node for node in self.node_configs['interactive_tools']['required_nodes']
+                        if node_registry.is_system(node)]
+        live_nodes = [node for node in selected_nodes
+                      if not node_registry.is_system(node) and node not in TOOL_MODE_REPLACED_NODES]
+        system_prompt = assemble_prompt(context_data, system_nodes, untrusted_keys=set(), note=None)
+        live_context = assemble_prompt(context_data, live_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
 
         log_service.gpt(f"Interactive Tools: Prompt System: {system_prompt}")
 
-        user_message = f"[LISTENER TXT] {transcription}"
+        user_message = f"{live_context}\n\n[LISTENER TXT] {transcription}" if live_context else \
+            f"[LISTENER TXT] {transcription}"
         log_service.gpt(f"Interactive Tools: Prompt User: {user_message}")
 
         spoken_preambles = []
@@ -880,8 +898,7 @@ class DJPromptService:
         result = await self.gemini_service.run_gemini_tool_turn(
             system_instruction=system_prompt,
             user_message=user_message,
-            function_declarations=declarations_for(tool_runtime.ctx.planned),
-            refresh_tools=lambda: declarations_for(tool_runtime.ctx.planned, tool_runtime.ctx.granted),
+            function_declarations=DJ_FUNCTION_DECLARATIONS,
             review=self._review_step,
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
@@ -889,6 +906,7 @@ class DJPromptService:
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
             spec=LLM_DJ,
             thinking_budget=settings.DJ_TOOL_THINKING_BUDGET,
+            cache_label="dj_interactive",
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             on_preamble=handle_preamble,
             followup_tools=READ_TOOLS
@@ -912,7 +930,8 @@ class DJPromptService:
 
         log_service.node_performance(
             f"✅ Node System (Tool Mode): {fetch_time:.1f}ms fetch | "
-            f"Selected {len(ordered_nodes)} nodes | {(time.perf_counter() - start_time) * 1000:.1f}ms total"
+            f"{len(system_nodes)} system + {len(live_nodes)} live nodes | "
+            f"{(time.perf_counter() - start_time) * 1000:.1f}ms total"
         )
 
         return {

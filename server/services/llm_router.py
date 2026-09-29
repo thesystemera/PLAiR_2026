@@ -199,6 +199,25 @@ async def gemini_generate(
     return response, usage, ms
 
 
+async def _gemini_generate_cached(*, spec: str, client, model: str, contents, config: types.GenerateContentConfig,
+                                  cache_label: Optional[str]):
+    from services.gemini_cache import is_cache_missing_error, system_caches
+
+    name = await system_caches.get(client, cache_label, model, config.system_instruction, config.tools) \
+        if cache_label and config.tool_config is None else None
+    if name is None:
+        return await gemini_generate(spec=spec, client=client, model=model, contents=contents, config=config)
+    cached_config = config.model_copy(update={"cached_content": name, "system_instruction": None, "tools": None})
+    try:
+        return await gemini_generate(spec=spec, client=client, model=model, contents=contents, config=cached_config)
+    except LLM_ERRORS as err:
+        if not is_cache_missing_error(err):
+            raise
+        system_caches.invalidate(name)
+        log_service.warning(f"[GEMINI CACHE] {cache_label} cache {name} rejected, running inline: {_err_line(err)}")
+        return await gemini_generate(spec=spec, client=client, model=model, contents=contents, config=config)
+
+
 async def gemini_generate_chain(
     *,
     spec: str,
@@ -206,6 +225,7 @@ async def gemini_generate_chain(
     contents,
     config: types.GenerateContentConfig,
     prefer: Optional[str] = None,
+    cache_label: Optional[str] = None,
 ):
     models = [model for provider, model in candidates_for(spec) if provider == "gemini"]
     if not models:
@@ -218,8 +238,9 @@ async def gemini_generate_chain(
     for idx, model in enumerate(models):
         key = _circuit_key(spec, "gemini", model)
         try:
-            response, usage, ms = await gemini_generate(spec=spec, client=client, model=model, contents=contents,
-                                                        config=config)
+            response, usage, ms = await _gemini_generate_cached(spec=spec, client=client, model=model,
+                                                                contents=contents, config=config,
+                                                                cache_label=cache_label)
         except LLM_ERRORS as err:
             _record_failure(key, err)
             if idx == len(models) - 1:
