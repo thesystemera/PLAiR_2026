@@ -529,7 +529,7 @@ class TTSGenerationService:
                     audio_data = await f.read()
                 audio = await voice_thread(decode_mp3, audio_data)
                 self._remember_clip_audio(key, audio)
-        except OSError as e:
+        except Exception as e:
             log_service.error(f"Failed to read cached clip {file_path}: {e}")
             return None
         return await self.process_clip(
@@ -587,11 +587,20 @@ class TTSGenerationService:
                 break
             cached_file_path = os.path.join(directory, filename)
             if await aiofiles.os.path.exists(cached_file_path):
+                self.vector_db_service.note_used(listener, filename)
                 return cached_file_path, float(similarity)
             log_service.warning(f"Cached file not found, removing stale embedding: {cached_file_path}")
             await asyncio.to_thread(self.vector_db_service.delete_embedding, filename, embeddings_type)
 
         return None
+
+    async def _drop_unreadable_clip(self, file_path: str, embeddings_type: str):
+        log_service.warning(f"Unreadable cached clip, removing it so the line renders fresh: {file_path}")
+        await asyncio.to_thread(self.vector_db_service.delete_embedding, os.path.basename(file_path), embeddings_type)
+        try:
+            await aiofiles.os.remove(file_path)
+        except OSError:
+            pass
 
     async def generation_description(self, tag: str, embeddings_type: str, content_voice: str) -> Optional[str]:
         if embeddings_type == 'meta_embeddings':
@@ -630,7 +639,9 @@ class TTSGenerationService:
                 cached_file_path, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix,
                 rank=rank
             )
-            if processed_audio is not None:
+            if processed_audio is None:
+                await self._drop_unreadable_clip(cached_file_path, embeddings_type)
+            else:
                 self.metrics['hits'] += 1
                 self._log_metrics("hit")
                 usage_tracking.record_gpu(f"tts.clip_cache.{embeddings_type.removesuffix('_embeddings')}", 0.0,

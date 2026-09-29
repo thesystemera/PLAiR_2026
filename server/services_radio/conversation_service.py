@@ -4,7 +4,6 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 import random
-import re
 import time
 from typing import Optional, List, Dict, Callable, Set
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,7 @@ from datetime import datetime, timezone
 from database import AsyncSessionLocal
 from database.models import Conversation, User
 from services import log_service
+from services_radio.tts_stream_planner import spoken_text
 from services import usage_tracking
 from services.task_utils import spawn
 from config.settings import settings
@@ -20,6 +20,12 @@ from config.settings import settings
 TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
 RECENT_ACTION_WINDOW_S = 15 * 60
+FAILED_TURN_LINES = (
+    "[BROADCAST] [LEO] &0.2& ~groans~ Ah, the desk just ate that one. &0.1& Hit us again?",
+    "[BROADCAST] [JESS] &0.2& ~sighs~ Lost you in the static there. &0.1& Say that again for us?",
+    "[BROADCAST] [LEO] &0.2& Hold up, the studio gremlins got that one. &0.1& Try us one more time.",
+    "[BROADCAST] [JESS] &0.2& ~chuckles~ Pirate gear, baby. &0.1& That one didn't come through, go again?",
+)
 
 temp_conversations: Dict[str, List[str]] = {}
 _turn_logger: Optional[logging.Logger] = None
@@ -469,17 +475,12 @@ class ConversationService:
             pass
 
     async def _speak_dj_text(self, text, user_id, session_id, is_guest):
-        sections = re.split(r'(\[BROADCAST]|\[TXT])', text)
-        spoken_content = [
-            section.strip() for section in sections
-            if section.strip() and section not in ('[BROADCAST]', '[TXT]')
-        ]
-
-        if spoken_content:
+        broadcast = spoken_text(text)
+        if broadcast:
             if self.tts_queue_manager is None:
                 raise RuntimeError("tts_queue_manager not initialized")
             await self.tts_queue_manager.add_tts_request(
-                text=" ".join(spoken_content),
+                text=broadcast,
                 user_id=user_id or 0,
                 tts_type="interactive",
                 is_broadcast=True,
@@ -624,7 +625,10 @@ class ConversationService:
             notes = (result or {}).get("notes") or ""
 
             if not main_response and not spoken:
-                log_service.error(f"{log_service.who(session_id)}: DJ turn produced no reply")
+                log_service.error(f"{log_service.who(session_id)}: DJ turn produced no reply - airing a fallback line")
+                fallback = random.choice(FAILED_TURN_LINES)
+                await self._speak_dj_text(fallback, user_id, session_id, is_guest)
+                await ctx.activity("say", text=fallback)
                 return
 
             if main_response and main_response not in spoken:

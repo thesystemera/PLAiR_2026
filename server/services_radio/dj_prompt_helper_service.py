@@ -1,6 +1,18 @@
 import re
+import unicodedata
+
 from services import log_service
 from services_radio.tts_stream_planner import TTSStreamPlanner
+
+SPOKEN_PUNCTUATION = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "″": '"',
+    "–": " - ", "—": " - ", "―": " - ", "−": "-",
+    "…": "...", " ": " ", " ": " ", " ": " ",
+    "°": " degrees",
+})
+SPOKEN_CURRENCY = re.compile(r'([£€])\s?(\d[\d,]*(?:\.\d+)?)')
+CURRENCY_WORDS = {'£': 'pounds', '€': 'euros'}
 
 PARALANGUAGE_EXAMPLES_FROM_LIBRARY = 20
 STARTER_PARALANGUAGE_TAGS = (
@@ -185,7 +197,8 @@ def clean_gpt_output(text, role='dj_content'):
     if non_ascii:
         log_service.filter(f"[CHAR CLEANUP] Found {len(non_ascii)} non-ASCII characters: {list(non_ascii)[:10]}")
 
-    text = text.encode('ascii', 'ignore').decode('ascii')
+    text = SPOKEN_CURRENCY.sub(lambda m: f"{m.group(2)} {CURRENCY_WORDS[m.group(1)]}", text)
+    text = unicodedata.normalize('NFKD', text.translate(SPOKEN_PUNCTUATION)).encode('ascii', 'ignore').decode('ascii')
 
     strange_chars = [(i, char, ord(char)) for i, char in enumerate(text)
                      if (ord(char) < 32 and char != '\n') or ord(char) > 126]
@@ -254,18 +267,17 @@ def clean_gpt_output(text, role='dj_content'):
         valid_tags = [
             'BROADCAST', 'TXT', 'JESS', 'LEO', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE'
         ]
-        pattern = r'\[(' + '|'.join(valid_tags) + r')\]|' + r'\[(.*?)\](.*?)(?=\[|$)'
+        pattern = r'\[(' + '|'.join(valid_tags) + r')\]|\[/IMPULSE\]|\[([^\[\]\n]*)\]'
 
         def replacer(match):
-            if match.group(1):
+            if match.group(2) is None:
                 return match.group(0)
-            else:
-                invalid_content = match.group(0)
-                log_service.filter(f"[META CLEANUP] ✗ Removed invalid tag section: {invalid_content[:50]}{'...' if len(invalid_content) > 50 else ''}")
-                removed_parts.append(f"Removed invalid tag section: {invalid_content}")
-                return ' '
+            invalid_content = match.group(0)
+            log_service.filter(f"[META CLEANUP] ✗ Removed invalid tag: {invalid_content[:50]}")
+            removed_parts.append(f"Removed invalid tag: {invalid_content}")
+            return ' '
 
-        return re.sub(pattern, replacer, text, flags=re.DOTALL)
+        return re.sub(pattern, replacer, text)
 
     if role != 'command':
         log_service.filter(f"[META CLEANUP] Starting cleanup for role '{role}'")
@@ -273,7 +285,7 @@ def clean_gpt_output(text, role='dj_content'):
 
         text = remove_char_counts(text)
         text = strip_asterisks(text)
-        text = re.sub(r"\+(['\"])", r"", text)
+        text = re.sub(r"\\+(['\"])", r"\1", text)
         text = handle_mismatched_tags(text)
         text = reduce_double_tags(text)
         text = keep_valid_tags(text)

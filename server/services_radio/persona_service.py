@@ -186,6 +186,11 @@ async def update_user_persona_if_needed(user_id: int, db: AsyncSession, ai_servi
             user.shoutout_interests = updated_interests  # type: ignore
             log_service.persona_profile(f"Updated shoutout interests for user {user_id}")
 
+        if updated_persona is None and updated_profile is None and updated_interests is None:
+            await db.commit()
+            log_service.persona_profile(f"Persona update failed for user {user_id}; retrying on the next engagement")
+            return
+
         await db.execute(
             update(User).where(User.id == user_id)
             .values(engagements_since_last_update=func.greatest(User.engagements_since_last_update - engagements, 0))

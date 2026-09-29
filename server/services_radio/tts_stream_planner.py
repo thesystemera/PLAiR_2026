@@ -3,11 +3,27 @@ import random
 from typing import List, Dict
 from services import log_service
 
+CHANNEL_TAG = re.compile(r'(\[BROADCAST]|\[TXT])')
+
+
+def spoken_text(text: str) -> str:
+    """What airs: only [BROADCAST] sections are spoken; [TXT] is a text message. Untagged text is spoken."""
+    if not CHANNEL_TAG.search(text or ""):
+        return (text or "").strip()
+    spoken, channel = [], None
+    for part in CHANNEL_TAG.split(text):
+        if part in ('[BROADCAST]', '[TXT]'):
+            channel = part
+        elif part.strip() and channel == '[BROADCAST]':
+            spoken.append(part.strip())
+    return " ".join(spoken)
+
+
 class TTSStreamPlanner:
     def split_text_into_sentences(self, text: str) -> List[Dict]:
         log_service.detail(f"Sentence Splitter: Original text: {text}", "tts_stream_planner")
 
-        text = re.sub(r'\[(BROADCAST|TXT)]', '', text).strip()
+        text = spoken_text(text)
 
         if text.startswith('[IMPULSE]'):
             current_speaker = random.choice(['jess', 'leo'])

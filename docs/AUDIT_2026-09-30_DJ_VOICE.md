@@ -8,6 +8,8 @@ Read-only audit, no code changed. Three comparisons:
 
 Nine agent reports went into this. Items already fixed today are not repeated: the phonetic paralanguage prompt, the filler caps, breaths, the tildes, the paralanguage examples, and the Chatterbox switch. Paths are `server/services_radio/` unless given in full.
 
+**Fixed on 2026-09-30:** B1–B10 and O1 (see the commit after this report). The rest is open.
+
 ## 1. Clear bugs (fix)
 
 | # | Bug | Where | Effect on air |

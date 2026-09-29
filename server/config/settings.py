@@ -329,6 +329,7 @@ class Settings:
     LLM_ANNOUNCE: str = os.getenv("LLM_ANNOUNCE", "deepseek:deepseek-flash,gemini:gemini-3.5-flash-lite")
     LLM_INTERPRET: str = os.getenv("LLM_INTERPRET", "deepseek:deepseek-flash,gemini:gemini-3.5-flash-lite")
     LLM_LIVE_TIMEOUT_S: float = float(os.getenv("LLM_LIVE_TIMEOUT_S", "20"))
+    LLM_DJ_TIMEOUT_S: float = float(os.getenv("LLM_DJ_TIMEOUT_S", "30"))
     LLM_BACKGROUND_TIMEOUT_S: float = float(os.getenv("LLM_BACKGROUND_TIMEOUT_S", "45"))
     LLM_ANNOUNCE_TIMEOUT_S: float = float(os.getenv("LLM_ANNOUNCE_TIMEOUT_S", "12"))
     LLM_INTERPRET_TIMEOUT_S: float = float(os.getenv("LLM_INTERPRET_TIMEOUT_S", "30"))

@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends
 
-from services.user_data_cache_service import user_data_cache
 from services import log_service
 from database import User
 from service_registry import services

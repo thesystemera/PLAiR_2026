@@ -81,7 +81,21 @@ def _record_success(key: str) -> None:
         log_service.ai(f"[LLM] {key} circuit reset after success")
 
 
+REQUEST_ERROR_CODES = {400, 404, 413, 422}
+
+
+def _status_code(err: Exception) -> Optional[int]:
+    code = getattr(err, "code", None)
+    if isinstance(code, int):
+        return code
+    response = getattr(err, "response", None)
+    return getattr(response, "status_code", None)
+
+
 def _record_failure(key: str, err: Exception) -> None:
+    if _status_code(err) in REQUEST_ERROR_CODES:
+        log_service.warning(f"[LLM] {key} rejected the request ({_status_code(err)}); not counted against the circuit")
+        return
     now = time.time()
     state = _circuit_state.setdefault(key, {"failures": [], "opened_until": 0, "last_error": ""})
     window_start = now - settings.LLM_CIRCUIT_WINDOW_SECONDS

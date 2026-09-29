@@ -13,6 +13,7 @@ from database.pg_pool import get_pooled_connection
 from services import log_service
 
 SHOTGUN_PRUNE_AT = 20000
+NEAR_BEST_TAKES = 0.01
 EMBEDDING_CACHE_MAX = 4096
 EMBEDDING_DIM = settings.SEMANTIC_ENCODER_DIM
 
@@ -387,7 +388,8 @@ class VectorDBService:
             used_at = self.shotgun_cache.get((listener, filename))
         return used_at is None or now - used_at >= settings.VECTOR_DB_SHOTGUN_COOLDOWN
 
-    def _note_used(self, listener: Optional[str], filename: str, now: float):
+    def note_used(self, listener: Optional[str], filename: str, now: Optional[float] = None):
+        now = now or time.time()
         with self.shotgun_lock:
             self.shotgun_cache[(listener, filename)] = now
             if len(self.shotgun_cache) > SHOTGUN_PRUNE_AT:
@@ -456,7 +458,7 @@ class VectorDBService:
 
         while all_matches and len(results) < top_n:
             current_similarity = all_matches[0][2]
-            identical_matches = [m for m in all_matches if abs(m[2] - current_similarity) < 1e-10]
+            identical_matches = [m for m in all_matches if current_similarity - m[2] < NEAR_BEST_TAKES]
 
             if len(identical_matches) > 1:
                 selected_match = random.choice(identical_matches)
@@ -464,10 +466,7 @@ class VectorDBService:
                 selected_match = identical_matches[0]
 
             results.append(selected_match)
-            all_matches = [m for m in all_matches if abs(m[2] - current_similarity) >= 1e-10]
-
-        if results:
-            self._note_used(listener, results[0][0], current_time)
+            all_matches = [m for m in all_matches if current_similarity - m[2] >= NEAR_BEST_TAKES]
 
         best = f"best {results[0][2]:.3f}" if results else "no match"
         log_service.detail(
