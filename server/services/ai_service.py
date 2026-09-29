@@ -369,6 +369,7 @@ class AIService(SingletonService):
         round_usage: list = []
         strikes = 0
         reviewed = False
+        trace: list = []
         tool_rounds = 0
         rounds = 0
 
@@ -398,12 +399,17 @@ class AIService(SingletonService):
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
             text = self._visible_text(parts)
             finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
+            trace.append({"round": rounds, "model": model, "finish": finish, "text": text,
+                          "thought": any(getattr(p, "thought", False) for p in parts),
+                          "calls": [{"name": fc.name, "args": dict(fc.args) if fc.args else {}}
+                                    for fc in function_calls]})
 
             if not function_calls and finish == "MAX_TOKENS" and strikes < settings.LLM_RECOVERY_MAX_STRIKES:
                 strikes += 1
                 log_service.warning(f"DJ tool turn: reply cut off at the token limit - asking again (strike {strikes})")
                 if parts:
                     contents.append(content)
+                trace[-1]["studio"] = self._recovery_message("MAX_TOKENS", bool(calls_log))
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(
                     text=self._recovery_message("MAX_TOKENS", bool(calls_log)))]))
                 continue
@@ -422,6 +428,7 @@ class AIService(SingletonService):
                                 log_service.error(f"DJ preamble handler failed: {e}")
                     if parts:
                         contents.append(content)
+                    trace[-1]["studio"] = prompt
                     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
                     continue
 
@@ -434,6 +441,7 @@ class AIService(SingletonService):
                     log_service.warning(f"DJ tool turn: no reply (finish {finish}) - recovery {strikes}")
                     if parts:
                         contents.append(content)
+                    trace[-1]["studio"] = recovery
                     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=recovery)]))
                     continue
                 if not text.strip():
@@ -443,7 +451,8 @@ class AIService(SingletonService):
                     "preambles": preambles,
                     "tool_calls": calls_log,
                     "rounds": rounds,
-                    "usage": round_usage
+                    "usage": round_usage,
+                    "trace": trace
                 }
 
             tool_rounds += 1
@@ -471,6 +480,7 @@ class AIService(SingletonService):
             response_parts = []
             for fc, result in zip(function_calls, results):
                 calls_log.append({"name": fc.name, "args": dict(fc.args) if fc.args else {}, "result": result})
+                trace[-1].setdefault("results", []).append({"name": fc.name, "result": result})
                 response_parts.append(types.Part(function_response=types.FunctionResponse(
                     id=fc.id,
                     name=fc.name,

@@ -1,4 +1,8 @@
 import asyncio
+import json
+import logging
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 import random
 import re
 import time
@@ -18,6 +22,31 @@ TEMP_CONVERSATION_TTL_S = 6 * 3600
 RECENT_ACTION_WINDOW_S = 15 * 60
 
 temp_conversations: Dict[str, List[str]] = {}
+_turn_logger: Optional[logging.Logger] = None
+
+
+def _turn_trace_logger() -> logging.Logger:
+    global _turn_logger
+    if _turn_logger is None:
+        logs_dir = Path(settings.LOGS_DIR)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        handler = TimedRotatingFileHandler(logs_dir / "dj_turns.jsonl", when="H", interval=1,
+                                           backupCount=max(1, settings.DJ_TURN_TRACE_HOURS), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        _turn_logger = logging.getLogger("plair.dj_turns")
+        _turn_logger.setLevel(logging.INFO)
+        _turn_logger.propagate = False
+        _turn_logger.addHandler(handler)
+    return _turn_logger
+
+
+def write_turn_trace(record: Dict) -> None:
+    if not settings.DJ_TURN_TRACE_ENABLED:
+        return
+    try:
+        _turn_trace_logger().info(json.dumps(record, ensure_ascii=False, default=str))
+    except Exception as e:
+        log_service.warning(f"[DJ TRACE] could not write turn trace: {type(e).__name__}: {e}")
 _temp_conversation_touched: Dict[str, float] = {}
 
 def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
@@ -614,6 +643,15 @@ class ConversationService:
                 f"{log_service.who(session_id)}: DJ turn | {trace['route']}"
                 f" | tools: {runtime.summary() or 'none'} | {(result or {}).get('rounds') or 0} round(s)"
                 f" | [TASK] {notes.rsplit('[TASK]', 1)[1].strip()[:160] if '[TASK]' in notes else 'none'}")
+            write_turn_trace({
+                "at": datetime.now(timezone.utc).isoformat(), "turn_id": ctx.turn_id,
+                "who": log_service.who(session_id), "origin": origin, "listener": transcription,
+                "plan": trace["route"], "user_message": (result or {}).get("user_message"),
+                "rounds": [{**round_, "results": [{"name": r["name"], "result": json.dumps(r["result"], default=str)[:2000]}
+                                                  for r in round_.get("results", [])]}
+                           for round_ in (result or {}).get("trace") or []],
+                "spoken_preambles": spoken, "main": main_response, "notes": notes,
+            })
 
             await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display,
                                                     user_id, session_id, is_guest, ctx.turn_id))

@@ -940,7 +940,9 @@ class DJPromptService:
                                for note in preamble_notes] + [notes_section]).strip(),
             "preambles": spoken_preambles,
             "tool_calls": result.get("tool_calls") or [],
-            "rounds": result.get("rounds")
+            "rounds": result.get("rounds"),
+            "trace": result.get("trace") or [],
+            "user_message": user_message
         }
 
     def _save_prompt_debug(

@@ -10,6 +10,10 @@ AI Radio (PLAiR.fm) is a full-stack music streaming application with an AI DJ th
 
 **Live site:** `https://plair.live` (nginx at `C:\nginx` proxies to backend :8000 and frontend :3000). "PLAiR.fm" is only the on-air brand name.
 
+## Working Rule: Root Causes, Not Band-Aids
+
+When something misbehaves, find out why it happened before changing code: read the logs and the raw model input/output for that turn, reproduce it, and fix the cause. Don't add guards, filters or retries that hide the symptom. If the cause can't be found yet, say so and add the logging needed to find it.
+
 ## Environment & Infrastructure
 
 All configuration lives in the repo-root `.env` (template: `.env.example`), loaded by `server/config/settings.py`.

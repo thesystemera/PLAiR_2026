@@ -10,3 +10,4 @@ Non-negotiables, in brief:
 - **GPU:** everything runs on the Quadro P6000 via `CUDA_VISIBLE_DEVICES`; never hard-code GPU indexes; no float16 for Whisper.
 - **Machine safety:** port 8000 is public (nginx → plair.live); test on `HOST=127.0.0.1 PORT=8011`. Never run `external_components/restart_all.bat` casually — it kills every python/node/nginx/java process on a shared host.
 - **Style:** no explanatory code comments; use relative paths when editing on Windows.
+- **Root causes, not band-aids:** when something misbehaves, read the logs and the raw model input/output, reproduce it and fix the cause. Don't add guards, filters or retries that hide symptoms.
