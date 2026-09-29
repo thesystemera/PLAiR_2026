@@ -73,6 +73,8 @@ import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
 const TILT_STORAGE_KEY = 'tiltEffects'
+const RADIO_INPUT_KEY = 'radioInputMode'
+const initialRadioInput = () => (safeStorage.get(RADIO_INPUT_KEY) === 'text' ? 'text' : 'voice')
 const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function'
 
@@ -719,12 +721,13 @@ export function UIStateProvider({ children }) {
     scale: 1
   })
 
-  const [radioButtonOpacity, setRadioButtonOpacityState] = useState(1)
-  const [radioButtonForegroundOpacity, setRadioButtonForegroundOpacityState] = useState(1)
+  const initialButtonOpacity = initialRadioInput() === 'text' ? 0 : 1
+  const [radioButtonOpacity, setRadioButtonOpacityState] = useState(initialButtonOpacity)
+  const [radioButtonForegroundOpacity, setRadioButtonForegroundOpacityState] = useState(initialButtonOpacity)
 
   const radioButtonRef = useRef({
-    opacity: 1,
-    foregroundOpacity: 1,
+    opacity: initialButtonOpacity,
+    foregroundOpacity: initialButtonOpacity,
     isHovered: false,
     isPressed: false,
     scale: 1
@@ -748,6 +751,7 @@ export function UIStateProvider({ children }) {
     showUIControls: false,
     currentMobilePanel: 2,
     catalogView: 'tracks',
+    radioInput: initialRadioInput(),
     playerHeight: 80
   })
 
@@ -759,6 +763,7 @@ export function UIStateProvider({ children }) {
     showUIControls: false,
     currentMobilePanel: 2,
     catalogView: 'tracks',
+    radioInput: initialRadioInput(),
     playerHeight: 80
   })
 
@@ -771,7 +776,7 @@ export function UIStateProvider({ children }) {
     }
 
     const merged = interfaceRef.current
-    const isHidden = merged.isFullscreenVisuals || merged.isScrolling
+    const isHidden = merged.isFullscreenVisuals || merged.isScrolling || merged.radioInput === 'text'
     const isRadioPanel = merged.currentMobilePanel === 2
     setRadioButtonOpacity(isHidden ? 0 : (isRadioPanel ? 1 : UI_FULLSCREEN.radioGlassOpacity))
     setRadioButtonForegroundOpacity(isHidden ? 0 : (isRadioPanel ? 1 : 0))
@@ -784,6 +789,12 @@ export function UIStateProvider({ children }) {
 
   const toggleCatalogView = useCallback(() => {
     reportInterfaceState({ catalogView: interfaceRef.current.catalogView === 'tracks' ? 'shoutouts' : 'tracks' })
+  }, [reportInterfaceState])
+
+  const toggleRadioInput = useCallback(() => {
+    const radioInput = interfaceRef.current.radioInput === 'text' ? 'voice' : 'text'
+    safeStorage.set(RADIO_INPUT_KEY, radioInput)
+    reportInterfaceState({ radioInput })
   }, [reportInterfaceState])
 
   const setMobilePanel = useCallback((index) => {
@@ -1208,6 +1219,7 @@ export function UIStateProvider({ children }) {
     interfaceState,
     interfaceRef,
     toggleCatalogView,
+    toggleRadioInput,
     setMobilePanel,
 
     shaderPanelRegions: shaderPanelRegionsRef,
@@ -1257,7 +1269,7 @@ export function UIStateProvider({ children }) {
     settingsState, publishSettings, contentUpdates, publishContentUpdate,
     toasts, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
-    reportInterfaceState, interfaceState, toggleCatalogView, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
+    reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
     subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
     getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,

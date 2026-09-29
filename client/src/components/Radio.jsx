@@ -2,7 +2,7 @@ import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
-import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
+import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle, Keyboard, Mic } from 'lucide-react'
 import { useRadioUI, uiState, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
@@ -10,6 +10,7 @@ import { api } from '../lib/api'
 import { useWebSocketEmit } from '../contexts/WebSocketContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { Conversation } from './Conversation'
+import { DJTextComposer } from './DJTextComposer'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { OnAirBadge } from './OnAirBadge'
@@ -60,8 +61,9 @@ export function Radio() {
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
   const { reportEngineStatus, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
-  const { interfaceState } = useUISelector(state => ({ interfaceState: state.interfaceState }))
+  const { interfaceState, toggleRadioInput } = useUISelector(state => ({ interfaceState: state.interfaceState, toggleRadioInput: state.toggleRadioInput }))
   const mobilePanel = interfaceState.currentMobilePanel
+  const isTextInput = interfaceState.radioInput === 'text'
   const playerHeight = interfaceState.playerHeight
 
   const [messageFilter, setMessageFilter] = useState('all')
@@ -86,34 +88,40 @@ export function Radio() {
 
   const isMusicPlaying = engineState.isMusicPlaying
 
+  const talkToDJ = useCallback(async ({ audio = null, text = null }, offlineLabel) => {
+    reportEngineStatus({ isAIProcessing: true })
+    try {
+      const response = await api.djTalk({ audio, text, context: 'generic_talk' })
+      if (response?.offline && response?.response) {
+        emitWebSocketEvent('transcription_complete', { text: offlineLabel })
+        setTimeout(() => emitWebSocketEvent('conversation_update', { bot_response: response.response }), 300)
+      }
+      return true
+    } catch (err) {
+      logger.error('[Radio] Failed to contact DJs:', err)
+      if (uiState.audioState.offlineMode) toastInfo("The DJs can't hear you while PLAiR is offline. Your music keeps playing.", 4000)
+      else errorToast('Failed to contact DJs', 3000)
+      return false
+    } finally {
+      reportEngineStatus({ isAIProcessing: false })
+    }
+  }, [reportEngineStatus, errorToast, toastInfo, emitWebSocketEvent])
+
   const sendToDJ = useCallback(async (audioBlob) => {
     if (!audioBlob) return
     try {
-      reportEngineStatus({ isAIProcessing: true })
       const reader = new FileReader()
-      reader.onloadend = async () => {
-        const base64Audio = reader.result.split(',')[1]
-        try {
-          const response = await api.djTalk({ audio: base64Audio, text: null, context: 'generic_talk' })
-          if (response?.offline && response?.response) {
-            emitWebSocketEvent('transcription_complete', { text: '🎤 Voice message (not sent, you are offline)' })
-            setTimeout(() => emitWebSocketEvent('conversation_update', { bot_response: response.response }), 300)
-          }
-        } catch (err) {
-          logger.error('[Radio] Failed to contact DJs:', err)
-          if (uiState.audioState.offlineMode) toastInfo("The DJs can't hear you while PLAiR is offline. Your music keeps playing.", 4000)
-          else errorToast('Failed to contact DJs', 3000)
-        } finally {
-          reportEngineStatus({ isAIProcessing: false })
-        }
+      reader.onloadend = () => {
+        void talkToDJ({ audio: reader.result.split(',')[1] }, '🎤 Voice message (not sent, you are offline)')
       }
       reader.readAsDataURL(audioBlob)
     } catch (err) {
       logger.error('[Radio] Failed to process audio:', err)
       errorToast('Failed to process audio', 3000)
-      reportEngineStatus({ isAIProcessing: false })
     }
-  }, [reportEngineStatus, errorToast, toastInfo, emitWebSocketEvent])
+  }, [talkToDJ, errorToast])
+
+  const sendTextToDJ = useCallback((text) => talkToDJ({ text }, `💬 ${text} (not sent, you are offline)`), [talkToDJ])
 
   useEffect(() => {
     registerKeyboardRecordingCallback(sendToDJ)
@@ -131,6 +139,7 @@ export function Radio() {
 
   const isPanelActive = !interfaceState.isFullscreenVisuals && (!isMobile || mobilePanel === 2)
   const showButtonMask = buttonOpacity > 0.5 && !isPhoneLandscape
+  const besideButton = isPhoneLandscape && !isTextInput
 
   const buttonScale = buttonInteraction?.scale || 1
   const buttonVisualRadius = (RADIO_BUTTON_SIZE * buttonScale * anchorScale) / 2
@@ -169,6 +178,17 @@ export function Radio() {
                </button>
              )
            })}
+          {!isMobile && (
+            <button
+              onClick={toggleRadioInput}
+              aria-label={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
+              title={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
+              className="ui-press p-1.5 rounded transition-colors border ml-1"
+              style={getFilterInactive()}
+            >
+              {isTextInput ? <Mic size={16} /> : <Keyboard size={16} />}
+            </button>
+          )}
         </div>
       </PanelHeader>
 
@@ -189,8 +209,8 @@ export function Radio() {
           }}
         >
           <div
-            className={isPhoneLandscape ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
-            style={isPhoneLandscape ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
+            className={besideButton ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
+            style={besideButton ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
           >
             <Conversation
               isOpen={true}
@@ -201,6 +221,12 @@ export function Radio() {
           </div>
         </Scroller>
       </div>
+
+      {isTextInput && (
+        <div className="w-full max-w-3xl mx-auto">
+          <DJTextComposer onSend={sendTextToDJ} />
+        </div>
+      )}
 
       {createPortal(
         <div

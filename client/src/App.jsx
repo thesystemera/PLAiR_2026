@@ -1,5 +1,6 @@
 import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {AnimatePresence, motion} from 'framer-motion'
+import {Keyboard, Mic} from 'lucide-react'
 import {api} from './lib/api'
 import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
 import {logger} from './lib/logger'
@@ -168,7 +169,7 @@ function App() {
     updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
     interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, hasActiveJobs,
-    uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, setMobilePanel,
+    uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
     tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
   } = useUISelector(state => ({
     updateShaderRegions: state.updateShaderRegions,
@@ -194,6 +195,8 @@ function App() {
     usageModalOpen: state.usageModalOpen,
     closeUsageModal: state.closeUsageModal,
     toggleCatalogView: state.toggleCatalogView,
+    toggleRadioInput: state.toggleRadioInput,
+    radioInput: state.interfaceState.radioInput,
     setMobilePanel: state.setMobilePanel,
     tracksUpdateCount: state.contentUpdates.tracks,
     shoutoutsUpdateCount: state.contentUpdates.shoutouts,
@@ -915,6 +918,8 @@ function App() {
 
                     if (id === PANEL_IDS.CATALOG && isActive) {
                       toggleCatalogView()
+                    } else if (id === PANEL_IDS.RADIO && isActive) {
+                      toggleRadioInput()
                     } else {
                       setMobilePanel(index)
                     }
@@ -959,12 +964,16 @@ function App() {
                         <>
                           {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
                             ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon(navIconClass)
-                            : config.mobileIcon(navIconClass)
+                            : id === PANEL_IDS.RADIO && isActive
+                              ? (radioInput === 'text' ? <Mic className={navIconClass} /> : <Keyboard className={navIconClass} />)
+                              : config.mobileIcon(navIconClass)
                           }
                           <span className={isPhoneLandscape ? 'text-[10px] leading-tight' : 'text-xs'}>
                             {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
                               ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileLabel
-                              : config.mobileLabel
+                              : id === PANEL_IDS.RADIO && isActive
+                                ? (radioInput === 'text' ? 'Talk' : 'Type')
+                                : config.mobileLabel
                             }
                           </span>
                         </>
