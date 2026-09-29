@@ -427,6 +427,8 @@ async def lifespan(_app: FastAPI):
     services.tts_stream_planner = tts_stream_planner = TTSStreamPlanner()
     log_service.success("✓ TTS Stream Planner initialized")
 
+    websocket_service.set_display_renderer(tts_generation_service.paralanguage_emoji.render_message)
+
     class WebSocketAdapter:
         async def emit(self, event: str, msg_data: dict, room: Optional[str] = None):
             assert websocket_service is not None

@@ -136,6 +136,23 @@ class DJPromptSystemService:
         return meta_tag, meta_data_prompt
 
     @gpt_error_handler
+    async def generate_paralanguage_emoji(self, reaction):
+        system_prompt = (
+            "You pick emoji for a radio DJ's non-verbal vocal reaction (a paralanguage tag). "
+            "Reply with one or two emoji that show the sound or feeling of the reaction, and nothing else."
+        )
+        return await self._execute_gpt_stream(
+            model=self.config['dj_model'],
+            max_tokens=settings.DJ_MICRO_MAX_TOKENS,
+            temperature=0.3,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": reaction}
+            ],
+            role=LLM_BACKGROUND
+        )
+
+    @gpt_error_handler
     async def generate_breath_gpt_response(self, context):
         system_prompt = (
             "You generate the micro-sound a radio DJ makes BETWEEN sentences - the tiniest inhale, "

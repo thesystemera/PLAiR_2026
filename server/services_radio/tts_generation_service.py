@@ -24,6 +24,7 @@ from services import usage_tracking
 from services_radio.tts_processing_service import decode_mp3
 from services_radio.tts_voice_threads import voice_thread
 from services_radio.dj_prompt_helper_service import is_clean_paralanguage
+from services_radio.paralanguage_emoji import ParalanguageEmoji
 from services.task_utils import spawn
 
 PRIORITY_HIGH = "high"
@@ -141,6 +142,7 @@ class TTSGenerationService:
         self.vector_db_service = vector_db_service
         self.audio_processing_service = audio_processing_service
         self.ai_service = ai_service
+        self.paralanguage_emoji = ParalanguageEmoji(vector_db_service, ai_service)
 
         self.tts_directory = settings.TTS_AUDIO_DIR
         self.meta_directory = settings.META_AUDIO_DIR
@@ -685,6 +687,8 @@ class TTSGenerationService:
 
         audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
         title = (sanitize_clip_title(tag) or 'breath') if embeddings_type == 'breath_embeddings' else tag
+        if embeddings_type == 'meta_embeddings':
+            self.paralanguage_emoji.note_new_title(title)
         spawn(self.save_generated_clip(
             pcm, audio_path, title, audio_description, content_voice, embeddings_type
         ), name="tts_save_audio_and_embedding")

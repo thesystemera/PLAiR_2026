@@ -13,6 +13,7 @@ WS_SEND_TIMEOUT_S = 3.0
 class WebSocketService:
     def __init__(self):
         self._connections: Dict[str, Dict[str, WebSocket]] = {}
+        self._display_renderer = None
 
         self._last_activity: Dict[str, Dict[str, float]] = {}
 
@@ -167,9 +168,17 @@ class WebSocketService:
             if failed is not None:
                 self._evict(*failed)
 
+    def set_display_renderer(self, renderer):
+        self._display_renderer = renderer
+
     async def broadcast_to_session(self, session_id: str, message: dict):
         if session_id not in self._connections:
             return
+        if self._display_renderer is not None:
+            try:
+                message = await self._display_renderer(message)
+            except Exception as e:
+                log_service.warning(f"Display renderer failed, sending raw message: {e}")
 
         connections = list(self._connections[session_id].items())
         if not connections:

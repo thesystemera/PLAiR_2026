@@ -30,6 +30,12 @@ async def get_conversation_history_endpoint(
         limit=limit
     )
 
+    emoji = services.tts_generation_service.paralanguage_emoji if services.tts_generation_service else None
+    if emoji and format_type == 'json':
+        for item in history:
+            if item.get("type") == "bot":
+                item["content"] = await emoji.render(item["content"])
+
     return {
         "conversations": history if format_type == 'json' else [],
         "text": history if format_type == 'text' else "",

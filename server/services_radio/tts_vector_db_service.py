@@ -80,6 +80,7 @@ class VectorDBService:
                 CREATE INDEX IF NOT EXISTS idx_{table_name}_voice 
                 ON {table_name}(voice)
             ''')
+        c.execute("ALTER TABLE meta_embeddings ADD COLUMN IF NOT EXISTS emoji TEXT")
         
         conn.commit()
         conn.close()
@@ -120,6 +121,47 @@ class VectorDBService:
                 log_service.error(f"Vector Cache: purge failed for {table_name}: {e}")
             finally:
                 conn.close()
+
+    def paralanguage_emojis(self) -> dict:
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT ON (lower(title)) lower(title), emoji FROM meta_embeddings WHERE emoji IS NOT NULL")
+            return dict(c.fetchall())
+        finally:
+            conn.close()
+
+    def set_paralanguage_emoji(self, title: str, emoji: str):
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute("UPDATE meta_embeddings SET emoji = %s WHERE lower(title) = lower(%s)", (emoji, title))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log_service.error(f"Failed to store paralanguage emoji for '{title}': {e}")
+        finally:
+            conn.close()
+
+    def nearest_titles(self, db_type: str, text: str, limit: int = 5) -> List[str]:
+        query = self._normalized(self._embedding_for(text))
+        scored = {}
+        index_pair = self.index_pairs.get(db_type)
+        if index_pair is not None:
+            with self.index_lock:
+                index = index_pair[0] if self.current_slots[db_type] == 1 else index_pair[1]
+                ids = index.get_nns_by_vector(query, limit * 4) if index.get_n_items() else []
+            rows = self._rows.get(db_type, {})
+            for item_id in ids:
+                row = rows.get(item_id + 1)
+                if row:
+                    scored[row[1]] = max(scored.get(row[1], -1.0), float(np.dot(query, row[2])))
+        with self.log_lock:
+            for _row_id, embedding, _filename, title, _voice, item_db_type in self.new_embeddings_log:
+                if item_db_type == db_type:
+                    similarity = float(np.dot(query, embedding / np.linalg.norm(embedding)))
+                    scored[title] = max(scored.get(title, -1.0), similarity)
+        return [title for title, _ in sorted(scored.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
 
     def delete_embedding(self, filename: str, db_type: str):
         conn = self._get_connection()
