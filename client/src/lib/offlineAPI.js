@@ -12,6 +12,7 @@ const OFFLINE_MESSAGES = {
   voiceSearch: 'Voice search needs a connection to PLAiR. You can still type to search your downloads.',
   shoutouts: 'Shoutouts need a connection to PLAiR. They will be back when you are online.',
   reply: 'Replies need a connection to PLAiR. Please try again when you are back online.',
+  review: 'Reviews need a connection to PLAiR. Please try again when you are back online.',
   deleteShoutout: 'Deleting a shoutout needs a connection to PLAiR. Please try again when you are back online.',
   radioMode: 'Radio Mode needs a connection to PLAiR. Your change was not saved.',
 }
@@ -593,6 +594,22 @@ class OfflineBackend {
     throw new Error(OFFLINE_MESSAGES.reply)
   }
 
+  async typeShoutoutReply() {
+    throw new Error(OFFLINE_MESSAGES.reply)
+  }
+
+  async getTrackReviews(trackId) {
+    return { reviews: [], count: 0, track_id: trackId, offline: true }
+  }
+
+  async uploadTrackReview() {
+    throw new Error(OFFLINE_MESSAGES.review)
+  }
+
+  async typeTrackReview() {
+    throw new Error(OFFLINE_MESSAGES.review)
+  }
+
   async deleteShoutout() {
     throw new Error(OFFLINE_MESSAGES.deleteShoutout)
   }
@@ -937,6 +954,14 @@ class OfflineBackend {
   pendingProfileUpdates(userId) {
     const pending = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
     return pending && pending.userId === userId ? pending.updates : null
+  }
+
+  clearPendingProfileKeys(keys) {
+    const pending = readJson(STORAGE_KEYS.PENDING_PROFILE, null)
+    if (!pending) return
+    const updates = Object.fromEntries(Object.entries(pending.updates || {}).filter(([key]) => !keys.includes(key)))
+    if (Object.keys(updates).length) writeJson(STORAGE_KEYS.PENDING_PROFILE, { ...pending, updates })
+    else safeStorage.remove(STORAGE_KEYS.PENDING_PROFILE)
   }
 
   takePendingProfileWrites() {

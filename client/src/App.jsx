@@ -52,6 +52,7 @@ const LAZY_MODULE_LOADERS = [
   () => import('./components/modals/SeedRadioModal'),
   () => import('./components/modals/TrackAnalyticsModal'),
   () => import('./components/modals/ShoutoutModal'),
+  () => import('./components/modals/ReviewModal'),
   () => import('./components/modals/GenerationModal'),
   () => import('./components/modals/CompatibilityWarningModal'),
   () => import('./components/modals/DemoModeModal'),
@@ -64,6 +65,7 @@ const [
   loadSeedRadioModal,
   loadTrackAnalyticsModal,
   loadShoutoutModal,
+  loadReviewModal,
   loadGenerationModal,
   loadCompatibilityWarningModal,
   loadDemoModeModal,
@@ -75,6 +77,7 @@ const AudioReactiveCanvas = lazyNamed(loadAudioReactiveCanvas, 'AudioReactiveCan
 const SeedRadioModal = lazyNamed(loadSeedRadioModal, 'SeedRadioModal')
 const TrackAnalyticsModal = lazyNamed(loadTrackAnalyticsModal, 'TrackAnalyticsModal')
 const ShoutoutModal = lazyNamed(loadShoutoutModal, 'ShoutoutModal')
+const ReviewModal = lazyNamed(loadReviewModal, 'ReviewModal')
 const GenerationModal = lazyNamed(loadGenerationModal, 'GenerationModal')
 const CompatibilityWarningModal = lazyNamed(loadCompatibilityWarningModal, 'CompatibilityWarningModal')
 const DemoModeModal = lazyNamed(loadDemoModeModal, 'DemoModeModal')
@@ -83,7 +86,9 @@ const UploadMusicModal = lazyNamed(loadUploadMusicModal, 'UploadMusicModal')
 const UsageStatsModal = lazyNamed(() => import('./components/modals/UsageStatsModal'), 'UsageStatsModal')
 const CostTicker = lazyNamed(() => import('./components/CostTicker'), 'CostTicker')
 
-const canvasFallback = <div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
+const CONTENT_UPDATE_TYPES = { track: 'tracks', shoutout: 'shoutouts', reply: 'shoutouts', review: 'reviews' }
+
+const canvasFallback =<div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
 
 const MOBILE_NAV_MASK = VERTICAL_EDGE_FADE_MASK('4px')
 const MOBILE_NAV_MASK_STYLE = { maskImage: MOBILE_NAV_MASK, WebkitMaskImage: MOBILE_NAV_MASK }
@@ -167,7 +172,7 @@ function App() {
   const {
     updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
-    interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, hasActiveJobs,
+    interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, reviewModalState, closeReviewModal, hasActiveJobs,
     uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
     tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
   } = useUISelector(state => ({
@@ -188,6 +193,8 @@ function App() {
     reportInterfaceState: state.reportInterfaceState,
     shoutoutModalState: state.shoutoutModalState,
     closeShoutoutModal: state.closeShoutoutModal,
+    reviewModalState: state.reviewModalState,
+    closeReviewModal: state.closeReviewModal,
     hasActiveJobs: state.hasActiveJobs,
     uploadModalOpen: state.uploadModalOpen,
     closeUploadModal: state.closeUploadModal,
@@ -225,9 +232,11 @@ function App() {
       publishSettings({ ...ACCOUNT_SETTING_DEFAULTS, ...loadGuestSettings() })
       return
     }
-    const settings = { ...settingsFromAccount(user), ...settingsFromAccount(offlineBackend.pendingProfileUpdates(user.id)) }
+    const pending = offlineBackend.pendingProfileUpdates(user.id)
+    const settings = { ...settingsFromAccount(user), ...settingsFromAccount(pending) }
     if (Object.keys(settings).length) publishSettings(settings)
-  }, [user, publishSettings])
+    if (pending && !getUIState().audioState.offlineMode) void api.syncOfflineWrites()
+  }, [user, publishSettings, getUIState])
 
   useEffect(() => {
     if (window.__rafDebug) {
@@ -716,11 +725,8 @@ function App() {
   useWebSocketSubscribe('generation_job_completed', handleGenerationJobCompleted)
   useWebSocketSubscribe('generation_stage_update', () => {})
   useWebSocketSubscribe('content_updated', (data) => {
-    const { content_type } = data
-    if (content_type && (content_type === 'track' || content_type === 'shoutout')) {
-      const normalizedType = content_type === 'track' ? 'tracks' : 'shoutouts'
-      publishContentUpdate(normalizedType)
-    }
+    const normalizedType = CONTENT_UPDATE_TYPES[data?.content_type]
+    if (normalizedType) publishContentUpdate(normalizedType)
   })
 
   useWebSocketSubscribe('user_settings_updated', (data) => {
@@ -1041,6 +1047,16 @@ function App() {
             isOpen={shoutoutModalState.isOpen}
             onClose={closeShoutoutModal}
             shoutout={shoutoutModalState.shoutout}
+          />
+        </LazyMount>
+
+        <LazyMount when={reviewModalState.isOpen}>
+          <ReviewModal
+            isOpen={reviewModalState.isOpen}
+            onClose={closeReviewModal}
+            trackId={reviewModalState.trackId}
+            track={reviewModalState.track}
+            onLogin={() => setShowLogin(true)}
           />
         </LazyMount>
 

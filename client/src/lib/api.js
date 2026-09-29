@@ -272,6 +272,7 @@ class API {
         body: JSON.stringify({ audio_quality: audioQuality }),
       })
       if (!res.ok) throw new Error('Failed to update audio quality')
+      offlineBackend.clearPendingProfileKeys(['audio_quality'])
       const data = await res.json()
       logger.info('[API] Audio quality update response:', data)
       return data
@@ -322,6 +323,7 @@ class API {
         body: JSON.stringify(updates),
       })
       if (!res.ok) throw new Error('Failed to update user profile')
+      offlineBackend.clearPendingProfileKeys(Object.keys(updates))
       return res.json()
     })
   }
@@ -490,6 +492,68 @@ class API {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ detail: 'Failed to upload reply' }))
         throw new Error(errorData.detail || 'Failed to upload reply')
+      }
+      return res.json()
+    })
+  }
+
+  async typeShoutoutReply(parentId, text) {
+    return this._routeRequest('typeShoutoutReply', [parentId, text], async () => {
+      logger.info(`[API] ⌨️ Posting typed reply to shoutout ${parentId}`)
+      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/${parentId}/reply/text`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Failed to post reply' }))
+        throw new Error(errorData.detail || 'Failed to post reply')
+      }
+      return res.json()
+    })
+  }
+
+  async getTrackReviews(trackId) {
+    return this._routeRequest('getTrackReviews', [trackId], async () => {
+      const res = await this._fetch(`${API_BASE}/tracks/${encodeURIComponent(trackId)}/reviews`, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      })
+      if (!res.ok) {
+        if (res.status === 404) return { reviews: [], count: 0, track_id: trackId }
+        throw new Error(`Failed to fetch reviews: ${res.statusText}`)
+      }
+      return res.json()
+    })
+  }
+
+  async uploadTrackReview(trackId, audioBase64) {
+    return this._routeRequest('uploadTrackReview', [trackId, audioBase64], async () => {
+      logger.info(`[API] 🎤 Uploading review for track ${trackId}`)
+      const res = await this._fetch(`${API_BASE}/tracks/${encodeURIComponent(trackId)}/reviews/upload`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ audio: audioBase64 }),
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Failed to upload review' }))
+        throw new Error(errorData.detail || 'Failed to upload review')
+      }
+      return res.json()
+    })
+  }
+
+  async typeTrackReview(trackId, text) {
+    return this._routeRequest('typeTrackReview', [trackId, text], async () => {
+      logger.info(`[API] ⌨️ Posting typed review for track ${trackId}`)
+      const res = await this._fetch(`${API_BASE}/tracks/${encodeURIComponent(trackId)}/reviews/text`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Failed to post review' }))
+        throw new Error(errorData.detail || 'Failed to post review')
       }
       return res.json()
     })
