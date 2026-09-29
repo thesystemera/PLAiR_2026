@@ -102,7 +102,6 @@ PlaybackContext publishes playback state to UIState via `reportEngineStatus()`:
 - `currentIndex` - Index of current track in queue
 - `isMusicPlaying`, `isMusicPaused` - Playback state
 - `isActiveDevice` - Whether THIS device controls playback
-- `progressPercent` - Playback progress
 
 UIStateContext uses this to automatically manage artwork preloading (see section 8).
 
@@ -481,7 +480,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 
 ### 16. Offline Mode
 
-**Files:** `NetworkContext.jsx` (health checks), `PlaybackContext.jsx` (local mode + hand-back), `lib/api.js` (`_routeRequest`, connectivity events `trouble`/`lost`/`recovered`), `lib/offlineAPI.js` (local backend + local radio queue), `lib/cacheManager.js` / `lib/offlineStorage.js` (IndexedDB library), `lib/backgroundDownloader.js`, `components/OfflinePill.jsx`, `public/sw.js` + the `asset-manifest.json` plugin in `vite.config.js`. Full notes: `docs/OFFLINE_MODE.md`.
+**Files:** `NetworkContext.jsx` (health checks), `PlaybackContext.jsx` (local mode + hand-back), `lib/api.js` (`_routeRequest`, connectivity events `trouble`/`lost`/`recovered`), `lib/offlineAPI.js` (local backend + local radio queue), `lib/cacheManager.js` / `lib/offlineStorage.js` (IndexedDB library), `lib/backgroundDownloader.js`, `OfflineNotice` in `components/AppBridges.jsx`, `public/sw.js` + the `asset-manifest.json` plugin in `vite.config.js`. Full notes: `docs/OFFLINE_MODE.md`.
 
 - `audioState.offlineMode` (UIState) is the SSOT for "running on the downloads"; it is `connectionMode !== 'full'`. Gate offline behaviour on it, never on `audioState.isOnline` (browser flag only). The server counts as down only after 2 failed `/api/health` probes and back up after 2 successes (more if it flapped); never flip on a single failure.
 - API calls that hit a network error or 502/503/504, and a WebSocket that closes abnormally, call `api.reportServerTrouble()` (immediate probe). Unreachable is not rejected: only a 401/403 or WS close 4401 may sign the user out.
@@ -490,7 +489,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 - `WebSocketContext.send` returns `'offline'` while `offlineMode` is on; queued playback/talk-break messages are dropped when the server is lost, and the socket reconnects immediately on `recovered`.
 - `audioEngine.handleOfflineTransition()` swaps a still-streaming song to its downloaded copy seamlessly and keeps the slot metadata (`duration_ms` drives crossfades). Stream chunk failures retry every 2 s while the buffer plays.
 - Cached track metadata is normalized (`normalizeTrackMetadata`); read the library via `cacheManager.getCachedTrackList()` (no blobs, memoized), not `getAllCachedTracks()`.
-- Offline preference changes queue in `offline_pending_preferences` and replay via `api.syncOfflineWrites()` on recovery.
+- Offline preference changes queue in `offline_pending_preferences` and replay via `api.syncOfflineWrites()` on recovery. Offline settings changes queue in `offline_pending_profile`: a later successful online save drops the queued value for the same keys (`clearPendingProfileKeys`), and anything still queued is synced as soon as the app is online (App settings effect), so a missed recovery can't pin a setting.
 - Service worker: precaches the build's `asset-manifest.json`, matches with `ignoreVary`, never intercepts `/api/*` (incl. streams), answers `Range` from cache with 206. Bump the cache names in `sw.js` when changing its caching rules.
 - Download space = half the browser quota (max 2 GB) on every platform, iOS included; `navigator.storage.persist()` is requested once downloads exist (not on Firefox). Background downloads back off 15 min after a < 1 Mbps download; Wi-Fi vs cellular is unknowable on Safari/Firefox (accepted).
 
@@ -527,7 +526,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 **Infrastructure Contexts:**
 - `client/src/contexts/WebSocketContext.jsx` - WebSocket client (message subscription, connection management)
 - `client/src/contexts/ViewportContext.jsx` - Responsive breakpoints (window size, device detection, scaling)
-- `client/src/contexts/NetworkContext.jsx` - Network status (online/offline, connection quality, bitrate detection)
+- `client/src/contexts/NetworkContext.jsx` - Network status (online/offline, connection quality, bitrate detection; without `navigator.connection` (Safari/iOS/Firefox) the speed test times a 516 KB `Range: bytes=0-` download of `/images/plair_icon.png`, which the service worker never caches)
 - `client/src/contexts/StorageContext.jsx` - Storage management (cache size, quota, cleanup)
 
 **Data Contexts:**
@@ -573,7 +572,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 **UI Utilities:**
 - `client/src/components/Panel.jsx` - Generic panel wrapper (consistent styling, animations)
 - `client/src/components/Scroller.jsx` - Custom scroller (haptic feedback, smooth scrolling)
-- `client/src/components/Toast.jsx` - Toast notifications (success, error, info messages)
+- `client/src/components/Notice.jsx` / `NoticeStack.jsx` - the one notice channel (`NoticeChip`; see section 14)
 - `client/src/components/VirtualScroller.jsx` - Virtual scrolling (large lists, lazy loading)
 - `client/src/components/KeyboardControls.jsx` - Keyboard shortcuts (space = play/pause, arrows = seek)
 - `client/src/components/InteractiveEngagementButton.jsx` - Interactive buttons (haptics, visual feedback)
@@ -633,6 +632,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 - `client/src/lib/offlineVideoRenderer.js` - Offline video export (frame-by-frame WebGL rendering, MP4 encoding via WebCodecs, uses shared shaders from AudioReactiveCanvas)
 
 **UI Libraries:**
+- `client/src/lib/soundModes.js` - the four DJ sound modes (DJ + PING, DJ only, PING only, OFF over `settingsState.ttsMuted` / `notificationsMuted`), shared by the player button and User → Sounds; `useUISound` skips notification sounds while `notificationsMuted` (mic press/release feedback still plays)
 - `client/src/lib/haptics.js` - Haptic feedback (vibration patterns)
 - `client/src/lib/textRenderer.js` - Text rendering (canvas-based text)
 - `client/src/lib/themeManager.js` - Theme management (color schemes)
@@ -654,7 +654,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 - `server/services/auth_service.py` - Authentication (JWT tokens, password hashing)
 - `server/services/user_profile_service.py` - User profile management (username, settings, location)
 - `server/services/preferences_service.py` - User preferences (audio quality, theme, TTS settings)
-- `server/services/user_data_cache_service.py` - In-memory cache for user likes/bans
+- `server/services/user_data_cache_service.py` - In-memory cache for users and their likes/bans (auth reads users from it; any write to a `User` row must call `invalidate_user`, as `UserProfileService.update_profile` does, or `/api/auth/me` serves stale settings)
 - `server/services/profile_picture_service.py` - Profile picture uploads and serving
 
 **Media Serving:**
@@ -905,7 +905,7 @@ The app supports iOS Safari with graceful degradation. Key patterns:
   - A rejected `play()` (`NotAllowedError`), or a context that isn't running, sets `engineState.audioNeedsTap` and shows `AudioUnlockPrompt` ("Tap to start audio"). `togglePlay` never pauses while blocked. `ensureContext()` waits at most 300 ms for `resume()`, since WebKit leaves it pending until a tap. DJ voice lines blocked by autoplay wait for the next tap instead of being dropped.
 - **Claim-on-open** only claims after real user activation (`navigator.userActivation.hasBeenActive`); otherwise the claim waits for the first tap (within 2 min).
 - **Streaming on iPhone:** `lib/mediaSupport.js` detects MSE + WebM/Opus. Without it (iPhone), the engine plays `/api/stream/{id}` (MP3) as a progressive `<audio src>`, and offline downloads are saved as MP3 (`downloadFormat()`). Downloads the device can't play are ignored (`canPlayCachedBlob`). DJ voice still needs MSE/ManagedMediaSource with WebM/Opus; if unsupported, a one-time notice explains it.
-- **Media Session / outside pauses:** separate `play`/`pause`/`seekto` handlers (`resumePlayback`/`pausePlayback`), `playbackState`, `setPositionState` and https artwork. Pauses the engine didn't cause (calls, other apps, headphones) and a context `interrupted` state go through `engine.onExternalPause` → `pauseFromOutside`, which updates UI + server. `navigator.audioSession.type = 'playback'` is set where supported.
+- **Media Session / outside pauses:** separate `play`/`pause`/`seekto` handlers (`resumePlayback`/`pausePlayback`), `playbackState`, `setPositionState` and https artwork. Pauses the engine didn't cause (calls, other apps, headphones) and a context `interrupted` state go through `engine.onExternalPause` → `pauseFromOutside`, which updates UI + server. `navigator.audioSession.type = 'playback'` is set where supported; the voice recorder switches it to `play-and-record` only while capturing and back to `playback` as soon as the mic tracks stop (released on stop, not after `MediaRecorder.onstop`), so Bluetooth headsets return from hands-free to A2DP.
 - **Motion permission** is only requested from Settings → Tilt Effects (never on the first tap).
 - `pagehide`/`pageshow` listeners supplement `visibilitychange` for reliable tab lifecycle.
 - **Layout:** Body uses `height: 100dvh` (dynamic viewport height) to handle iOS address bar. `position: fixed` elements work correctly because no parent transforms interfere.
