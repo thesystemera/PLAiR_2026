@@ -80,6 +80,42 @@ def _is_float_wav(path: Path) -> bool:
     except Exception:
         return False
 
+TITLE_MAX = 120
+TAG_MAX = 60
+TAG_LIST_MAX = 8
+LYRICS_MAX = 20000
+DESCRIPTION_MAX = 2000
+
+
+def _clean_tag_list(values) -> List[str]:
+    if isinstance(values, str):
+        values = values.split(",")
+    cleaned = []
+    for value in values or []:
+        value = " ".join(str(value or "").split())[:TAG_MAX]
+        if value and value.lower() not in (c.lower() for c in cleaned):
+            cleaned.append(value)
+    return cleaned[:TAG_LIST_MAX]
+
+
+EMBEDDED_TAG_KEYS = ("title", "artist", "albumartist", "album", "date", "genre")
+
+
+def read_embedded_tags(path: Path) -> Dict[str, str]:
+    try:
+        import mutagen
+        audio = mutagen.File(str(path), easy=True)
+    except Exception:
+        return {}
+    found = {}
+    for key in EMBEDDED_TAG_KEYS:
+        values = (audio.tags or {}).get(key) if audio is not None and audio.tags is not None else None
+        value = " ".join(str(values[0]).split())[:200] if values else ""
+        if value:
+            found[key] = value
+    return found
+
+
 class UploadFailed(Exception):
     pass
 
@@ -395,7 +431,7 @@ class HumanMusicUploadService(SingletonService):
         filename: str,
         audio_bytes: Optional[bytes] = None,
         user_title: Optional[str] = None,
-        user_artist: Optional[str] = None,
+        artist: Optional[Dict[str, Any]] = None,
         content_type: Optional[str] = None,
         upload_path: Optional[Path] = None,
         file_size: Optional[int] = None,
@@ -443,7 +479,7 @@ class HumanMusicUploadService(SingletonService):
                     file_size=file_size,
                     content_sha256=content_sha256,
                     user_title=user_title,
-                    user_artist=user_artist,
+                    artist=artist,
                     enable_upscaling=enable_upscaling,
                     upload_id=upload_id
                 )
@@ -492,7 +528,7 @@ class HumanMusicUploadService(SingletonService):
         file_size: Optional[int],
         content_sha256: str,
         user_title: Optional[str],
-        user_artist: Optional[str],
+        artist: Optional[Dict[str, Any]],
         enable_upscaling: bool,
         upload_id: str
     ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
@@ -591,7 +627,7 @@ class HumanMusicUploadService(SingletonService):
             source_audio_path=source_audio_path,
             duration_ms=duration_ms,
             user_title=user_title,
-            user_artist=user_artist
+            artist=artist
         )
 
         catalog_metadata["source_sha256"] = content_sha256
@@ -608,8 +644,9 @@ class HumanMusicUploadService(SingletonService):
             catalog_metadata["source_media_type"] = "audio"
 
         should_apply_apollo = enable_upscaling
-        if quality_report and self.quality_analysis_service:
+        if enable_upscaling and quality_report and self.quality_analysis_service:
             should_apply_apollo = self.quality_analysis_service.should_apply_processing(quality_report, "apollo")
+        catalog_metadata["enhance_requested"] = enable_upscaling
 
         master_wav_path = settings.ENHANCED_WAV_DIR / f"{track_id}.wav"
 
@@ -691,8 +728,9 @@ class HumanMusicUploadService(SingletonService):
         source_audio_path: Path,
         duration_ms: int,
         user_title: Optional[str],
-        user_artist: Optional[str]
+        artist: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
+        tags = await asyncio.to_thread(read_embedded_tags, original_path)
         analysis_path = source_audio_path
         temp_mp3_path = None
         file_size_mb = source_audio_path.stat().st_size / (1024 * 1024)
@@ -727,7 +765,9 @@ class HumanMusicUploadService(SingletonService):
             extracted_metadata, extraction_error = await self.metadata_extraction_service.extract_metadata(
                 audio_path=analysis_path,
                 user_provided_title=user_title,
-                user_provided_artist=user_artist
+                user_provided_artist=(artist or {}).get("name"),
+                filename=filename,
+                tags=tags
             )
         finally:
             if temp_mp3_path is not None:
@@ -741,7 +781,9 @@ class HumanMusicUploadService(SingletonService):
             track_id=track_id,
             user_id=user_id,
             duration_ms=duration_ms,
-            original_filename=filename
+            original_filename=filename,
+            artist=artist,
+            tags=tags
         )
 
         sonic_prompt = _coerce_prompt(catalog_metadata.get("sonic_master_prompt"))
@@ -1063,40 +1105,49 @@ class HumanMusicUploadService(SingletonService):
         self,
         user_id: int,
         track_id: str,
-        updates: Dict[str, Any]
+        updates: Dict[str, Any],
+        artist: Optional[Dict[str, Any]] = None
     ) -> Tuple[bool, str]:
 
         if not self.catalog_db_service:
             return False, "Catalog service not available"
 
-        track = self.catalog_db_service.tracks.get(track_id)
-        if not track:
+        current = self.catalog_db_service.tracks.get(track_id)
+        if not current:
             return False, "Track not found"
 
-        if track.get("uploaded_by_user_id") != user_id:
+        if current.get("uploaded_by_user_id") != user_id:
             return False, "You can only edit your own uploads"
 
-        allowed_updates = {
-            "title": ["generation_params", "title"],
-            "artist": ["track_info", "artist"],
-            "primary_genre": ["derived_tags", "primary_genre"],
-            "secondary_genres": ["derived_tags", "secondary_genres"],
-            "mood_keywords": ["derived_tags", "mood_keywords"],
-            "similar_artists": ["derived_tags", "similar_artists"],
-        }
-
-        for key, value in updates.items():
-            if key in allowed_updates:
-                path = allowed_updates[key]
-                if len(path) == 2:
-                    if path[0] not in track:
-                        track[path[0]] = {}
-                    track[path[0]][path[1]] = value
+        track = json.loads(json.dumps(current))
+        params = track.setdefault("generation_params", {})
+        info = track.setdefault("track_info", {})
+        tags = track.setdefault("derived_tags", {})
 
         if "title" in updates:
-            if "track_info" not in track:
-                track["track_info"] = {}
-            track["track_info"]["title"] = updates["title"]
+            title = " ".join(str(updates["title"] or "").split())[:TITLE_MAX]
+            if not title:
+                return False, "Title can't be empty"
+            params["title"] = info["title"] = title
+        if artist is not None:
+            params["artist_name"] = info["artist"] = artist["name"]
+            track["artist_profile_id"] = artist["id"]
+            track["artist_slug"] = artist["slug"]
+        if "primary_genre" in updates:
+            genre = " ".join(str(updates["primary_genre"] or "").split())[:TAG_MAX]
+            if not genre:
+                return False, "Genre can't be empty"
+            tags["primary_genre"] = genre
+        for key in ("secondary_genres", "mood_keywords"):
+            if key in updates:
+                tags[key] = _clean_tag_list(updates[key])
+        if "lyrics" in updates:
+            lyrics = str(updates["lyrics"] or "").strip()[:LYRICS_MAX]
+            track["transcribed_lyrics"] = lyrics or None
+            params["prompt"] = lyrics
+            params["instrumental"] = not lyrics
+        if "description" in updates:
+            track["description"] = str(updates["description"] or "").strip()[:DESCRIPTION_MAX] or None
 
         track["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1107,6 +1158,28 @@ class HumanMusicUploadService(SingletonService):
         except Exception as e:
             log_service.warning(f"Failed to update database: {e}")
 
-        self.catalog_db_service.tracks[track_id] = track
+        self.catalog_db_service.add_track_to_memory(track_id, track)
+        if self.vector_db_service:
+            try:
+                await asyncio.to_thread(self.vector_db_service.add_single_track, track)
+            except Exception as e:
+                log_service.warning(f"[Upload] Re-indexing {track_id} after edit failed: {e}")
+        if "lyrics" in updates:
+            await self._remove_paths([settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json"])
+            asset_integrity_service.notify_tracks_changed([track_id], "lyrics edited")
 
+        log_service.upload(f"[Upload] {log_service.who(user_id=user_id)} edited {track_id}: "
+                           f"{', '.join(sorted(set(updates) | ({'artist'} if artist else set())))}")
         return True, "Track updated successfully"
+
+    async def retag_artist(self, profile: Dict[str, Any]) -> int:
+        if not self.catalog_db_service:
+            return 0
+        changed = 0
+        for track_id, metadata in list(self.catalog_db_service.tracks.items()):
+            if metadata.get("artist_profile_id") != profile["id"]:
+                continue
+            ok, _message = await self.update_track_metadata(metadata.get("uploaded_by_user_id"), track_id, {},
+                                                            artist=profile)
+            changed += int(ok)
+        return changed

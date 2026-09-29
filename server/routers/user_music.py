@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, Form
 from typing import Optional
 
 from services.track_artwork_service import track_artwork_service
+from services import artist_profile_service as artists
 from services import log_service
 from database import User
 from config import settings
@@ -16,12 +17,21 @@ from routers.deps import get_session_info, get_current_user, RateLimit, read_upl
 
 router = APIRouter()
 
+
+async def _remember_enhance(user_id: int, enabled: bool):
+    from database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is not None:
+            user.upload_enhance = enabled
+            await db.commit()
+
 @router.post("/api/user/music/upload")
 async def upload_user_music(
         file: UploadFile = File(...),
-        title: Optional[str] = Form(None),
-        artist: Optional[str] = Form(None),
-        enable_upscaling: bool = Form(False),
+        title: Optional[str] = Form(None, max_length=120),
+        artist_profile_id: Optional[int] = Form(None),
+        enable_upscaling: Optional[bool] = Form(None),
         upload_id: Optional[str] = Form(None, max_length=64),
         current_user: User = Depends(get_current_user),
         session: dict = Depends(get_session_info),
@@ -97,6 +107,12 @@ async def upload_user_music(
             staging_path.unlink()
         raise HTTPException(status_code=400, detail="File too small to be valid media")
 
+    if enable_upscaling is None:
+        enable_upscaling = bool(getattr(current_user, "upload_enhance", False))
+    elif enable_upscaling != bool(getattr(current_user, "upload_enhance", False)):
+        await _remember_enhance(int(current_user.id), enable_upscaling)  # type: ignore
+    artist = await artists.resolve_for_upload(current_user, artist_profile_id)
+
     upload_size_mb = upload_size / (1024 * 1024)
     log_service.upload(
         f"[Upload] Received file: user={current_user.id}, "
@@ -113,7 +129,7 @@ async def upload_user_music(
             content_sha256=digest.hexdigest(),
             upload_id=upload_id,
             user_title=title,
-            user_artist=artist,
+            artist=artist,
             content_type=content_type,
             enable_upscaling=enable_upscaling,
             progress_callback=progress_callback
@@ -148,7 +164,10 @@ async def upload_user_music(
         "duplicate": bool(metadata.get("duplicate_upload")),
         "metadata": {
             "title": metadata.get("generation_params", {}).get("title"),
-            "artist": metadata.get("track_info", {}).get("artist"),
+            "artist": metadata.get("generation_params", {}).get("artist_name") or metadata.get("track_info", {}).get("artist"),
+            "artist_profile_id": metadata.get("artist_profile_id"),
+            "enhance_requested": bool(metadata.get("enhance_requested")),
+            "embedded_tags": metadata.get("embedded_tags") or {},
             "style": metadata.get("generation_params", {}).get("style"),
             "primary_genre": metadata.get("derived_tags", {}).get("primary_genre"),
             "secondary_genres": metadata.get("derived_tags", {}).get("secondary_genres", []),
@@ -230,10 +249,20 @@ async def update_user_track(
     if not services.human_music_upload_service:
         raise HTTPException(status_code=503, detail="Upload service not available")
 
+    artist = None
+    if updates.get("artist_profile_id") is not None:
+        try:
+            artist = await artists.get(int(updates["artist_profile_id"]))
+        except (TypeError, ValueError):
+            artist = None
+        if artist is None or artist["owner_user_id"] != current_user.id:
+            raise HTTPException(status_code=400, detail="Pick one of your own artists")
+
     success, message = await services.human_music_upload_service.update_track_metadata(
         user_id=int(current_user.id),  # type: ignore
         track_id=track_id,
-        updates=updates
+        updates=updates,
+        artist=artist
     )
 
     if not success:

@@ -1001,13 +1001,63 @@ class API {
     })
   }
 
-  async uploadMusic(file, uploadId = null) {
-    return this._routeRequest('uploadMusic', [file, uploadId], async () => {
+  async _jsonRequest(path, method, body, fallbackMessage) {
+    const res = await this._fetch(`${API_BASE}${path}`, {
+      method,
+      headers: this.getHeaders(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      const detail = Array.isArray(data.detail)
+        ? data.detail.map(d => d?.msg).filter(Boolean).join('. ')
+        : data.detail
+      const err = new Error(detail || fallbackMessage)
+      err.status = res.status
+      throw err
+    }
+    return res.json()
+  }
+
+  async getUploadSetup() {
+    return this._routeRequest('getUploadSetup', [], () =>
+      this._jsonRequest('/user/music/setup', 'GET', undefined, 'Could not load your artists')
+    )
+  }
+
+  async createArtist(data) {
+    return this._routeRequest('createArtist', [data], () =>
+      this._jsonRequest('/artists', 'POST', data, 'Could not add the artist')
+    )
+  }
+
+  async updateArtist(artistId, data) {
+    return this._routeRequest('updateArtist', [artistId, data], () =>
+      this._jsonRequest(`/artists/${encodeURIComponent(artistId)}`, 'PUT', data, 'Could not save the artist')
+    )
+  }
+
+  async deleteArtist(artistId) {
+    return this._routeRequest('deleteArtist', [artistId], () =>
+      this._jsonRequest(`/artists/${encodeURIComponent(artistId)}`, 'DELETE', undefined, 'Could not delete the artist')
+    )
+  }
+
+  async updateUserTrack(trackId, updates) {
+    return this._routeRequest('updateUserTrack', [trackId, updates], () =>
+      this._jsonRequest(`/user/music/tracks/${encodeURIComponent(trackId)}`, 'PUT', updates, 'Could not save the change')
+    )
+  }
+
+  async uploadMusic(file, uploadId = null, { artistProfileId = null, enableUpscaling = null } = {}) {
+    return this._routeRequest('uploadMusic', [file, uploadId, { artistProfileId, enableUpscaling }], async () => {
       const sizeMb = file.size / (1024 * 1024)
       logger.info(`[API] Uploading media: ${file.name} (${sizeMb.toFixed(1)}MB, ${file.type || 'unknown type'})`)
       const formData = new FormData()
       formData.append('file', file)
       if (uploadId) formData.append('upload_id', uploadId)
+      if (artistProfileId !== null && artistProfileId !== undefined) formData.append('artist_profile_id', String(artistProfileId))
+      if (enableUpscaling !== null && enableUpscaling !== undefined) formData.append('enable_upscaling', enableUpscaling ? 'true' : 'false')
       const headers = this.getHeaders()
       delete headers['Content-Type']
       const res = await this._fetch(`${API_BASE}/user/music/upload`, {

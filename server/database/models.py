@@ -44,6 +44,20 @@ class User(Base):
     current_period_end = Column(DateTime(timezone=True), nullable=True)
 
     last_login = Column(DateTime(timezone=True), nullable=True)
+    upload_enhance = Column(Boolean, default=False, nullable=False)
+    last_artist_profile_id = Column(Integer, nullable=True)
+
+class ArtistProfile(Base):
+    __tablename__ = "artist_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, index=True, nullable=False)
+    bio = Column(Text, nullable=True)
+    links = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: utc_now())
+    updated_at = Column(DateTime(timezone=True), default=lambda: utc_now(), onupdate=lambda: utc_now())
 
 class StripeWebhookEvent(Base):
     __tablename__ = "stripe_webhook_events"

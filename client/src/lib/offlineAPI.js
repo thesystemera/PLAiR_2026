@@ -946,6 +946,26 @@ class OfflineBackend {
     throw new Error('Uploading music requires an internet connection')
   }
 
+  async getUploadSetup() {
+    return { artists: [], last_artist_profile_id: null, upload_enhance: false, offline: true }
+  }
+
+  async createArtist() {
+    throw new Error('Adding an artist requires an internet connection')
+  }
+
+  async updateArtist() {
+    throw new Error('Editing an artist requires an internet connection')
+  }
+
+  async deleteArtist() {
+    throw new Error('Deleting an artist requires an internet connection')
+  }
+
+  async updateUserTrack() {
+    throw new Error('Editing a track requires an internet connection')
+  }
+
   queueProfileUpdate(updates) {
     const userId = cachedUserId()
     if (userId === null) throw new Error('Sign in to save settings')

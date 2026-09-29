@@ -80,6 +80,13 @@ def install_log_redaction():
                 handler.addFilter(redact)
 
 
+SIGNED_IN_UPLOAD_PATHS = (
+    re.compile(r"^/api/user/music/upload/?$"),
+    re.compile(r"^/api/user/music/tracks/[^/]+/artwork/?$"),
+    re.compile(r"^/api/user/profile-picture/?$"),
+)
+
+
 def _default_body_limits():
     from config import settings
 
@@ -122,9 +129,26 @@ class RequestGuardMiddleware:
         if scope["type"] == "http":
             limit = self._body_limit_for(scope)
             if limit is not None:
+                if self._needs_signed_in(scope) and not self._has_valid_token(scope):
+                    await self._send_json(send, 401, "Authentication required")
+                    return
                 return await self._call_with_body_limit(scope, receive, send, limit)
 
         return await self.app(scope, receive, send)
+
+    @staticmethod
+    def _needs_signed_in(scope) -> bool:
+        path = scope.get("path", "")
+        return any(pattern.match(path) for pattern in SIGNED_IN_UPLOAD_PATHS)
+
+    @staticmethod
+    def _has_valid_token(scope) -> bool:
+        from services.auth_service import decode_token
+        for name, value in scope.get("headers", []):
+            if name == b"authorization":
+                scheme, _sep, token = value.decode("latin-1").partition(" ")
+                return scheme.lower() == "bearer" and bool(token) and decode_token(token.strip()) is not None
+        return False
 
     @staticmethod
     async def _send_json(send, status: int, detail: str):

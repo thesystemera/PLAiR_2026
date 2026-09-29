@@ -92,7 +92,8 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         secondary_genres_text = ', '.join(secondary_genres) if isinstance(secondary_genres, list) else ""
         mood_keywords = derived_tags.get("mood_keywords") or []
         mood_text = ', '.join(mood_keywords) if isinstance(mood_keywords, list) else ""
-        primary_artist_text = derived_tags.get("inspired_artist") or ""
+        human_artist = params.get("artist_name") if track.get("is_ai_generated") is False else None
+        primary_artist_text = human_artist or derived_tags.get("inspired_artist") or ""
         similar_artists = derived_tags.get("similar_artists") or []
         similar_artists_text = ', '.join(similar_artists) if isinstance(similar_artists, list) else ""
         style_text = params.get("style_canonical") or params.get("style") or ""

@@ -47,6 +47,8 @@ def migrate_users_table(conn):
         "stripe_subscription_id": "VARCHAR",
         "subscription_status": "VARCHAR",
         "current_period_end": "TIMESTAMP WITH TIME ZONE",
+        "upload_enhance": "BOOLEAN DEFAULT false NOT NULL",
+        "last_artist_profile_id": "INTEGER",
         # Add future columns here
         # "new_column": "VARCHAR DEFAULT 'something'",
     }

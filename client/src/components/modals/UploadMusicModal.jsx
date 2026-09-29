@@ -1,12 +1,15 @@
-import { useState, useRef, useCallback, memo } from 'react'
-import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from 'react'
+import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge, Mic2, Wand2, Plus } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
+import { logger } from '../../lib/logger'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useWebSocketSubscribe } from '../../contexts/WebSocketContext'
 import { useAuth } from '../../contexts/AuthContext'
+import { useUISelector } from '../../contexts/UIStateContext'
+import { ToggleChip } from '../SettingRow'
 import { Modal, ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
 
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
@@ -14,6 +17,7 @@ const VIDEO_FORMATS = ['mp4', 'mov', 'm4v', 'mkv', 'avi']
 const SUPPORTED_FORMATS = [...AUDIO_FORMATS, ...VIDEO_FORMATS]
 const MAX_AUDIO_FILE_SIZE = 100 * 1024 * 1024
 const MAX_VIDEO_FILE_SIZE = 10 * 1024 * 1024 * 1024
+const ENHANCE_HINT = 'Restores detail on low-quality files. Slower.'
 
 const UploadStage = {
   SELECT: 'select',
@@ -23,70 +27,358 @@ const UploadStage = {
   ERROR: 'error'
 }
 
+const cleanText = (text) => String(text || '').split(/\s+/).filter(Boolean).join(' ')
+
+const splitTags = (text) => String(text || '').split(',').map(cleanText).filter(Boolean)
+
+const mergeTags = (list, extra) => {
+  const seen = new Set()
+  return [...list, ...extra].filter(tag => {
+    const key = tag.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const sameTags = (a = [], b = []) => a.length === b.length && a.every((tag, i) => tag === b[i])
+
+const pickDefaultArtist = (artists, lastId) => {
+  if (artists.some(a => a.id === lastId)) return lastId
+  return artists[0]?.id ?? null
+}
+
+const FieldLabel = memo(function FieldLabel({ children }) {
+  const { getGrey400 } = useDynamicTheme()
+  return <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>{children}</label>
+})
+
+const EditButton = memo(function EditButton({ label, onClick }) {
+  const { getGrey400 } = useDynamicTheme()
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Edit ${label}`}
+      className="ui-tap p-1.5 -m-1 rounded-md flex-shrink-0 hover:bg-white/10 hover:text-white transition"
+      style={{ color: getGrey400() }}
+    >
+      <Edit2 size={14} />
+    </button>
+  )
+})
+
+const EditActions = memo(function EditActions({ onSave, onCancel, saving }) {
+  return (
+    <div className="flex gap-2">
+      <button type="button" onClick={onSave} disabled={saving} className="ui-press px-3 py-1.5 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30 flex items-center gap-1.5 disabled:opacity-60">
+        {saving && <Loader2 size={12} className="animate-spin" />}
+        Save
+      </button>
+      <button type="button" onClick={onCancel} disabled={saving} className="ui-press px-3 py-1.5 bg-gray-500/20 text-gray-400 rounded text-xs hover:bg-gray-500/30 disabled:opacity-60">Cancel</button>
+    </div>
+  )
+})
+
 const MetadataField = memo(function MetadataField({
   label,
   value,
-  onEdit,
-  isEditing,
-  editValue,
-  setEditValue,
   onSave,
-  onCancel,
-  multiline = false
+  multiline = false,
+  rows = 3,
+  placeholder = '',
+  emptyText = 'Unknown',
+  renderValue
 }) {
   const { getWhite, getGrey400, getBorder } = useDynamicTheme()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  if (isEditing) {
+  const startEdit = () => {
+    setDraft(value || '')
+    setEditing(true)
+  }
+
+  const cancel = () => {
+    if (!saving) setEditing(false)
+  }
+
+  const save = async () => {
+    if (saving) return
+    if (draft === (value || '')) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    const ok = await onSave(draft)
+    setSaving(false)
+    if (ok) setEditing(false)
+  }
+
+  if (editing) {
     return (
       <div className="space-y-2">
-        <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>{label}</label>
+        <FieldLabel>{label}</FieldLabel>
         {multiline ? (
           <textarea
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500 resize-none"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
+            className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500 resize-y"
             style={{ borderColor: getBorder(0.3), color: getWhite() }}
-            rows={3}
+            rows={rows}
             autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') cancel()
+            }}
           />
         ) : (
           <input
             type="text"
-            value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
             className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
             style={{ borderColor: getBorder(0.3), color: getWhite() }}
             autoFocus
+            enterKeyHint="done"
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onSave()
-              if (e.key === 'Escape') onCancel()
+              if (e.key === 'Enter') void save()
+              if (e.key === 'Escape') cancel()
             }}
           />
         )}
-        <div className="flex gap-2">
-          <button onClick={onSave} className="ui-press px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30">Save</button>
-          <button onClick={onCancel} className="ui-press px-2 py-1 bg-gray-500/20 text-gray-400 rounded text-xs hover:bg-gray-500/30">Cancel</button>
-        </div>
+        <EditActions onSave={save} onCancel={cancel} saving={saving} />
       </div>
     )
   }
 
   return (
-    <div className="group">
-      <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>{label}</label>
-      <div className="flex items-start justify-between gap-2 mt-1">
-        <p className="text-sm" style={{ color: getWhite() }}>{value || 'Unknown'}</p>
-        {onEdit && (
-          <button
-            onClick={onEdit}
-            className="ui-press opacity-0 group-hover:opacity-100 p-1 hover:text-white transition"
-            style={{ color: getGrey400() }}
-          >
-            <Edit2 size={12} />
-          </button>
-        )}
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <FieldLabel>{label}</FieldLabel>
+        {onSave && <EditButton label={label} onClick={startEdit} />}
+      </div>
+      <div className="mt-1">
+        {value
+          ? (renderValue ? renderValue(value) : <p className="text-sm break-words" style={{ color: getWhite() }}>{value}</p>)
+          : <p className="text-sm" style={{ color: getGrey400() }}>{emptyText}</p>}
       </div>
     </div>
+  )
+})
+
+const TagEditor = memo(function TagEditor({ label, tags, color, onSave, placeholder = 'Type and press Enter' }) {
+  const { getWhite, getBorder } = useDynamicTheme()
+  const [editing, setEditing] = useState(false)
+  const [draftTags, setDraftTags] = useState([])
+  const [input, setInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const current = useMemo(() => tags || [], [tags])
+
+  const startEdit = () => {
+    setDraftTags(current)
+    setInput('')
+    setEditing(true)
+  }
+
+  const cancel = () => {
+    if (!saving) setEditing(false)
+  }
+
+  const addInput = () => {
+    const extra = splitTags(input)
+    if (extra.length) setDraftTags(prev => mergeTags(prev, extra))
+    setInput('')
+  }
+
+  const save = async () => {
+    if (saving) return
+    const next = mergeTags(draftTags, splitTags(input))
+    if (sameTags(next, current)) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    const ok = await onSave(next)
+    setSaving(false)
+    if (ok) setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <div className="space-y-2">
+        <FieldLabel>{label}</FieldLabel>
+        {draftTags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {draftTags.map((tag, i) => (
+              <span
+                key={`${tag}-${i}`}
+                className="pl-2 pr-1 py-0.5 rounded-full text-xs flex items-center gap-1"
+                style={{ backgroundColor: `${color}20`, color }}
+              >
+                {tag}
+                <button
+                  type="button"
+                  onClick={() => setDraftTags(prev => prev.filter((_, j) => j !== i))}
+                  aria-label={`Remove ${tag}`}
+                  className="ui-tap p-0.5 rounded-full hover:bg-white/10"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={placeholder}
+            className="flex-1 min-w-0 px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
+            style={{ borderColor: getBorder(0.3), color: getWhite() }}
+            autoFocus
+            enterKeyHint="enter"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault()
+                addInput()
+              } else if (e.key === 'Backspace' && !input && draftTags.length) {
+                setDraftTags(prev => prev.slice(0, -1))
+              } else if (e.key === 'Escape') {
+                cancel()
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={addInput}
+            disabled={!input.trim()}
+            aria-label={`Add to ${label}`}
+            className="ui-tap px-2.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-40 transition"
+            style={{ color: getWhite() }}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+        <EditActions onSave={save} onCancel={cancel} saving={saving} />
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <FieldLabel>{label}</FieldLabel>
+        <EditButton label={label} onClick={startEdit} />
+      </div>
+      <div className="mt-1">
+        <ModalTagList tags={current} color={color} />
+      </div>
+    </div>
+  )
+})
+
+const ADD_ARTIST = '__add_artist__'
+
+const ArtistChooser = memo(function ArtistChooser({ artists, value, onChange, onCreate, fallbackLabel, disabled = false }) {
+  const { getWhite, getBorder } = useDynamicTheme()
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const selected = artists.find(a => a.id === value)
+
+  const cancelAdd = () => {
+    if (creating) return
+    setAdding(false)
+    setName('')
+  }
+
+  const create = async () => {
+    const trimmed = cleanText(name)
+    if (!trimmed || creating) return
+    setCreating(true)
+    const artist = await onCreate(trimmed)
+    setCreating(false)
+    if (!artist) return
+    setAdding(false)
+    setName('')
+    onChange(artist.id, artist)
+  }
+
+  if (adding) {
+    return (
+      <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Band or artist name"
+          maxLength={80}
+          className="flex-1 min-w-0 px-2.5 py-1.5 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
+          style={{ borderColor: getBorder(0.3), color: getWhite() }}
+          autoFocus
+          enterKeyHint="done"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void create()
+            if (e.key === 'Escape') cancelAdd()
+          }}
+        />
+        <button
+          type="button"
+          onClick={create}
+          disabled={creating || !name.trim()}
+          className="ui-press px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-50 flex items-center gap-1"
+        >
+          {creating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          Add
+        </button>
+        <button type="button" onClick={cancelAdd} aria-label="Cancel" className="ui-tap p-1.5 rounded-lg text-gray-400 hover:bg-white/10">
+          <X size={14} />
+        </button>
+      </div>
+    )
+  }
+
+  if (artists.length === 0) {
+    return (
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <span className="text-sm truncate" style={{ color: getWhite() }}>{fallbackLabel}</span>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          disabled={disabled}
+          className="ui-press text-xs text-purple-400 hover:text-purple-300 whitespace-nowrap disabled:opacity-50"
+        >
+          + Add band/artist
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <select
+      value={selected ? String(selected.id) : ''}
+      disabled={disabled}
+      aria-label="Artist"
+      onChange={(e) => {
+        if (e.target.value === ADD_ARTIST) setAdding(true)
+        else if (e.target.value) {
+          const id = Number(e.target.value)
+          onChange(id, artists.find(a => a.id === id))
+        }
+      }}
+      className="flex-1 min-w-0 px-2.5 py-1.5 bg-dark-hover border rounded-lg text-sm focus:outline-none focus:border-purple-500 transition disabled:opacity-60"
+      style={{ borderColor: getBorder(0.3), color: getWhite() }}
+    >
+      {!selected && <option value="">{fallbackLabel}</option>}
+      {artists.map(artist => (
+        <option key={artist.id} value={String(artist.id)}>{artist.name}</option>
+      ))}
+      <option value={ADD_ARTIST}>+ Add band/artist</option>
+    </select>
   )
 })
 
@@ -121,6 +413,7 @@ const QualityBadge = memo(function QualityBadge({ tier, sampleRate, bitDepth, is
 
 const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork, artworkGenerated, onArtworkUploaded }) {
   const { getWhite, getGrey400, getBorder } = useDynamicTheme()
+  const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
   const [uploading, setUploading] = useState(false)
   const [artworkUrl, setArtworkUrl] = useState(hasArtwork ? `/api/artwork/${trackId}?t=${Date.now()}` : null)
   const fileInputRef = useRef(null)
@@ -131,12 +424,14 @@ const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork, artwo
 
     const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
     if (!validTypes.includes(file.type)) {
-      alert('Please select a valid image file (JPEG, PNG, WebP, or GIF)')
+      toastError('Please select a valid image file (JPEG, PNG, WebP, or GIF)')
+      if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
 
     if (file.size > 10 * 1024 * 1024) {
-      alert('Image too large. Maximum size is 10MB')
+      toastError('Image too large. Maximum size is 10MB')
+      if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
 
@@ -149,7 +444,7 @@ const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork, artwo
       onArtworkUploaded?.(true)
       triggerHaptic('success')
     } catch (err) {
-      alert(err.message || 'Failed to upload artwork')
+      toastError(err.message || 'Failed to upload artwork')
       triggerHaptic('error')
     } finally {
       setUploading(false)
@@ -268,7 +563,8 @@ const AudioFeaturesDisplay = memo(function AudioFeaturesDisplay({ features }) {
 
 export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin }) {
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
+  const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
   const categoryColor = getCategoryMetadata('all')?.color || '#6366f1'
 
   const [stage, setStage] = useState(UploadStage.SELECT)
@@ -279,13 +575,17 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const [metadata, setMetadata] = useState(null)
   const [trackId, setTrackId] = useState(null)
 
-  const [editingField, setEditingField] = useState(null)
-  const [editValue, setEditValue] = useState('')
+  const [artists, setArtists] = useState([])
+  const [selectedArtistId, setSelectedArtistId] = useState(null)
+  const [enhance, setEnhance] = useState(null)
+  const [savingArtist, setSavingArtist] = useState(false)
 
   const fileInputRef = useRef(null)
   const dragCounterRef = useRef(0)
   const uploadIdRef = useRef(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  const ownName = user?.username || 'You'
 
   useWebSocketSubscribe('upload_progress', useCallback((data) => {
     if (!uploadIdRef.current || data?.upload_id !== uploadIdRef.current) return
@@ -294,6 +594,28 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       setStageText(data.stage)
     }
   }, []))
+
+  const applySetup = useCallback((data) => {
+    const list = data?.artists || []
+    setArtists(list)
+    setSelectedArtistId(pickDefaultArtist(list, data?.last_artist_profile_id))
+    if (!data?.offline) setEnhance(!!data?.upload_enhance)
+  }, [])
+
+  const loadSetup = useCallback(() => {
+    api.getUploadSetup()
+      .then(applySetup)
+      .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
+  }, [applySetup])
+
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated) return
+    let cancelled = false
+    api.getUploadSetup()
+      .then(data => { if (!cancelled) applySetup(data) })
+      .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
+    return () => { cancelled = true }
+  }, [isOpen, isAuthenticated, applySetup])
 
   const resetState = useCallback(() => {
     uploadIdRef.current = null
@@ -304,8 +626,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     setError(null)
     setMetadata(null)
     setTrackId(null)
-    setEditingField(null)
-    setEditValue('')
+    setSavingArtist(false)
   }, [])
 
   const handleClose = useCallback(() => {
@@ -395,12 +716,16 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     try {
       setStage(UploadStage.ANALYZING)
 
-      const result = await api.uploadMusic(file, uploadIdRef.current)
+      const result = await api.uploadMusic(file, uploadIdRef.current, {
+        artistProfileId: selectedArtistId,
+        enableUpscaling: enhance
+      })
 
       setProgress(100)
       setMetadata(result.metadata)
       setTrackId(result.track_id)
       setStage(UploadStage.PREVIEW)
+      loadSetup()
 
       triggerHaptic('success')
 
@@ -417,36 +742,76 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     handleClose()
   }
 
-  const startEditField = (field, currentValue) => {
-    setEditingField(field)
-    setEditValue(currentValue || '')
-  }
-
-  const saveEditField = async () => {
-    if (!editingField || !trackId) return
-
+  const handleCreateArtist = useCallback(async (name) => {
     try {
-      await api.put(`/api/user/music/tracks/${trackId}`, {
-        [editingField]: editValue
-      })
-
-      setMetadata(prev => ({
-        ...prev,
-        [editingField]: editValue
-      }))
-
-      setEditingField(null)
-      setEditValue('')
+      const artist = await api.createArtist({ name })
+      setArtists(prev => [...prev.filter(a => a.id !== artist.id), { ...artist, track_count: artist.track_count ?? 0 }])
       triggerHaptic('light')
-    } catch {
-      // Edit cancellation is intentional, no error handling needed
+      return artist
+    } catch (err) {
+      toastError(err.message || 'Could not add the artist')
+      triggerHaptic('error')
+      return null
     }
-  }
+  }, [toastError])
 
-  const cancelEdit = () => {
-    setEditingField(null)
-    setEditValue('')
-  }
+  const saveTrack = useCallback(async (updates) => {
+    if (!trackId) return false
+    try {
+      await api.updateUserTrack(trackId, updates)
+      triggerHaptic('light')
+      return true
+    } catch (err) {
+      toastError(err.message || 'Could not save the change')
+      triggerHaptic('error')
+      return false
+    }
+  }, [trackId, toastError])
+
+  const saveTitle = useCallback(async (value) => {
+    const title = cleanText(value)
+    if (!await saveTrack({ title })) return false
+    setMetadata(prev => ({ ...prev, title }))
+    return true
+  }, [saveTrack])
+
+  const saveGenre = useCallback(async (value) => {
+    const primaryGenre = cleanText(value)
+    if (!await saveTrack({ primary_genre: primaryGenre })) return false
+    setMetadata(prev => ({ ...prev, primary_genre: primaryGenre }))
+    return true
+  }, [saveTrack])
+
+  const saveSecondaryGenres = useCallback(async (list) => {
+    if (!await saveTrack({ secondary_genres: list })) return false
+    setMetadata(prev => ({ ...prev, secondary_genres: list }))
+    return true
+  }, [saveTrack])
+
+  const saveMoods = useCallback(async (list) => {
+    if (!await saveTrack({ mood_keywords: list })) return false
+    setMetadata(prev => ({ ...prev, mood_keywords: list }))
+    return true
+  }, [saveTrack])
+
+  const saveLyrics = useCallback(async (value) => {
+    const lyrics = String(value || '').trim()
+    if (!await saveTrack({ lyrics })) return false
+    setMetadata(prev => ({ ...prev, transcribed_lyrics: lyrics || null, has_lyrics: !!lyrics }))
+    return true
+  }, [saveTrack])
+
+  const handleTrackArtistChange = useCallback(async (artistId, artist) => {
+    if (artistId === metadata?.artist_profile_id || savingArtist) return
+    setSavingArtist(true)
+    const ok = await saveTrack({ artist_profile_id: artistId })
+    setSavingArtist(false)
+    if (!ok) return
+    setMetadata(current => ({ ...current, artist_profile_id: artistId, artist: artist?.name ?? current.artist }))
+    setSelectedArtistId(artistId)
+  }, [metadata?.artist_profile_id, savingArtist, saveTrack])
+
+  const handleSelectArtist = useCallback((artistId) => setSelectedArtistId(artistId), [])
 
   const handleClearFile = () => {
     setFile(null)
@@ -550,6 +915,25 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                   </>
                 )}
               </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div className="flex items-center gap-2 flex-1 min-w-[12rem]">
+                  <Mic2 size={14} className="flex-shrink-0" style={{ color: getGrey400() }} />
+                  <ArtistChooser
+                    artists={artists}
+                    value={selectedArtistId}
+                    onChange={handleSelectArtist}
+                    onCreate={handleCreateArtist}
+                    fallbackLabel={ownName}
+                  />
+                </div>
+                <div className="flex items-center gap-2" title={ENHANCE_HINT}>
+                  <Wand2 size={14} className="flex-shrink-0" style={{ color: getGrey400() }} />
+                  <span className="text-xs whitespace-nowrap" style={{ color: getWhite() }}>Enhance audio</span>
+                  <ToggleChip on={!!enhance} onClick={() => setEnhance(prev => !prev)} label="Enhance audio" />
+                </div>
+              </div>
+              <p className="mt-1.5 text-xs text-right" style={{ color: getGrey400() }}>{ENHANCE_HINT}</p>
             </ModalSection>
 
             {file && (
@@ -737,30 +1121,29 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             )}
 
             <ModalSection title="Track Info">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <ModalCard>
                   <MetadataField
                     label="Title"
                     value={metadata.title}
-                    onEdit={() => startEditField('title', metadata.title)}
-                    isEditing={editingField === 'title'}
-                    editValue={editValue}
-                    setEditValue={setEditValue}
-                    onSave={saveEditField}
-                    onCancel={cancelEdit}
+                    onSave={saveTitle}
                   />
                 </ModalCard>
                 <ModalCard>
-                  <MetadataField
-                    label="Artist"
-                    value={metadata.artist}
-                    onEdit={() => startEditField('artist', metadata.artist)}
-                    isEditing={editingField === 'artist'}
-                    editValue={editValue}
-                    setEditValue={setEditValue}
-                    onSave={saveEditField}
-                    onCancel={cancelEdit}
-                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <FieldLabel>Artist</FieldLabel>
+                    {savingArtist && <Loader2 size={14} className="animate-spin" style={{ color: getGrey400() }} />}
+                  </div>
+                  <div className="mt-1 flex items-center">
+                    <ArtistChooser
+                      artists={artists}
+                      value={metadata.artist_profile_id}
+                      onChange={handleTrackArtistChange}
+                      onCreate={handleCreateArtist}
+                      fallbackLabel={metadata.artist || ownName}
+                      disabled={savingArtist}
+                    />
+                  </div>
                 </ModalCard>
               </div>
             </ModalSection>
@@ -771,30 +1154,29 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                   <MetadataField
                     label="Primary Genre"
                     value={metadata.primary_genre}
-                    onEdit={() => startEditField('primary_genre', metadata.primary_genre)}
-                    isEditing={editingField === 'primary_genre'}
-                    editValue={editValue}
-                    setEditValue={setEditValue}
-                    onSave={saveEditField}
-                    onCancel={cancelEdit}
+                    onSave={saveGenre}
                   />
                 </ModalCard>
                 <ModalCard>
-                  <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>Secondary Genres</label>
-                  <div className="mt-1">
-                    <ModalTagList tags={metadata.secondary_genres} color={categoryColor} />
-                  </div>
+                  <TagEditor
+                    label="Secondary Genres"
+                    tags={metadata.secondary_genres}
+                    color={categoryColor}
+                    onSave={saveSecondaryGenres}
+                  />
                 </ModalCard>
               </div>
             </ModalSection>
 
             <ModalSection title="Mood & Vibe">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <ModalCard>
-                  <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>Mood</label>
-                  <div className="mt-1">
-                    <ModalTagList tags={metadata.mood_keywords} color="#10b981" />
-                  </div>
+                  <TagEditor
+                    label="Mood"
+                    tags={metadata.mood_keywords}
+                    color="#10b981"
+                    onSave={saveMoods}
+                  />
                 </ModalCard>
                 <ModalCard>
                   <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>Similar Artists</label>
@@ -823,41 +1205,37 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
               </ModalSection>
             )}
 
-            {metadata.has_lyrics && (
-              <ModalSection title="Lyrics">
-                {metadata.lyrical_interpretation && (
-                  <ModalCard className="mb-3">
-                    <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>
-                      About the Lyrics
-                    </label>
-                    <p className="text-sm mt-1 leading-relaxed" style={{ color: getWhite() }}>
-                      {metadata.lyrical_interpretation}
-                    </p>
-                  </ModalCard>
-                )}
-                {metadata.transcribed_lyrics && (
-                  <ModalCard className="max-h-48 overflow-y-auto">
-                    <label className="text-xs uppercase tracking-wide mb-2 block" style={{ color: getGrey400() }}>
-                      Transcribed Lyrics
-                    </label>
+            <ModalSection title="Lyrics">
+              {metadata.lyrical_interpretation && (
+                <ModalCard className="mb-3">
+                  <label className="text-xs uppercase tracking-wide" style={{ color: getGrey400() }}>
+                    About the Lyrics
+                  </label>
+                  <p className="text-sm mt-1 leading-relaxed" style={{ color: getWhite() }}>
+                    {metadata.lyrical_interpretation}
+                  </p>
+                </ModalCard>
+              )}
+              <ModalCard>
+                <MetadataField
+                  label={metadata.transcribed_lyrics ? 'Transcribed Lyrics' : 'Lyrics'}
+                  value={metadata.transcribed_lyrics || ''}
+                  onSave={saveLyrics}
+                  multiline
+                  rows={10}
+                  placeholder="Paste or type the lyrics. Leave empty for an instrumental."
+                  emptyText={metadata.has_lyrics ? 'Lyrics detected' : 'Instrumental (no lyrics)'}
+                  renderValue={(lyrics) => (
                     <pre
-                      className="text-sm whitespace-pre-wrap font-sans leading-relaxed"
+                      className="max-h-48 overflow-y-auto text-sm whitespace-pre-wrap font-sans leading-relaxed"
                       style={{ color: getWhite(), opacity: 0.9 }}
                     >
-                      {metadata.transcribed_lyrics}
+                      {lyrics}
                     </pre>
-                  </ModalCard>
-                )}
-                {!metadata.transcribed_lyrics && (
-                  <ModalCard className="bg-green-500/10 border border-green-500/20">
-                    <p className="text-xs text-green-400 flex items-center gap-2">
-                      <Check size={14} />
-                      Lyrics detected
-                    </p>
-                  </ModalCard>
-                )}
-              </ModalSection>
-            )}
+                  )}
+                />
+              </ModalCard>
+            </ModalSection>
 
             <ModalFooter>
               <ModalButton onClick={resetState} variant="secondary">

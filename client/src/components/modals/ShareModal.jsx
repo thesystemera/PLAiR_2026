@@ -48,7 +48,7 @@ export function ShareModal({ isOpen, onClose, track }) {
   useEffect(() => releaseVideoUrl, [releaseVideoUrl])
 
   const trackTitle = currentTrack?.generation_params?.title || 'Untitled'
-  const trackArtist = currentTrack?.generation_params?.artist_name || 'Unknown Artist'
+  const trackArtist = currentTrack?.generation_params?.artist_name || currentTrack?.track_info?.artist || currentTrack?.artist_name || 'Unknown Artist'
   const trackId = currentTrack?.id
 
   useEffect(() => {

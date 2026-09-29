@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -294,7 +294,7 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
   const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track.generation_params || {}
   const title = params.title || track.title || 'Untitled'
-  const artist = params.primary_artist || 'Unknown Artist'
+  const artist = params.artist_name || track.track_info?.artist || 'Unknown Artist'
   const genre = track.derived_tags?.primary_genre || params.style || 'Unknown Genre'
 
   return (
@@ -338,6 +338,117 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
         ) : (
           <Trash2 size={16} />
         )}
+      </button>
+    </div>
+  )
+})
+
+const ARTIST_INPUT_CLASS = 'w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition'
+
+const parseLinks = (text) => String(text || '').split(/[\s,]+/).map(link => link.trim()).filter(Boolean)
+
+const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDelete, isDeleting }) {
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [name, setName] = useState('')
+  const [bio, setBio] = useState('')
+  const [links, setLinks] = useState('')
+  const count = artist.track_count || 0
+  const artistLinks = artist.links || []
+
+  const startEdit = () => {
+    setName(artist.name || '')
+    setBio(artist.bio || '')
+    setLinks(artistLinks.join('\n'))
+    setEditing(true)
+  }
+
+  const cancel = () => {
+    if (!saving) setEditing(false)
+  }
+
+  const save = async () => {
+    if (saving) return
+    const changes = {}
+    const nextName = name.split(/\s+/).filter(Boolean).join(' ')
+    const nextBio = bio.trim()
+    const nextLinks = parseLinks(links)
+    if (nextName !== artist.name) changes.name = nextName
+    if (nextBio !== (artist.bio || '')) changes.bio = nextBio
+    if (nextLinks.join('\n') !== artistLinks.join('\n')) changes.links = nextLinks
+    if (!Object.keys(changes).length) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    const ok = await onSave(artist, changes)
+    setSaving(false)
+    if (ok) setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <div className="bg-white/5 p-3 rounded-lg space-y-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Band or artist name"
+          maxLength={80}
+          aria-label="Name"
+          className={ARTIST_INPUT_CLASS}
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save()
+            if (e.key === 'Escape') cancel()
+          }}
+        />
+        <textarea
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          placeholder="Bio (optional)"
+          aria-label="Bio"
+          rows={3}
+          className={`${ARTIST_INPUT_CLASS} resize-y`}
+        />
+        <textarea
+          value={links}
+          onChange={(e) => setLinks(e.target.value)}
+          placeholder="Links, one per line (optional)"
+          aria-label="Links"
+          rows={2}
+          className={`${ARTIST_INPUT_CLASS} resize-y`}
+        />
+        <div className="flex gap-2">
+          <button onClick={save} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 flex items-center gap-1.5 disabled:opacity-60">
+            {saving && <Loader2 size={12} className="animate-spin" />}
+            Save
+          </button>
+          <button onClick={cancel} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 disabled:opacity-60">
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
+      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-600 to-purple-600 flex items-center justify-center flex-shrink-0">
+        <Mic2 size={18} className="text-white/80" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate">{artist.name}</div>
+        <div className="text-xs text-gray-400 truncate">
+          {[`${count} track${count === 1 ? '' : 's'}`, artistLinks.length ? `${artistLinks.length} link${artistLinks.length === 1 ? '' : 's'}` : null].filter(Boolean).join(' • ')}
+        </div>
+        {artist.bio && <div className="text-xs text-gray-500 truncate">{artist.bio}</div>}
+      </div>
+      <button onClick={startEdit} className="ui-tap p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition" title="Edit artist" aria-label={`Edit ${artist.name}`}>
+        <Edit2 size={16} />
+      </button>
+      <button onClick={() => onDelete(artist)} disabled={isDeleting} className="ui-tap p-2 rounded-full text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition" title="Delete artist" aria-label={`Delete ${artist.name}`}>
+        {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
       </button>
     </div>
   )
@@ -484,6 +595,12 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [dataManagementExpanded, setDataManagementExpanded] = useState(() => safeStorage.get('userPanel_dataManagement') === 'true')
   const [uploadsExpanded, setUploadsExpanded] = useState(() => safeStorage.get('userPanel_uploads') === 'true')
   const [postsExpanded, setPostsExpanded] = useState(() => safeStorage.get('userPanel_posts') === 'true')
+  const [artistsExpanded, setArtistsExpanded] = useState(() => safeStorage.get('userPanel_artists') === 'true')
+  const [myArtists, setMyArtists] = useState([])
+  const [loadingArtists, setLoadingArtists] = useState(false)
+  const [newArtistName, setNewArtistName] = useState('')
+  const [addingArtist, setAddingArtist] = useState(false)
+  const [deletingArtistId, setDeletingArtistId] = useState(null)
   const [expandedMyShoutouts, setExpandedMyShoutouts] = useState(false)
   const [expandedMyReviews, setExpandedMyReviews] = useState(false)
   const [myPosts, setMyPosts] = useState({ shoutouts: [], reviews: [] })
@@ -537,7 +654,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     safeStorage.set('userPanel_dataManagement', String(dataManagementExpanded))
     safeStorage.set('userPanel_uploads', String(uploadsExpanded))
     safeStorage.set('userPanel_posts', String(postsExpanded))
-  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded, postsExpanded])
+    safeStorage.set('userPanel_artists', String(artistsExpanded))
+  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded, postsExpanded, artistsExpanded])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -589,6 +707,81 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }, [uploadsExpanded, isAuthenticated, fetchUserUploads])
 
+  const fetchMyArtists = useCallback(async () => {
+    if (!isAuthenticated) return
+    setLoadingArtists(true)
+    try {
+      const data = await api.getUploadSetup()
+      setMyArtists(data?.artists || [])
+    } catch (err) {
+      logger.error('Failed to fetch your artists:', err)
+    } finally {
+      setLoadingArtists(false)
+    }
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    if (artistsExpanded && isAuthenticated) {
+      void fetchMyArtists()
+    }
+  }, [artistsExpanded, isAuthenticated, fetchMyArtists])
+
+  const handleAddArtist = async () => {
+    const name = newArtistName.split(/\s+/).filter(Boolean).join(' ')
+    if (!name || addingArtist) return
+    setAddingArtist(true)
+    try {
+      const artist = await api.createArtist({ name })
+      setMyArtists(prev => [...prev.filter(a => a.id !== artist.id), { ...artist, track_count: artist.track_count ?? 0 }])
+      setNewArtistName('')
+      success(`Added ${artist.name}`)
+    } catch (err) {
+      error(err.message || 'Could not add the artist')
+    } finally {
+      setAddingArtist(false)
+    }
+  }
+
+  const handleSaveArtist = useCallback(async (artist, changes) => {
+    try {
+      const updated = await api.updateArtist(artist.id, changes)
+      const { tracks_updated: tracksUpdated, ...profile } = updated
+      setMyArtists(prev => prev.map(a => (a.id === artist.id ? { ...a, ...profile } : a)))
+      if (profile.name && profile.name !== artist.name) {
+        const count = tracksUpdated || 0
+        success(`Renamed - ${count} track${count === 1 ? '' : 's'} updated`)
+        if (uploadsExpanded) void fetchUserUploads()
+      } else {
+        success('Artist saved')
+      }
+      return true
+    } catch (err) {
+      error(err.message || 'Could not save the artist')
+      return false
+    }
+  }, [success, error, uploadsExpanded, fetchUserUploads])
+
+  const handleDeleteArtist = useCallback(async (artist) => {
+    const confirmed = await showConfirm({
+      title: `Delete ${artist.name}?`,
+      message: 'This removes the band/artist from your profile.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'danger'
+    })
+    if (!confirmed) return
+    setDeletingArtistId(artist.id)
+    try {
+      await api.deleteArtist(artist.id)
+      setMyArtists(prev => prev.filter(a => a.id !== artist.id))
+      success(`Deleted ${artist.name}`)
+    } catch (err) {
+      error(err.message || 'Could not delete the artist')
+    } finally {
+      setDeletingArtistId(null)
+    }
+  }, [showConfirm, success, error])
+
   const handleDeleteUpload = async (trackId) => {
     const confirmed = await showConfirm({
       title: 'Delete Uploaded Track?',
@@ -605,6 +798,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       if (result.ok) {
         setUserUploads(prev => prev.filter(t => t.id !== trackId))
         success('Track deleted')
+        if (artistsExpanded) void fetchMyArtists()
       } else {
         error('Failed to delete track')
       }
@@ -1317,6 +1511,64 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
             <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} emptyMessage="You haven't reviewed a song yet"
               renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+          </ExpandSection>
+        )}
+
+        {isAuthenticated && (
+          <ExpandSection
+            className="p-4 md:p-6 border-b border-gray-800"
+            open={artistsExpanded}
+            onToggle={setArtistsExpanded}
+            icon={Mic2}
+            iconClassName="text-fuchsia-400"
+            title="Artists & Bands"
+            meta={myArtists.length > 0 && (
+              <span className="text-xs text-gray-400">({myArtists.length})</span>
+            )}
+            contentClassName="space-y-3 pl-2"
+          >
+            <p className="text-xs text-gray-400">Your uploads are credited to these names. Pick one when you upload.</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newArtistName}
+                onChange={(e) => setNewArtistName(e.target.value)}
+                placeholder="Add a band or artist"
+                maxLength={80}
+                aria-label="New band or artist name"
+                className={`${ARTIST_INPUT_CLASS} flex-1 min-w-0`}
+                enterKeyHint="done"
+                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddArtist() }}
+              />
+              <button
+                onClick={handleAddArtist}
+                disabled={addingArtist || !newArtistName.trim()}
+                className="ui-press px-3 py-2 rounded-lg text-sm font-medium bg-fuchsia-600 hover:bg-fuchsia-700 text-white flex items-center gap-1.5 disabled:opacity-50 transition"
+              >
+                {addingArtist ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                Add
+              </button>
+            </div>
+
+            {loadingArtists && myArtists.length === 0 ? (
+              <div className="ui-fade-in flex items-center justify-center py-6">
+                <Loader2 size={20} className="animate-spin text-gray-400" />
+              </div>
+            ) : myArtists.length === 0 ? (
+              <p className="ui-fade-in text-sm text-gray-400">No artists yet. Uploads use your username until you add one.</p>
+            ) : (
+              <div className="ui-fade-in space-y-2">
+                {myArtists.map(artist => (
+                  <ArtistProfileItem
+                    key={artist.id}
+                    artist={artist}
+                    onSave={handleSaveArtist}
+                    onDelete={handleDeleteArtist}
+                    isDeleting={deletingArtistId === artist.id}
+                  />
+                ))}
+              </div>
+            )}
           </ExpandSection>
         )}
 

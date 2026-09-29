@@ -91,7 +91,7 @@ from services_radio.conversation_service import conversation_service
 from config import settings
 
 from service_registry import services
-from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts,
+from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts, artists,
                      conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
                      client_log)
 
@@ -663,6 +663,7 @@ app.include_router(search.router)
 app.include_router(dj.router)
 app.include_router(media.router)
 app.include_router(generation.router)
+app.include_router(artists.router)
 app.include_router(user_music.router)
 app.include_router(ws.router)
 app.include_router(usage.router)

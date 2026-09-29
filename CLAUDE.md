@@ -718,10 +718,13 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 
 **IMPORTANT:** Human uploads use the SAME catalog system as AI tracks. See `docs/HUMAN_MUSIC_UPLOAD.md` for full details.
 
-- `server/services/human_metadata_extraction_service.py` - Gemini Pro audio analysis (genre, mood, artists, lyrics)
-- `server/services/human_music_upload_service.py` - Upload pipeline (validation, transcoding, catalog integration)
+- `server/services/human_metadata_extraction_service.py` - Gemini (`GEMINI_UPLOAD_ANALYSIS_MODEL`, 3.5 Flash) audio analysis (genre, mood, lyrics, mix decisions, artwork prompt)
+- `server/services/human_music_upload_service.py` - Upload pipeline (validation, transcoding, mastering, catalog integration, edits)
+- `server/services/artist_profile_service.py` + `routers/artists.py` - artist/band profiles (`artist_profiles` table)
 
 **Key Principle:** Human tracks are stored in the same `tracks` table with `is_ai_generated=0`. They use identical metadata schemas, playback systems, and discovery pipelines as AI tracks.
+
+**Credits (least resistance):** uploading is one tap; everything is automatic and editable afterwards. A user's bands are artist profiles they define once (User panel → Artists & Bands); an upload is credited to the chosen profile, else their last-used, else their first, else one made from their username. The credit is `generation_params.artist_name` (= `track_info.artist`, plus `artist_profile_id`/`artist_slug`), the field every view reads; `derived_tags.inspired_artist` is only a "sounds like" comparison and never the credit. Titles: uploader's > embedded tag (mutagen, `embedded_tags`) > a real title in the filename > the sung hook (Gemini is told all of these). Renaming a profile re-credits its tracks (`retag_artist`); edits go through `update_track_metadata` (validated, re-indexed; a lyrics edit drops the lyric timing so the asset doctor re-aligns it). "Enhance audio" (Apollo) is the user's remembered opt-in (`users.upload_enhance`). Uploads, artwork and profile pictures are refused before the body is read without a valid token (`SIGNED_IN_UPLOAD_PATHS`). Fix old uploads with `server/utils/backfill_upload_credits.py`; test with `tests/upload_credit_test.py --file <audio>` (runs the full pipeline, ~8 min).
 
 ### Backend DJ System (services_radio)
 

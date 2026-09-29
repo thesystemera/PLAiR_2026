@@ -27,12 +27,12 @@ You must output valid JSON matching this exact schema:
 
 {
     "style": "Detailed production style description (instruments, production techniques, era, sound characteristics) - be VERY specific about drums, synths, guitars, bass, production style, mix characteristics",
-    "title": "Extract from lyrics if sung clearly, or suggest based on mood/theme, or 'Untitled'",
+    "title": "The song's real title: the embedded tag title if given, else a real title in the filename (drop track numbers, the artist prefix, and words like final/master/mix/original/v2), else the sung hook, else 'Untitled'. Never invent a poetic title when the file names the song",
     "instrumental": true/false,
     "vocal_gender": "m" | "f" | "mixed" | null (if instrumental),
     "primary_genre": "Main genre - be specific: e.g. 'Indie Folk', 'Tech House', 'Shoegaze', 'Trap', 'Bossa Nova', 'Post-Punk', 'Roots Reggae', 'Dream Pop'",
     "secondary_genres": ["Sub-genre 1", "Sub-genre 2", "Sub-genre 3"],
-    "inspired_artist": "Primary artist this sounds most like - any genre, any era",
+    "inspired_artist": "The well-known artist this SOUNDS most like - a comparison only, never the performer of this recording",
     "mood_keywords": ["Mood 1", "Mood 2", "Mood 3", "Mood 4", "Mood 5"],
     "lyrical_interpretation": "Summary of what the lyrics are about, themes and meaning (or null if instrumental)",
     "vocal_style_keywords": ["Vocal style 1", "Vocal style 2"] (or empty array if instrumental),
@@ -184,7 +184,9 @@ class HumanMetadataExtractionService(SingletonService):
         self,
         audio_path: Path,
         user_provided_title: Optional[str] = None,
-        user_provided_artist: Optional[str] = None
+        user_provided_artist: Optional[str] = None,
+        filename: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
 
         if not self._service_initialized or not self.client:
@@ -217,7 +219,7 @@ class HumanMetadataExtractionService(SingletonService):
 
         log_service.info(f"Extracting metadata from {audio_path.name} ({file_size_mb:.1f}MB)")
 
-        user_prompt = self._build_prompt(user_provided_title, user_provided_artist)
+        user_prompt = self._build_prompt(user_provided_title, user_provided_artist, filename, tags)
 
         max_retries = 3
         retry_delays = [5, 15, 30]
@@ -247,11 +249,8 @@ class HumanMetadataExtractionService(SingletonService):
 
                 result = json.loads(response.text)
 
-                if user_provided_title and result.get('title') in ['Untitled', None, '']:
+                if user_provided_title:
                     result['title'] = user_provided_title
-
-                if user_provided_artist:
-                    result['user_provided_artist'] = user_provided_artist
 
                 log_service.info(f"✓ Metadata extracted: {result.get('primary_genre')} - {result.get('title')}")
                 return result, None
@@ -282,18 +281,22 @@ class HumanMetadataExtractionService(SingletonService):
     def _build_prompt(
         self,
         user_title: Optional[str] = None,
-        user_artist: Optional[str] = None
+        user_artist: Optional[str] = None,
+        filename: Optional[str] = None,
+        tags: Optional[Dict[str, str]] = None
     ) -> str:
 
         prompt_parts = ["Analyze this audio file and generate detailed metadata."]
 
-        if user_title or user_artist:
-            prompt_parts.append("\nUser-provided information:")
-            if user_title:
-                prompt_parts.append(f"- Title: {user_title}")
-            if user_artist:
-                prompt_parts.append(f"- Artist: {user_artist}")
-            prompt_parts.append("Use this information to help with classification, but still analyze the audio independently.")
+        known = [f"- Performed by: {user_artist} (an independent artist; this is their own recording)" if user_artist else None,
+                 f"- Title chosen by the uploader: {user_title}" if user_title else None,
+                 f"- Uploaded filename: {filename}" if filename else None]
+        known += [f"- Embedded {key} tag: {value}" for key, value in (tags or {}).items() if value]
+        known = [line for line in known if line]
+        if known:
+            prompt_parts.append("\nKnown facts about this upload:")
+            prompt_parts.extend(known)
+            prompt_parts.append("Use these for the title. Still analyze the audio itself for everything else.")
 
         prompt_parts.append("""
 IMPORTANT:
@@ -312,10 +315,14 @@ Output ONLY valid JSON with your analysis, no other text.""")
         track_id: str,
         user_id: int,
         duration_ms: int,
-        original_filename: str
+        original_filename: str,
+        artist: Optional[Dict[str, Any]] = None,
+        tags: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
 
         now = datetime.now(timezone.utc).isoformat()
+        artist_name = (artist or {}).get("name") or "Unknown Artist"
+        title = (extracted.get("title") or "").strip() or (tags or {}).get("title") or "Untitled"
 
         transcribed_lyrics = extracted.get("transcribed_lyrics")
         lyrics_prompt = transcribed_lyrics if transcribed_lyrics else ""
@@ -326,10 +333,14 @@ Output ONLY valid JSON with your analysis, no other text.""")
             "is_ai_generated": False,
             "uploaded_by_user_id": user_id,
             "original_filename": original_filename,
+            "artist_profile_id": (artist or {}).get("id"),
+            "artist_slug": (artist or {}).get("slug"),
+            "embedded_tags": tags or {},
 
             "generation_params": {
                 "style": extracted.get("style", ""),
-                "title": extracted.get("title", "Untitled"),
+                "title": title,
+                "artist_name": artist_name,
                 "instrumental": extracted.get("instrumental", False),
                 "vocal_gender": extracted.get("vocal_gender"),
                 "prompt": lyrics_prompt,
@@ -339,9 +350,9 @@ Output ONLY valid JSON with your analysis, no other text.""")
             },
 
             "track_info": {
-                "title": extracted.get("title", "Untitled"),
+                "title": title,
                 "duration": duration_ms,
-                "artist": extracted.get("user_provided_artist") or extracted.get("inspired_artist"),
+                "artist": artist_name,
             },
 
             "generation_status": "completed",
