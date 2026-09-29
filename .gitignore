@@ -55,3 +55,4 @@ checkpoints/
 server/checkpoints/
 server/utils/checkpoints/
 models/
+tests/.dj_test_account.json

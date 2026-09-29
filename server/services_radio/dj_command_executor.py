@@ -23,7 +23,7 @@ SEARCH_CATEGORY_PREFIXES = {
     "vocal": "Vocal",
     "lyrics": "Lyrics",
 }
-NAME_SEARCH_FIELDS = {"Artist": "artist_name", "Song": "title"}
+NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
 
 SEED_MODE_DISPLAY = {
     "mood": "mood",
@@ -102,15 +102,9 @@ class CommandExecutorService:
 
     def _track_label(self, track_id):
         track = self.catalog_service.get_track(track_id) if track_id else None
-        if not track:
+        if not track or not track.get('generation_params', {}).get('title'):
             return None
-        title = track.get('generation_params', {}).get('title', '')
-        artist = track.get('generation_params', {}).get('artist_name', '')
-        if title and artist:
-            return f"'{title}' by {artist}"
-        if title:
-            return f"'{title}'"
-        return None
+        return log_service.track_label(track)
 
     def _upcoming_labels(self, session_id, limit=3):
         state = self.playback_service.get_state(session_id) or {}
@@ -261,9 +255,14 @@ class CommandExecutorService:
         def norm(text):
             return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
         track = self.catalog_service.get_track(track_id) if self.catalog_service else None
-        name = norm(((track or {}).get("generation_params") or {}).get(field))
+        if field == "artist":
+            names = log_service.track_artists(track)
+        else:
+            names = [((track or {}).get("generation_params") or {}).get("title"),
+                     ((track or {}).get("track_info") or {}).get("title")]
         wanted = norm(value)
-        return bool(name and wanted) and (f" {wanted} " in f" {name} " or f" {name} " in f" {wanted} ")
+        return bool(wanted) and any(
+            f" {wanted} " in f" {name} " or f" {name} " in f" {wanted} " for name in map(norm, names) if name)
 
     async def execute_playback_control(self, session_dict, action):
         session_id = session_dict.get('session_id')

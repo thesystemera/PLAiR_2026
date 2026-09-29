@@ -112,13 +112,8 @@ def stated_pulse(pulse: Dict, user_input: str) -> Dict:
 
 
 def tool_menu() -> str:
-    from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS
-    lines = []
-    for declaration in DJ_FUNCTION_DECLARATIONS:
-        schema = declaration.parameters_json_schema or {}
-        params = ", ".join((schema.get("properties") or {}).keys())
-        lines.append(f"- {declaration.name}({params}): {declaration.description}")
-    return "\n".join(lines)
+    from services_radio.dj_tools import tool_catalog
+    return tool_catalog()
 
 def _selection_pulse(selection) -> Dict:
     return clean_pulse(selection.pulse_topic, selection.pulse_kinds, selection.pulse_near_me, selection.pulse_when)
@@ -294,6 +289,7 @@ class ContextRouterService(SingletonService):
     ) -> Dict:
         if similarity_threshold is None:
             similarity_threshold = settings.GEMINI_NODE_PRODUCER_SIMILARITY_THRESHOLD
+        use_cache = use_cache and settings.PRODUCER_CACHE_ENABLED
 
         if not user_input or not user_input.strip():
             return self._route(DEFAULT_NODES)
@@ -347,8 +343,9 @@ class ContextRouterService(SingletonService):
         selection, system_prompt, user_prompt = await self._call_producer_ai(user_input)
 
         if selection:
-            await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
-            self._log_cache_performance()
+            if use_cache:
+                await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
+                self._log_cache_performance()
             route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan,
                                 _selection_pulse(selection), "fresh plan")
             log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}"
@@ -477,7 +474,7 @@ Reasoning: "Music request - core formatting + roles for personality + user taste
 Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more.
 
 TOOL PLANNING (needs_tools + tool_plan):
-The hosts can use these studio tools while they reply:
+The studio tools the hosts can use, with what each does, its parameters, cost and requirements:
 {tool_menu()}
 
 Set needs_tools=true when the hosts must find something out or make something happen:

@@ -2,8 +2,11 @@ import argparse
 import asyncio
 import base64
 import json
+import os
+import secrets
 import time
 import uuid
+from pathlib import Path
 
 import httpx
 import websockets
@@ -19,11 +22,11 @@ DEFAULT_TURNS = [
 AUCKLAND = {"latitude": -36.8570, "longitude": 174.7600, "accuracy": 30, "timezone": "Pacific/Auckland"}
 
 
-async def run_turn(base: str, ws, guest: str, device: str, text: str, timeout: float) -> dict:
+async def run_turn(base: str, ws, headers: dict, text: str, timeout: float) -> dict:
     t0 = time.perf_counter()
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(f"{base}/api/dj/talk", json={"text": text},
-                              headers={"X-Guest-ID": guest, "X-Device-ID": device})
+                              headers=headers)
     result = {"text": text, "status": r.status_code, "reply": None, "commands": None, "first_audio_s": None,
               "audio_kb": 0, "streams": 0, "stream_starts": [], "activity": []}
     if r.status_code != 200:
@@ -45,6 +48,13 @@ async def run_turn(base: str, ws, guest: str, device: str, text: str, timeout: f
             result["commands"] = data.get("commands") or data.get("command")
             result["reply_s"] = round(time.perf_counter() - t0, 1)
             idle_after_reply = time.perf_counter() + 12
+        elif kind == "playback_state" and isinstance(data.get("queue"), list):
+            queue, current = data["queue"], (data.get("current_track") or {}).get("id")
+            index = next((i for i, t in enumerate(queue) if t.get("id") == current), -1)
+            label = lambda t: (f"{(t.get('generation_params') or {}).get('title') or t.get('title') or t.get('name')} "
+                               f"[{str(t.get('id'))[:6]}] by {(t.get('generation_params') or {}).get('artist_name') or t.get('artist_name') or '?'}")
+            result["now_playing"] = label(queue[index]) if index >= 0 else None
+            result["up_next"] = [label(t) for t in queue[index + 1:index + 7]]
         elif kind == "dj_activity":
             if data.get("phase") == "result":
                 result["activity"].append(f"{data.get('tool')}: {data.get('outcome')} {data.get('summary') or ''}".strip())
@@ -64,21 +74,56 @@ async def run_turn(base: str, ws, guest: str, device: str, text: str, timeout: f
     return result
 
 
+ACCOUNT_FILE = Path(__file__).with_name(".dj_test_account.json")
+
+
+async def signed_in_token(base: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as client:
+        if os.environ.get("DJ_TEST_USERNAME") and os.environ.get("DJ_TEST_PASSWORD"):
+            account = {"username": os.environ["DJ_TEST_USERNAME"], "password": os.environ["DJ_TEST_PASSWORD"]}
+            r = await client.post(f"{base}/api/auth/login", json=account)
+        elif ACCOUNT_FILE.exists():
+            account = json.loads(ACCOUNT_FILE.read_text())
+            r = await client.post(f"{base}/api/auth/login", json=account)
+        else:
+            account = {"username": f"djtest_{secrets.token_hex(3)}", "password": secrets.token_urlsafe(18)}
+            r = await client.post(f"{base}/api/auth/register", json=account)
+            if r.status_code == 200:
+                ACCOUNT_FILE.write_text(json.dumps(account))
+        r.raise_for_status()
+        token = r.json()["token"]
+        cleared = await client.post(f"{base}/api/manage_user_data", json={"action": "delete_conversations"},
+                                    headers={"Authorization": f"Bearer {token}"})
+        cleared.raise_for_status()
+        return token
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="DJ tool-mode + City Pulse live test (guest in Auckland)")
     parser.add_argument("--base", default="http://127.0.0.1:8011")
     parser.add_argument("--timeout", type=float, default=90)
+    parser.add_argument("--signed-in", action="store_true",
+                        help="talk as the test account in tests/.dj_test_account.json (created on first use)")
     parser.add_argument("turns", nargs="*")
     args = parser.parse_args()
     guest = f"guest_{uuid.uuid4()}"
     device = f"pulse-test-{uuid.uuid4().hex[:6]}"
-    ws_url = args.base.replace("http", "ws", 1) + \
-        f"/ws/playback?guest_id={guest}&device_id={device}&device_name=pulse-test&device_type=desktop"
-    async with websockets.connect(ws_url, max_size=None) as ws:
+    headers = {"X-Device-ID": device}
+    protocols = None
+    query = f"device_id={device}&device_name=pulse-test&device_type=desktop"
+    if args.signed_in:
+        token = await signed_in_token(args.base)
+        headers["Authorization"] = f"Bearer {token}"
+        protocols = ["plair.v1", f"auth.{token}"]
+    else:
+        headers["X-Guest-ID"] = guest
+        query = f"guest_id={guest}&" + query
+    ws_url = args.base.replace("http", "ws", 1) + f"/ws/playback?{query}"
+    async with websockets.connect(ws_url, max_size=None, subprotocols=protocols) as ws:
         await ws.send(json.dumps({"type": "listener_location", "data": AUCKLAND}))
         await asyncio.sleep(1.5)
         for text in args.turns or DEFAULT_TURNS:
-            result = await run_turn(args.base, ws, guest, device, text, args.timeout)
+            result = await run_turn(args.base, ws, headers, text, args.timeout)
             print(json.dumps(result, ensure_ascii=False, indent=1))
 
 

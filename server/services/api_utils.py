@@ -1,5 +1,7 @@
 from typing import Dict, Any
 
+from services import log_service
+
 def simplify_track_info(track: Dict[str, Any], catalog_service=None) -> Dict[str, Any]:
     params = track.get("generation_params", {})
     track_info = track.get("track_info", {})
@@ -14,7 +16,7 @@ def simplify_track_info(track: Dict[str, Any], catalog_service=None) -> Dict[str
     return {
         "id": track_id,
         "title": params.get("title", "Unknown"),
-        "artist_name": params.get("artist_name"),
+        "artist_name": next(iter(log_service.track_artists(track)), None),
         "style": params.get("style", ""),
         "duration_ms": track_info.get("duration", 0),
         "has_artwork": has_artwork

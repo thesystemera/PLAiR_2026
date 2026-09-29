@@ -268,6 +268,10 @@ class PlaybackState:
                 removed = self.queue.pop()
                 self._auto_filled_track_ids.discard(removed["id"])
 
+    def _upcoming_picks(self) -> List[Dict]:
+        start = self.current_index + 1 if self.current_track else 0
+        return [t for t in self.queue[start:] if t.get("id") not in self._auto_filled_track_ids]
+
     def _enforce_queue_size(self):
         while len(self.queue) > self.QUEUE_SIZE:
             if self.current_index < len(self.queue) - 1:
@@ -601,6 +605,7 @@ class PlaybackState:
         async with self._command():
             async with self._queue_lock:
                 existing_ids = {t["id"] for t in self.queue}
+                insert_pos = position if position is not None else self.current_index + 1
 
                 for track_id in track_ids:
                     if track_id in existing_ids:
@@ -610,8 +615,8 @@ class PlaybackState:
                     if not track:
                         continue
 
-                    insert_pos = position if position is not None else self.current_index + 1
                     self.queue.insert(insert_pos, track)
+                    insert_pos += 1
 
                     existing_ids.add(track_id)
                     added.append(track_id)
@@ -694,6 +699,7 @@ class PlaybackState:
         if is_playlist_mode(category):
             self.radio_mode = category
             async with self._queue_lock:
+                picks = self._upcoming_picks()
                 self._reset_fill_epoch()
                 self.queue = []
                 self.current_track_id = None
@@ -701,8 +707,12 @@ class PlaybackState:
 
             await self._auto_fill_queue(user_id=user_id, notify_callback=notify_callback)
 
-            if self.queue:
+            if self.queue or picks:
                 async with self._queue_lock:
+                    pick_ids = {t["id"] for t in picks}
+                    fill = [t for t in self.queue if t["id"] not in pick_ids]
+                    self.queue = fill[:1] + picks + fill[1:]
+                    self._enforce_queue_size()
                     self.current_track_id = self.queue[0]["id"]
                     self.progress_ms = 0
                     self.last_update_time = time.time()
@@ -736,12 +746,13 @@ class PlaybackState:
             return False
 
         async with self._queue_lock:
+            picks = self._upcoming_picks()
             self._reset_fill_epoch()
             seed_epoch = self._fill_epoch
             if self.current_track:
-                self.queue = [self.current_track]
+                self.queue = [self.current_track] + picks
             else:
-                self.queue = []
+                self.queue = picks
                 self.current_track_id = None
             self._auto_filled_track_ids.clear()
 

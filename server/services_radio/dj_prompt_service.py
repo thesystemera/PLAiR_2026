@@ -19,7 +19,7 @@ from services_radio.context_service import gather_raw_dependencies
 from services_radio import listener_location as location_resolver
 from services_radio.context_router_service import context_router_service
 from services import log_service
-from services.llm_router import LLM_LIVE, LLM_ANNOUNCE, LLM_INTERPRET
+from services.llm_router import LLM_LIVE, LLM_DJ, LLM_ANNOUNCE, LLM_INTERPRET
 from services.llm_result_cache import cache_key, interpretation_caches
 from config.settings import settings
 
@@ -807,7 +807,7 @@ class DJPromptService:
         return response_text.strip().strip('"')
 
     @staticmethod
-    def _review_step(text: str) -> str | None:
+    def _review_step(text: str, calls: list) -> str | None:
         if "[TASK]" not in text:
             return ("[STUDIO] No [TASK] sign-off yet: did you do what you told the listener you'd do? If not, do it "
                     "now. Then sign off with [TASK]. Your line already aired, so don't repeat it.")
@@ -882,11 +882,13 @@ class DJPromptService:
             user_message=user_message,
             function_declarations=declarations_for(tool_runtime.ctx.planned),
             refresh_tools=lambda: declarations_for(tool_runtime.ctx.planned, tool_runtime.ctx.granted),
-            review=lambda text, calls: self._review_step(text),
+            review=self._review_step,
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
             max_tokens=self.config['dj_tokens'],
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
+            spec=LLM_DJ,
+            thinking_budget=settings.DJ_TOOL_THINKING_BUDGET,
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             on_preamble=handle_preamble,
             followup_tools=READ_TOOLS

@@ -332,6 +332,7 @@ class AIService(SingletonService):
             followup_tools: Optional[set] = None,
             review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
+            thinking_budget: Optional[int] = None,
             spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
         if temperature is None:
@@ -340,6 +341,8 @@ class AIService(SingletonService):
             max_tokens = 2048
 
         base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
+        if thinking_budget is not None:
+            base["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
 
         def build_configs(declarations):
             if not declarations:
@@ -397,7 +400,7 @@ class AIService(SingletonService):
                 prompt = review(text, calls_log)
                 if prompt:
                     reviewed = True
-                    log_service.detail(f"DJ tool turn: review step ({prompt[:80]})", "ai")
+                    log_service.ai(f"DJ tool turn: review step ({prompt[:80]})")
                     if text.strip():
                         preambles.append(text)
                         if on_preamble is not None:

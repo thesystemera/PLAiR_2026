@@ -285,13 +285,21 @@ def who(session_id=None, device_id: Optional[str] = None, user_id=None) -> str:
     return label
 
 
+def track_artists(track) -> list:
+    if not track:
+        return []
+    names = [(track.get("generation_params") or {}).get("artist_name"), (track.get("track_info") or {}).get("artist"),
+             track.get("artist_name"), (track.get("derived_tags") or {}).get("inspired_artist")]
+    return [name for name in dict.fromkeys(str(n).strip() for n in names if n and str(n).strip())]
+
+
 def track_label(track, fallback: str = "unknown track") -> str:
     if not track:
         return fallback
     params = track.get("generation_params") or {}
     title = params.get("title") or track.get("title") or track.get("id") or fallback
-    artist = params.get("artist_name") or track.get("artist_name")
-    return f"'{title}' by {artist}" if artist else f"'{title}'"
+    artists = track_artists(track)
+    return f"'{title}' by {artists[0]}" if artists else f"'{title}'"
 
 
 def clock(ms) -> str:

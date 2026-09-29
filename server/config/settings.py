@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
@@ -296,6 +297,8 @@ class Settings:
     GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))
     GEO_LOCATE_PER_RUN: int = int(os.getenv("GEO_LOCATE_PER_RUN", "200"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
+    DJ_TOOL_THINKING_BUDGET: Optional[int] = (int(os.getenv("DJ_TOOL_THINKING_BUDGET", "-1"))
+                                              if os.getenv("DJ_TOOL_THINKING_BUDGET", "-1").strip() else None)
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))
     DJ_MICRO_MAX_TOKENS: int = int(os.getenv("DJ_MICRO_MAX_TOKENS", "48"))
@@ -313,6 +316,7 @@ class Settings:
     GEMINI_NODE_PRODUCER_MODEL: str = os.getenv("GEMINI_NODE_PRODUCER_MODEL", "gemini-3.5-flash-lite")
     GEMINI_NODE_PRODUCER_TEMPERATURE: float = float(os.getenv("GEMINI_NODE_PRODUCER_TEMPERATURE", "0.1"))
     GEMINI_NODE_PRODUCER_SIMILARITY_THRESHOLD: float = float(os.getenv("GEMINI_NODE_PRODUCER_SIMILARITY_THRESHOLD", "0.85"))
+    PRODUCER_CACHE_ENABLED: bool = os.getenv("PRODUCER_CACHE_ENABLED", "true").lower() == "true"
 
     GEMINI_METADATA_MODEL: str = os.getenv("GEMINI_METADATA_MODEL", "gemini-3.5-flash-lite")
     GEMINI_PERSONA_MODEL: str = os.getenv("GEMINI_PERSONA_MODEL", "gemini-3.5-flash-lite")
@@ -321,7 +325,8 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_API_BASE_URL: str = os.getenv("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com/chat/completions")
 
-    LLM_LIVE: str = os.getenv("LLM_LIVE", "gemini:gemini-3.5-flash-lite")
+    LLM_LIVE: str = os.getenv("LLM_LIVE", "gemini:gemini-3.5-flash-lite,gemini:gemini-3.5-flash")
+    LLM_DJ: str = os.getenv("LLM_DJ", "gemini:gemini-2.5-flash,gemini:gemini-3.5-flash-lite")
     LLM_BACKGROUND: str = os.getenv("LLM_BACKGROUND", "deepseek:deepseek-flash,gemini:gemini-3.5-flash-lite")
     LLM_ANNOUNCE: str = os.getenv("LLM_ANNOUNCE", "deepseek:deepseek-flash,gemini:gemini-3.5-flash-lite")
     LLM_INTERPRET: str = os.getenv("LLM_INTERPRET", "deepseek:deepseek-flash,gemini:gemini-3.5-flash-lite")

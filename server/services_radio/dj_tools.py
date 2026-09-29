@@ -94,166 +94,263 @@ def _string(description: str) -> Dict[str, Any]:
     return {"type": "string", "description": description}
 
 
-DJ_FUNCTION_DECLARATIONS = [
-    types.FunctionDeclaration(
-        name="pulse_search",
-        description="Look something up in everything the station knows, all at once and by meaning: tracks in the PLAiR catalog, artist biographies, gigs and events, places nearby, local and national news, weather, air quality, pollen and the neighbourhood, listener shoutouts, what the city is playing, and what locals have been asking about. One query (e.g. 'Radiohead') returns whatever is connected across all of them. Returns short facts right away so you can use them in THIS reply. Checks what the station already knows first and only fetches live when nothing is on hand.",
-        parameters_json_schema=_schema({
-            "query": _string("What to look up, in plain words, e.g. 'jazz', 'late night pizza', 'All Blacks', 'Radiohead'. Empty to browse what's on hand."),
-            "kinds": {"type": "array", "items": _enum(PULSE_KINDS, "Kind of knowledge."), "description": "Optional: limit to these kinds (event, place, news, weather, area, artist, track, community, chart, trend). Leave empty to search everything."},
+COST_TEXT = {
+    "memory": "instant, from station memory",
+    "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
+    "segment": "expensive: gathers the material and airs a full produced segment of 30-60 s",
+}
+VOICE_SAVE_REQUIRES = "the listener's own voice recording from this turn; signed-in listener"
+
+TOOL_REGISTRY: List[Dict[str, Any]] = [
+    {
+        "name": "pulse_search",
+        "cost": "live",
+        "summary": "search everything the station knows, for quick facts",
+        "description": "The station's memory, searched by meaning across everything it knows at once: tracks in the "
+                       "PLAiR catalog, artist bios, gigs and events, places, local and national news, weather, air "
+                       "quality and pollen, listener shoutouts (as text summaries), what the city is playing and what "
+                       "locals have been asking about. Returns short facts to use in THIS reply. Use it for quick "
+                       "answers and to check what the station has, including whether the catalog has an artist or "
+                       "song. Typical pattern: pulse_search, then pulse_detail on the best item, or the matching "
+                       "segment tool when the listener wants the whole thing.",
+        "parameters": _schema({
+            "query": _string("What to look up, in plain words, e.g. 'jazz', 'late night pizza', 'All Blacks', "
+                             "'Radiohead'. Empty to browse what's on hand."),
+            "kinds": {"type": "array", "items": _enum(PULSE_KINDS, "Kind of knowledge."),
+                      "description": "Optional: limit to these kinds (event, place, news, weather, area, artist, "
+                                     "track, community, chart, trend). Leave empty to search everything."},
             "when": _enum(PULSE_WHEN, "Optional time window for events and weather."),
-            "near_me": {"type": "boolean", "description": "Local only: gigs, places, news and shoutouts that happen near the listener, from their street out to their city. Every result also says where it is and how far from the listener."},
+            "near_me": {"type": "boolean",
+                        "description": "Local only: gigs, places, news and shoutouts near the listener, from their "
+                                       "street out to their city. Every result says where it is and how far away."},
             "max_age_days": {"type": "number", "description": "Only shoutouts and news from the last N days."},
-            "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), nearest."),
+            "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), "
+                                      "nearest."),
         }),
-    ),
-    types.FunctionDeclaration(
-        name="pulse_detail",
-        description="Get the full details of one item returned by pulse_search, plus what it's connected to across the station's knowledge: the gig a shoutout is about, shoutouts and news mentioning a gig or venue, other things nearby or on the same subject. A shoutout's details include its audio clip.",
-        parameters_json_schema=_schema({
-            "item_id": _string("The id of an item from pulse_search."),
-        }, ["item_id"]),
-    ),
-    types.FunctionDeclaration(
-        name="listener_context",
-        description="What the station knows about THIS listener: local time, city and neighbourhood, favourite genres and artists, interests and notes from past chats. Use it to personalise, never to recite.",
-        parameters_json_schema=_schema({}),
-    ),
-    types.FunctionDeclaration(
-        name="city_trends",
-        description="What the listener's city is into right now: this week's most played tracks and genres on PLAiR, and what locals have been asking the station about (and what the station told them).",
-        parameters_json_schema=_schema({
-            "topic": _string("Optional subject, e.g. 'food' or 'gigs', to see what locals have asked about it."),
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="search_and_play",
-        description="Search the station catalog in one category and either start playing the best match now or add matches to the queue. Returns how many tracks were found and their titles.",
-        parameters_json_schema=_schema({
-            "category": _enum(SEARCH_CATEGORIES, "Which catalog field to search: song_title, primary_artist, similar_artists, primary_genre, secondary_genres (sub-genres/tags), mood, style (production), theme (lyrical subject), vocal (delivery), lyrics (lyric content)."),
+    },
+    {
+        "name": "pulse_detail",
+        "cost": "memory",
+        "summary": "the full story on one pulse_search item",
+        "description": "Full details of one item from pulse_search plus what it's connected to across the station's "
+                       "knowledge: the gig a shoutout is about, shoutouts and news mentioning a gig or venue, other "
+                       "things nearby or on the same subject. Use it after pulse_search when one item deserves more.",
+        "parameters": _schema({"item_id": _string("The id of an item from pulse_search.")}, ["item_id"]),
+    },
+    {
+        "name": "listener_context",
+        "cost": "memory",
+        "summary": "what the station knows about this listener",
+        "description": "What the station knows about THIS listener: local time, city and neighbourhood, favourite "
+                       "genres and artists, interests and notes from past chats. Use it to personalise a reply, never "
+                       "to recite it.",
+        "parameters": _schema({}),
+    },
+    {
+        "name": "city_trends",
+        "cost": "memory",
+        "summary": "what the listener's city is into right now",
+        "description": "What the listener's city is into right now: this week's most played tracks and genres on "
+                       "PLAiR, and what locals have been asking the station about (and what it told them).",
+        "parameters": _schema({"topic": _string("Optional subject, e.g. 'food' or 'gigs', to see what locals "
+                                                "asked about it.")}),
+    },
+    {
+        "name": "search_and_play",
+        "cost": "memory",
+        "summary": "find tracks in the catalog and play or queue them",
+        "description": "Find tracks in the catalog by one field and play the best match now, or queue matches after "
+                       "the current track. Artist and song searches say plainly when the catalog doesn't have that "
+                       "name and what the closest match was. Use it whenever the listener wants to hear something "
+                       "specific. Typical pattern: mode 'play' for the main request, mode 'queue' for extras.",
+        "parameters": _schema({
+            "category": _enum(SEARCH_CATEGORIES, "Which catalog field to search: song_title, primary_artist, "
+                                                 "similar_artists, primary_genre, secondary_genres (sub-genres/tags), "
+                                                 "mood, style (production), theme (lyrical subject), vocal "
+                                                 "(delivery), lyrics (lyric content)."),
             "query": _string("What to search for, e.g. 'Nine Inch Nails', 'melancholic', 'TR-808 drums'."),
-            "mode": _enum(["play", "queue"], "play = start the first match immediately; queue = add matches after the current track."),
+            "mode": _enum(["play", "queue"], "play = start the first match now; queue = add matches after the "
+                                             "current track."),
         }, ["category", "query", "mode"]),
-    ),
-    types.FunctionDeclaration(
-        name="playback_control",
-        description="Control playback for this listener's session: skip to the next track, go back, pause, or resume.",
-        parameters_json_schema=_schema({
-            "action": _enum(["next", "previous", "pause", "resume"], "Playback action."),
-        }, ["action"]),
-    ),
-    types.FunctionDeclaration(
-        name="seed_radio",
-        description="Turn the radio into a station built from the CURRENT track, matched on one aspect (or 'all' for a balanced mix).",
-        parameters_json_schema=_schema({
-            "mode": _enum(SEED_MODES, "Aspect of the current track to match."),
-        }, ["mode"]),
-    ),
-    types.FunctionDeclaration(
-        name="play_playlist",
-        description="Switch to a playlist: the listener's favorites, discovery (favorites plus similar new tracks), or the station's top hits (all time, this week, today).",
-        parameters_json_schema=_schema({
-            "name": _enum(PLAYLISTS, "Playlist to play."),
-        }, ["name"]),
-    ),
-    types.FunctionDeclaration(
-        name="rate_track",
-        description="Record the listener's rating of a track. like = enjoys it; superstar = an all-time favourite; dislike = clear any existing rating; ban = never play it again.",
-        parameters_json_schema=_schema({
+    },
+    {
+        "name": "playback_control",
+        "cost": "memory",
+        "summary": "skip, go back, pause or resume",
+        "description": "Skip to the next track, go back, pause or resume this listener's playback.",
+        "parameters": _schema({"action": _enum(["next", "previous", "pause", "resume"], "Playback action.")},
+                              ["action"]),
+    },
+    {
+        "name": "seed_radio",
+        "cost": "memory",
+        "requires": "a track playing",
+        "summary": "build a station from the track playing now",
+        "description": "Turn the radio into a station built from the track playing now, matched on one aspect "
+                       "('all' for a balanced mix). Use it for 'more like this', or to steer from the current sound.",
+        "parameters": _schema({"mode": _enum(SEED_MODES, "Aspect of the current track to match.")}, ["mode"]),
+    },
+    {
+        "name": "play_playlist",
+        "cost": "memory",
+        "summary": "switch to favorites, discovery or top hits",
+        "description": "Switch to a playlist: the listener's favorites, discovery (favorites plus similar new "
+                       "tracks), or the station's top hits (all time, this week, today). Suits broad asks that don't "
+                       "name an artist or sound.",
+        "parameters": _schema({"name": _enum(PLAYLISTS, "Playlist to play.")}, ["name"]),
+    },
+    {
+        "name": "rate_track",
+        "cost": "memory",
+        "requires": "signed-in listener; ban and dislike need the listener's own negative words",
+        "summary": "like, superstar, clear or ban a track",
+        "description": "Record the listener's rating of a track: like (enjoys it), superstar (an all-time "
+                       "favourite), dislike (clears any rating), ban (never play it again).",
+        "parameters": _schema({
             "rating": _enum(["like", "superstar", "dislike", "ban"], "Rating to record."),
             "target": _enum(TRACK_TARGETS, "Which track: the one playing now, the previous one, or the next one."),
         }, ["rating", "target"]),
-    ),
-    types.FunctionDeclaration(
-        name="get_news",
-        description="Schedule a news segment that airs right after your reply.",
-        parameters_json_schema=_schema({
+    },
+    {
+        "name": "get_news",
+        "cost": "segment",
+        "summary": "a full produced news bulletin",
+        "description": "A full produced news bulletin that airs right after your reply: world, national or local, "
+                       "optionally one category or topic. For a quick headline, pulse_search is enough.",
+        "parameters": _schema({
             "scope": _enum(["world", "national", "local"], "Geographic scope."),
             "category": _enum(NEWS_CATEGORIES, "Optional news category."),
             "query": _string("Optional specific topic."),
         }, ["scope"]),
-    ),
-    types.FunctionDeclaration(
-        name="get_weather",
-        description="Schedule a weather segment for the listener's location that airs right after your reply.",
-        parameters_json_schema=_schema({
-            "when": _enum(["current", "today", "tomorrow", "week"], "Forecast period."),
-        }, ["when"]),
-    ),
-    types.FunctionDeclaration(
-        name="get_events",
-        description="Schedule a segment about concerts, festivals and local events near the listener that airs right after your reply.",
-        parameters_json_schema=_schema({
+    },
+    {
+        "name": "get_weather",
+        "cost": "segment",
+        "requires": "the listener's location",
+        "summary": "a full produced weather forecast",
+        "description": "A full produced weather forecast for the listener's location that airs right after your "
+                       "reply.",
+        "parameters": _schema({"when": _enum(["current", "today", "tomorrow", "week"], "Forecast period.")},
+                              ["when"]),
+    },
+    {
+        "name": "get_events",
+        "cost": "segment",
+        "requires": "the listener's location",
+        "summary": "a produced gig guide of events nearby",
+        "description": "A produced gig guide of concerts, festivals and local events near the listener that airs "
+                       "right after your reply.",
+        "parameters": _schema({
             "when": _enum(["today", "tonight", "tomorrow", "weekend", "week", "month"], "Time window."),
             "query": _string("Optional kind of event, e.g. 'techno', 'comedy'."),
         }, ["when"]),
-    ),
-    types.FunctionDeclaration(
-        name="find_places",
-        description="Schedule a segment about nearby places (restaurants, bars, venues, shops, amenities) that airs right after your reply.",
-        parameters_json_schema=_schema({
-            "query": _string("What kind of place, e.g. 'late night pizza'."),
-        }, ["query"]),
-    ),
-    types.FunctionDeclaration(
-        name="get_artist_biography",
-        description="Schedule an artist biography segment that airs right after your reply.",
-        parameters_json_schema=_schema({
-            "artist": _string("Artist name. Omit for the artist of the current track."),
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="explain_lyrics",
-        description="Schedule a lyrics breakdown segment that airs right after your reply. Returns whether the track and its lyrics were found.",
-        parameters_json_schema=_schema({
+    },
+    {
+        "name": "find_places",
+        "cost": "segment",
+        "requires": "the listener's location",
+        "summary": "a produced rundown of places nearby",
+        "description": "A produced rundown of nearby places (restaurants, bars, venues, shops, amenities) that airs "
+                       "right after your reply.",
+        "parameters": _schema({"query": _string("What kind of place, e.g. 'late night pizza'.")}, ["query"]),
+    },
+    {
+        "name": "get_artist_biography",
+        "cost": "segment",
+        "summary": "a produced artist story",
+        "description": "A produced segment telling an artist's story that airs right after your reply.",
+        "parameters": _schema({"artist": _string("Artist name. Omit for the artist of the current track.")}),
+    },
+    {
+        "name": "explain_lyrics",
+        "cost": "segment",
+        "requires": "a track with lyrics on file",
+        "summary": "a produced breakdown of a song's lyrics",
+        "description": "A produced breakdown of a song's lyrics that airs right after your reply. Says straight away "
+                       "whether the track and its lyrics were found.",
+        "parameters": _schema({
             "target": _enum(TRACK_TARGETS, "Which queued track, when no song is named."),
             "song": _string("Optional song title (and artist) to look up instead of a queued track."),
         }),
-    ),
-    types.FunctionDeclaration(
-        name="play_shoutouts",
-        description="Schedule a segment that plays community shoutouts from other listeners right after your reply.",
-        parameters_json_schema=_schema({
-            "query": _string("Optional topic to find relevant shoutouts."),
-        }),
-    ),
-    types.FunctionDeclaration(
-        name="save_shoutout",
-        description="Post the listener's own voice message from THIS turn as a public shoutout to the PLAiR community. Only when the listener explicitly asks to save/post/share their message.",
-    ),
-    types.FunctionDeclaration(
-        name="save_shoutout_reply",
-        description="Post the listener's own voice message from THIS turn as a public reply to an existing shoutout. Only when the listener explicitly asks to reply to that shoutout.",
-        parameters_json_schema=_schema({
-            "parent_id": _string("ID of the shoutout being answered, '<userId>_<timestamp>' as seen in its audio path /shoutouts/audio/<userId>/<timestamp>.mp3."),
+    },
+    {
+        "name": "play_shoutouts",
+        "cost": "segment",
+        "summary": "play other listeners' recorded shoutouts on air",
+        "description": "Plays other listeners' recorded shoutouts on air, in their own voices, in a produced segment "
+                       "right after your reply, optionally about a topic. This is the only way the listener gets to "
+                       "hear shoutouts; pulse_search only has text summaries of them.",
+        "parameters": _schema({"query": _string("Optional topic to find relevant shoutouts.")}),
+    },
+    {
+        "name": "save_shoutout",
+        "cost": "memory",
+        "requires": VOICE_SAVE_REQUIRES,
+        "summary": "publish the listener's voice message as a shoutout",
+        "description": "Publishes the listener's own voice message from this turn as a shoutout to the PLAiR "
+                       "community. Use it when the listener is giving a shoutout or a message meant for everyone.",
+        "parameters": _schema({}),
+    },
+    {
+        "name": "save_shoutout_reply",
+        "cost": "memory",
+        "requires": VOICE_SAVE_REQUIRES,
+        "summary": "publish the listener's voice message as a reply to a shoutout",
+        "description": "Publishes the listener's own voice message from this turn as a reply to an existing "
+                       "shoutout.",
+        "parameters": _schema({
+            "parent_id": _string("ID of the shoutout being answered, '<userId>_<timestamp>' as seen in its audio "
+                                 "path /shoutouts/audio/<userId>/<timestamp>.mp3."),
         }, ["parent_id"]),
-    ),
-    types.FunctionDeclaration(
-        name="save_opinion",
-        description="Save the listener's own spoken review of a track from THIS turn so other listeners can hear it. Only when the listener gives a substantial opinion about the track or asks to save their review.",
-        parameters_json_schema=_schema({
-            "target": _enum(TRACK_TARGETS, "Which track the opinion is about."),
-        }, ["target"]),
-    ),
+    },
+    {
+        "name": "save_opinion",
+        "cost": "memory",
+        "requires": VOICE_SAVE_REQUIRES,
+        "summary": "save the listener's spoken review of a track",
+        "description": "Saves the listener's own spoken review of a track from this turn so other listeners can "
+                       "hear it.",
+        "parameters": _schema({"target": _enum(TRACK_TARGETS, "Which track the opinion is about.")}, ["target"]),
+    },
 ]
-
-COST_TEXT = {
-    "memory": "instant, from station memory",
-    "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
-    "segment": "expensive: a web lookup plus a full produced segment of 30-60 s on air",
-}
 DONE_WITH = {"type": "object", "additionalProperties": {"type": "string"},
              "description": "Earlier tool results you have finished using this turn: {tool_name: what you took from "
                             "it in a few words}. The studio then drops them from your context."}
-for _declaration in DJ_FUNCTION_DECLARATIONS:
-    _schema_json = _declaration.parameters_json_schema or {"type": "object", "properties": {}}
-    _schema_json.setdefault("properties", {})["_done_with"] = DONE_WITH
-    _declaration.parameters_json_schema = _schema_json
 
-TOOL_COSTS = {name: "segment" for name in SEGMENT_TOOLS}
-TOOL_COSTS["pulse_search"] = "live"
-for _declaration in DJ_FUNCTION_DECLARATIONS:
-    _declaration.description = f"{_declaration.description} Cost: {COST_TEXT[TOOL_COSTS.get(_declaration.name, 'memory')]}."
+
+def _tool_notes(tool: Dict[str, Any]) -> str:
+    notes = [f"Cost: {COST_TEXT[tool['cost']]}."]
+    if tool.get("requires"):
+        notes.append(f"Requires: {tool['requires']}.")
+    return "\n".join(notes)
+
+
+def _declaration(tool: Dict[str, Any]) -> types.FunctionDeclaration:
+    parameters = {**tool["parameters"], "properties": {**tool["parameters"].get("properties", {}),
+                                                       "_done_with": DONE_WITH}}
+    return types.FunctionDeclaration(name=tool["name"], description=f"{tool['description']}\n\n{_tool_notes(tool)}",
+                                     parameters_json_schema=parameters)
+
+
+def _parameter_line(name: str, spec: Dict[str, Any]) -> str:
+    options = spec.get("enum") or (spec.get("items") or {}).get("enum")
+    detail = spec.get("description", "")
+    return f"{name}: {detail}" + (f" [{', '.join(options)}]" if options and ", ".join(options) not in detail else "")
+
+
+def tool_catalog() -> str:
+    entries = []
+    for tool in TOOL_REGISTRY:
+        properties = tool["parameters"].get("properties") or {}
+        params = "; ".join(_parameter_line(name, spec) for name, spec in properties.items()) or "none"
+        entries.append(f"- {tool['name']}: {tool['description']}\n  Parameters: {params}\n  "
+                       + _tool_notes(tool).replace("\n", " "))
+    return "\n".join(entries)
+
+
+TOOLS_BY_NAME = {tool["name"]: tool for tool in TOOL_REGISTRY}
+DJ_FUNCTION_DECLARATIONS = [_declaration(tool) for tool in TOOL_REGISTRY]
+TOOL_COSTS = {tool["name"]: tool["cost"] for tool in TOOL_REGISTRY}
 
 KIND_SEGMENTS = {"event": "get_events", "place": "find_places", "news": "get_news", "weather": "get_weather",
                  "area": "get_weather", "artist": "get_artist_biography", "community": "play_shoutouts"}
@@ -286,7 +383,8 @@ def request_tools_declaration(missing: List[types.FunctionDeclaration]) -> types
         description="Rarely needed: only when the listener clearly wants something none of your current tools can do "
                     "(the producer misread the message). The tools below are NOT in your kit yet; request the ones you "
                     "need and they become available on your next step. " + "; ".join(
-                        f"{d.name}: {d.description.split('.')[0]}" for d in missing),
+                        f"{d.name}: {TOOLS_BY_NAME[d.name]['summary']} ({TOOLS_BY_NAME[d.name]['cost']})"
+                        for d in missing),
         parameters_json_schema=_schema({
             "names": {"type": "array", "items": _enum([d.name for d in missing], "Tool name."),
                       "description": "Tools you need."},
@@ -578,6 +676,15 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 PLAN_GATED_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist", "rate_track"}
 
 
+def _words(text: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _mentions(listener_text: str, query: str) -> bool:
+    wanted = {word for word in _words(query) if len(word) > 2}
+    return bool(wanted) and len(wanted & _words(listener_text)) * 2 >= len(wanted)
+
+
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
     if name in READ_TOOLS and ctx.calls_made < settings.DJ_TOOL_MAX_CALLS_PER_TURN:
         return None
@@ -590,10 +697,10 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
 
     listener_text = ctx.transcription or ""
 
-    if (name in PLAN_GATED_TOOLS and command_string(name, args) in ctx.recent_commands
-            and not (ctx.planned and name in ctx.planned)):
-        return ("That exact action was already carried out for an earlier message. Only repeat it if the listener "
-                "asks again in this message.")
+    if (name in PLAN_GATED_TOOLS and args.get("query") and command_string(name, args) in ctx.recent_commands
+            and not _mentions(listener_text, args["query"])):
+        return (f"'{args['query']}' was already handled for an earlier message and this message doesn't ask for it. "
+                "Answer this message only.")
 
     if name in SAVE_TOOLS:
         if not ctx.user_id:
