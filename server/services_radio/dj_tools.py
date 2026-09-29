@@ -778,16 +778,6 @@ class DJToolRuntime:
             await self._flash(name, raw_args or {}, "failed", f"bad arguments: {e}"[:80])
             return {"status": "error", "reason": str(e)}
 
-        if name not in READ_TOOLS:
-            command = command_string(name, args)
-            earlier = next((r for r in self.ctx.executed if r.get("command") == command), None)
-            if earlier is not None:
-                log_service.commands(f"[DJ TOOLS] {command} already done this turn - not repeated")
-                return {"status": "already_done",
-                        "note": f"You already did this a moment ago in this turn and it worked "
-                                f"({earlier.get('summary') or 'done'}). Don't do it again, and don't repeat what "
-                                f"you already said on air."}
-
         refusal = authorize_tool_call(name, args, self.ctx)
         self.ctx.calls_made += 1
         if refusal:
