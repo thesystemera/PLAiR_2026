@@ -1,9 +1,8 @@
-import { memo } from 'react'
+import { memo, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useUISelector } from '../contexts/UIStateContext'
 import { PRESETS } from '../lib/motion'
 import { ON_AIR_LAMP, getOnAirSegment } from '../lib/themeManager'
-import { NoticeChip } from './Notice'
 
 const LAMP_GLOW = `0 0 6px 2px ${ON_AIR_LAMP}d9, 0 0 14px 4px #f59e0b59`
 
@@ -61,23 +60,43 @@ const OnAirBadgeView = memo(function OnAirBadgeView({ talkBreak, className = '',
   )
 })
 
-export const OnAirNotice = memo(function OnAirNotice() {
-  const talkBreak = useUISelector(state => state.engineState.talkBreak)
-  const segment = getOnAirSegment(talkBreak)
-  return (
-    <AnimatePresence initial={false}>
-      {talkBreak && (
-        <motion.div key={talkBreak.id} layout="position" {...PRESETS.fadeSlide}>
-          <NoticeChip borderColor={`${segment.color}80`} title={talkBreak.title || segment.label}>
-            <OnAirLamp paused={talkBreak.paused} />
-            <span className="font-bold tracking-wide text-red-100">ON AIR</span>
-            <span className="font-medium truncate" style={{ color: segment.color }}>· {segment.label}</span>
-          </NoticeChip>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  )
-})
+const ON_AIR_NOTICE = 'on-air'
+
+export function OnAirNotice() {
+  const { talkBreak, showNotice, hideNotice } = useUISelector(state => ({
+    talkBreak: state.engineState.talkBreak,
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+  }))
+
+  useEffect(() => {
+    if (!talkBreak) {
+      hideNotice(ON_AIR_NOTICE)
+      return
+    }
+    const segment = getOnAirSegment(talkBreak)
+    showNotice({
+      key: ON_AIR_NOTICE,
+      sticky: true,
+      dismissible: false,
+      priority: 0,
+      icon: null,
+      borderColor: `${segment.color}80`,
+      title: talkBreak.title || segment.label,
+      content: (
+        <>
+          <OnAirLamp paused={talkBreak.paused} />
+          <span className="font-bold tracking-wide text-red-100">ON AIR</span>
+          <span className="font-medium truncate" style={{ color: segment.color }}>· {segment.label}</span>
+        </>
+      ),
+    })
+  }, [talkBreak, showNotice, hideNotice])
+
+  useEffect(() => () => hideNotice(ON_AIR_NOTICE), [hideNotice])
+
+  return null
+}
 
 const EDGE_TOP = 'linear-gradient(to bottom, var(--on-air-lamp), transparent)'
 const EDGE_BOTTOM = 'linear-gradient(to top, var(--on-air-accent), transparent)'

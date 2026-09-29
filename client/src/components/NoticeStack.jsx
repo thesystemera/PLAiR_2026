@@ -1,28 +1,18 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { PRESETS } from '../lib/motion'
-import { NoticeChip, setNoticeSlot } from './Notice'
-import { ActivityChip } from './DJActivity'
-import { OfflinePill } from './OfflinePill'
-import { OnAirNotice } from './OnAirBadge'
+import { NoticeChip } from './Notice'
 
-const TOAST_ICONS = {
-  success: CheckCircle2,
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-}
+const byPriority = (a, b) => a.priority - b.priority || a.seq - b.seq
 
 export const NoticeStack = memo(function NoticeStack() {
-  const { toasts, calls, fullscreen, offline, removeToast } = useUISelector(state => ({
-    toasts: state.toasts,
-    calls: state.engineState.djActivity,
+  const { notices, fullscreen, hideNotice } = useUISelector(state => ({
+    notices: state.notices,
     fullscreen: state.interfaceState.isFullscreenVisuals,
-    offline: state.audioState.offlineMode,
-    removeToast: state.removeToast,
+    hideNotice: state.hideNotice,
   }))
+  const ordered = useMemo(() => [...notices].sort(byPriority), [notices])
 
   return (
     <div
@@ -31,24 +21,14 @@ export const NoticeStack = memo(function NoticeStack() {
       role="status"
       aria-live="polite"
     >
-      {!fullscreen && <OnAirNotice />}
-      <div ref={setNoticeSlot} className="contents" />
-      <OfflinePill />
       <AnimatePresence initial={false}>
-        {!fullscreen && toasts.map(toast => (
-          <motion.div key={toast.id} layout="position" {...PRESETS.fadeSlide}>
+        {!fullscreen && ordered.map(({ key, dismissible, sticky: _sticky, priority: _priority, seq: _seq, ...notice }) => (
+          <motion.div key={key} layout="position" {...PRESETS.fadeSlide}>
             <NoticeChip
-              tone={toast.type}
-              icon={TOAST_ICONS[toast.type] || Info}
-              text={toast.message}
-              title="Tap to dismiss"
-              onClick={() => removeToast(toast.id)}
+              {...notice}
+              title={notice.title || (dismissible ? 'Tap to dismiss' : undefined)}
+              onClick={dismissible ? () => hideNotice(key) : undefined}
             />
-          </motion.div>
-        ))}
-        {!fullscreen && !offline && (calls || []).map(call => (
-          <motion.div key={call.id} layout="position" {...PRESETS.fadeSlide}>
-            <ActivityChip call={call} />
           </motion.div>
         ))}
       </AnimatePresence>

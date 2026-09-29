@@ -5,7 +5,7 @@ import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { formatDuration } from '../lib/utils'
 import { triggerHaptic } from '../lib/haptics'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { useDevicePicker, DevicePickerButton, DevicePickerBanner, DevicePickerPanel } from './DevicePicker'
+import { useDevicePicker, DevicePickerButton, DeviceNotice, DevicePickerPanel } from './DevicePicker'
 import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './BitratePicker'
 import { GenerationQueuePanel } from './GenerationQueuePanel'
 import { OnAirBadge } from './OnAirBadge'
@@ -778,7 +778,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
 
   return (
     <>
-      <DevicePickerBanner
+      <DeviceNotice
         showInactive={devicePicker.showInactive}
         bannerDismissed={devicePicker.bannerDismissed}
         actionLoading={devicePicker.actionLoading}

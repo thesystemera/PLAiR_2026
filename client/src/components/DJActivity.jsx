@@ -9,7 +9,6 @@ import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { TWEEN } from '../lib/motion'
 import { Expandable } from './Motion'
-import { NoticeChip } from './Notice'
 
 const LINGER_MS = 2600
 const DONE_MS = 1400
@@ -148,33 +147,52 @@ export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = fal
   )
 })
 
-export const ActivityChip = memo(function ActivityChip({ call }) {
+function activityNotice(call) {
   const source = SOURCES[call.source] || SOURCES.tool
   const state = STATES[call.state] || STATES.done
   const StateIcon = state.icon
-
-  return (
-    <NoticeChip
-      borderClass={source.chip}
-      icon={ICONS[iconKey(call)]}
-      iconClass={`text-current ${call.state === 'running' ? 'animate-pulse' : ''}`}
-      text={sentenceCase(call.label || call.tool)}
-    >
-      {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
-      <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text} ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
-    </NoticeChip>
-  )
-})
+  return {
+    key: `dj:${call.id}`,
+    sticky: true,
+    dismissible: false,
+    priority: 2,
+    borderClass: source.chip,
+    icon: ICONS[iconKey(call)],
+    iconClass: `text-current ${call.state === 'running' ? 'animate-pulse' : ''}`,
+    text: sentenceCase(call.label || call.tool),
+    content: (
+      <>
+        {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
+        <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text} ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
+      </>
+    ),
+  }
+}
 
 export function DJActivityBridge() {
-  const { reportEngineStatus } = useUISelector(state => ({ reportEngineStatus: state.reportEngineStatus }))
+  const { offline, showNotice, hideNotice } = useUISelector(state => ({
+    offline: !!state.audioState.offlineMode,
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+  }))
   const { triggerEffect } = useDynamicTheme()
   const callsRef = useRef([])
   const timersRef = useRef(new Map())
+  const shownRef = useRef(new Set())
+  const offlineRef = useRef(offline)
 
   const publish = useCallback(() => {
-    reportEngineStatus({ djActivity: callsRef.current.slice(-MAX_VISIBLE) })
-  }, [reportEngineStatus])
+    const visible = offlineRef.current ? [] : callsRef.current.slice(-MAX_VISIBLE)
+    const keys = new Set(visible.map(call => `dj:${call.id}`))
+    shownRef.current.forEach(key => { if (!keys.has(key)) hideNotice(key) })
+    visible.forEach(call => showNotice(activityNotice(call)))
+    shownRef.current = keys
+  }, [showNotice, hideNotice])
+
+  useEffect(() => {
+    offlineRef.current = offline
+    publish()
+  }, [offline, publish])
 
   const removeLater = useCallback((id, delay) => {
     const timers = timersRef.current

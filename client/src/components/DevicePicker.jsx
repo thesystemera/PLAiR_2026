@@ -7,13 +7,10 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useNetwork } from '../contexts/NetworkContext'
-import { createPortal } from 'react-dom'
 import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive, MonitorSpeaker } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
 import { GLASS } from '../lib/themeManager'
-import { CSS_TRANSITION, PRESETS } from '../lib/motion'
+import { CSS_TRANSITION } from '../lib/motion'
 import { Expandable } from './Motion'
-import { NoticeChip, useNoticeSlot } from './Notice'
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
@@ -247,41 +244,59 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
   )
 })
 
-export const DevicePickerBanner = memo(function DevicePickerBanner({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
-  const activeDeviceOnline = useUISelector(state => state.engineState.activeDeviceOnline)
-  const slot = useNoticeSlot()
-  if (!slot) return null
-  return createPortal(
-    <AnimatePresence>
-      {showInactive && !bannerDismissed && (
-        <motion.div key="device-notice" layout="position" {...PRESETS.fadeSlide}>
-          <NoticeChip
-            tone={activeDeviceOnline ? 'info' : 'warning'}
-            icon={activeDeviceOnline ? MonitorSpeaker : WifiOff}
-            text={activeDeviceOnline ? 'Playing on another device' : 'Your other device is offline'}
+const DEVICE_NOTICE = 'other-device'
+
+export function DeviceNotice({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
+  const { activeDeviceOnline, showNotice, hideNotice } = useUISelector(state => ({
+    activeDeviceOnline: state.engineState.activeDeviceOnline,
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+  }))
+  const handlersRef = useRef({ handleActivateDevice, handleDismissBanner })
+  useEffect(() => {
+    handlersRef.current = { handleActivateDevice, handleDismissBanner }
+  })
+  const visible = showInactive && !bannerDismissed
+
+  useEffect(() => {
+    if (!visible) {
+      hideNotice(DEVICE_NOTICE)
+      return
+    }
+    showNotice({
+      key: DEVICE_NOTICE,
+      sticky: true,
+      dismissible: false,
+      priority: 0,
+      tone: activeDeviceOnline ? 'info' : 'warning',
+      icon: activeDeviceOnline ? MonitorSpeaker : WifiOff,
+      text: activeDeviceOnline ? 'Playing on another device' : 'Your other device is offline',
+      content: (
+        <>
+          <button
+            onClick={() => handlersRef.current.handleActivateDevice()}
+            disabled={actionLoading}
+            className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
           >
-            <button
-              onClick={() => handleActivateDevice()}
-              disabled={actionLoading}
-              className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
-            >
-              {actionLoading ? '…' : 'Play here'}
-            </button>
-            <button
-              onClick={handleDismissBanner}
-              className="ui-tap text-white/60 hover:text-white"
-              title="Hide (comes back on a device change)"
-              aria-label="Hide"
-            >
-              <X size={14} />
-            </button>
-          </NoticeChip>
-        </motion.div>
-      )}
-    </AnimatePresence>,
-    slot
-  )
-})
+            {actionLoading ? '…' : 'Play here'}
+          </button>
+          <button
+            onClick={() => handlersRef.current.handleDismissBanner()}
+            className="ui-tap text-white/60 hover:text-white"
+            title="Hide (comes back on a device change)"
+            aria-label="Hide"
+          >
+            <X size={14} />
+          </button>
+        </>
+      ),
+    })
+  }, [visible, activeDeviceOnline, actionLoading, showNotice, hideNotice])
+
+  useEffect(() => () => hideNotice(DEVICE_NOTICE), [hideNotice])
+
+  return null
+}
 
 export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIsOpen, devices, loading, actionLoading, handleActivateDevice, handleRemoveDevice, getDeviceIcon, editingDeviceId, editingName, setEditingName, handleStartEdit, handleCancelEdit, handleSaveEdit, connectionMode, storageInfo, isPlaying }) {
   const isFullMode = connectionMode === 'full'

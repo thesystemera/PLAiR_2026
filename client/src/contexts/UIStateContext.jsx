@@ -46,7 +46,7 @@
  * - publishRadioState() - Radio/seed mode state
  * - publishContentUpdate() - Content update counters (triggers data refresh)
  * - reportInterfaceState() - Interface state (fullscreen, scrolling, mobile visibility)
- * - publishToast() - Toast notifications (success, error, info, warning)
+ * - showNotice() / hideNotice() - The one notice channel (toasts are passing notices)
  *
  * SUBSCRIBERS (How to read state):
  * - useUISelector(state => slice) - Subscribe to ONE slice; re-renders only when that slice changes
@@ -74,8 +74,8 @@ import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
 const TILT_STORAGE_KEY = 'tiltEffects'
 const RADIO_INPUT_KEY = 'radioInputMode'
-const TOAST_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000 }
-const MAX_TOASTS = 3
+const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
+const MAX_PASSING_NOTICES = 3
 const initialRadioInput = () => (safeStorage.get(RADIO_INPUT_KEY) === 'text' ? 'text' : 'voice')
 const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function'
@@ -312,7 +312,6 @@ export function UIStateProvider({ children }) {
     currentIndex: 0,
     talkBreak: null,
     audioNeedsTap: false,
-    djActivity: [],
   })
 
   const engineRef = useRef({
@@ -673,47 +672,53 @@ export function UIStateProvider({ children }) {
     }))
   }, [])
 
-  const [toasts, setToasts] = useState([])
-  const timeoutRefsToast = useRef({})
+  const [notices, setNotices] = useState([])
+  const noticeTimersRef = useRef({})
+  const noticeSeqRef = useRef(0)
 
-  const removeToast = useCallback((id) => {
-    if (timeoutRefsToast.current[id]) {
-      clearTimeout(timeoutRefsToast.current[id])
-      delete timeoutRefsToast.current[id]
-    }
-    setToasts(prev => prev.filter(toast => toast.id !== id))
+  const clearNoticeTimer = useCallback((key) => {
+    clearTimeout(noticeTimersRef.current[key])
+    delete noticeTimersRef.current[key]
   }, [])
 
-  const publishToast = useCallback((message, type = 'info', requestedDuration, _position, replaceKey = null) => {
-    const id = Date.now() + Math.random()
-    const limit = TOAST_DURATION_MS[type] || TOAST_DURATION_MS.info
-    const duration = requestedDuration === 0 || requestedDuration < 0 ? 0 : Math.min(requestedDuration || limit, limit)
-    const key = replaceKey || `${type}:${message}`
-    const toast = { id, message, type, duration, replaceKey: key }
+  const hideNotice = useCallback((key) => {
+    clearNoticeTimer(key)
+    setNotices(prev => (prev.some(notice => notice.key === key) ? prev.filter(notice => notice.key !== key) : prev))
+  }, [clearNoticeTimer])
 
-    setToasts(prev => {
-      const existing = prev.find(t => t.replaceKey === key)
-      if (existing) {
-        clearTimeout(timeoutRefsToast.current[existing.id])
-        delete timeoutRefsToast.current[existing.id]
-        return prev.map(t => t.replaceKey === key ? toast : t)
+  const showNotice = useCallback(({ key, tone = 'info', text, duration, sticky = false, dismissible = true, priority = 1, ...look }) => {
+    const noticeKey = key || `${tone}:${text}`
+    const limit = NOTICE_DURATION_MS[tone] || NOTICE_DURATION_MS.info
+    const holds = sticky || duration === 0 || duration < 0
+    const seq = ++noticeSeqRef.current
+    const notice = { ...look, key: noticeKey, tone, text, sticky: holds, dismissible, priority, seq }
+
+    setNotices(prev => {
+      const index = prev.findIndex(item => item.key === noticeKey)
+      if (index >= 0) {
+        const next = prev.slice()
+        next[index] = { ...notice, seq: prev[index].seq }
+        return next
       }
-      const next = [...prev, toast]
-      next.slice(0, Math.max(0, next.length - MAX_TOASTS)).forEach(old => {
-        clearTimeout(timeoutRefsToast.current[old.id])
-        delete timeoutRefsToast.current[old.id]
-      })
-      return next.slice(-MAX_TOASTS)
+      const next = [...prev, notice]
+      const passing = next.filter(item => !item.sticky)
+      const dropped = new Set(passing.slice(0, Math.max(0, passing.length - MAX_PASSING_NOTICES)).map(item => item.key))
+      dropped.forEach(clearNoticeTimer)
+      return dropped.size ? next.filter(item => !dropped.has(item.key)) : next
     })
 
-    if (duration > 0) {
-      timeoutRefsToast.current[id] = setTimeout(() => {
-        removeToast(id)
-      }, duration)
+    clearNoticeTimer(noticeKey)
+    if (!holds) {
+      noticeTimersRef.current[noticeKey] = setTimeout(() => hideNotice(noticeKey), Math.min(duration || limit, limit))
     }
+    return noticeKey
+  }, [clearNoticeTimer, hideNotice])
 
-    return id
-  }, [removeToast])
+  const publishToast = useCallback((message, type = 'info', duration, _position, replaceKey = null) => {
+    return showNotice({ key: replaceKey, tone: type, text: message, duration })
+  }, [showNotice])
+
+  const removeToast = hideNotice
 
   const toastSuccess = useCallback((message, duration, position = 'top', replaceKey = null) => {
     return publishToast(message, 'success', duration, position, replaceKey)
@@ -890,7 +895,6 @@ export function UIStateProvider({ children }) {
     if (updates.currentIndex !== undefined) stateUpdates.currentIndex = updates.currentIndex
     if (updates.talkBreak !== undefined) stateUpdates.talkBreak = updates.talkBreak
     if (updates.audioNeedsTap !== undefined) stateUpdates.audioNeedsTap = updates.audioNeedsTap
-    if (updates.djActivity !== undefined) stateUpdates.djActivity = updates.djActivity
 
     const keys = Object.keys(stateUpdates)
     if (keys.length > 0) {
@@ -1226,7 +1230,9 @@ export function UIStateProvider({ children }) {
     contentUpdates,
     publishContentUpdate,
 
-    toasts,
+    notices,
+    showNotice,
+    hideNotice,
     publishToast,
     removeToast,
     toastSuccess,
@@ -1297,7 +1303,7 @@ export function UIStateProvider({ children }) {
     setMixerRef, audioState, publishAudioState, queueState, publishQueueState,
     authState, publishAuthState, radioState, publishRadioState, downloadState, publishDownloadState,
     settingsState, publishSettings, contentUpdates, publishContentUpdate,
-    toasts, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
+    notices, showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
     reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
     subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
@@ -1326,13 +1332,15 @@ export function UIStateProvider({ children }) {
   }), [radioButtonInteraction, radioButtonOpacity, radioButtonForegroundOpacity])
 
   const actionsValue = useMemo(() => ({
+    showNotice,
+    hideNotice,
     publishToast,
     removeToast,
     toastSuccess,
     toastError,
     toastInfo,
     toastWarning,
-  }), [publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning])
+  }), [showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning])
 
   return (
     <UIStoreContext.Provider value={store}>

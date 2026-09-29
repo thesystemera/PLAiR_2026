@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
+import { CloudOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
 import { useArtwork, useUISelector, uiState } from '../contexts/UIStateContext'
 import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
+import { useStorage } from '../contexts/StorageContext'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -143,6 +145,40 @@ export function MediaSessionBridge() {
     const timer = setInterval(publishPosition, MEDIA_POSITION_REFRESH_MS)
     return () => clearInterval(timer)
   }, [currentTrack, isPlaying, isCrossfading, audio])
+
+  return null
+}
+
+export function OfflineNotice() {
+  const { offline, noNetwork, showNotice, hideNotice } = useUISelector(state => ({
+    offline: !!state.audioState.offlineMode,
+    noNetwork: state.audioState.connectionMode === 'offline',
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+  }))
+  const { storageInfo } = useStorage()
+  const countRef = useRef(0)
+  useEffect(() => {
+    countRef.current = storageInfo?.offlineTrackCount ?? storageInfo?.trackCount ?? 0
+  })
+
+  useEffect(() => {
+    if (!offline) {
+      hideNotice('offline')
+      return
+    }
+    const count = countRef.current
+    showNotice({
+      key: 'offline',
+      tone: 'warning',
+      icon: CloudOff,
+      priority: 0,
+      text: count > 0 ? `Offline · ${count} downloads` : 'Offline · no downloads',
+      title: noNetwork
+        ? 'No internet connection. Your downloads keep playing, and likes sync when you are back online.'
+        : "PLAiR can't be reached right now. Your downloads keep playing, and likes sync when it is back.",
+    })
+  }, [offline, noNetwork, showNotice, hideNotice])
 
   return null
 }

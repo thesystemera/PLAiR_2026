@@ -38,12 +38,12 @@ import {
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import {NoticeStack} from './components/NoticeStack'
-import {OnAirFrame} from './components/OnAirBadge'
+import {OnAirFrame, OnAirNotice} from './components/OnAirBadge'
 import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
-import {ConnectionNotice, MediaSessionBridge, TrackDataLoader} from './components/AppBridges'
+import {ConnectionNotice, MediaSessionBridge, OfflineNotice, TrackDataLoader} from './components/AppBridges'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -795,6 +795,8 @@ function App() {
         <TrackDataLoader />
         <MediaSessionBridge />
         <ConnectionNotice />
+        <OfflineNotice />
+        <OnAirNotice />
         <DJActivityBridge />
         <KeyboardControls
         showLogin={showLogin}
