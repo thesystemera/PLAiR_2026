@@ -34,7 +34,7 @@ const HIGHLIGHT_FLASH_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, 
 const NowPlayingHighlight = memo(function NowPlayingHighlight({ box, ringColor, background, flashing, glowRef }) {
   useEffect(() => {
     if (flashing) arrivalGlow(glowRef.current, true)
-  }, [flashing])
+  }, [flashing, glowRef])
 
   return (
     <motion.div

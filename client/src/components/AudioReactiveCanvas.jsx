@@ -1094,7 +1094,7 @@ function MultiPassPlane({
         onApplied?.()
       }, () => {
         if (tokens[layer] === token) {
-          console.warn('[AudioReactiveCanvas] Failed to load artwork texture')
+          logger.warn('[AudioReactiveCanvas] Failed to load artwork texture')
         }
       })
     }
@@ -1201,7 +1201,7 @@ function MultiPassPlane({
       bgMaterial.uniforms.u_tex_resolution.value.set(img && img.width ? img.width : 1, img && img.height ? img.height : 1)
       bgMaterial.uniforms.u_texture_prev.value = prevTex
       bgMaterial.uniforms.u_has_depth_map.value = 0.0
-  }, [tex, prevTex])
+  }, [bgMaterial, tex, prevTex])
 
   useEffect(() => {
     return () => {
@@ -1733,7 +1733,7 @@ function MultiPassPlane({
           fpsCap,
           glassTaps,
         }
-        console.log('[SHADER PERF]', debugInfo)
+        logger.debug('[SHADER PERF]', debugInfo)
       }
       frameTimingRef.current.total = 0
       frameTimingRef.current.count = 0

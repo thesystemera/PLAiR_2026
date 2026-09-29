@@ -14,6 +14,10 @@ const NETWORK_THRESHOLDS = {
   FAIR: 0.5,
 }
 
+const SPEED_TEST_URL = '/images/plair_icon.png'
+const SPEED_TEST_MIN_BYTES = 64 * 1024
+const SPEED_TEST_FALLBACK_MBPS = 1.0
+
 const BITRATE_RECOMMENDATIONS = {
   excellent: '256k',
   good: '192k',
@@ -312,51 +316,15 @@ export function NetworkProvider({ children }) {
 
   const measureDownloadSpeed = useCallback(async () => {
     try {
-      const testUrl = '/api/health'
       const startTime = performance.now()
-      const response = await fetch(testUrl, { cache: 'no-store' })
-      await response.text()
-      const endTime = performance.now()
-
-      const duration = (endTime - startTime) / 1000
-      const sizeBytes = parseInt(response.headers.get('content-length') || '1024', 10)
-      const sizeMegabits = (sizeBytes * 8) / (1024 * 1024)
-      const speedMbps = sizeMegabits / duration
-
-      if (sizeBytes < 10000) {
-        return await measureStreamSpeed()
-      }
-
-      return speedMbps
-    } catch (_error) {
-      logger.warn('[Network] Download speed test failed, trying stream method', _error)
-      return await measureStreamSpeed()
-    }
-  }, [])
-
-  const measureStreamSpeed = useCallback(async () => {
-    try {
-      const testSize = 100 * 1024
-      const startTime = performance.now()
-
-      const response = await fetch('/api/health', {
-        headers: {
-          'Range': `bytes=0-${testSize - 1}`,
-        },
-      })
-
+      const response = await fetch(SPEED_TEST_URL, { cache: 'no-store', headers: { Range: 'bytes=0-' } })
       const blob = await response.blob()
-      const endTime = performance.now()
-
-      const duration = (endTime - startTime) / 1000
-      const sizeBytes = blob.size
-      const sizeMegabits = (sizeBytes * 8) / (1024 * 1024)
-      const speedMbps = sizeMegabits / duration
-
-      return Math.max(speedMbps, 0.5)
+      const seconds = (performance.now() - startTime) / 1000
+      if (!response.ok || blob.size < SPEED_TEST_MIN_BYTES || seconds <= 0) return SPEED_TEST_FALLBACK_MBPS
+      return (blob.size * 8) / (1024 * 1024) / seconds
     } catch (error) {
-      logger.warn('[Network] Stream speed test failed, using fallback', error)
-      return 1.0
+      logger.warn('[Network] Speed test failed, using fallback', error)
+      return SPEED_TEST_FALLBACK_MBPS
     }
   }, [])
 

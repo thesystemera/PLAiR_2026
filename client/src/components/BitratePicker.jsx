@@ -42,22 +42,19 @@ export function useBitratePicker(onReloadTrackQuality) {
   const isOnline = audioState?.isOnline ?? true
   const networkQuality = audioState?.networkQuality
   const detectedBitrate = audioState?.detectedBitrate
-  const isFirstRender = useRef(true)
+  const lastDetectedRef = useRef(detectedBitrate)
+  const reloadRef = useRef(onReloadTrackQuality)
+  useEffect(() => {
+    reloadRef.current = onReloadTrackQuality
+  })
 
   useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      return
-    }
-
-    if (actionLoading) {
-      return
-    }
-
-    if (currentBitrate === 'auto' && detectedBitrate && onReloadTrackQuality) {
-      logger.info(`[BitratePicker] Auto mode: network bitrate changed to ${detectedBitrate}, reloading track`)
-      onReloadTrackQuality()
-    }
+    const previous = lastDetectedRef.current
+    lastDetectedRef.current = detectedBitrate
+    if (!detectedBitrate || detectedBitrate === previous) return
+    if (currentBitrate !== 'auto' || actionLoading || !reloadRef.current) return
+    logger.info(`[BitratePicker] Auto mode: network bitrate changed to ${detectedBitrate}, reloading track`)
+    reloadRef.current()
   }, [detectedBitrate, currentBitrate, actionLoading])
 
   const detectQuality = async () => {

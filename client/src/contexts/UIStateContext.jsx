@@ -509,11 +509,12 @@ export function UIStateProvider({ children }) {
 
   useEffect(() => () => clearTimeout(duckRestoreTimerRef.current), [])
 
+  const { isMicRecording, isDJSpeaking, isShoutoutPlaying, isVideoPreviewPlaying } = engineState
+
   useEffect(() => {
     const mixer = mixerRefInternal.current?.current
     if (!mixer) return
 
-    const { isMicRecording, isDJSpeaking, isShoutoutPlaying, isVideoPreviewPlaying } = engineState
     const targetState = isMicRecording ? 'user'
       : (isShoutoutPlaying ? 'shoutout'
       : (isVideoPreviewPlaying ? 'videoPreview'
@@ -542,7 +543,7 @@ export function UIStateProvider({ children }) {
     } else if (targetState === 'dj') {
       mixer.duckMusic(0.25, 400)
     }
-  }, [engineState.isMicRecording, engineState.isDJSpeaking, engineState.isShoutoutPlaying, engineState.isVideoPreviewPlaying])
+  }, [isMicRecording, isDJSpeaking, isShoutoutPlaying, isVideoPreviewPlaying])
 
   const [audioState, setAudioState] = useState({
     isOnline: navigator.onLine,
@@ -1097,19 +1098,20 @@ export function UIStateProvider({ children }) {
     }
   }, [])
 
+  const currentTrackId = engineState.currentTrack?.id
+  const currentTrackHasArtwork = engineState.currentTrack?.has_artwork
+  const { queue: engineQueue, currentIndex: engineIndex } = engineState
+
   useEffect(() => {
-    const { currentTrack, queue, currentIndex } = engineState
-    if (!currentTrack) return
+    if (!currentTrackId) return
 
-    // Preload current track artwork (standard + enriched)
-    preloadArtwork(currentTrack.id, currentTrack.has_artwork)
-    preloadEnrichedArtwork(currentTrack.id, currentTrack.has_artwork)
+    preloadArtwork(currentTrackId, currentTrackHasArtwork)
+    preloadEnrichedArtwork(currentTrackId, currentTrackHasArtwork)
 
-    // Preload NEXT track artwork for seamless transitions
-    const nextTrack = queue?.[currentIndex + 1]
+    const nextTrack = engineQueue?.[engineIndex + 1]
     const pinned = pinnedArtworkIdsRef.current
     pinned.clear()
-    pinned.add(currentTrack.id)
+    pinned.add(currentTrackId)
     if (nextTrack) pinned.add(nextTrack.id)
     if (nextTrack) {
       preloadArtwork(nextTrack.id, nextTrack.has_artwork)
@@ -1117,9 +1119,9 @@ export function UIStateProvider({ children }) {
     }
 
     if (settingsState.videoClipsEnabled) {
-      fetchVideoClips(currentTrack.id)
+      fetchVideoClips(currentTrackId)
     }
-  }, [engineState.currentTrack?.id, engineState.queue, engineState.currentIndex, preloadArtwork, preloadEnrichedArtwork, fetchVideoClips, settingsState.videoClipsEnabled])
+  }, [currentTrackId, currentTrackHasArtwork, engineQueue, engineIndex, preloadArtwork, preloadEnrichedArtwork, fetchVideoClips, settingsState.videoClipsEnabled])
 
   useEffect(() => {
     logger.info(`[UIState] 🎬 Video clips setting: ${settingsState.videoClipsEnabled ? 'ENABLED' : 'DISABLED'}`)

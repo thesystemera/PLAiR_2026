@@ -294,7 +294,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
 
       playShoutout(shoutout)
     } catch (error) {
-      console.error('Failed to load shoutout:', error)
+      logger.error('Failed to load shoutout:', error)
       toastError('Failed to load shoutout')
     }
   }

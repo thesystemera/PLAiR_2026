@@ -1439,7 +1439,7 @@ export function PlaybackProvider({ children }) {
         applyLocalState(response.state, { manual: true })
       }
     } catch (error) {
-      console.error('[PlaybackContext.seedRadio] Failed to seed radio:', error)
+      logger.error('[PlaybackContext.seedRadio] Failed to seed radio:', error)
       if (publishRadioState) {
         publishRadioState({ activeSeedMode: null })
       }

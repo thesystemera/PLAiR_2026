@@ -44,7 +44,8 @@ export default [
       'react/no-unknown-property': ['error', { ignore: ['geometry', 'material', 'renderOrder', 'args', 'attach', 'dispose', 'position', 'rotation', 'scale', 'object'] }],
       'react/react-in-jsx-scope': 'off',
       'react-hooks/rules-of-hooks': 'error',
-      'react-hooks/exhaustive-deps': 'warn',
+      'react-hooks/exhaustive-deps': 'error',
+      'no-console': 'error',
     },
     settings: {
       react: {
@@ -54,7 +55,12 @@ export default [
   },
   {
     files: ['scripts/**/*.mjs'],
-    languageOptions: { globals: { ...globals.node } }
+    languageOptions: { globals: { ...globals.node } },
+    rules: { 'no-console': 'off' }
+  },
+  {
+    files: ['src/lib/logger.js', 'src/lib/errorReporter.js', 'public/sw.js'],
+    rules: { 'no-console': 'off' }
   },
   {
     ignores: ['dist/', 'node_modules/', '*.config.js']

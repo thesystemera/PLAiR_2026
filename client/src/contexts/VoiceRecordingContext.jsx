@@ -32,13 +32,15 @@ export function VoiceRecordingProvider({ children, mixerRef }) {
     }
   }, [mixerRef, setMixerRef])
 
+  const { recordingError, clearError } = voiceRecorder
+
   useEffect(() => {
-    if (voiceRecorder.recordingError) {
-      errorToast(voiceRecorder.recordingError, 2000)
+    if (recordingError) {
+      errorToast(recordingError, 2000)
       triggerHaptic('error')
-      voiceRecorder.clearError()
+      clearError()
     }
-  }, [voiceRecorder.recordingError, errorToast, voiceRecorder.clearError])
+  }, [recordingError, errorToast, clearError])
 
   useEffect(() => {
     reportEngineStatus({

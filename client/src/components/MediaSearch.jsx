@@ -1,3 +1,4 @@
+import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, memo } from 'react'
 import { Search, X, Sparkles, Loader, Upload } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -95,7 +96,7 @@ export const MediaSearch = memo(function MediaSearch({
       }
     } catch (_err) {
       showError('Voice transcription failed. Please try again.')
-      console.error('Transcription error:', _err)
+      logger.error('Transcription error:', _err)
     } finally {
       setIsTranscribing(false)
     }

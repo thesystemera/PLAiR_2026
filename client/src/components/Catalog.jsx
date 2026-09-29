@@ -366,6 +366,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     pageSize: 60
   })
 
+  const resetWindow = catalogWindow.reset
   const serverReachable = connectionMode !== 'degraded' && connectionMode !== 'offline'
 
   useEffect(() => {
@@ -383,7 +384,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
         } else {
           const statsData = await retryableAPICall(() => api.getStats(selectedGenre), 'getStats')
           setStats(statsData)
-          await catalogWindow.reset({ sortMode, genre: selectedGenre })
+          await resetWindow({ sortMode, genre: selectedGenre })
 
           if (sortMode === 'genre' && !selectedGenre) {
             const genresData = await retryableAPICall(() => api.getGenres(), 'getGenres')
@@ -402,7 +403,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       }
     }
     void loadData()
-  }, [sortMode, selectedGenre, isOnline, serverReachable])
+  }, [sortMode, selectedGenre, isOnline, serverReachable, resetWindow, errorToast])
 
   const sortModeRef = useRef(sortMode)
   const selectedGenreRef = useRef(selectedGenre)
@@ -413,8 +414,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
 
   const reloadCatalog = useCallback(async () => {
     try {
-      const currentSortMode = sortModeRef.current || sortMode
-      const currentGenre = selectedGenreRef.current || selectedGenre
+      const currentSortMode = sortModeRef.current
+      const currentGenre = selectedGenreRef.current
 
       if (currentSortMode === 'genre' && !currentGenre) {
         const [statsData, genresData] = await Promise.all([
@@ -426,14 +427,14 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       } else {
         const [statsData] = await Promise.all([
           retryableAPICall(() => api.getStats(currentGenre), 'getStats (reload)'),
-          catalogWindow.reset({ sortMode: currentSortMode, genre: currentGenre })
+          resetWindow({ sortMode: currentSortMode, genre: currentGenre })
         ])
         setStats(statsData)
       }
     } catch (error) {
       logger.error('[Catalog] Failed to reload catalog after retries:', error)
     }
-  }, [])
+  }, [resetWindow])
 
   useEffect(() => {
     if (contentUpdateCounter > 0 && contentUpdateCounter !== lastHandledCounterRef.current) {
@@ -566,7 +567,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
         const thirdRect = thirdCard.getBoundingClientRect()
         const actualRowHeight = thirdRect.top - firstRect.top
 
-        if (actualRowHeight > 0 && Math.abs(actualRowHeight - measuredRowHeight) > 2) {
+        if (actualRowHeight > 0 && Math.abs(actualRowHeight - gridLayoutRef.current.rowHeight) > 2) {
           setMeasuredRowHeight(actualRowHeight)
         }
       }

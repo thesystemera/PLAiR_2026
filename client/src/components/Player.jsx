@@ -438,13 +438,15 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   }, [])
 
 
+  const currentTrackId = currentTrack?.id
+
   useEffect(() => {
     if (!isScreenVisible) return
 
     const updateBuffered = () => {
       const element = audio?.getCurrentElement?.()
 
-      if (!element || !element.src || !currentTrack || actualDuration <= 0) {
+      if (!element || !element.src || !currentTrackId || actualDuration <= 0) {
         setBufferedPercent(0)
         return
       }
@@ -465,7 +467,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     const interval = setInterval(updateBuffered, 1000)
     updateBuffered()
     return () => clearInterval(interval)
-  }, [audio, actualDuration, currentTrack?.id, isScreenVisible])
+  }, [audio, actualDuration, currentTrackId, isScreenVisible])
 
   const waveformBars = useMemo(() => {
     if (!audioFeatures?.loudness_segments || !durationMs) return []

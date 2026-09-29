@@ -265,20 +265,10 @@ export function Shoutouts() {
     {
       onError: (error) => {
         errorToast('Search failed')
-        console.error('Error searching shoutouts:', error)
+        logger.error('Error searching shoutouts:', error)
       }
     }
   )
-
-  useEffect(() => {
-    void fetchShoutouts()
-  }, [])
-
-  useEffect(() => {
-    if (contentUpdates.shoutouts > 0) {
-      void fetchShoutouts()
-    }
-  }, [contentUpdates.shoutouts])
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -293,13 +283,15 @@ export function Shoutouts() {
     void fetchStats()
   }, [selectedCategory])
 
-  const fetchShoutouts = async () => {
+  const shoutoutInterests = user?.shoutout_interests
+
+  const fetchShoutouts = useCallback(async () => {
     try {
       setLoading(true)
 
       let discoveryQuery = 'greeting message shoutout hello family friends announcement'
-      if (user?.shoutout_interests) {
-        const interests = user.shoutout_interests.split(',').map(s => s.trim()).filter(s => s)
+      if (shoutoutInterests) {
+        const interests = shoutoutInterests.split(',').map(s => s.trim()).filter(s => s)
         if (interests.length > 0) {
           discoveryQuery = interests[Math.floor(Math.random() * interests.length)]
         }
@@ -311,11 +303,15 @@ export function Shoutouts() {
       setShoutouts(discoveredShoutouts)
     } catch (err) {
       errorToast('Failed to load shoutouts')
-      console.error('Error fetching shoutouts:', err)
+      logger.error('Error fetching shoutouts:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [shoutoutInterests, errorToast])
+
+  useEffect(() => {
+    void fetchShoutouts()
+  }, [fetchShoutouts, contentUpdates.shoutouts])
 
   const handleDelete = useCallback(async (e, id) => {
     e?.preventDefault()
@@ -355,7 +351,7 @@ export function Shoutouts() {
       }
     } catch (err) {
       errorToast('Failed to delete shoutout')
-      console.error('Error deleting:', err)
+      logger.error('Error deleting:', err)
       setRemovingIds(prev => {
         const next = new Set(prev)
         next.delete(id)

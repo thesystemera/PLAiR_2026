@@ -13,6 +13,7 @@ import {PANEL} from '../lib/themeManager'
 import {artPop, watchOffscreen} from '../lib/microMotion'
 import {MessageSquareText} from 'lucide-react'
 
+const NO_LYRICS = []
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
 const LYRIC_STATE_CLASSES = [
   'px-1 rounded transition-colors duration-micro text-white font-bold bg-white/20',
@@ -22,18 +23,12 @@ const LYRIC_STATE_CLASSES = [
 ]
 
 const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
-  const {
-    engineState,
-    engineRef,
-    isScreenVisible,
-  } = useUISelector(state => ({
-    engineState: state.engineState,
+  const { engineRef, isScreenVisible } = useUISelector(state => ({
     engineRef: state.engineRef,
     isScreenVisible: state.isScreenVisible,
   }))
-  const isPlaying = engineState.is_playing
 
-  const lyrics = lyricTimestamps?.lyrics || []
+  const lyrics = lyricTimestamps?.lyrics || NO_LYRICS
   const wordRefs = useRef(new Map())
   const [container, setContainer] = useState(null)
   const [isVisible, setIsVisible] = useState(true)
@@ -92,7 +87,7 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
     const intervalId = setInterval(updateLyrics, 100)
 
     return () => clearInterval(intervalId)
-  }, [lyrics, isPlaying, isVisible, isScreenVisible, engineRef])
+  }, [lyrics, isVisible, isScreenVisible, engineRef])
 
   if (!lyricTimestamps || lyrics.length === 0) {
     return null
@@ -291,7 +286,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
       previousArtworkUrlRef.current = artworkUrl
     }
-  }, [artworkUrl, track?.id, track?.has_artwork, track?.generation_params?.title])
+  }, [artworkUrl, frontLayer, track?.id, track?.has_artwork, track?.generation_params?.title])
 
   const hasTrack = !!track
   useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])

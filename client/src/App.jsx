@@ -136,7 +136,7 @@ if (import.meta.env.DEV && typeof window !== 'undefined' && !window.__rafDebug) 
       }
       const labeledTotal = Object.values(window.__rafDebug.sources).reduce((a, b) => a + b, 0)
       const unknown = window.__rafDebug.count - labeledTotal
-      console.log('[RAF DEBUG] Total:', window.__rafDebug.count, 'Sources:', output, 'Unknown:', unknown)
+      logger.debug('[RAF DEBUG] Total:', window.__rafDebug.count, 'Sources:', output, 'Unknown:', unknown)
       window.__rafDebug.count = 0
       window.__rafDebug.sources = {}
       window.__rafDebug.lastLog = now

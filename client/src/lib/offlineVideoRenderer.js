@@ -1,3 +1,4 @@
+import { logger } from './logger'
 import * as THREE from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import {
@@ -51,7 +52,7 @@ async function decodeRenderAudio(audioUrl, durationMs, onStatus) {
   try {
     return await audioCtx.decodeAudioData(audioArrayBuffer.slice(0))
   } catch (err) {
-    console.error('[OfflineVideoRenderer] Audio decode failed:', {
+    logger.error('[OfflineVideoRenderer] Audio decode failed:', {
       url: audioUrl,
       contentType,
       bytes: audioArrayBuffer.byteLength,
@@ -203,7 +204,7 @@ export async function renderVideo({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => {
       videoEncoderError = e
-      console.error('VideoEncoder error:', e)
+      logger.error('VideoEncoder error:', e)
     },
   })
   resources.videoEncoder = videoEncoder
@@ -221,7 +222,7 @@ export async function renderVideo({
     output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
     error: (e) => {
       audioEncoderError = e
-      console.error('AudioEncoder error:', e)
+      logger.error('AudioEncoder error:', e)
     },
   })
   resources.audioEncoder = audioEncoder
@@ -303,7 +304,7 @@ export async function renderVideo({
         resources.clipTextures.push(clipTexture)
         resources.clipVideos.push(video)
       } catch (e) {
-        console.warn('Failed to load video clip:', clip.url, e)
+        logger.warn('Failed to load video clip:', clip.url, e)
       }
     }
     onStatus?.(`Loaded ${resources.clipTextures.length} video clips`)

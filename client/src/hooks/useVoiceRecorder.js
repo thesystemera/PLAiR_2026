@@ -191,7 +191,7 @@ export const useVoiceRecorder = () => {
 
       return true
     } catch (error) {
-      console.warn('Recording start failed or aborted', error)
+      logger.warn('Recording start failed or aborted', error)
       cleanup()
       return false
     }
