@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Header
 from fastapi.responses import HTMLResponse
 from typing import Optional
 
@@ -18,12 +18,14 @@ async def get_catalog_tracks(
         sort_by: str = "created_at",
         order: str = "desc",
         genre: Optional[str] = None,
-        human: bool = False,
         current_user: User = Depends(get_current_user),
+        x_guest_id: Optional[str] = Header(None),
 ):
-    banned_ids = None
-    if current_user:
-        banned_ids = await user_data_cache.get_banned_ids(int(current_user.id))  # type: ignore
+    from services.listener_filters import excluded_ids
+    from security_middleware import is_valid_guest_id
+    user_id = int(current_user.id) if current_user else None  # type: ignore
+    guest = x_guest_id if x_guest_id and is_valid_guest_id(x_guest_id) else None
+    banned_ids = await excluded_ids(user_id, str(user_id) if user_id else guest)
 
     assert services.catalog_service is not None
     tracks, filtered_total = await asyncio.to_thread(
@@ -33,8 +35,7 @@ async def get_catalog_tracks(
         sort_by,
         order,
         genre,
-        banned_ids,
-        human
+        banned_ids
     )
 
     for track in tracks:

@@ -258,9 +258,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
     queueState,
     interfaceState,
     engineState,
-    openArtist,
   } = useUISelector(state => ({
-    openArtist: state.openArtist,
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
     queueState: state.queueState,
@@ -407,22 +405,14 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             <MediaActions type="track" itemId={track.id} overlay />
           </div>
 
-          <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none flex items-center gap-1.5">
+          <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
             <div className={`
               px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase
               border border-white/30 bg-black/40 backdrop-blur-sm
-              ${track.is_ai_generated === false ? (track.ai_assisted === true ? 'text-sky-300/70' : 'text-emerald-300/70') : 'text-purple-300/70'}
+              ${track.is_ai_generated === false ? 'text-emerald-300/70' : 'text-purple-300/70'}
             `}>
-              {track.is_ai_generated === false ? (track.ai_assisted === true ? 'Human + AI' : '100% Human') : '100% AI'}
+              {track.is_ai_generated === false ? '100% Human' : '100% AI'}
             </div>
-            {track.explicit === true && (
-              <div
-                className="px-1.5 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase border border-white/30 bg-black/40 backdrop-blur-sm text-white/70"
-                aria-label="Explicit"
-              >
-                E
-              </div>
-            )}
           </div>
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">
@@ -471,21 +461,9 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         <div className={isSplit ? 'flex-1 min-w-0' : undefined}>
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
-          {params.artist_name && (track.artist_slug ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                openArtist(track.artist_slug)
-              }}
-              className="ui-press block max-w-full text-left text-lg text-gray-300 mb-1 break-words underline-offset-4 hover:underline hover:text-white transition-colors"
-              title={`Open ${params.artist_name}'s page`}
-            >
-              {params.artist_name}
-            </button>
-          ) : (
+          {params.artist_name && (
             <p className="text-lg text-gray-300 mb-1">{params.artist_name}</p>
-          ))}
+          )}
           <p className="text-lg text-gray-400">{params.style_canonical || params.style || 'No style'}</p>
         </div>
 

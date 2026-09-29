@@ -24,21 +24,19 @@ Validate → save original → probe/decode → **fingerprint + duplicate check*
 
 ## Credits and artists
 
-- **Artist profiles** (`artist_profiles`, `services/artist_profile_service.py`, `routers/artists.py`): a user defines their bands once (User → Artists & Bands: name, bio, links). Uploads are credited to the chosen profile, else the last used, else the first, else one created from the username. Renaming a profile re-credits all its tracks. Public artist page: `GET /api/artists/{slug}` (public tracks only), shown in `ArtistModal`.
+- **Artist profiles** (`artist_profiles`, `services/artist_profile_service.py`, `routers/artists.py`): a user defines their bands once (User → Artists & Bands: name, bio, links). Uploads are credited to the chosen profile, else the last used, else the first, else one created from the username. Renaming a profile re-credits all its tracks.
 - **The credit** is `generation_params.artist_name` (mirrored in `track_info.artist`, plus `artist_profile_id` and `artist_slug`). Every view reads it. `derived_tags.inspired_artist` is only a "sounds like" comparison, never the credit. The DJ is told the track is by an independent human artist.
 - **Titles**: the uploader's title, else the embedded tag title (mutagen, stored as `embedded_tags`), else a real title in the filename, else the sung hook. Gemini receives the tags and filename as known facts.
 
 ## Sharing and flags
 
 - `visibility`: public (default), unlisted (link only) or private (owner only). Unlisted and private tracks are in `CatalogDatabaseService.hidden_ids` and are left out of browsing, vector search, queue fill, top hits, charts, on-air stats and new-session seeding; they still play by id.
-- `explicit`: set by Gemini from the lyrics, editable. `ai_assisted`: the uploader's own "Made with AI help" flag (Now Playing shows "Human + AI").
+- `explicit`: set by Gemini from the lyrics, editable.
 - Rights: `users.upload_rights_confirmed_at`, asked once.
 
-## Discovery
+## Human, AI or both
 
-- "Human Made" station (playlist mode `human`, also a DJ `play_playlist` option): human tracks only, liked ones weighted up.
-- Catalog "Human" filter (`GET /api/catalog/tracks?human=true`) and Human badges on catalog cards and queue rows (`is_human`, `artist_slug` in queue items).
-- Tapping a human track's artist (Now Playing, Queue) opens the artist page.
+Human tracks are ordinary catalog tracks; the only difference is `is_ai_generated = 0`, shown as the existing "100% Human" / "100% AI" tag on the Now Playing cover. Each listener has one setting, Music: Both (default) / Human / AI (User → Radio settings, radio pref `music_source`), and `services/listener_filters.excluded_ids` applies it with bans and hidden tracks everywhere tracks are picked: queue and radio fill, catalog listing, semantic search, the DJ's searches and City Pulse music. The DJ is told when a track is by an independent human artist.
 
 ## Analysis model
 
@@ -54,11 +52,11 @@ Validate → save original → probe/decode → **fingerprint + duplicate check*
 
 ## Editing and deleting
 
-- `PUT /api/user/music/tracks/{id}`: title, artist_profile_id, primary_genre, secondary_genres, mood_keywords, lyrics (empty = instrumental; drops the lyric timing so the asset doctor re-aligns it), visibility, explicit, ai_assisted, description. Validated, written atomically, re-indexed.
+- `PUT /api/user/music/tracks/{id}`: title, artist_profile_id, primary_genre, secondary_genres, mood_keywords, lyrics (empty = instrumental; drops the lyric timing so the asset doctor re-aligns it), visibility, explicit, description. Validated, written atomically, re-indexed.
 - `DELETE /api/user/music/tracks/{id}`: removes the catalog row, memory entry, all outputs, originals, stems, and likes/bans of that track; the search index drops it on its next rebuild.
 
 ## Tools and tests
 
-- `tests/upload_credit_test.py --base URL --file <audio> [--cancel-file <other audio>]`: full pipeline end to end (credit, edits, rename, artist page, duplicate, cancel).
+- `tests/upload_credit_test.py --base URL --file <audio> [--cancel-file <other audio>]`: full pipeline end to end (credit, edits, rename, duplicate, cancel).
 - `tests/upload_llm_ab.py --models a,b --limit N`: analysis model comparison on real uploads.
 - `server/utils/backfill_upload_credits.py --user N --artist NAME [--titles] [--apply]`: fix credits and titles on old uploads (dry run by default).

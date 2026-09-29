@@ -261,7 +261,6 @@ async def _upload_result(message: str, metadata: dict, upload_id: str) -> dict:
             "embedded_tags": metadata.get("embedded_tags") or {},
             "visibility": metadata.get("visibility", "public"),
             "explicit": bool(metadata.get("explicit")),
-            "ai_assisted": bool(metadata.get("ai_assisted")),
             "style": metadata.get("generation_params", {}).get("style"),
             "primary_genre": metadata.get("derived_tags", {}).get("primary_genre"),
             "secondary_genres": metadata.get("derived_tags", {}).get("secondary_genres", []),

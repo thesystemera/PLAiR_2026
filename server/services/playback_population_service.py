@@ -5,24 +5,24 @@ from services.user_data_cache_service import user_data_cache
 from services.analytics_service import analytics_service
 
 PLAYLIST_MODES = frozenset([
-    "favorites", "discovery", "human",
+    "favorites", "discovery",
     "top_hits_all", "top_hits_week", "top_hits_day",
 ])
 
 def is_playlist_mode(mode: str) -> bool:
     return mode in PLAYLIST_MODES
 
-async def _get_user_preferences(user_id: Optional[int] = None):
-    from service_registry import services
-    hidden = set(getattr(services.catalog_service, "hidden_ids", set()))
+async def _get_user_preferences(user_id: Optional[int] = None, session_id: Optional[str] = None):
+    from services.listener_filters import excluded_ids
+    excluded = await excluded_ids(user_id, session_id)
     if not user_id:
-        return {"likes": set(), "super_likes": set(), "bans": hidden}
+        return {"likes": set(), "super_likes": set(), "bans": excluded}
     try:
         prefs = await user_data_cache.get_preferences(user_id)
-        return {**prefs, "bans": set(prefs.get("bans") or set()) | hidden}
+        return {**prefs, "bans": excluded}
     except Exception as e:
         log_service.error(f"Error getting user preferences: {e}")
-        return {"likes": set(), "super_likes": set(), "bans": hidden}
+        return {"likes": set(), "super_likes": set(), "bans": excluded}
 
 def _build_category_query(track: Dict[str, Any], category: str) -> str:
     params = track.get("generation_params", {}) or {}
@@ -132,7 +132,7 @@ class PlaybackPopulationService:
             return []
 
         needed = queue_size - len(queue)
-        prefs = await _get_user_preferences(user_id)
+        prefs = await _get_user_preferences(user_id, session_id)
         existing_ids = {t["id"] for t in queue} | {t["id"] for t in history[-20:]}
 
         if is_playlist_mode(radio_mode):
@@ -173,7 +173,7 @@ class PlaybackPopulationService:
         session_id: str = "",
     ) -> List[Dict]:
 
-        prefs = await _get_user_preferences(user_id)
+        prefs = await _get_user_preferences(user_id, session_id)
         exclude_ids = {t["id"] for t in queue} | {t["id"] for t in history[-10:]}
 
         if category == "similar_artists":
@@ -216,26 +216,7 @@ class PlaybackPopulationService:
             return self._fill_favorites(needed, prefs, existing_ids, session_id)
         if mode == "discovery":
             return await self._fill_discovery(needed, prefs, existing_ids, session_id)
-        if mode == "human":
-            return self._fill_human(needed, prefs, existing_ids, session_id)
         return []
-
-    def _fill_human(self, needed: int, prefs: Dict, existing_ids: Set[str], session_id: str) -> List[Dict]:
-        if not self.catalog:
-            return []
-        liked = prefs["likes"] | prefs["super_likes"]
-        pool = [t for tid, t in self.catalog.tracks.items()
-                if t.get("is_ai_generated") is False and tid not in prefs["bans"] and tid not in existing_ids]
-        weights = [3.0 if t.get("id") in liked else 1.0 for t in pool]
-        new_tracks = []
-        while pool and len(new_tracks) < needed:
-            index = random.choices(range(len(pool)), weights=weights)[0]
-            track = pool.pop(index)
-            weights.pop(index)
-            new_tracks.append(track)
-            existing_ids.add(track["id"])
-        log_service.detail(f"{log_service.who(session_id)}: human-made added {len(new_tracks)}/{needed} tracks", "playback")
-        return new_tracks
 
     async def _fill_top_hits(
         self, mode: str, needed: int, banned_ids: Set[str],

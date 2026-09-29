@@ -22,9 +22,8 @@ async def semantic_search(
     if use_ai_analysis:
         enforce_rate_limit("search_ai_user", f"user:{user_id}")
 
-    banned_ids = set()
-    if current_user:
-        banned_ids = await user_data_cache.get_banned_ids(int(current_user.id))  # type: ignore
+    from services.listener_filters import excluded_ids
+    banned_ids = await excluded_ids(user_id, session_id)
 
     assert services.vector_search_service is not None
     results = await services.vector_search_service.search(

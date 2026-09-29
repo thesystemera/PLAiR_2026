@@ -365,7 +365,6 @@ Output ONLY valid JSON with your analysis, no other text.""")
             "artist_profile_id": (artist or {}).get("id"),
             "visibility": "public",
             "explicit": bool(extracted.get("explicit")),
-            "ai_assisted": False,
             "artist_slug": (artist or {}).get("slug"),
             "embedded_tags": tags or {},
 

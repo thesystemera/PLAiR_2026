@@ -25,6 +25,7 @@ class CatalogDatabaseService(SingletonService):
         self.artwork_dir = settings.ARTWORK_DIR
         self.tracks = {}
         self.hidden_ids = set()
+        self.human_ids = set()
         self.track_ids = []
         self._catalog_initialized = False
         self._artwork_cache = {}
@@ -101,6 +102,7 @@ class CatalogDatabaseService(SingletonService):
         self.track_ids = track_ids
         self._artwork_cache = artwork_cache
         self.hidden_ids = {tid for tid, meta in tracks.items() if is_hidden_track(meta)}
+        self.human_ids = {tid for tid, meta in tracks.items() if meta.get("is_ai_generated") is False}
         self._bump_version()
 
     def _bump_version(self):
@@ -113,6 +115,10 @@ class CatalogDatabaseService(SingletonService):
             self.hidden_ids.add(track_id)
         else:
             self.hidden_ids.discard(track_id)
+        if metadata.get("is_ai_generated") is False:
+            self.human_ids.add(track_id)
+        else:
+            self.human_ids.discard(track_id)
         if track_id not in self.track_ids:
             self.track_ids.insert(0, track_id)
         if has_artwork is not None:
@@ -125,6 +131,7 @@ class CatalogDatabaseService(SingletonService):
     def remove_track_from_memory(self, track_id: str):
         self.tracks.pop(track_id, None)
         self.hidden_ids.discard(track_id)
+        self.human_ids.discard(track_id)
         if track_id in self.track_ids:
             self.track_ids.remove(track_id)
         self._artwork_cache.pop(track_id, None)
@@ -343,11 +350,8 @@ class CatalogDatabaseService(SingletonService):
         return self.tracks.get(track_id)
 
     def get_all_tracks(self, skip: int = 0, limit: int = 100, sort_by: str = "created_at", order: str = "desc",
-                       genre: Optional[str] = None, banned_ids: Optional[set] = None, human_only: bool = False) -> tuple:
+                       genre: Optional[str] = None, banned_ids: Optional[set] = None) -> tuple:
         ids = self.track_ids
-
-        if human_only:
-            ids = [tid for tid in ids if self.tracks[tid].get("is_ai_generated") is False]
 
         if genre:
             ids = [tid for tid in ids if

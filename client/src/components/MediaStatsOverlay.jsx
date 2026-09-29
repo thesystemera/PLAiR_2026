@@ -1,33 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Music, List, Clock } from 'lucide-react'
-import { useDynamicTheme, getCategoryMetadata, CATALOG_HEADER, TRANSITIONS, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, CATALOG_HEADER, TRANSITIONS, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
 
-const HUMAN_IDENTITY = getCategoryMetadata('human')
-const HUMAN_CHIP_ACTIVE_STYLE = {
-  color: HUMAN_IDENTITY.color,
-  backgroundColor: `${HUMAN_IDENTITY.color}33`,
-  boxShadow: `inset 0 0 0 1px ${HUMAN_IDENTITY.color}66`
-}
-
-function HumanFilterChip({ active, onToggle, idleColor }) {
-  const Icon = HUMAN_IDENTITY.icon
-  return (
-    <button
-      onClick={onToggle}
-      aria-pressed={active}
-      className={`ui-press flex items-center gap-1 px-2 py-1.5 rounded-full text-xs font-semibold transition-colors ${active ? '' : 'hover:bg-white/10'}`}
-      style={active ? HUMAN_CHIP_ACTIVE_STYLE : { color: idleColor, boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.12)' }}
-      title={active ? 'Showing human-made tracks only' : 'Show human-made tracks only'}
-    >
-      <Icon className="w-3.5 h-3.5" />
-      <span>Human</span>
-    </button>
-  )
-}
-
-export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = null, onBackToGenres = null, humanOnly = false, onToggleHuman = null, contentType = 'catalog' }) {
+export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = null, onBackToGenres = null, contentType = 'catalog' }) {
   const { getGrey400 } = useDynamicTheme()
   const [visible, setVisible] = useState(true)
   const scrollTimeoutRef = useRef(null)
@@ -132,7 +109,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                     </div>
                   </div>
                 </div>
-              ) : !stats.showing_genres && !stats.hide_duration && (
+              ) : !stats.showing_genres && (
                 <div className="flex items-center gap-1.5 md:gap-2">
                   <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.clock}`}>
                     <Clock className={CATALOG_HEADER.statIcon.size} />
@@ -151,9 +128,6 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
 
             {!stats.is_search_mode && (
               <div className="flex items-center gap-1.5 md:gap-2 ml-auto pointer-events-auto">
-                {onToggleHuman && (
-                  <HumanFilterChip active={humanOnly} onToggle={onToggleHuman} idleColor={getGrey400()} />
-                )}
                 {selectedGenre && onBackToGenres ? (
                   <button
                     onClick={onBackToGenres}

@@ -2,7 +2,6 @@ import { logger } from './logger'
 import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
 import { getDeviceId } from './session'
-import { isHumanTrack } from './utils'
 
 const QUEUE_SIZE = 11
 const TARGET_INDEX = 5
@@ -105,8 +104,6 @@ function queueItem(track) {
     style: track.style || track.generation_params?.style || '',
     duration_ms: track.duration_ms || track.track_info?.duration || 0,
     has_artwork: !!track.has_artwork,
-    is_human: isHumanTrack(track),
-    artist_slug: track.artist_slug || null
   }
 }
 
@@ -205,9 +202,6 @@ class OfflineBackend {
     if (mode === 'favorites') {
       const favorites = pool.filter(track => liked.has(track.id) || superLiked.has(track.id))
       if (favorites.length >= Math.min(MIN_FAVORITES_POOL, count)) pool = favorites
-    } else if (mode === 'human') {
-      const human = pool.filter(isHumanTrack)
-      if (human.length) pool = human
     }
     const fresh = pool.filter(track => !recent.has(track.id))
     if (fresh.length >= Math.min(count, pool.length)) pool = fresh.length ? fresh : pool
@@ -401,13 +395,9 @@ class OfflineBackend {
     }
   }
 
-  async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null, human = false) {
+  async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null) {
     try {
       let tracks = await this._libraryTracks()
-
-      if (human) {
-        tracks = tracks.filter(isHumanTrack)
-      }
 
       if (genre) {
         const genreLower = genre.toLowerCase()
@@ -982,10 +972,6 @@ class OfflineBackend {
 
   async deleteArtist() {
     throw new Error('Deleting an artist requires an internet connection')
-  }
-
-  async getArtist() {
-    throw new Error('Artist pages need a connection to PLAiR')
   }
 
   async updateUserTrack() {

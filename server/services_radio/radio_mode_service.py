@@ -156,21 +156,24 @@ class RadioModeService:
         return sess.prefs.to_dict() if sess else None
 
     def stings_pref(self, session_id: str) -> bool:
-        return self._sting_prefs.get(session_id, (True, True))[0]
+        return self._sting_prefs.get(session_id, (True, True, "both"))[0]
 
     def reviews_pref(self, session_id: str) -> bool:
-        return self._sting_prefs.get(session_id, (True, True))[1]
+        return self._sting_prefs.get(session_id, (True, True, "both"))[1]
 
-    def _remember_sting_pref(self, session_id: str, stings: bool, reviews: bool = True):
+    def music_source(self, session_id: str) -> str:
+        return self._sting_prefs.get(session_id, (True, True, "both"))[2]
+
+    def _remember_sting_pref(self, session_id: str, stings: bool, reviews: bool = True, source: str = "both"):
         self._sting_prefs.pop(session_id, None)
-        self._sting_prefs[session_id] = (stings, reviews)
+        self._sting_prefs[session_id] = (stings, reviews, source)
         while len(self._sting_prefs) > STING_PREFS_MAX:
             self._sting_prefs.popitem(last=False)
 
     def _apply_prefs(self, session_id: str, user_id: Optional[int], prefs: schedule.RadioPrefs,
                      tz_name: Optional[str], tts_muted: bool) -> Optional[SessionRadio]:
         now = self.clock()
-        self._remember_sting_pref(session_id, prefs.stings, prefs.reviews)
+        self._remember_sting_pref(session_id, prefs.stings, prefs.reviews, prefs.music_source)
         sess = self.sessions.get(session_id)
         if sess is None:
             if not prefs.enabled:

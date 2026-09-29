@@ -328,15 +328,12 @@ class API {
     })
   }
 
-  async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null, human = false) {
-    return this._routeRequest('getTracks', [skip, limit, sortBy, order, genre, human], async () => {
+  async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null) {
+    return this._routeRequest('getTracks', [skip, limit, sortBy, order, genre], async () => {
       logger.info('[API] 🌐 ONLINE MODE - Fetching tracks from server')
       let url = `${API_BASE}/catalog/tracks?skip=${skip}&limit=${limit}&sort_by=${sortBy}&order=${order}`
       if (genre) {
         url += `&genre=${encodeURIComponent(genre)}`
-      }
-      if (human) {
-        url += '&human=true'
       }
       const res = await this._fetch(url, {
         headers: this.getHeaders(),
@@ -1043,12 +1040,6 @@ class API {
   async deleteArtist(artistId) {
     return this._routeRequest('deleteArtist', [artistId], () =>
       this._jsonRequest(`/artists/${encodeURIComponent(artistId)}`, 'DELETE', undefined, 'Could not delete the artist')
-    )
-  }
-
-  async getArtist(slug) {
-    return this._routeRequest('getArtist', [slug], () =>
-      this._jsonRequest(`/artists/${encodeURIComponent(slug)}`, 'GET', undefined, 'Could not load this artist')
     )
   }
 

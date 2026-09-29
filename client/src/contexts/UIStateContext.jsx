@@ -335,7 +335,6 @@ export function UIStateProvider({ children }) {
   const [uploadEditTrackId, setUploadEditTrackId] = useState(null)
   const [uploadWatchId, setUploadWatchId] = useState(null)
   const [usageModalOpen, setUsageModalOpen] = useState(false)
-  const [artistModalState, setArtistModalState] = useState({ isOpen: false, slug: null })
 
   const [isOfflineRendering, setIsOfflineRendering] = useState(false)
 
@@ -1194,16 +1193,6 @@ export function UIStateProvider({ children }) {
     setUsageModalOpen(false)
   }, [])
 
-  const openArtist = useCallback((slug) => {
-    if (!slug) return
-    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
-    startTransition(() => setArtistModalState({ isOpen: true, slug }))
-  }, [])
-
-  const closeArtist = useCallback(() => {
-    setArtistModalState(prev => ({ ...prev, isOpen: false }))
-  }, [])
-
   const setVideoPreviewPlaying = useCallback((isPlaying) => {
     setEngineState(prev => ({ ...prev, isVideoPreviewPlaying: isPlaying }))
   }, [])
@@ -1323,10 +1312,6 @@ export function UIStateProvider({ children }) {
     openUsageModal,
     closeUsageModal,
 
-    artistModalState,
-    openArtist,
-    closeArtist,
-
     isOfflineRendering,
     setIsOfflineRendering,
 
@@ -1349,7 +1334,6 @@ export function UIStateProvider({ children }) {
     reviewModalState, openReviewModal, closeReviewModal,
     uploadModalOpen, uploadEditTrackId, uploadWatchId, openUploadModal, openEditTrack, closeUploadModal,
     usageModalOpen, openUsageModal, closeUsageModal,
-    artistModalState, openArtist, closeArtist,
     isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
   ])
 

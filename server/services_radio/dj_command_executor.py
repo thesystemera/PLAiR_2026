@@ -41,7 +41,6 @@ SEED_MODE_DISPLAY = {
 PLAYLIST_DISPLAY = {
     "favorites": "your favorites",
     "discovery": "smart discovery",
-    "human": "human-made music from independent artists",
     "top_hits_all": "all-time top hits",
     "top_hits_week": "this week's top hits",
     "top_hits_day": "today's top hits",
@@ -138,9 +137,8 @@ class CommandExecutorService:
         session_id = session_dict.get('session_id')
         user_id = session_dict.get('user_id')
 
-        banned_ids = set()
-        if user_id:
-            banned_ids = await user_data_cache.get_banned_ids(user_id)
+        from services.listener_filters import excluded_ids
+        banned_ids = await excluded_ids(user_id, session_id)
 
         tracks_to_add = []
         play_first = False

@@ -20,8 +20,7 @@ import {
   Smile,
   TrendingUp,
   Calendar,
-  Clock,
-  Fingerprint
+  Clock
 } from 'lucide-react'
 import {
   extractColorsFromImage,
@@ -93,7 +92,6 @@ const ThemeArtworkContext = createContext(null)
 const CATEGORY_IDENTITY = {
   favorites: { icon: Heart, color: '#ec4899', label: 'My Favorites' },
   discovery: { icon: Sparkles, color: '#8b5cf6', label: 'Smart Discovery' },
-  human: { icon: Fingerprint, color: '#f97316', label: 'Human Made' },
 
   top_hits_all: { icon: TrendingUp, color: '#a855f7', label: 'All-Time Hits' },
   top_hits_week: { icon: Calendar, color: '#8b5cf6', label: "This Week's Hits" },
@@ -145,7 +143,6 @@ export function getCategoryMetadata(key) {
 
   if (k === 'favorites') return { ...CATEGORY_IDENTITY.favorites, id: key }
   if (k === 'discovery') return { ...CATEGORY_IDENTITY.discovery, id: key }
-  if (k === 'human') return { ...CATEGORY_IDENTITY.human, id: key }
 
   if (k === 'top_hits_all') return { ...CATEGORY_IDENTITY.top_hits_all, id: key }
   if (k === 'top_hits_week') return { ...CATEGORY_IDENTITY.top_hits_week, id: key }

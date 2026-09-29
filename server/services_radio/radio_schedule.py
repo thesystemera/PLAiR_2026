@@ -32,6 +32,7 @@ class RadioPrefs:
     features: bool = True
     stings: bool = True
     reviews: bool = True
+    music_source: str = "both"
     feature_interval_min: int = field(default_factory=default_feature_interval)
 
     def to_dict(self) -> dict:
@@ -49,6 +50,8 @@ def normalize_prefs(raw) -> RadioPrefs:
         value = raw.get(key)
         if isinstance(value, bool):
             setattr(prefs, key, value)
+    if raw.get("music_source") in ("both", "human", "ai"):
+        prefs.music_source = raw["music_source"]
     interval = raw.get("feature_interval_min")
     if isinstance(interval, (int, float)) and not isinstance(interval, bool):
         allowed = feature_intervals()

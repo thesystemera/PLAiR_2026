@@ -1226,9 +1226,8 @@ class HumanMusicUploadService(SingletonService):
             if updates["visibility"] not in VISIBILITIES:
                 return False, "Visibility must be public, unlisted or private"
             track["visibility"] = updates["visibility"]
-        for flag in ("explicit", "ai_assisted"):
-            if flag in updates:
-                track[flag] = bool(updates[flag])
+        if "explicit" in updates:
+            track["explicit"] = bool(updates["explicit"])
         if "description" in updates:
             track["description"] = str(updates["description"] or "").strip()[:DESCRIPTION_MAX] or None
 

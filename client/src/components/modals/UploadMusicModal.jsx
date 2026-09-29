@@ -89,7 +89,6 @@ const trackToMetadata = (track) => {
     lyrical_interpretation: tags.lyrical_interpretation || null,
     visibility: track?.visibility || 'public',
     explicit: !!track?.explicit,
-    ai_assisted: !!track?.ai_assisted,
     description: track?.description || '',
     has_artwork: !!track?.has_artwork,
     artwork_generated: !!track?.artwork_generated,
@@ -1382,11 +1381,6 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                     label="Explicit"
                     on={!!metadata.explicit}
                     onToggle={() => saveSetting('explicit', !metadata.explicit)}
-                  />
-                  <SettingToggle
-                    label="Made with AI help"
-                    on={!!metadata.ai_assisted}
-                    onToggle={() => saveSetting('ai_assisted', !metadata.ai_assisted)}
                   />
                 </div>
                 <div className="mt-3">

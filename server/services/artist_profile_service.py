@@ -70,13 +70,6 @@ async def get(profile_id: int) -> Optional[Dict]:
         return to_dict(profile) if profile else None
 
 
-async def get_by_slug(slug: str) -> Optional[Dict]:
-    async with AsyncSessionLocal() as db:
-        row = await db.execute(select(ArtistProfile).where(ArtistProfile.slug == slug))
-        profile = row.scalar_one_or_none()
-        return to_dict(profile) if profile else None
-
-
 async def create(user_id: int, name: str, bio: str = "", links=None) -> Dict:
     name = clean_name(name)
     if not name:

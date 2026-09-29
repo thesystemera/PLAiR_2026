@@ -20,8 +20,10 @@ const DEFAULT_RADIO_MODE = Object.freeze({
   features: true,
   stings: true,
   reviews: true,
+  music_source: 'both',
   feature_interval_min: 20,
 })
+const MUSIC_SOURCES = ['both', 'human', 'ai']
 const DEFAULT_RADIO_OPTIONS = Object.freeze({ feature_intervals_min: [15, 20, 30], stings_outside_radio_mode: true })
 
 function normalizeRadioMode(raw, intervals = DEFAULT_RADIO_OPTIONS.feature_intervals_min) {
@@ -30,6 +32,7 @@ function normalizeRadioMode(raw, intervals = DEFAULT_RADIO_OPTIONS.feature_inter
   RADIO_MODE_TOGGLES.forEach(key => {
     if (typeof raw[key] === 'boolean') next[key] = raw[key]
   })
+  if (MUSIC_SOURCES.includes(raw.music_source)) next.music_source = raw.music_source
   const interval = Number(raw.feature_interval_min)
   if (Number.isFinite(interval) && intervals.length) {
     next.feature_interval_min = intervals.reduce((best, value) => (

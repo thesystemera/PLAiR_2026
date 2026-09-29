@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from 'react'
-import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock, MessageSquareText } from 'lucide-react'
+import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock, MessageSquareText, Music } from 'lucide-react'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
@@ -12,6 +12,12 @@ const SEGMENTS = [
   { key: 'local', icon: Ticket, label: 'Local & Gigs', color: 'text-amber-400', hint: 'Gigs and spots near you that fit your taste' },
   { key: 'community', icon: Users, label: 'Community', color: 'text-pink-400', hint: 'Listener shoutouts and station stats' },
   { key: 'features', icon: Sparkles, label: 'Trivia & Features', color: 'text-violet-400', hint: 'Stories behind the artists coming up' },
+]
+
+const MUSIC_SOURCE_OPTIONS = [
+  { id: 'both', label: 'Both' },
+  { id: 'human', label: 'Human' },
+  { id: 'ai', label: 'AI' },
 ]
 
 export const RadioModeSettings = memo(function RadioModeSettings({ className = '' }) {
@@ -140,6 +146,32 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
       </Expandable>
 
       {stingsOutside && stingsRow}
+
+      <SettingRow
+        icon={Music}
+        label="Music"
+        color="text-emerald-400"
+        headerContent={
+          <div className="flex gap-1">
+            {MUSIC_SOURCE_OPTIONS.map(option => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => updateRadioMode({ music_source: option.id })}
+                disabled={radioModeSaving}
+                aria-pressed={(radioMode.music_source || 'both') === option.id}
+                className={`ui-press px-3 py-1 rounded text-xs font-medium transition disabled:opacity-50 ${(radioMode.music_source || 'both') === option.id ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        <div className="text-xs text-gray-400">
+          Play human-made music, AI music, or both, everywhere on the station
+        </div>
+      </SettingRow>
 
       <SettingRow
         icon={MessageSquareText}

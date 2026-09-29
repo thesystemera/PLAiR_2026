@@ -5,10 +5,6 @@ export function formatDuration(ms) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-export function isHumanTrack(track) {
-  return track?.is_human === true || track?.is_ai_generated === false
-}
-
 export function formatDateShort(dateStr) {
   if (!dateStr) return 'Unknown'
   const date = new Date(dateStr)

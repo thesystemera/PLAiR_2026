@@ -476,10 +476,10 @@ class MusicNode(KnowledgeNode):
         search = services.vector_search_service
         if not q.text or search is None:
             return []
-        from services.user_data_cache_service import user_data_cache
-        banned = await user_data_cache.get_banned_ids(q.listener.user_id) if q.listener.user_id else set()
+        from services.listener_filters import excluded_ids
+        banned = await excluded_ids(q.listener.user_id, q.listener.session_id)
         tracks = await search.search(q.text, n_results=q.per_kind, use_ai_analysis=q.use_ai,
-                                     banned_ids=set(banned or ()))
+                                     banned_ids=banned)
         items = []
         for track in tracks:
             score = float(track.get("similarity_score") or 0.0)
