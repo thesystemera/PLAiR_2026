@@ -74,6 +74,8 @@ import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
 const TILT_STORAGE_KEY = 'tiltEffects'
 const RADIO_INPUT_KEY = 'radioInputMode'
+const TOAST_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000 }
+const MAX_TOASTS = 3
 const initialRadioInput = () => (safeStorage.get(RADIO_INPUT_KEY) === 'text' ? 'text' : 'voice')
 const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function'
@@ -675,24 +677,26 @@ export function UIStateProvider({ children }) {
     setToasts(prev => prev.filter(toast => toast.id !== id))
   }, [])
 
-  const publishToast = useCallback((message, type = 'info', duration = 5000, position = 'top', replaceKey = null) => {
+  const publishToast = useCallback((message, type = 'info', requestedDuration, _position, replaceKey = null) => {
     const id = Date.now() + Math.random()
-    const toast = { id, message, type, duration, position }
+    const limit = TOAST_DURATION_MS[type] || TOAST_DURATION_MS.info
+    const duration = requestedDuration === 0 || requestedDuration < 0 ? 0 : Math.min(requestedDuration || limit, limit)
+    const key = replaceKey || `${type}:${message}`
+    const toast = { id, message, type, duration, replaceKey: key }
 
     setToasts(prev => {
-      if (replaceKey) {
-        const existing = prev.find(t => t.replaceKey === replaceKey)
-        if (existing) {
-          if (timeoutRefsToast.current[existing.id]) {
-            clearTimeout(timeoutRefsToast.current[existing.id])
-          }
-          return prev.map(t => t.replaceKey === replaceKey
-            ? { ...toast, replaceKey }
-            : t
-          )
-        }
+      const existing = prev.find(t => t.replaceKey === key)
+      if (existing) {
+        clearTimeout(timeoutRefsToast.current[existing.id])
+        delete timeoutRefsToast.current[existing.id]
+        return prev.map(t => t.replaceKey === key ? toast : t)
       }
-      return [...prev, { ...toast, replaceKey }]
+      const next = [...prev, toast]
+      next.slice(0, Math.max(0, next.length - MAX_TOASTS)).forEach(old => {
+        clearTimeout(timeoutRefsToast.current[old.id])
+        delete timeoutRefsToast.current[old.id]
+      })
+      return next.slice(-MAX_TOASTS)
     })
 
     if (duration > 0) {

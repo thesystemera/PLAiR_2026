@@ -37,10 +37,9 @@ import {
 } from './components/Panel'
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
-import ToastContainer from './components/Toast'
+import {NoticeStack} from './components/NoticeStack'
 import {OnAirFrame} from './components/OnAirBadge'
-import {OfflinePill} from './components/OfflinePill'
-import {DJActivity, DJActivityBridge} from './components/DJActivity'
+import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
@@ -807,13 +806,8 @@ function App() {
           <AudioReactiveCanvas />
         </Suspense>
 
-        <AnimatePresence>
-          {!isFullscreenVisuals && <ToastContainer />}
-        </AnimatePresence>
-
         <OnAirFrame />
-        <OfflinePill />
-        <DJActivity />
+        <NoticeStack />
         <AudioUnlockPrompt />
 
         <AnimatePresence>

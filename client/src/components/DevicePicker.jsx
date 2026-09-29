@@ -7,23 +7,13 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useNetwork } from '../contexts/NetworkContext'
-import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive, MonitorSpeaker } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { GLASS } from '../lib/themeManager'
-import { CSS_TRANSITION, SPRING, TWEEN } from '../lib/motion'
+import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { Expandable } from './Motion'
-
-const BANNER_SAFE_AREA_STYLE = {
-  paddingTop: 'calc(var(--safe-top) + 0.75rem)',
-  paddingLeft: 'calc(var(--safe-left) + 0.75rem)',
-  paddingRight: 'calc(var(--safe-right) + 0.75rem)'
-}
-
-const BANNER_MOTION = {
-  initial: { y: '-100%', opacity: 0 },
-  animate: { y: 0, opacity: 1, transition: SPRING.panel },
-  exit: { y: '-100%', opacity: 0, transition: TWEEN.exit }
-}
+import { NoticeChip, useNoticeSlot } from './Notice'
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
@@ -259,29 +249,37 @@ export const DevicePickerButton = memo(function DevicePickerButton({ currentDevi
 
 export const DevicePickerBanner = memo(function DevicePickerBanner({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
   const activeDeviceOnline = useUISelector(state => state.engineState.activeDeviceOnline)
-  const message = activeDeviceOnline ? '▶️ Playing on another device' : '📴 Your other device is offline'
-  return (
+  const slot = useNoticeSlot()
+  if (!slot) return null
+  return createPortal(
     <AnimatePresence>
       {showInactive && !bannerDismissed && (
-    <motion.div {...BANNER_MOTION} className="fixed top-0 left-0 right-0 bg-gradient-to-r from-purple-600 to-blue-600 text-white p-3 flex items-center justify-center gap-4 z-[9999] text-sm font-medium shadow-lg" style={BANNER_SAFE_AREA_STYLE}>
-      <span>{message}</span>
-      <button
-        onClick={() => handleActivateDevice()}
-        disabled={actionLoading}
-        className="ui-press ui-hover bg-white text-purple-600 px-4 py-1.5 rounded-full text-xs font-bold cursor-pointer transition shadow hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {actionLoading ? 'Loading...' : 'Play here instead'}
-      </button>
-      <button
-        onClick={handleDismissBanner}
-        className="ui-tap ui-hover-lg ml-auto bg-transparent border-none text-white/80 cursor-pointer p-1 leading-none transition-colors hover:text-white"
-        title="Close (will reappear on device change)"
-      >
-        <X size={18} />
-      </button>
-    </motion.div>
+        <motion.div key="device-notice" layout="position" {...PRESETS.fadeSlide}>
+          <NoticeChip
+            tone={activeDeviceOnline ? 'info' : 'warning'}
+            icon={activeDeviceOnline ? MonitorSpeaker : WifiOff}
+            text={activeDeviceOnline ? 'Playing on another device' : 'Your other device is offline'}
+          >
+            <button
+              onClick={() => handleActivateDevice()}
+              disabled={actionLoading}
+              className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
+            >
+              {actionLoading ? '…' : 'Play here'}
+            </button>
+            <button
+              onClick={handleDismissBanner}
+              className="ui-tap text-white/60 hover:text-white"
+              title="Hide (comes back on a device change)"
+              aria-label="Hide"
+            >
+              <X size={14} />
+            </button>
+          </NoticeChip>
+        </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    slot
   )
 })
 

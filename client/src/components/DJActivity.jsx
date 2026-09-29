@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
   Newspaper, Radio, Save, Search, SkipForward, Ticket, TrendingUp, User, Wrench, X
@@ -7,8 +7,9 @@ import {
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { PRESETS, TWEEN } from '../lib/motion'
+import { TWEEN } from '../lib/motion'
 import { Expandable } from './Motion'
+import { NoticeChip } from './Notice'
 
 const LINGER_MS = 2600
 const DONE_MS = 1400
@@ -147,22 +148,21 @@ export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = fal
   )
 })
 
-const ActivityChip = memo(function ActivityChip({ call }) {
+export const ActivityChip = memo(function ActivityChip({ call }) {
   const source = SOURCES[call.source] || SOURCES.tool
   const state = STATES[call.state] || STATES.done
-  const Icon = ICONS[iconKey(call)]
   const StateIcon = state.icon
 
   return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs whitespace-nowrap max-w-[92vw] backdrop-blur-sm ${source.chip}`}
-      style={{ backgroundColor: 'rgba(10, 10, 12, 0.82)' }}
+    <NoticeChip
+      borderClass={source.chip}
+      icon={ICONS[iconKey(call)]}
+      iconClass={`text-current ${call.state === 'running' ? 'animate-pulse' : ''}`}
+      text={sentenceCase(call.label || call.tool)}
     >
-      <Icon className={`w-3.5 h-3.5 shrink-0 ${call.state === 'running' ? 'animate-pulse' : ''}`} aria-hidden="true" />
-      <span className="font-semibold text-white/90 truncate">{sentenceCase(call.label || call.tool)}</span>
       {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
       <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text} ${state.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
-    </span>
+    </NoticeChip>
   )
 })
 
@@ -230,26 +230,3 @@ export function DJActivityBridge() {
   return null
 }
 
-export const DJActivity = memo(function DJActivity() {
-  const { calls, hidden } = useUISelector(state => ({
-    calls: state.engineState.djActivity,
-    hidden: state.interfaceState.isFullscreenVisuals || state.audioState.offlineMode,
-  }))
-
-  return (
-    <div
-      className="fixed left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col items-center gap-1.5"
-      style={{ top: 'calc(var(--safe-top) + 0.5rem)' }}
-      role="status"
-      aria-live="polite"
-    >
-      <AnimatePresence initial={false}>
-        {!hidden && (calls || []).map(call => (
-          <motion.div key={call.id} layout="position" {...PRESETS.fadeSlide}>
-            <ActivityChip call={call} />
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
-  )
-})

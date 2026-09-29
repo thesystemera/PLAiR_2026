@@ -4,6 +4,7 @@ import { CloudOff } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { PRESETS } from '../lib/motion'
+import { NoticeChip } from './Notice'
 
 const OFFLINE_NOTICE_MS = 4000
 
@@ -40,22 +41,8 @@ const OfflinePillView = memo(function OfflinePillView({ visible, count, noNetwor
   return (
     <AnimatePresence>
       {visible && (
-        <motion.div
-          key="offline-pill"
-          {...PRESETS.fadeSlide}
-          className="fixed left-1/2 -translate-x-1/2 z-[110] pointer-events-none"
-          style={{ top: 'calc(var(--safe-top) + 0.5rem)' }}
-        >
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-amber-100 pointer-events-auto"
-            style={{ borderColor: 'rgba(245, 158, 11, 0.5)', backgroundColor: 'rgba(10, 10, 12, 0.82)' }}
-            title={title}
-            role="status"
-            aria-live="polite"
-          >
-            <CloudOff className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" />
-            {label}
-          </span>
+        <motion.div key="offline-pill" layout="position" {...PRESETS.fadeSlide}>
+          <NoticeChip tone="warning" icon={CloudOff} text={label} title={title} />
         </motion.div>
       )}
     </AnimatePresence>

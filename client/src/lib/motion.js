@@ -236,12 +236,6 @@ export const PRESETS = {
   },
 }
 
-export const toastMotion = (isBottom) => ({
-  initial: { opacity: 0, y: isBottom ? 40 : -40, scale: 0.95 },
-  animate: { opacity: 1, y: 0, scale: 1, transition: SPRING.toast },
-  exit: { opacity: 0, y: isBottom ? 24 : -24, scale: 0.96, transition: TWEEN.exit },
-})
-
 export const messageMotion = (fromRight) => ({
   initial: { opacity: 0, y: 14, x: fromRight ? 16 : -16, scale: 0.94 },
   animate: { opacity: 1, y: 0, x: 0, scale: 1, transition: { ...SPRING.message, opacity: { duration: DURATION.quick } } },
