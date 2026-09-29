@@ -224,10 +224,10 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
-    isCached: state.isCached,
+    isCached: state.audioState.isCached,
     engineRef: state.engineRef,
-    notificationsMuted: state.notificationsMuted,
-    ttsMuted: state.ttsMuted,
+    notificationsMuted: state.settingsState.notificationsMuted,
+    ttsMuted: state.settingsState.ttsMuted,
     publishSettings: state.publishSettings,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
