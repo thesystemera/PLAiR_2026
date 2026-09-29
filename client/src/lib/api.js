@@ -513,6 +513,17 @@ class API {
     })
   }
 
+  async getMyCommunityPosts() {
+    return this._routeRequest('getMyCommunityPosts', [], async () => {
+      const res = await this._fetch(`${API_BASE}/user/community`, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      })
+      if (!res.ok) throw new Error(`Failed to fetch your posts: ${res.statusText}`)
+      return res.json()
+    })
+  }
+
   async getTrackReviews(trackId) {
     return this._routeRequest('getTrackReviews', [trackId], async () => {
       const res = await this._fetch(`${API_BASE}/tracks/${encodeURIComponent(trackId)}/reviews`, {

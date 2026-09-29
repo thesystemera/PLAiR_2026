@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -23,6 +23,7 @@ import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
+import { formatTimeAgo } from '../lib/utils'
 
 const SOUND_MODE_ACTIVE_CLASS = {
   both: 'bg-green-500/30 text-green-300 border border-green-500/50',
@@ -184,6 +185,8 @@ const MediaRow = memo(function MediaRow({
   typeIconColor,
   onPlay,
   onRemove,
+  removeIcon: RemoveIcon = X,
+  removeTitle = 'Remove preference',
   isLoading,
   isPlaying
 }) {
@@ -240,10 +243,11 @@ const MediaRow = memo(function MediaRow({
         onPointerMove={removeInteraction.onPointerMove}
         onPointerUp={handleRemove}
         className="ui-press transition p-1 hover:bg-red-500/20 rounded"
-        title="Remove preference"
+        title={removeTitle}
+        aria-label={removeTitle}
         disabled={isLoading}
       >
-        {isLoading ? <Loader2 size={16} className="animate-spin text-gray-400" /> : <X size={16} className="text-gray-400 hover:text-red-500" />}
+        {isLoading ? <Loader2 size={16} className="animate-spin text-gray-400" /> : <RemoveIcon size={16} className="text-gray-400 hover:text-red-500" />}
       </button>
     </div>
   )
@@ -381,6 +385,38 @@ const ShoutoutItem = memo(function ShoutoutItem({ shoutout, icon, iconColor, onP
   )
 })
 
+const postSubtitle = (post) => {
+  const when = formatTimeAgo(post?.timestamp)
+  const typed = post?.has_audio === false ? 'Typed' : null
+  let about = null
+  if (post?.kind === 'review') about = post.track?.title ? `On ${post.track.title}` : 'Song review'
+  else if (post?.kind === 'reply') about = post.parent_preview?.username ? `Reply to ${post.parent_preview.username}` : 'Reply'
+  return [about, typed, when].filter(Boolean).join(' • ')
+}
+
+const OwnPostItem = memo(function OwnPostItem({ post, icon, iconColor, onPlay, onDelete, isDeleting, isPlaying }) {
+  const { user } = useAuth()
+  const profilePictureUrl = useProfilePicture(user?.id, !!user?.profile_picture)
+  const userInitial = user?.username?.charAt(0).toUpperCase() || 'U'
+
+  return (
+    <MediaRow
+      image={profilePictureUrl}
+      fallbackIcon={<span className="text-xl font-bold">{userInitial}</span>}
+      title={`"${post?.transcription || post?.full_transcription || 'No transcription'}"`}
+      subtitle={postSubtitle(post)}
+      typeIcon={icon}
+      typeIconColor={iconColor}
+      onPlay={() => onPlay(post)}
+      onRemove={() => onDelete(post)}
+      removeIcon={Trash2}
+      removeTitle={post?.kind === 'review' ? 'Delete review' : 'Delete'}
+      isLoading={isDeleting}
+      isPlaying={isPlaying}
+    />
+  )
+})
+
 export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTrack, onReloadTrackQuality }) {
   const { isAuthenticated, user, refreshUser } = useAuth()
   const { getPreferences, removePreference, isPending } = usePreferences()
@@ -400,6 +436,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     tiltEnabled,
     tiltNeedsPermission,
     enableTiltEffects,
+    shoutoutUpdates,
+    reviewUpdates,
   } = useUISelector(state => ({
     audioState: state.audioState,
     downloadState: state.downloadState,
@@ -414,6 +452,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     tiltEnabled: state.tiltEnabled,
     tiltNeedsPermission: state.tiltNeedsPermission,
     enableTiltEffects: state.enableTiltEffects,
+    shoutoutUpdates: state.contentUpdates.shoutouts,
+    reviewUpdates: state.contentUpdates.reviews,
   }))
   const success = toastSuccess
   const error = toastError
@@ -441,6 +481,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [storageExpanded, setStorageExpanded] = useState(() => safeStorage.get('userPanel_storage') === 'true')
   const [dataManagementExpanded, setDataManagementExpanded] = useState(() => safeStorage.get('userPanel_dataManagement') === 'true')
   const [uploadsExpanded, setUploadsExpanded] = useState(() => safeStorage.get('userPanel_uploads') === 'true')
+  const [postsExpanded, setPostsExpanded] = useState(() => safeStorage.get('userPanel_posts') === 'true')
+  const [expandedMyShoutouts, setExpandedMyShoutouts] = useState(false)
+  const [expandedMyReviews, setExpandedMyReviews] = useState(false)
+  const [myPosts, setMyPosts] = useState({ shoutouts: [], reviews: [] })
+  const [deletingPostId, setDeletingPostId] = useState(null)
 
   const [userUploads, setUserUploads] = useState([])
   const [loadingUploads, setLoadingUploads] = useState(false)
@@ -489,7 +534,60 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     safeStorage.set('userPanel_storage', String(storageExpanded))
     safeStorage.set('userPanel_dataManagement', String(dataManagementExpanded))
     safeStorage.set('userPanel_uploads', String(uploadsExpanded))
-  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded])
+    safeStorage.set('userPanel_posts', String(postsExpanded))
+  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded, postsExpanded])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setMyPosts({ shoutouts: [], reviews: [] })
+      return
+    }
+    let cancelled = false
+    api.getMyCommunityPosts()
+      .then(data => {
+        if (cancelled || !data) return
+        const shoutoutsAndReplies = [...(data.shoutouts || []), ...(data.replies || [])]
+          .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+        setMyPosts({ shoutouts: shoutoutsAndReplies, reviews: data.reviews || [] })
+      })
+      .catch(err => logger.warn('Failed to load your posts:', err))
+    return () => { cancelled = true }
+  }, [isAuthenticated, user?.id, shoutoutUpdates, reviewUpdates])
+
+  const handleDeletePost = useCallback(async (post) => {
+    if (!post?.id) return
+    const noun = post.kind === 'review' ? 'review' : post.kind === 'reply' ? 'reply' : 'shoutout'
+    const confirmed = await showConfirm({
+      title: `Delete ${noun.charAt(0).toUpperCase()}${noun.slice(1)}?`,
+      message: post.kind === 'shoutout'
+        ? 'This deletes the shoutout and every reply to it. This action cannot be undone.'
+        : `Are you sure you want to delete this ${noun}? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'danger'
+    })
+    if (!confirmed) return
+
+    setDeletingPostId(post.id)
+    try {
+      const deleted = await api.deleteShoutout(post.id)
+      if (!deleted) {
+        error(`Failed to delete ${noun}`)
+        return
+      }
+      if (playingShoutout?.id === post.id) stopShoutout()
+      setMyPosts(prev => ({
+        shoutouts: prev.shoutouts.filter(p => p.id !== post.id && p.parent_id !== post.id),
+        reviews: prev.reviews.filter(p => p.id !== post.id),
+      }))
+      success(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} deleted`)
+    } catch (err) {
+      error(err.message || `Failed to delete ${noun}`)
+      logger.error('Failed to delete post:', err)
+    } finally {
+      setDeletingPostId(null)
+    }
+  }, [showConfirm, playingShoutout, stopShoutout, success, error])
 
   const fetchUserUploads = useCallback(async () => {
     if (!isAuthenticated) return
@@ -1219,6 +1317,25 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
             <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} emptyMessage="No banned shoutouts"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Ban} iconColor="text-red-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
+          </ExpandSection>
+        )}
+
+        {!loading && isAuthenticated && (
+          <ExpandSection
+            className="p-4 md:p-6 border-b border-gray-800"
+            open={postsExpanded}
+            onToggle={setPostsExpanded}
+            icon={Megaphone}
+            iconClassName="text-purple-400"
+            title="My Posts"
+            meta={<span className="text-xs text-gray-400">({myPosts.shoutouts.length + myPosts.reviews.length})</span>}
+            contentClassName="space-y-6 pl-2"
+          >
+            <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} emptyMessage="You haven't posted a shoutout yet"
+              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+
+            <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} emptyMessage="You haven't reviewed a song yet"
+              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
           </ExpandSection>
         )}
 

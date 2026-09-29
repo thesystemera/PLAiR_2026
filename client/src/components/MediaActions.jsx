@@ -37,7 +37,7 @@ function ActionIcon({ icon: Icon, size, on, fill }) {
 }
 
 export default function MediaActions({ type = 'track', itemId, compact = false, overlay = false }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
   const { getPreference, setPreference, removePreference } = usePreferences()
   const { toastError } = useUIActions()
   const { getGrey800, getGrey700, getGrey400, triggerEffect } = useDynamicTheme()
@@ -91,6 +91,10 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
   }
 
   if (!isAuthenticated) {
+    return null
+  }
+
+  if (type === 'shoutout' && user?.id != null && String(itemId).startsWith(`${user.id}_`)) {
     return null
   }
 

@@ -598,6 +598,10 @@ class OfflineBackend {
     throw new Error(OFFLINE_MESSAGES.reply)
   }
 
+  async getMyCommunityPosts() {
+    return { shoutouts: [], replies: [], reviews: [], offline: true }
+  }
+
   async getTrackReviews(trackId) {
     return { reviews: [], count: 0, track_id: trackId, offline: true }
   }

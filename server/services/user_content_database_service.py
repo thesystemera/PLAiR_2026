@@ -665,6 +665,16 @@ class UserContentDatabaseService(SingletonService):
         replies.sort(key=lambda r: r.get('timestamp', ''), reverse=True)
         return replies
 
+    def items_by_user(self, user_id: int) -> Dict[str, List[Dict]]:
+        mine: Dict[str, List[Dict]] = {KIND_SHOUTOUT: [], KIND_REPLY: [], KIND_REVIEW: []}
+        prefix = f"{user_id}_"
+        for sid in self.shoutout_ids:
+            if sid.startswith(prefix):
+                enriched = self.get_enriched_shoutout(sid)
+                if enriched:
+                    mine[enriched['kind']].append(enriched)
+        return mine
+
     def reviews_for_track(self, track_id: str, with_audio: bool = False) -> List[Dict]:
         reviews = []
         for sid in self.shoutout_ids:

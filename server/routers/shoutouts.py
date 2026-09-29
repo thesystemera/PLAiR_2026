@@ -12,7 +12,7 @@ from services.whisper_dual_service import whisper_dual_service
 from services.preferences_service import preferences_service
 from services import log_service
 from services.user_content_database_service import (public_shoutout, public_shoutouts, track_ref,
-                                                     KIND_REPLY, KIND_REVIEW)
+                                                     KIND_SHOUTOUT, KIND_REPLY, KIND_REVIEW)
 from services.community_engagement import community_engagement
 from database import get_db, User
 from config import settings
@@ -259,6 +259,18 @@ async def type_shoutout_reply(
     _require_parent(parent_id)
     return {**await _save_item(current_user, KIND_REPLY, text=request.text, parent_id=parent_id),
             "parent_id": parent_id}
+
+
+@router.get("/api/user/community")
+async def get_my_community_items(
+        current_user: User = Depends(get_current_user)
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    assert services.user_content_service is not None
+    mine = services.user_content_service.items_by_user(int(current_user.id))  # type: ignore
+    return {"shoutouts": public_shoutouts(mine[KIND_SHOUTOUT]), "replies": public_shoutouts(mine[KIND_REPLY]),
+            "reviews": public_shoutouts(mine[KIND_REVIEW])}
 
 
 @router.get("/api/tracks/{track_id}/reviews")

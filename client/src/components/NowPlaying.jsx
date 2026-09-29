@@ -12,6 +12,8 @@ import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
 import {artPop, watchOffscreen} from '../lib/microMotion'
 import {MessageSquareText} from 'lucide-react'
+import {AnimatePresence, motion} from 'framer-motion'
+import {PRESETS} from '../lib/motion'
 
 const NO_LYRICS = []
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
@@ -185,26 +187,30 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
 
 const OVERLAY_BUTTON_CLASS = `${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`
 
+const reviewCounts = new Map()
+
 const ReviewsButton = memo(function ReviewsButton({ track }) {
   const { reviewsUpdateCount, openReviewModal } = useUISelector(state => ({
     reviewsUpdateCount: state.contentUpdates.reviews,
     openReviewModal: state.openReviewModal,
   }))
-  const [reviewCount, setReviewCount] = useState({ trackId: null, count: 0 })
   const trackId = track?.id
+  const [reviewCount, setReviewCount] = useState(() => ({ trackId, count: reviewCounts.get(trackId) ?? 0 }))
 
   useEffect(() => {
     if (!trackId) return
     let cancelled = false
     api.getTrackReviews(trackId)
       .then(data => {
-        if (!cancelled) setReviewCount({ trackId, count: data?.count ?? data?.reviews?.length ?? 0 })
+        const fetched = data?.count ?? data?.reviews?.length ?? 0
+        reviewCounts.set(trackId, fetched)
+        if (!cancelled) setReviewCount({ trackId, count: fetched })
       })
       .catch(error => logger.warn('Failed to fetch review count:', error))
     return () => { cancelled = true }
   }, [trackId, reviewsUpdateCount])
 
-  const count = reviewCount.trackId === trackId ? reviewCount.count : 0
+  const count = reviewCount.trackId === trackId ? reviewCount.count : (reviewCounts.get(trackId) ?? 0)
   const label = count > 0 ? `Reviews (${count})` : 'Reviews'
 
   return (
@@ -219,11 +225,17 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
       aria-label={label}
     >
       <MessageSquareText className={BUTTON.icon.small} />
-      {count > 0 && (
-        <span className="absolute -top-1.5 -right-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-pink-500 text-white text-[10px] font-bold leading-[1.125rem] text-center shadow">
-          {count > 99 ? '99+' : count}
-        </span>
-      )}
+      <AnimatePresence initial={false}>
+        {count > 0 && (
+          <motion.span
+            key={trackId}
+            {...PRESETS.pop}
+            className="absolute -top-1.5 -right-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-pink-500 text-white text-[10px] font-bold leading-[1.125rem] text-center shadow pointer-events-none"
+          >
+            {count > 99 ? '99+' : count}
+          </motion.span>
+        )}
+      </AnimatePresence>
     </button>
   )
 })

@@ -141,6 +141,8 @@ class PreferencesService(SingletonService):
 
         if preference_type not in pref_type_map:
             raise ValueError("Invalid preference type. Use 'super_like', 'like', or 'ban'")
+        if str(shoutout_id).split("_", 1)[0] == str(user_id):
+            raise ValueError("You can't rate your own post")
 
         result = await db.execute(
             select(ShoutoutPreference).where(
