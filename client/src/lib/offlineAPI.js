@@ -946,6 +946,18 @@ class OfflineBackend {
     throw new Error('Uploading music requires an internet connection')
   }
 
+  async listUploadJobs() {
+    return { uploads: [], offline: true }
+  }
+
+  async getUploadJob() {
+    throw new Error('Checking an upload requires an internet connection')
+  }
+
+  async cancelUploadJob() {
+    throw new Error('Cancelling an upload requires an internet connection')
+  }
+
   async getUploadSetup() {
     return { artists: [], last_artist_profile_id: null, upload_enhance: false, offline: true }
   }

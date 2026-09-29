@@ -91,6 +91,7 @@ from services_radio.conversation_service import conversation_service
 from config import settings
 
 from service_registry import services
+from services.task_utils import spawn
 from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts, artists,
                      conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
                      client_log)
@@ -225,6 +226,7 @@ async def lifespan(_app: FastAPI):
     await asyncio.to_thread(catalog_vector_db_service.load_initial_data)
     log_service.success("✓ Catalog vector database service initialized")
     human_music_upload_service.attach_services(vector_db_service=catalog_vector_db_service)
+    spawn(human_music_upload_service.backfill_fingerprints(), name="upload_fingerprint_backfill")
 
     log_service.system("Initializing catalog vector search prompt cache service...")
     try:

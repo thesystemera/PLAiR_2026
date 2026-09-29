@@ -1,14 +1,16 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from 'react'
-import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge, Mic2, Wand2, Plus, Globe, EyeOff, Lock } from 'lucide-react'
+import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge, Mic2, Wand2, Plus, Globe, EyeOff, Lock, Info } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
 import { triggerHaptic } from '../../lib/haptics'
+import { fetchFinishedUploadJob, isUploadFinished, UPLOAD_FINISHED_STATUSES } from '../../lib/uploadJobs'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useWebSocketSubscribe } from '../../contexts/WebSocketContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { useUISelector } from '../../contexts/UIStateContext'
+import { useDialog } from '../../contexts/DialogContext'
 import { ToggleChip } from '../SettingRow'
 import { Modal, ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
 
@@ -20,6 +22,14 @@ const MAX_VIDEO_FILE_SIZE = 10 * 1024 * 1024 * 1024
 const ENHANCE_HINT = 'Restores detail on low-quality files. Slower.'
 const RIGHTS_LABEL = 'I made this music or have the rights to share it'
 const DESCRIPTION_MAX = 2000
+const FILE_ACCEPT = ['audio/*', 'video/*', ...SUPPORTED_FORMATS.map(f => `.${f}`)].join(',')
+const UPLOAD_EVENT_QUIET_MS = 10000
+const UPLOAD_POLL_MS = 5000
+const ANALYZING_HINT = "You can close this - we'll let you know when it's live."
+const DUPLICATE_NOTICE = "You've already uploaded this song - here it is."
+const LOST_UPLOAD_MESSAGE = 'This upload was interrupted. Please try again.'
+
+const newUploadId = () => `up_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
 
 const VISIBILITY_OPTIONS = [
   { value: 'public', label: 'Public', icon: Globe, hint: 'Plays on the station and shows everywhere.' },
@@ -690,7 +700,11 @@ const AudioFeaturesDisplay = memo(function AudioFeaturesDisplay({ features }) {
 export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin, editTrackId = null }) {
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
   const { isAuthenticated, user } = useAuth()
-  const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
+  const { toastError, setUploadWatchId } = useUISelector(state => ({
+    toastError: state.toastError,
+    setUploadWatchId: state.setUploadWatchId,
+  }))
+  const { showConfirm } = useDialog()
   const categoryColor = getCategoryMetadata('all')?.color || '#6366f1'
 
   const [stage, setStage] = useState(UploadStage.SELECT)
@@ -700,6 +714,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const [error, setError] = useState(null)
   const [metadata, setMetadata] = useState(null)
   const [trackId, setTrackId] = useState(null)
+  const [sendProgress, setSendProgress] = useState(0)
+  const [jobName, setJobName] = useState('')
+  const [duplicate, setDuplicate] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
 
   const [artists, setArtists] = useState([])
   const [selectedArtistId, setSelectedArtistId] = useState(null)
@@ -714,17 +732,12 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const fileInputRef = useRef(null)
   const dragCounterRef = useRef(0)
   const uploadIdRef = useRef(null)
+  const uploadAbortRef = useRef(null)
+  const settlingRef = useRef(null)
+  const lastEventAtRef = useRef(0)
   const [isDragging, setIsDragging] = useState(false)
 
   const ownName = user?.username || 'You'
-
-  useWebSocketSubscribe('upload_progress', useCallback((data) => {
-    if (!uploadIdRef.current || data?.upload_id !== uploadIdRef.current) return
-    if (data?.stage && data?.percent !== undefined) {
-      setProgress(prev => Math.max(prev, data.percent))
-      setStageText(data.stage)
-    }
-  }, []))
 
   const applySetup = useCallback((data) => {
     const list = data?.artists || []
@@ -741,6 +754,126 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       .then(applySetup)
       .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
   }, [applySetup])
+
+  const watchUpload = useCallback((uploadId) => {
+    uploadIdRef.current = uploadId
+    settlingRef.current = null
+    lastEventAtRef.current = Date.now()
+    setUploadWatchId(uploadId)
+  }, [setUploadWatchId])
+
+  const clearWatch = useCallback(() => {
+    uploadIdRef.current = null
+    settlingRef.current = null
+    setUploadWatchId(null)
+  }, [setUploadWatchId])
+
+  const applyFinishedJob = useCallback((uploadId, job) => {
+    if (uploadIdRef.current !== uploadId) return
+    if (!isUploadFinished(job)) {
+      settlingRef.current = null
+      return
+    }
+    uploadIdRef.current = null
+    setCancelling(false)
+    if (job.status === 'cancelled') {
+      clearWatch()
+      setProgress(0)
+      setSendProgress(0)
+      setStageText('')
+      setJobName('')
+      setStage(UploadStage.SELECT)
+      return
+    }
+    if (job.status === 'done' && job.result) {
+      setRightsConfirmed(true)
+      setProgress(100)
+      setMetadata(job.result.metadata)
+      setTrackId(job.result.track_id)
+      setDuplicate(!!job.result.duplicate)
+      setStage(UploadStage.PREVIEW)
+      loadSetup()
+      triggerHaptic('success')
+      return
+    }
+    triggerHaptic('error')
+    setError(job.error || 'Upload failed. Please try again.')
+    setStage(UploadStage.ERROR)
+  }, [clearWatch, loadSetup])
+
+  const settleUpload = useCallback((uploadId, knownJob = null) => {
+    if (uploadIdRef.current !== uploadId || settlingRef.current === uploadId) return
+    settlingRef.current = uploadId
+    const load = knownJob
+      ? Promise.resolve(knownJob)
+      : fetchFinishedUploadJob(uploadId, { shouldStop: () => uploadIdRef.current !== uploadId })
+    load
+      .then(job => applyFinishedJob(uploadId, job))
+      .catch(err => {
+        logger.warn('[Upload] Could not load the finished upload:', err)
+        if (uploadIdRef.current !== uploadId) return
+        if (err?.status === 404) applyFinishedJob(uploadId, { status: 'failed', error: LOST_UPLOAD_MESSAGE })
+        else settlingRef.current = null
+      })
+  }, [applyFinishedJob])
+
+  useWebSocketSubscribe('upload_progress', useCallback((data) => {
+    const uploadId = uploadIdRef.current
+    if (!uploadId || data?.upload_id !== uploadId) return
+    lastEventAtRef.current = Date.now()
+    if (data.stage && data.percent !== undefined) {
+      setProgress(prev => Math.max(prev, data.percent))
+      setStageText(data.stage)
+    }
+    if (UPLOAD_FINISHED_STATUSES.has(data.status)) {
+      settleUpload(uploadId, data.status === 'done' ? null : { status: data.status, error: data.message })
+    }
+  }, [settleUpload]))
+
+  useEffect(() => {
+    if (!isOpen || stage !== UploadStage.ANALYZING) return
+    const timer = setInterval(() => {
+      const uploadId = uploadIdRef.current
+      if (!uploadId || settlingRef.current === uploadId) return
+      if (Date.now() - lastEventAtRef.current < UPLOAD_EVENT_QUIET_MS) return
+      api.getUploadJob(uploadId)
+        .then(job => {
+          if (uploadIdRef.current !== uploadId) return
+          if (isUploadFinished(job)) {
+            settleUpload(uploadId, job)
+            return
+          }
+          setProgress(prev => Math.max(prev, job?.percent || 0))
+          if (job?.stage) setStageText(job.stage)
+        })
+        .catch(err => {
+          if (err?.status === 404 && uploadIdRef.current === uploadId) {
+            applyFinishedJob(uploadId, { status: 'failed', error: LOST_UPLOAD_MESSAGE })
+            return
+          }
+          logger.warn('[Upload] Could not check the upload:', err)
+        })
+    }, UPLOAD_POLL_MS)
+    return () => clearInterval(timer)
+  }, [isOpen, stage, settleUpload, applyFinishedJob])
+
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated || editTrackId) return
+    let cancelled = false
+    api.listUploadJobs()
+      .then(data => {
+        if (cancelled || uploadIdRef.current) return
+        const running = (data?.uploads || []).find(job => job.status === 'running')
+        if (!running?.upload_id) return
+        watchUpload(running.upload_id)
+        setJobName(running.filename || '')
+        setProgress(running.percent || 0)
+        setStageText(running.stage || '')
+        setStage(UploadStage.ANALYZING)
+      })
+      .catch(err => logger.warn('[Upload] Could not check for running uploads:', err))
+    return () => { cancelled = true }
+  }, [isOpen, isAuthenticated, editTrackId, watchUpload])
 
   useEffect(() => {
     if (!isOpen || !isAuthenticated) return
@@ -771,24 +904,45 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   }, [isOpen, isAuthenticated, editTrackId])
 
   const resetState = useCallback(() => {
-    uploadIdRef.current = null
+    uploadAbortRef.current?.abort()
+    uploadAbortRef.current = null
+    clearWatch()
     setStage(UploadStage.SELECT)
     setFile(null)
     setProgress(0)
+    setSendProgress(0)
     setStageText('')
+    setJobName('')
+    setDuplicate(false)
+    setCancelling(false)
     setError(null)
     setMetadata(null)
     setTrackId(null)
     setSavingArtist(false)
-  }, [])
+  }, [clearWatch])
 
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback(async () => {
+    if (uploadAbortRef.current) {
+      const stop = await showConfirm({
+        title: 'Stop uploading?',
+        message: "Your file hasn't finished uploading. Closing now stops the upload.",
+        confirmText: 'Stop upload',
+        cancelText: 'Keep uploading',
+        variant: 'danger'
+      })
+      if (!stop) return
+      if (uploadAbortRef.current) {
+        uploadAbortRef.current.abort()
+      } else if (uploadIdRef.current) {
+        api.cancelUploadJob(uploadIdRef.current).catch(err => logger.warn('[Upload] Could not cancel the upload:', err))
+      }
+    }
     resetState()
     onClose()
-  }, [onClose, resetState])
+  }, [onClose, resetState, showConfirm])
 
   const handleLoginRequired = useCallback(() => {
-    handleClose()
+    void handleClose()
     onLogin?.()
   }, [handleClose, onLogin])
 
@@ -859,35 +1013,46 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   }
 
   const handleUpload = async () => {
-    if (!file || needsRights) return
+    if (!file || needsRights || uploadIdRef.current) return
 
-    uploadIdRef.current = `up_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
-    setStage(UploadStage.UPLOADING)
+    const uploadId = newUploadId()
+    const controller = new AbortController()
+    uploadAbortRef.current = controller
+    watchUpload(uploadId)
+    setJobName(file.name)
+    setSendProgress(0)
     setProgress(0)
     setStageText('')
+    setDuplicate(false)
+    setCancelling(false)
+    setStage(UploadStage.UPLOADING)
 
     try {
-      setStage(UploadStage.ANALYZING)
-
-      const result = await api.uploadMusic(file, uploadIdRef.current, {
+      const response = await api.uploadMusic(file, uploadId, {
         artistProfileId: selectedArtistId,
         enableUpscaling: enhance,
-        rightsConfirmed: rightsTicked
+        rightsConfirmed: rightsTicked,
+        onProgress: (fraction) => setSendProgress(Math.round(fraction * 100)),
+        signal: controller.signal
       })
-
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null
+      if (uploadIdRef.current !== uploadId) return
       setRightsConfirmed(true)
-      setProgress(100)
-      setMetadata(result.metadata)
-      setTrackId(result.track_id)
-      setStage(UploadStage.PREVIEW)
-      loadSetup()
-
-      triggerHaptic('success')
-
+      setSendProgress(100)
+      if (response?.upload_id && response.upload_id !== uploadId) watchUpload(response.upload_id)
+      else lastEventAtRef.current = Date.now()
+      setStage(prev => prev === UploadStage.UPLOADING ? UploadStage.ANALYZING : prev)
     } catch (err) {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null
+      if (uploadIdRef.current !== uploadId) return
+      clearWatch()
+      setSendProgress(0)
+      if (err?.name === 'AbortError') {
+        setStage(UploadStage.SELECT)
+        return
+      }
       triggerHaptic('error')
       if (isRightsError(err)) {
-        uploadIdRef.current = null
         setRightsConfirmed(false)
         setRightsTicked(false)
         setProgress(0)
@@ -900,10 +1065,31 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     }
   }
 
+  const handleCancelSend = () => {
+    uploadAbortRef.current?.abort()
+  }
+
+  const handleCancelProcessing = async () => {
+    const uploadId = uploadIdRef.current
+    if (!uploadId || cancelling) return
+    setCancelling(true)
+    try {
+      const response = await api.cancelUploadJob(uploadId)
+      if (uploadIdRef.current !== uploadId) return
+      if (response?.status === 'cancelled') settleUpload(uploadId, { status: 'cancelled' })
+      else if (response?.status === 'cancelling') lastEventAtRef.current = 0
+      else settleUpload(uploadId)
+    } catch (err) {
+      if (uploadIdRef.current !== uploadId) return
+      setCancelling(false)
+      toastError(err.message || 'Could not cancel the upload')
+    }
+  }
+
   const handleSaveAndClose = () => {
     triggerHaptic('success')
     onUploadComplete?.(trackId, metadata)
-    handleClose()
+    void handleClose()
   }
 
   const handleCreateArtist = useCallback(async (name) => {
@@ -1057,7 +1243,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept={SUPPORTED_FORMATS.map(f => `.${f}`).join(',')}
+                  accept={FILE_ACCEPT}
                   onChange={(e) => {
                     e.stopPropagation()
                     if (e.target.files?.[0]) handleFileSelect(e.target.files[0])
@@ -1156,9 +1342,19 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             className="py-8"
           >
             <ModalProgress
-              progress={progress / 100}
-              statusText={stageText || (stage === UploadStage.UPLOADING ? 'Uploading...' : 'Processing...')}
+              progress={(stage === UploadStage.UPLOADING ? sendProgress : progress) / 100}
+              statusText={stage === UploadStage.UPLOADING
+                ? `Uploading ${sendProgress}%`
+                : (cancelling ? 'Cancelling...' : stageText || 'Processing...')}
+              showCancel={!cancelling}
+              onCancel={stage === UploadStage.UPLOADING ? handleCancelSend : handleCancelProcessing}
             />
+            {jobName && (
+              <p className="mt-4 text-xs text-center truncate" style={{ color: getGrey400() }}>{jobName}</p>
+            )}
+            {stage === UploadStage.ANALYZING && !cancelling && (
+              <p className="mt-2 text-xs text-center" style={{ color: getGrey400() }}>{ANALYZING_HINT}</p>
+            )}
           </motion.div>
         )}
 
@@ -1167,7 +1363,13 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             key="preview"
             {...PRESETS.stepSwap}
           >
-            {!isEditing && <ModalSuccessBanner message="Ready! Review and edit details if needed." className="mb-4" />}
+            {!isEditing && duplicate && (
+              <div className="mb-4 flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
+                <Info size={20} className="flex-shrink-0" style={{ color: getGrey400() }} />
+                <p className="text-sm" style={{ color: getWhite() }}>{DUPLICATE_NOTICE}</p>
+              </div>
+            )}
+            {!isEditing && !duplicate && <ModalSuccessBanner message="Ready! Review and edit details if needed." className="mb-4" />}
 
             <ModalSection title="Sharing">
               <ModalCard>

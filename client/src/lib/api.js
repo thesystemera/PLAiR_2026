@@ -1049,7 +1049,70 @@ class API {
     )
   }
 
-  async uploadMusic(file, uploadId = null, { artistProfileId = null, enableUpscaling = null, rightsConfirmed = false } = {}) {
+  _sendUpload(url, formData, { onProgress, signal } = {}) {
+    return new Promise((resolve, reject) => {
+      const abortError = () => {
+        const err = new Error('Upload cancelled')
+        err.name = 'AbortError'
+        return err
+      }
+      if (signal?.aborted) {
+        reject(abortError())
+        return
+      }
+      const headers = this.getHeaders()
+      delete headers['Content-Type']
+      const xhr = new XMLHttpRequest()
+      const onAbortSignal = () => xhr.abort()
+      const cleanup = () => signal?.removeEventListener('abort', onAbortSignal)
+      xhr.open('POST', url)
+      Object.entries(headers).forEach(([name, value]) => {
+        if (value !== undefined && value !== null) xhr.setRequestHeader(name, String(value))
+      })
+      if (onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) onProgress(Math.min(event.loaded / event.total, 1))
+        }
+      }
+      xhr.onload = () => {
+        cleanup()
+        const status = xhr.status
+        let data = {}
+        try {
+          data = xhr.responseText ? JSON.parse(xhr.responseText) : {}
+        } catch {
+          data = {}
+        }
+        if (status === 502 || status === 503 || status === 504) this.reportServerTrouble(`http_${status}`)
+        if (status === 401 && headers.Authorization === `Bearer ${this.token}` && this.token) {
+          this._notifyAuthRejected(this.token, url)
+        }
+        if (status >= 200 && status < 300) {
+          resolve(data)
+          return
+        }
+        const detail = status === 413
+          ? 'Upload is larger than the server currently accepts. Video uploads support up to 10GB once the proxy limit is active.'
+          : (typeof data.detail === 'string' ? data.detail : 'Upload failed')
+        const err = new Error(detail)
+        err.status = status
+        reject(err)
+      }
+      xhr.onerror = () => {
+        cleanup()
+        this.reportServerTrouble('network')
+        reject(new Error('Upload failed - check your connection and try again'))
+      }
+      xhr.onabort = () => {
+        cleanup()
+        reject(abortError())
+      }
+      signal?.addEventListener('abort', onAbortSignal)
+      xhr.send(formData)
+    })
+  }
+
+  async uploadMusic(file, uploadId = null, { artistProfileId = null, enableUpscaling = null, rightsConfirmed = false, onProgress = null, signal = null } = {}) {
     return this._routeRequest('uploadMusic', [file, uploadId, { artistProfileId, enableUpscaling, rightsConfirmed }], async () => {
       const sizeMb = file.size / (1024 * 1024)
       logger.info(`[API] Uploading media: ${file.name} (${sizeMb.toFixed(1)}MB, ${file.type || 'unknown type'})`)
@@ -1059,24 +1122,26 @@ class API {
       if (artistProfileId !== null && artistProfileId !== undefined) formData.append('artist_profile_id', String(artistProfileId))
       if (enableUpscaling !== null && enableUpscaling !== undefined) formData.append('enable_upscaling', enableUpscaling ? 'true' : 'false')
       if (rightsConfirmed) formData.append('rights_confirmed', 'true')
-      const headers = this.getHeaders()
-      delete headers['Content-Type']
-      const res = await this._fetch(`${API_BASE}/user/music/upload`, {
-        method: 'POST',
-        headers,
-        body: formData
-      })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        if (res.status === 413) {
-          throw new Error('Upload is larger than the server currently accepts. Video uploads support up to 10GB once the proxy limit is active.')
-        }
-        const err = new Error(data.detail || 'Upload failed')
-        err.status = res.status
-        throw err
-      }
-      return res.json()
+      return this._sendUpload(`${API_BASE}/user/music/upload`, formData, { onProgress, signal })
     })
+  }
+
+  async listUploadJobs() {
+    return this._routeRequest('listUploadJobs', [], () =>
+      this._jsonRequest('/user/music/uploads', 'GET', undefined, 'Could not load your uploads')
+    )
+  }
+
+  async getUploadJob(uploadId) {
+    return this._routeRequest('getUploadJob', [uploadId], () =>
+      this._jsonRequest(`/user/music/uploads/${encodeURIComponent(uploadId)}`, 'GET', undefined, 'Could not check the upload')
+    )
+  }
+
+  async cancelUploadJob(uploadId) {
+    return this._routeRequest('cancelUploadJob', [uploadId], () =>
+      this._jsonRequest(`/user/music/uploads/${encodeURIComponent(uploadId)}`, 'DELETE', undefined, 'Could not cancel the upload')
+    )
   }
 
   async _getUsage(methodName, path, params = {}) {

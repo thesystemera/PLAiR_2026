@@ -333,6 +333,7 @@ export function UIStateProvider({ children }) {
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [uploadEditTrackId, setUploadEditTrackId] = useState(null)
+  const [uploadWatchId, setUploadWatchId] = useState(null)
   const [usageModalOpen, setUsageModalOpen] = useState(false)
 
   const [isOfflineRendering, setIsOfflineRendering] = useState(false)
@@ -664,7 +665,8 @@ export function UIStateProvider({ children }) {
   const [contentUpdates, setContentUpdates] = useState({
     tracks: 0,
     shoutouts: 0,
-    reviews: 0
+    reviews: 0,
+    uploads: 0
   })
 
   const publishContentUpdate = useCallback((contentType) => {
@@ -1300,6 +1302,8 @@ export function UIStateProvider({ children }) {
 
     uploadModalOpen,
     uploadEditTrackId,
+    uploadWatchId,
+    setUploadWatchId,
     openUploadModal,
     openEditTrack,
     closeUploadModal,
@@ -1328,7 +1332,7 @@ export function UIStateProvider({ children }) {
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
     shoutoutModalState, openShoutoutModal, closeShoutoutModal,
     reviewModalState, openReviewModal, closeReviewModal,
-    uploadModalOpen, uploadEditTrackId, openUploadModal, openEditTrack, closeUploadModal,
+    uploadModalOpen, uploadEditTrackId, uploadWatchId, openUploadModal, openEditTrack, closeUploadModal,
     usageModalOpen, openUsageModal, closeUsageModal,
     isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
   ])

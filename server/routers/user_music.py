@@ -1,3 +1,4 @@
+import asyncio
 import aiofiles
 import hashlib
 import json
@@ -10,12 +11,15 @@ from typing import Optional
 from services.track_artwork_service import track_artwork_service
 from services import artist_profile_service as artists
 from services import log_service
+from services.task_utils import spawn
 from database import User
 from config import settings
 from service_registry import services
 from routers.deps import get_session_info, get_current_user, RateLimit, read_upload_limited
 
 router = APIRouter()
+UPLOAD_JOBS: dict = {}
+UPLOAD_JOB_TTL_S = 3600
 
 
 async def _remember_rights(user_id: int):
@@ -58,13 +62,6 @@ async def upload_user_music(
     session_id = session["session_id"]
     if not upload_id or not all(ch.isalnum() or ch in "-_" for ch in upload_id) or len(upload_id) < 8:
         upload_id = uuid.uuid4().hex
-
-    async def progress_callback(event: dict):
-        assert services.websocket_service is not None
-        await services.websocket_service.broadcast_to_session(session_id, {
-            "type": "upload_progress",
-            "data": event
-        })
 
     filename = file.filename or "upload.mp3"
     content_type = file.content_type
@@ -137,28 +134,105 @@ async def upload_user_music(
         f"size={upload_size_mb:.1f}MB"
     )
 
+    job = {"upload_id": upload_id, "user_id": int(current_user.id), "filename": filename, "status": "running",  # type: ignore
+           "stage": "Queued", "percent": 0, "started_at": time.time(), "finished_at": None, "result": None,
+           "error": None, "task": None}
+    _prune_jobs()
+    UPLOAD_JOBS[upload_id] = job
+    job["task"] = spawn(_run_upload_job(job, session_id, staging_path, dict(
+        user_id=int(current_user.id),  # type: ignore
+        filename=filename,
+        upload_path=staging_path,
+        file_size=upload_size,
+        content_sha256=digest.hexdigest(),
+        upload_id=upload_id,
+        user_title=title,
+        artist=artist,
+        content_type=content_type,
+        enable_upscaling=enable_upscaling,
+    )), name=f"upload:{upload_id}")
+    return {"status": "processing", "upload_id": upload_id}
+
+
+def _job_view(job: dict) -> dict:
+    return {k: v for k, v in job.items() if k not in ("task", "user_id")}
+
+
+def _prune_jobs():
+    now = time.time()
+    for key, job in list(UPLOAD_JOBS.items()):
+        if job["finished_at"] and now - job["finished_at"] > UPLOAD_JOB_TTL_S:
+            UPLOAD_JOBS.pop(key, None)
+
+
+async def _run_upload_job(job: dict, session_id: str, staging_path: Path, upload_args: dict):
+    final_event: dict = {}
+
+    async def announce(event: dict):
+        if services.websocket_service is not None:
+            await services.websocket_service.broadcast_to_session(session_id, {"type": "upload_progress", "data": event})
+
+    async def progress_callback(event: dict):
+        job["stage"], job["percent"] = event.get("stage", job["stage"]), event.get("percent", job["percent"])
+        if event.get("status") in ("done", "failed"):
+            final_event.update(event)
+            return
+        await announce(event)
+
     try:
+        assert services.human_music_upload_service is not None
         success, message, metadata = await services.human_music_upload_service.process_upload(
-            user_id=int(current_user.id),  # type: ignore
-            filename=filename,
-            upload_path=staging_path,
-            file_size=upload_size,
-            content_sha256=digest.hexdigest(),
-            upload_id=upload_id,
-            user_title=title,
-            artist=artist,
-            content_type=content_type,
-            enable_upscaling=enable_upscaling,
-            progress_callback=progress_callback
-        )
+            progress_callback=progress_callback, **upload_args)
+        if success and metadata is not None:
+            job["result"] = await _upload_result(message, metadata, job["upload_id"])
+            job["status"] = "done"
+        else:
+            job["status"], job["error"] = "failed", message
+        await announce({**final_event, "upload_id": job["upload_id"], "status": job["status"],
+                        "message": message, "track_id": (job["result"] or {}).get("track_id")})
+    except asyncio.CancelledError:
+        job["status"], job["error"] = "cancelled", "Upload cancelled"
+        if services.websocket_service is not None:
+            await services.websocket_service.broadcast_to_session(session_id, {"type": "upload_progress", "data": {
+                "upload_id": job["upload_id"], "stage": "Cancelled", "percent": job["percent"], "status": "cancelled"}})
+    except Exception as e:
+        log_service.error(f"[Upload] Job {job['upload_id']} crashed: {e}")
+        job["status"], job["error"] = "failed", "Upload processing failed unexpectedly - please try again"
     finally:
-        if staging_path.exists():
-            staging_path.unlink()
+        job["finished_at"] = time.time()
+        staging_path.unlink(missing_ok=True)
 
-    if not success:
-        raise HTTPException(status_code=400, detail=message)
 
-    assert metadata is not None
+@router.get("/api/user/music/uploads")
+async def list_upload_jobs(current_user: User = Depends(get_current_user)):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    _prune_jobs()
+    mine = [_job_view(j) for j in UPLOAD_JOBS.values() if j["user_id"] == current_user.id]
+    return {"uploads": sorted(mine, key=lambda j: j["started_at"], reverse=True)}
+
+
+@router.get("/api/user/music/uploads/{upload_id}")
+async def get_upload_job(upload_id: str, current_user: User = Depends(get_current_user)):
+    job = UPLOAD_JOBS.get(upload_id)
+    if not current_user or job is None or job["user_id"] != current_user.id:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    return _job_view(job)
+
+
+@router.delete("/api/user/music/uploads/{upload_id}")
+async def cancel_upload_job(upload_id: str, current_user: User = Depends(get_current_user)):
+    job = UPLOAD_JOBS.get(upload_id)
+    if not current_user or job is None or job["user_id"] != current_user.id:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    task = job.get("task")
+    if job["status"] == "running" and task is not None and not task.done():
+        task.cancel()
+        log_service.upload(f"[Upload] {log_service.who(user_id=current_user.id)} cancelled {upload_id}")
+    return {"status": "cancelling" if job["status"] == "running" else job["status"], "upload_id": upload_id}
+
+
+async def _upload_result(message: str, metadata: dict, upload_id: str) -> dict:
     source_quality = metadata.get("source_quality", {})
     quality_tier = source_quality.get("quality_tier", "unknown") if source_quality else "unknown"
 
@@ -195,7 +269,7 @@ async def upload_user_music(
             "similar_artists": metadata.get("derived_tags", {}).get("similar_artists", []),
             "vocal_style_keywords": metadata.get("derived_tags", {}).get("vocal_style_keywords", []),
             "duration_ms": metadata.get("track_info", {}).get("duration"),
-            "has_lyrics": metadata.get("transcribed_lyrics") is not None,
+            "has_lyrics": bool(metadata.get("transcribed_lyrics")),
             "transcribed_lyrics": metadata.get("transcribed_lyrics"),
             "lyrical_interpretation": metadata.get("derived_tags", {}).get("lyrical_interpretation"),
             "has_artwork": services.catalog_service.has_artwork(track_id) if services.catalog_service else False,
@@ -232,6 +306,7 @@ async def upload_user_music(
             "artwork_generation_deferred": metadata.get("artwork_generation_deferred", False),
         }
     }
+
 
 @router.get("/api/user/music/tracks")
 async def get_user_tracks(

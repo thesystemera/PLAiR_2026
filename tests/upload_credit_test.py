@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--base", default="http://127.0.0.1:8011")
     parser.add_argument("--file", required=True, help="audio file to upload (runs the full pipeline)")
     parser.add_argument("--keep", action="store_true")
+    parser.add_argument("--cancel-file", help="a second, different audio file to start and cancel")
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
@@ -49,17 +50,29 @@ def main():
     setup = requests.get(f"{base}/api/user/music/setup", headers=headers, timeout=30).json()
     results.append(check("setup lists the artist", any(a["id"] == artist["id"] for a in setup["artists"])))
 
+    def upload(path, wait=True):
+        with open(path, "rb") as f:
+            r = requests.post(f"{base}/api/user/music/upload", headers=headers, timeout=600,
+                              files={"file": (Path(path).name, f)},
+                              data={"upload_id": uuid.uuid4().hex, "artist_profile_id": str(artist["id"]),
+                                    "enable_upscaling": "false", "rights_confirmed": "true"})
+        if r.status_code != 200 or not wait:
+            return r.status_code, r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        job_id = r.json()["upload_id"]
+        while True:
+            job = requests.get(f"{base}/api/user/music/uploads/{job_id}", headers=headers, timeout=30).json()
+            if job.get("status") != "running":
+                return 200, job
+            time.sleep(5)
+
     started = time.time()
-    with open(args.file, "rb") as f:
-        r = requests.post(f"{base}/api/user/music/upload", headers=headers, timeout=1200,
-                          files={"file": (Path(args.file).name, f)},
-                          data={"upload_id": uuid.uuid4().hex, "artist_profile_id": str(artist["id"]),
-                                "enable_upscaling": "false"})
-    ok = r.status_code == 200
-    results.append(check("upload processed", ok, f"{r.status_code} in {time.time() - started:.0f}s {r.text[:160] if not ok else ''}"))
+    code, job = upload(args.file)
+    ok = code == 200 and job.get("status") == "done"
+    results.append(check("upload processed in the background", ok,
+                         f"{job.get('status')} in {time.time() - started:.0f}s {job.get('error') or ''}"))
     if not ok:
         sys.exit(1)
-    body = r.json()
+    body = job["result"]
     track_id, meta = body["track_id"], body["metadata"]
     print(f"      title={meta['title']!r} artist={meta['artist']!r} genre={meta['primary_genre']!r} "
           f"tags={meta.get('embedded_tags')}")
@@ -80,6 +93,25 @@ def main():
 
     page = requests.get(f"{base}/api/artists/{renamed['slug']}", timeout=30).json()
     results.append(check("artist page lists the track", any(t["id"] == track_id for t in page.get("tracks", []))))
+
+    started = time.time()
+    code, again = upload(args.file)
+    dup = (again.get("result") or {})
+    results.append(check("same song again returns the existing track",
+                         again.get("status") == "done" and dup.get("duplicate") and dup.get("track_id") == track_id,
+                         f"{time.time() - started:.0f}s {again.get('error') or dup.get('message')}"))
+
+    if args.cancel_file:
+        code, pending = upload(args.cancel_file, wait=False)
+        time.sleep(8)
+        requests.delete(f"{base}/api/user/music/uploads/{pending['upload_id']}", headers=headers, timeout=30)
+        for _ in range(60):
+            job = requests.get(f"{base}/api/user/music/uploads/{pending['upload_id']}", headers=headers,
+                               timeout=30).json()
+            if job.get("status") != "running":
+                break
+            time.sleep(2)
+        results.append(check("cancel stops a running upload", job.get("status") == "cancelled", job.get("status")))
 
     blocked = requests.delete(f"{base}/api/artists/{artist['id']}", headers=headers, timeout=30)
     results.append(check("artist with tracks can't be deleted", blocked.status_code == 400, blocked.text[:80]))

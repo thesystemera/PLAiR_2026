@@ -19,6 +19,7 @@ from services import log_service
 from services import usage_tracking
 from services import track_asset_stages as stages
 from services.asset_integrity_service import asset_integrity_service
+from services import audio_fingerprint
 from services.track_asset_stages import coerce_bool as _coerce_bool
 from services.base_service import SingletonService
 from services.audio_headroom import mix_stems_to_file
@@ -115,6 +116,12 @@ def read_embedded_tags(path: Path) -> Dict[str, str]:
         if value:
             found[key] = value
     return found
+
+
+class DuplicateSong(Exception):
+    def __init__(self, track: Dict[str, Any]):
+        super().__init__("duplicate song")
+        self.track = track
 
 
 class UploadFailed(Exception):
@@ -487,6 +494,13 @@ class HumanMusicUploadService(SingletonService):
                 job["succeeded"] = result[0]
                 if job["succeeded"] and job["track_id"]:
                     asset_integrity_service.notify_tracks_changed([job["track_id"]], "upload")
+        except DuplicateSong as e:
+            if job["track_id"]:
+                await self._rollback_track(user_id, job["track_id"], job["catalog_added"])
+            job["track_id"], job["succeeded"] = e.track.get("id"), True
+            title = e.track.get("generation_params", {}).get("title", "Untitled")
+            log_service.upload(f"[Upload] Same song as {e.track.get('id')} for user {user_id}: returning it")
+            result = (True, f"You've already uploaded this song: {title}", {**e.track, "duplicate_upload": True})
         except UploadFailed as e:
             result = (False, str(e), None)
         except GPUOutOfMemoryError as e:
@@ -503,6 +517,36 @@ class HumanMusicUploadService(SingletonService):
             await progress.finish(job["succeeded"], result[1], job["track_id"] if job["succeeded"] else None)
 
         return result
+
+    def _same_song(self, song_fingerprint) -> Optional[Dict[str, Any]]:
+        if song_fingerprint is None or not self.catalog_db_service:
+            return None
+        for metadata in list(self.catalog_db_service.tracks.values()):
+            other = audio_fingerprint.decode(metadata.get("fingerprint"))
+            if other is not None and audio_fingerprint.similarity(song_fingerprint, other) >= audio_fingerprint.SAME_SONG_SIMILARITY:
+                return metadata
+        return None
+
+    async def backfill_fingerprints(self) -> int:
+        if not self.catalog_db_service:
+            return 0
+        added = 0
+        for track_id, metadata in list(self.catalog_db_service.tracks.items()):
+            if metadata.get("is_ai_generated") is not False or metadata.get("fingerprint"):
+                continue
+            audio_path = settings.AUDIO_DIR / f"{track_id}.mp3"
+            if not audio_path.exists():
+                continue
+            song_fingerprint = await asyncio.to_thread(audio_fingerprint.fingerprint, audio_path)
+            if song_fingerprint is None:
+                continue
+            updated = {**metadata, "fingerprint": audio_fingerprint.encode(song_fingerprint)}
+            await asyncio.to_thread(self.catalog_db_service.write_track_metadata, track_id, updated)
+            self.catalog_db_service.add_track_to_memory(track_id, updated)
+            added += 1
+        if added:
+            log_service.upload(f"[Upload] Fingerprinted {added} existing upload(s) for duplicate detection")
+        return added
 
     @staticmethod
     async def _hash_upload(upload_path: Optional[Path], audio_bytes: Optional[bytes]) -> str:
@@ -605,6 +649,14 @@ class HumanMusicUploadService(SingletonService):
         if duration_ms > self.max_track_duration_ms:
             raise UploadFailed(f"Track too long. Maximum length: {self._format_max_duration()}")
 
+        song_fingerprint = await asyncio.to_thread(audio_fingerprint.fingerprint, source_audio_path)
+        match = await asyncio.to_thread(self._same_song, song_fingerprint)
+        if match is not None:
+            if match.get("uploaded_by_user_id") == user_id:
+                raise DuplicateSong(match)
+            raise UploadFailed("This song is already on PLAiR, uploaded by another listener. "
+                               "If it's yours, contact us and we'll sort it out.")
+
         await progress.stage("quality")
 
         quality_report = None
@@ -632,6 +684,8 @@ class HumanMusicUploadService(SingletonService):
         )
 
         catalog_metadata["source_sha256"] = content_sha256
+        if song_fingerprint is not None:
+            catalog_metadata["fingerprint"] = audio_fingerprint.encode(song_fingerprint)
         catalog_metadata["upload_id"] = upload_id
         if quality_report:
             catalog_metadata["source_quality"] = quality_report.to_dict()

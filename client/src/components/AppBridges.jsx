@@ -1,11 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { CloudOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
-import { useArtwork, useUISelector, uiState } from '../contexts/UIStateContext'
+import { fetchFinishedUploadJob, uploadJobTitle, UPLOAD_FINISHED_STATUSES } from '../lib/uploadJobs'
+import { useArtwork, useUISelector, useUIStateGetter, uiState } from '../contexts/UIStateContext'
 import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
 import { useStorage } from '../contexts/StorageContext'
+import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -209,6 +211,50 @@ export function ConnectionNotice() {
       wasConnectedRef.current = true
     }
   }, [connected, errorToast, success])
+
+  return null
+}
+
+export function UploadNotice() {
+  const { success, errorToast, info, publishContentUpdate } = useUISelector(state => ({
+    success: state.toastSuccess,
+    errorToast: state.toastError,
+    info: state.toastInfo,
+    publishContentUpdate: state.publishContentUpdate,
+  }))
+  const getUIState = useUIStateGetter()
+  const handledRef = useRef(new Set())
+
+  useWebSocketSubscribe('upload_progress', useCallback((data) => {
+    const uploadId = data?.upload_id
+    const status = data?.status
+    if (!uploadId || !UPLOAD_FINISHED_STATUSES.has(status) || handledRef.current.has(uploadId)) return
+    handledRef.current.add(uploadId)
+    if (status === 'done') publishContentUpdate('uploads')
+    if (status === 'cancelled') return
+    const watched = () => getUIState().uploadWatchId === uploadId
+    if (watched()) return
+    const key = `upload:${uploadId}`
+    if (status === 'failed') {
+      errorToast(data.message || 'Your upload could not be processed', 8000, 'top', key)
+      return
+    }
+    fetchFinishedUploadJob(uploadId)
+      .then(job => {
+        if (watched()) return
+        if (job?.status === 'failed') {
+          errorToast(job.error || 'Your upload could not be processed', 8000, 'top', key)
+          return
+        }
+        const title = uploadJobTitle(job)
+        if (job?.result?.duplicate) info(`Already uploaded: “${title}”`, 6000, 'top', key)
+        else success(`“${title}” is live`, 6000, 'top', key)
+      })
+      .catch(err => {
+        logger.warn('[Upload] Could not load the finished upload:', err)
+        if (!watched()) success('Your upload is live', 6000, 'top', key)
+      })
+  }, [getUIState, publishContentUpdate, errorToast, info, success]))
 
   return null
 }

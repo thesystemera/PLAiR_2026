@@ -566,6 +566,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     enableTiltEffects,
     shoutoutUpdates,
     reviewUpdates,
+    uploadUpdates,
   } = useUISelector(state => ({
     audioState: state.audioState,
     downloadState: state.downloadState,
@@ -584,6 +585,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     enableTiltEffects: state.enableTiltEffects,
     shoutoutUpdates: state.contentUpdates.shoutouts,
     reviewUpdates: state.contentUpdates.reviews,
+    uploadUpdates: state.contentUpdates.uploads,
   }))
   const success = toastSuccess
   const error = toastError
@@ -733,6 +735,13 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       void fetchUserUploads({ quiet: true })
     }
   }, [uploadModalOpen, uploadsExpanded, isAuthenticated, fetchUserUploads])
+
+  const handledUploadUpdatesRef = useRef(uploadUpdates)
+  useEffect(() => {
+    if (uploadUpdates === handledUploadUpdatesRef.current) return
+    handledUploadUpdatesRef.current = uploadUpdates
+    if (uploadsExpanded && isAuthenticated) void fetchUserUploads({ quiet: true })
+  }, [uploadUpdates, uploadsExpanded, isAuthenticated, fetchUserUploads])
 
   const fetchMyArtists = useCallback(async () => {
     if (!isAuthenticated) return

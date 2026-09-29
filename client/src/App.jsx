@@ -43,7 +43,7 @@ import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
-import {ConnectionNotice, MediaSessionBridge, OfflineNotice, TrackDataLoader} from './components/AppBridges'
+import {ConnectionNotice, MediaSessionBridge, OfflineNotice, TrackDataLoader, UploadNotice} from './components/AppBridges'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -797,6 +797,7 @@ function App() {
         <MediaSessionBridge />
         <ConnectionNotice />
         <OfflineNotice />
+        <UploadNotice />
         <OnAirNotice />
         <DJActivityBridge />
         <KeyboardControls
