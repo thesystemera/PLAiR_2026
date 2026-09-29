@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from database.models import User, Conversation, WeatherData
 from services import log_service
+from services.user_data_cache_service import user_data_cache
 
 if TYPE_CHECKING:
     from services.websocket_service import WebSocketService
@@ -147,6 +148,7 @@ class UserProfileService:
             user.profile = updates["profile"]  # type: ignore
 
         await db.commit()
+        await user_data_cache.invalidate_user(user_id)
         log_service.api(f"User profile updated for {user.username}")
 
         if settings_to_broadcast and self._websocket_service is not None:

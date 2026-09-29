@@ -9,7 +9,7 @@ import { useDeviceSelector } from '../hooks/useDeviceSelector'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useDialog } from '../contexts/DialogContext'
 import { api } from '../lib/api'
-import { saveGuestSettings } from '../lib/accountSettings'
+import { applySoundMode, SOUND_MODES, soundModeFor } from '../lib/soundModes'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
@@ -23,6 +23,13 @@ import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
+
+const SOUND_MODE_ACTIVE_CLASS = {
+  both: 'bg-green-500/30 text-green-300 border border-green-500/50',
+  dj: 'bg-sky-500/30 text-sky-300 border border-sky-500/50',
+  ping: 'bg-amber-500/30 text-amber-300 border border-amber-500/50',
+  off: 'bg-red-500/30 text-red-300 border border-red-500/50',
+}
 
 const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
   const [isTesting, setIsTesting] = useState(false)
@@ -530,11 +537,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }
 
-  const soundMode = useMemo(() => {
-    if (!settingsState.ttsMuted && !settingsState.notificationsMuted) return 'both'
-    if (settingsState.ttsMuted && !settingsState.notificationsMuted) return 'notifications'
-    return 'off'
-  }, [settingsState])
+  const soundMode = soundModeFor(settingsState.ttsMuted, settingsState.notificationsMuted)
 
   const handlePlayShoutout = useCallback((shoutout) => {
     if (!shoutout) return
@@ -666,38 +669,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
   const handleSetSoundMode = async (mode) => {
     try {
-      let newTtsMuted, newNotificationsMuted, message
-
-      if (mode === 'both') {
-        newTtsMuted = false
-        newNotificationsMuted = false
-        message = 'DJ + PING'
-      } else if (mode === 'notifications') {
-        newTtsMuted = true
-        newNotificationsMuted = false
-        message = 'PING only'
-      } else {
-        newTtsMuted = true
-        newNotificationsMuted = true
-        message = 'OFF'
-      }
-
-      publishSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
-
-      if (!user) {
-        saveGuestSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
-        success(message)
-        return
-      }
-
-      await api.updateUserProfile({
-        tts_muted: newTtsMuted,
-        notifications_muted: newNotificationsMuted
-      })
-      if (refreshUser) await refreshUser()
-      success(message)
+      await applySoundMode(mode, { user, publishSettings, refreshUser })
+      success(mode.label, 1500)
     } catch (_err) {
-      publishSettings({ ttsMuted: user?.tts_muted ?? false, notificationsMuted: user?.notifications_muted ?? false })
       error('Failed to update sound settings')
       logger.error('Failed to update sound settings:', _err)
     }
@@ -998,24 +972,15 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Sounds"
             headerContent={
               <div className="flex gap-1">
-                <button
-                  onClick={() => handleSetSoundMode('both')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'both' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  DJ+PING
-                </button>
-                <button
-                  onClick={() => handleSetSoundMode('notifications')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'notifications' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  PING
-                </button>
-                <button
-                  onClick={() => handleSetSoundMode('off')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${soundMode === 'off' ? 'bg-red-500/30 text-red-300 border border-red-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  OFF
-                </button>
+                {SOUND_MODES.map(mode => (
+                  <button
+                    key={mode.id}
+                    onClick={() => handleSetSoundMode(mode)}
+                    className={`ui-press px-2 py-1 rounded text-xs font-medium whitespace-nowrap transition ${soundMode === mode ? SOUND_MODE_ACTIVE_CLASS[mode.id] : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                  >
+                    {mode.short}
+                  </button>
+                ))}
               </div>
             }
           />

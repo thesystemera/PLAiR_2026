@@ -1,4 +1,5 @@
-import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, HardDrive, Bell} from 'lucide-react'
+import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, HardDrive, Bell, BellOff} from 'lucide-react'
+import { applySoundMode, nextSoundMode, soundModeFor } from '../lib/soundModes'
 import { motion, AnimatePresence } from 'framer-motion'
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { formatDuration } from '../lib/utils'
@@ -12,8 +13,6 @@ import { useArtwork, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useViewport } from '../contexts/ViewportContext'
-import { api } from '../lib/api'
-import { saveGuestSettings } from '../lib/accountSettings'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
 
@@ -413,51 +412,22 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const handleToggleSounds = useCallback(async (e) => {
     e?.preventDefault()
     triggerHaptic('medium')
+    const mode = nextSoundMode(soundModeFor(ttsMuted, notificationsMuted))
     try {
-      let newTtsMuted, newNotificationsMuted, message
-
-      if (!ttsMuted && !notificationsMuted) {
-        newTtsMuted = true
-        newNotificationsMuted = false
-        message = 'PING only'
-      } else if (ttsMuted && !notificationsMuted) {
-        newTtsMuted = true
-        newNotificationsMuted = true
-        message = 'OFF'
-      } else {
-        newTtsMuted = false
-        newNotificationsMuted = false
-        message = 'DJ + PING'
-      }
-
-      publishSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
-
-      if (!user) {
-        saveGuestSettings({ ttsMuted: newTtsMuted, notificationsMuted: newNotificationsMuted })
-        toastSuccess(message)
-        return
-      }
-
-      await api.updateUserProfile({
-        tts_muted: newTtsMuted,
-        notifications_muted: newNotificationsMuted
-      })
-      if (refreshUser) await refreshUser()
-      toastSuccess(message)
+      await applySoundMode(mode, { user, publishSettings, refreshUser })
+      toastSuccess(mode.label, 1500)
     } catch {
-      publishSettings({ ttsMuted: user?.tts_muted ?? false, notificationsMuted: user?.notifications_muted ?? false })
       toastError('Failed to toggle sounds')
     }
   }, [ttsMuted, notificationsMuted, publishSettings, user, refreshUser, toastSuccess, toastError])
 
   const soundState = useMemo(() => {
-    if (!ttsMuted && !notificationsMuted) {
-      return { icon: 'volume', title: 'DJ + PING (click for PING only)', color: false }
-    } else if (ttsMuted && !notificationsMuted) {
-      return { icon: 'bell', title: 'PING only (click for OFF)', color: 'warning' }
-    } else {
-      return { icon: 'muted', title: 'OFF (click for DJ + PING)', color: 'error' }
-    }
+    const mode = soundModeFor(ttsMuted, notificationsMuted)
+    const title = `${mode.label} (tap for ${nextSoundMode(mode).label})`
+    if (mode.id === 'both') return { icon: 'volume', title, color: false }
+    if (mode.id === 'dj') return { icon: 'bellOff', title, color: 'info' }
+    if (mode.id === 'ping') return { icon: 'bell', title, color: 'warning' }
+    return { icon: 'muted', title, color: 'error' }
   }, [ttsMuted, notificationsMuted])
 
   const handleMouseEnterButton = useCallback((e) => {
@@ -553,18 +523,20 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         className={`ui-tap ui-hover relative rounded-lg cursor-pointer flex flex-shrink-0 items-center justify-center ${controlSizeClass}`}
         style={{
           background: getGradient(0.2),
-          border: `1px solid ${soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.3)}`,
+          border: `1px solid ${soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : soundState.color === 'info' ? '#38bdf8' : getAccentColor(0.3)}`,
           transition: CSS_TRANSITION.theme,
-          color: soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : getAccentColor(0.9)
+          color: soundState.color === 'error' ? getErrorColor() : soundState.color === 'warning' ? '#f59e0b' : soundState.color === 'info' ? '#38bdf8' : getAccentColor(0.9)
         }}
         title={soundState.title}
         aria-label={soundState.title}
       >
         {soundState.icon === 'volume' && <Volume2 size={16} className={compact ? undefined : 'md:hidden'} />}
         {soundState.icon === 'bell' && <Bell size={16} className={compact ? undefined : 'md:hidden'} />}
+        {soundState.icon === 'bellOff' && <BellOff size={16} className={compact ? undefined : 'md:hidden'} />}
         {soundState.icon === 'muted' && <VolumeX size={16} className={compact ? undefined : 'md:hidden'} />}
         {!compact && soundState.icon === 'volume' && <Volume2 size={20} className="hidden md:block" />}
         {!compact && soundState.icon === 'bell' && <Bell size={20} className="hidden md:block" />}
+        {!compact && soundState.icon === 'bellOff' && <BellOff size={20} className="hidden md:block" />}
         {!compact && soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
       </button>
       <div className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>

@@ -196,6 +196,10 @@ export const uiState = {
   authState: {
     isAuthenticated: (() => { try { return !!localStorage.getItem('cached_user') } catch { return false } })(),
     user: null,
+  },
+  settingsState: {
+    ttsMuted: false,
+    notificationsMuted: false,
   }
 }
 
@@ -618,6 +622,7 @@ export function UIStateProvider({ children }) {
   const publishSettings = useCallback((updates) => {
     setSettingsState(prev => {
       const newState = { ...prev, ...updates }
+      Object.assign(uiState.settingsState, newState)
       if (updates.dataSaverMode !== undefined) {
         safeStorage.set('dataSaverMode', String(updates.dataSaverMode))
       }

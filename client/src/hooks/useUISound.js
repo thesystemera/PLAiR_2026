@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { uiState } from '../contexts/UIStateContext'
 
 const SOUND_IDS = {
   recordPress: ['recordButtonPress1', 'recordButtonPress2', 'recordButtonPress3'],
@@ -23,7 +24,10 @@ function getSound(key) {
   return document.getElementById(id)
 }
 
+const BUTTON_FEEDBACK = new Set(['recordPress', 'recordRelease'])
+
 function playSound(key, volume) {
+  if (uiState.settingsState.notificationsMuted && !BUTTON_FEEDBACK.has(key)) return
   const element = getSound(key)
   if (!element) return
   try {
