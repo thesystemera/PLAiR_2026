@@ -515,7 +515,6 @@ class TTSGenerationService:
             audio_process_mix: float = 0.0,
             previous_segment_end_mix: Optional[float] = None,
             next_segment_start_mix: Optional[float] = None,
-            process: bool = True,
             rank: Tuple = RANK_UNRANKED_HIGH
     ) -> Optional[AudioSegment]:
         try:
@@ -532,8 +531,6 @@ class TTSGenerationService:
         except OSError as e:
             log_service.error(f"Failed to read cached clip {file_path}: {e}")
             return None
-        if not process:
-            return audio
         return await self.process_clip(
             audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
         )
@@ -627,11 +624,10 @@ class TTSGenerationService:
             log_service.error(f"Unknown embeddings type: {embeddings_type}")
             return None, None
 
-        process = embeddings_type != 'breath_embeddings' or audio_process_mix > 0
         if cached_file_path:
             processed_audio = await self.load_clip(
                 cached_file_path, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix,
-                process=process, rank=rank
+                rank=rank
             )
             if processed_audio is not None:
                 self.metrics['hits'] += 1
@@ -670,7 +666,7 @@ class TTSGenerationService:
         raw_audio = AudioSegment(data=pcm, sample_width=2, frame_rate=settings.TTS_SAMPLE_RATE, channels=1)
         processed_audio = await self.process_clip(
             raw_audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
-        ) if process else raw_audio
+        )
 
         audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
         title = (sanitize_clip_title(tag) or 'breath') if embeddings_type == 'breath_embeddings' else tag
