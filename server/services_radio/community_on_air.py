@@ -39,6 +39,8 @@ def describe(item: Dict, index: Optional[int] = None, max_chars: int = 400) -> s
         reply_marker = audio_marker(reply)
         lines.append(f"   Top reply (of {count}) from {speaker(reply)}: \"{text_of(reply)[:max_chars]}\""
                      + (f" Audio: {reply_marker}" if reply_marker else "") + f" - {REPLY_HINT}")
+    elif kind_of(item) != KIND_REVIEW:
+        lines.append("   No replies yet.")
     return "\n".join(lines)
 
 
