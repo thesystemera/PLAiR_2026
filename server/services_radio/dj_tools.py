@@ -57,7 +57,7 @@ UNTRUSTED_NODE_KEYS = {
     "shoutout_interests",
 }
 
-FAILED_STATUSES = {"refused", "error", "no_results", "not_found", "no_lyrics"}
+FAILED_STATUSES = {"refused", "error", "no_results", "not_found", "no_lyrics", "scrapped"}
 FAILED_ACTION_NOTE = "This did NOT happen. Don't pretend it did - tell the listener honestly, in character."
 
 SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. "
@@ -276,7 +276,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "summary": "publish the listener's message as a shoutout",
         "description": "Publishes the listener's own message from this turn as a shoutout to the PLAiR community: "
                        "their recording when they spoke, their words when they typed. Use it when the listener is "
-                       "giving a shoutout or a message meant for everyone. Instructions to you are trimmed off.",
+                       "giving a shoutout or a message meant for everyone. Instructions to you are trimmed off. An editor judges the listener's words first: if they're scrapped nothing is saved, and either way you get the editor's feedback to pass on in your own words.",
         "parameters": _schema({}),
     },
     {
@@ -286,7 +286,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "summary": "publish the listener's message as a reply to a shoutout",
         "description": "Publishes the listener's own message from this turn (voice or typed) as a reply to a "
                        "shoutout. Leave parent_id out to answer the shoutout that just played for this listener "
-                       "(\"reply to that\", \"tell her congrats\"). Top replies play on air after their shoutout.",
+                       "(\"reply to that\", \"tell her congrats\"). Top replies play on air after their shoutout. An editor judges the listener's words first: if they're scrapped nothing is saved, and either way you get the editor's feedback to pass on in your own words.",
         "parameters": _schema({
             "parent_id": _string("Optional ID of a different shoutout, '<userId>_<timestamp>' as seen in its audio "
                                  "path /shoutouts/audio/<userId>/<timestamp>.mp3 or its pulse id."),
@@ -299,7 +299,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "summary": "save the listener's review of a track",
         "description": "Saves the listener's own review of a track from this turn (voice or typed). Other "
                        "listeners see it on the song, and the best line of a spoken review can play over the song "
-                       "as a sting. Use it when the listener reacts to a song and wants it kept or shared.",
+                       "as a sting. Use it when the listener reacts to a song and wants it kept or shared. An editor judges the listener's words first: if they're scrapped nothing is saved, and either way you get the editor's feedback to pass on in your own words.",
         "parameters": _schema({"target": _enum(TRACK_TARGETS, "Which track the review is about.")}, ["target"]),
     },
 ]
@@ -937,10 +937,23 @@ class DJToolRuntime:
     def _own_words(self) -> str:
         return "voice message" if self.session_dict.get("recording") else "typed message"
 
+    async def _editor(self, kind: str, context: str = "") -> Optional[Dict[str, Any]]:
+        from services_radio.community_judge import judge
+        return await judge(self.executor.gemini_ai_service, kind, self.ctx.transcription or "", context)
+
+    @staticmethod
+    def _scrapped(kind: str, verdict: Dict[str, Any]) -> Dict[str, Any]:
+        return {"status": "scrapped", "feedback": verdict.get("feedback"),
+                "note": f"The editor scrapped this {kind}, so nothing was saved. Tell the listener honestly, "
+                        f"in your own words, with the feedback."}
+
     async def _save_shoutout(self, _args):
+        verdict = await self._editor("shoutout")
+        if verdict and not verdict.get("keep"):
+            return self._scrapped("shoutout", verdict)
         spawn(self.executor.save_community_item(self.session_dict, "shoutout", text=self.ctx.transcription),
               name="dj_tool_save_shoutout")
-        return {"status": "saving",
+        return {"status": "saving", "feedback": (verdict or {}).get("feedback"),
                 "note": f"The listener's {self._own_words()} from this turn is being posted as a shoutout; a confirmation appears when it's done."}
 
     async def _save_shoutout_reply(self, args):
@@ -960,9 +973,14 @@ class DJToolRuntime:
         if problem:
             return {"status": "error", "reason": problem}
         parent = content_service.get_shoutout(parent_id) or {}
+        parent_name = (parent.get("user_data") or {}).get("username") or "a listener"
+        verdict = await self._editor(
+            "reply", f"Shoutout being replied to, from {parent_name}: \"{parent.get('full_transcription') or ''}\"")
+        if verdict and not verdict.get("keep"):
+            return self._scrapped("reply", verdict)
         spawn(self.executor.save_community_item(self.session_dict, "reply", text=self.ctx.transcription,
                                                 parent_id=parent_id), name="dj_tool_save_shoutout_reply")
-        return {"status": "saving", "replying_to": (parent.get("user_data") or {}).get("username") or "a listener",
+        return {"status": "saving", "replying_to": parent_name, "feedback": (verdict or {}).get("feedback"),
                 "note": f"The listener's {self._own_words()} from this turn is being posted as a reply; a confirmation appears when it's done."}
 
     async def _save_review(self, args):
@@ -970,7 +988,10 @@ class DJToolRuntime:
         track_id = self.executor._resolve_track_id(session_id, args["target"]) if session_id else None
         if not track_id:
             return {"status": "error", "reason": "No track at that position"}
+        verdict = await self._editor("review", f"Song: {self.executor._track_label(track_id)}")
+        if verdict and not verdict.get("keep"):
+            return self._scrapped("review", verdict)
         spawn(self.executor.save_community_item(self.session_dict, "review", text=self.ctx.transcription,
                                                 track_id=track_id), name="dj_tool_save_review")
-        return {"status": "saving", "track": self.executor._track_label(track_id),
+        return {"status": "saving", "track": self.executor._track_label(track_id), "feedback": (verdict or {}).get("feedback"),
                 "note": f"The listener's {self._own_words()} from this turn is being saved as a review of this track."}
