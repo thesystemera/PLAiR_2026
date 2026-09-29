@@ -119,11 +119,13 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     currentTrack,
     toastSuccess,
     toastError,
+    toastWarning,
   } = useUISelector(state => ({
     reviewsUpdateCount: state.contentUpdates.reviews,
     currentTrack: state.engineState.currentTrack?.id === trackId ? state.engineState.currentTrack : null,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
+    toastWarning: state.toastWarning,
   }))
   const { isRecording, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { user } = useAuth()
@@ -182,8 +184,12 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     setIsSubmitting(true)
     try {
       const base64Audio = await blobToBase64(audioBlob)
-      await api.uploadTrackReview(trackId, base64Audio)
-      toastSuccess('Review posted!', 3000)
+      const result = await api.uploadTrackReview(trackId, base64Audio)
+      if (result?.status === 'scrapped') {
+        toastWarning(`Review not posted: ${result.feedback || 'the editor passed on it'}`, 6000)
+        return
+      }
+      toastSuccess(result?.feedback ? `Review posted! ${result.feedback}` : 'Review posted!', 5000)
       await refresh()
     } catch (err) {
       logger.error('[ReviewModal] Failed to post voice review:', err)
@@ -191,7 +197,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     } finally {
       setIsSubmitting(false)
     }
-  }, [isRecording, stopRecording, trackId, toastSuccess, toastError, refresh])
+  }, [isRecording, stopRecording, trackId, toastSuccess, toastError, toastWarning, refresh])
 
   const handleCancelRecording = useCallback(() => {
     if (!isRecording) return
@@ -208,9 +214,13 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     triggerHaptic('medium')
     setIsSubmitting(true)
     try {
-      await api.typeTrackReview(trackId, trimmed)
+      const result = await api.typeTrackReview(trackId, trimmed)
+      if (result?.status === 'scrapped') {
+        toastWarning(`Review not posted: ${result.feedback || 'the editor passed on it'}`, 6000)
+        return
+      }
       setText('')
-      toastSuccess('Review posted!', 3000)
+      toastSuccess(result?.feedback ? `Review posted! ${result.feedback}` : 'Review posted!', 5000)
       await refresh()
     } catch (err) {
       logger.error('[ReviewModal] Failed to post typed review:', err)
@@ -218,7 +228,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     } finally {
       setIsSubmitting(false)
     }
-  }, [canSend, trackId, trimmed, toastSuccess, toastError, refresh])
+  }, [canSend, trackId, trimmed, toastSuccess, toastError, toastWarning, refresh])
 
   const handleClose = useCallback(() => {
     if (isRecording) abortRecording()

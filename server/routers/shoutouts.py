@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import json
 import re
 import time
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from service_registry import services
 from routers.deps import get_current_user, RateLimit, enforce_rate_limit
 from security_middleware import is_valid_guest_id
 from services_radio import listener_location as location_resolver
+from services_radio.community_judge import judge, post_context
 from routers.schemas import ShoutoutSearchRequest, PreferenceRequest, DirectReplyUploadRequest, CommunityTextRequest
 
 router = APIRouter()
@@ -186,17 +188,33 @@ async def _save_item(user: User, kind: str, *, audio: Optional[str] = None, text
                   ai_service=services.ai_service, vector_db_service=services.user_content_vector_db_service,
                   broadcast_callback=services.websocket_service.broadcast_content_updated,
                   parent_id=parent_id, track=track)
-    if audio is not None:
-        webm_path = await _ingest_recording(user, audio)
+    webm_path = await _ingest_recording(user, audio) if audio is not None else None
+    words = _recorded_words(webm_path) if webm_path else (text or "")
+    parent = content.get_shoutout(parent_id) if parent_id else None
+    verdict = await judge(services.ai_service, kind, words, post_context(track=track, parent=parent))
+    target = f" to {parent_id}" if parent_id else (f" on {track.get('title')}" if track else "")
+    if verdict and not verdict.get("keep"):
+        if webm_path:
+            await asyncio.to_thread(content._remove_files, [webm_path, webm_path.with_suffix(".json")])
+        log_service.listener(f"{log_service.who(user_id=user.id)}: {kind}{target} scrapped by the editor")
+        return {"status": "scrapped", "kind": kind, "feedback": verdict.get("feedback")}
+    if webm_path:
         item = await content.create_voice_item(int(user.id), kind, webm_path, **common)  # type: ignore
     else:
         item = await content.create_text_item(int(user.id), kind, text or "", _user_data(user), **common)  # type: ignore
     if not item:
         raise HTTPException(status_code=400, detail=f"Couldn't save that {kind}")
-    target = f" to {parent_id}" if parent_id else (f" on {track.get('title')}" if track else "")
     log_service.listener(
         f"{log_service.who(user_id=user.id)}: {'recorded' if audio is not None else 'typed'} a {kind}{target}")
-    return {"status": "success", "id": item["id"], "kind": kind, "transcription": item.get("full_transcription", "")}
+    return {"status": "success", "id": item["id"], "kind": kind, "transcription": item.get("full_transcription", ""),
+            "feedback": (verdict or {}).get("feedback")}
+
+
+def _recorded_words(webm_path) -> str:
+    try:
+        return json.loads(webm_path.with_suffix(".json").read_text(encoding="utf-8")).get("full_transcription", "")
+    except (OSError, ValueError):
+        return ""
 
 
 def _require_parent(parent_id: str):

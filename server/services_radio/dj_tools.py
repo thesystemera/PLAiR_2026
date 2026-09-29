@@ -9,6 +9,7 @@ from google.genai import types
 from config.settings import settings
 from services import log_service
 from services.task_utils import spawn
+from services_radio.community_judge import judge, post_context
 from services_radio.dj_command_executor import (
     SEARCH_CATEGORY_PREFIXES,
     SEED_MODE_DISPLAY,
@@ -938,7 +939,6 @@ class DJToolRuntime:
         return "voice message" if self.session_dict.get("recording") else "typed message"
 
     async def _editor(self, kind: str, context: str = "") -> Optional[Dict[str, Any]]:
-        from services_radio.community_judge import judge
         return await judge(self.executor.gemini_ai_service, kind, self.ctx.transcription or "", context)
 
     @staticmethod
@@ -974,8 +974,7 @@ class DJToolRuntime:
             return {"status": "error", "reason": problem}
         parent = content_service.get_shoutout(parent_id) or {}
         parent_name = (parent.get("user_data") or {}).get("username") or "a listener"
-        verdict = await self._editor(
-            "reply", f"Shoutout being replied to, from {parent_name}: \"{parent.get('full_transcription') or ''}\"")
+        verdict = await self._editor("reply", post_context(parent=parent))
         if verdict and not verdict.get("keep"):
             return self._scrapped("reply", verdict)
         spawn(self.executor.save_community_item(self.session_dict, "reply", text=self.ctx.transcription,

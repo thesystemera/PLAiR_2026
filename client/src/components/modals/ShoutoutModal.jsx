@@ -386,12 +386,14 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     openShoutoutModal,
     toastSuccess,
     toastError,
+    toastWarning,
   } = useUISelector(state => ({
     shoutoutFftDataRef: state.shoutoutFftDataRef,
     shoutoutsUpdateCount: state.contentUpdates.shoutouts,
     openShoutoutModal: state.openShoutoutModal,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
+    toastWarning: state.toastWarning,
   }))
   const { isRecording, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { user } = useAuth()
@@ -472,8 +474,11 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     try {
       const base64Audio = await blobToBase64(audioBlob)
       const result = await api.uploadShoutoutReply(shoutout.id, base64Audio)
-      logger.info('[ShoutoutModal] Reply uploaded directly:', result)
-      toastSuccess('Reply submitted!', 3000)
+      if (result?.status === 'scrapped') {
+        toastWarning(`Reply not posted: ${result.feedback || 'the editor passed on it'}`, 6000)
+        return
+      }
+      toastSuccess(result?.feedback ? `Reply posted! ${result.feedback}` : 'Reply posted!', 5000)
       await refreshReplies()
     } catch (err) {
       logger.error('[ShoutoutModal] Failed to submit reply:', err)
@@ -481,7 +486,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     } finally {
       setIsSubmittingReply(false)
     }
-  }, [isRecording, stopRecording, shoutout?.id, refreshReplies, toastSuccess, toastError])
+  }, [isRecording, stopRecording, shoutout?.id, refreshReplies, toastSuccess, toastError, toastWarning])
 
   const trimmedReply = replyText.trim()
   const canSendReply = !isSubmittingReply && !isRecording && trimmedReply.length >= REPLY_MIN_CHARS
@@ -492,9 +497,13 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     triggerHaptic('medium')
     setIsSubmittingReply(true)
     try {
-      await api.typeShoutoutReply(shoutout.id, trimmedReply)
+      const result = await api.typeShoutoutReply(shoutout.id, trimmedReply)
+      if (result?.status === 'scrapped') {
+        toastWarning(`Reply not posted: ${result.feedback || 'the editor passed on it'}`, 6000)
+        return
+      }
       setReplyText('')
-      toastSuccess('Reply posted!', 3000)
+      toastSuccess(result?.feedback ? `Reply posted! ${result.feedback}` : 'Reply posted!', 5000)
       await refreshReplies()
     } catch (err) {
       logger.error('[ShoutoutModal] Failed to post typed reply:', err)
@@ -502,7 +511,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     } finally {
       setIsSubmittingReply(false)
     }
-  }, [canSendReply, shoutout?.id, trimmedReply, refreshReplies, toastSuccess, toastError])
+  }, [canSendReply, shoutout?.id, trimmedReply, refreshReplies, toastSuccess, toastError, toastWarning])
 
   const handleOpenParent = useCallback(async () => {
     const parentId = shoutout?.parent_id

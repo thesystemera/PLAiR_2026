@@ -29,6 +29,17 @@ class CommunityVerdict(BaseModel):
     feedback: str
 
 
+def post_context(track: Optional[dict] = None, parent: Optional[dict] = None) -> str:
+    """What the editor needs to know about where the post is going: the song, or the shoutout being answered."""
+    if track:
+        artist = track.get("artist") or ""
+        return f"Song: {track.get('title') or 'unknown'}" + (f" by {artist}" if artist else "")
+    if parent:
+        name = (parent.get("user_data") or {}).get("username") or "a listener"
+        return f"Shoutout being replied to, from {name}: \"{parent.get('full_transcription') or ''}\""
+    return ""
+
+
 async def judge(ai_service, kind: str, text: str, context: str = "") -> Optional[dict]:
     """One small structured call on the live chain. None when the editor couldn't answer."""
     if ai_service is None or not (text or "").strip():
