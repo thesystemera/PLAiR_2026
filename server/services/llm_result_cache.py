@@ -108,7 +108,6 @@ class LLMResultCache:
             log_service.warning(f"[LLM CACHE] Could not save {self.path}: {e}")
 
 
-breath_script_cache = LLMResultCache("breath_scripts", settings.LLM_CACHE_BREATH_TTL_S, persist=True)
 interpretation_caches = {
     "news": LLMResultCache("news_interpretations", settings.LLM_CACHE_NEWS_TTL_S),
     "weather": LLMResultCache("weather_interpretations", settings.LLM_CACHE_WEATHER_TTL_S),

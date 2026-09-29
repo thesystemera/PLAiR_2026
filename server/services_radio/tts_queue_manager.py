@@ -13,7 +13,7 @@ from services import log_service
 from services import usage_tracking
 from services.task_utils import spawn
 from services_radio.tts_broadcast_service import TimelineMixer, limit_peaks, CLIP_CHUNK_MS
-from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE
+from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GENERATED_TYPES
 from services_radio.tts_live_stream import LiveStreamEncoder
 from services_radio.tts_processing_service import decode_mp3
 from services_radio.tts_voice_threads import voice_thread
@@ -25,7 +25,6 @@ RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
 FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
-GENERATED_EMBEDDINGS = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings')
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 TTS_TYPE_LABELS = {
     'interactive': 'chat reply',
@@ -575,7 +574,7 @@ class TTSQueueManager:
                 embeddings_type = EMBEDDINGS_BY_CONTENT_TYPE[content_type]
                 clip_voice = content_voice if content_type != 'audio' else 'computer'
                 can_generate = content_voice in settings.GENERATION_PERMISSIONS.get(content_type, set())
-                tag = segment['content'].strip()
+                tag = (segment.get('context') or segment['content'] if content_type == 'breath' else segment['content']).strip()
 
                 cached = await generation.lookup_clip(
                     tag, embeddings_type, clip_voice, generation.similarity_threshold(embeddings_type), rank,
@@ -586,7 +585,7 @@ class TTSQueueManager:
                     generation.note_cache_match(embeddings_type, clip_voice, tag, cached[1])
                 if cached_file_path:
                     render.resolve(await generation.clip_rate(cached_file_path))
-                elif can_generate and embeddings_type in GENERATED_EMBEDDINGS:
+                elif can_generate and embeddings_type in GENERATED_TYPES:
                     render.resolve(settings.TTS_SAMPLE_RATE)
                 else:
                     render.resolve(NO_AUDIO)
@@ -597,17 +596,6 @@ class TTSQueueManager:
                     can_generate=can_generate, owner=owner, rank=rank, group=turn.group,
                     before_generation=lambda: turn.wait_resolved_before(segment_index)
                 )
-
-            elif content_type == 'breath':
-                file_path = await generation.resolve_breath_clip(
-                    (segment.get('context') or segment['content']).strip(), content_voice, rank, listener=owner
-                )
-                render.resolve(await generation.clip_rate(file_path) if file_path else NO_AUDIO)
-                if file_path:
-                    audio_segment = await generation.load_clip(
-                        file_path, content_voice, audio_process_mix, previous_segment_end_mix,
-                        next_segment_start_mix, process=audio_process_mix > 0, rank=rank
-                    )
 
             elif content_type == 'user_content':
                 file_path = self._resolve_user_content(segment['content'])

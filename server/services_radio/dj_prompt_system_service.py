@@ -1,6 +1,5 @@
 from services import log_service
 from services.llm_router import LLM_LIVE, LLM_BACKGROUND
-from services.llm_result_cache import breath_script_cache, cache_key
 from config.settings import settings
 
 def gpt_error_handler(func):
@@ -138,12 +137,6 @@ class DJPromptSystemService:
 
     @gpt_error_handler
     async def generate_breath_gpt_response(self, context):
-        breath_key = cache_key((context or "").strip())
-        cached_breath = breath_script_cache.get(breath_key)
-        if cached_breath:
-            log_service.gpt(f"Breath: {(context or '')[:60]} -> {cached_breath} (cached)")
-            return context, cached_breath
-
         system_prompt = (
             "You generate the micro-sound a radio DJ makes BETWEEN sentences - the tiniest inhale, "
             "a barely-audible lip part, a quarter-second breath. This is NOT a word. It is the "
@@ -186,5 +179,4 @@ class DJPromptSystemService:
             log_service.gpt(f"Breath: Rejected breath prompt for context: {context[:60]} -> {breath_prompt[:40]}")
             return None
         log_service.gpt(f"Breath: {context[:60]} -> {breath_prompt}")
-        breath_script_cache.set(breath_key, breath_prompt)
         return context, breath_prompt

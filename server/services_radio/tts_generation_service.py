@@ -36,7 +36,6 @@ LOOKUP_PARALLEL = max(1, int(os.getenv("TTS_LOOKUP_PARALLEL", "2")))
 RANK_UNRANKED_HIGH = (1,)
 RANK_LOW = (2,)
 ENGINE_OPTIONS = ("seed", "max_tokens", "top_p")
-BREATH_LIBRARY_COUNT_TTL_S = 300
 CLIP_RATE_CACHE_MAX = 20000
 CLIP_AUDIO_CACHE_BYTES = max(0, int(os.getenv("TTS_CLIP_AUDIO_CACHE_MB", "96"))) * 1024 * 1024
 
@@ -44,6 +43,7 @@ EMBEDDINGS_BY_CONTENT_TYPE = {
     'meta': 'meta_embeddings',
     'impulse': 'impulse_embeddings',
     'sentence': 'tts_embeddings',
+    'breath': 'breath_embeddings',
     'audio': 'audio_embeddings'
 }
 
@@ -53,7 +53,8 @@ FILLER_TYPES = {
     'meta_embeddings': 'meta',
     'impulse_embeddings': 'impulse',
 }
-EXACT_REFRESH_TYPES = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings')
+GENERATED_TYPES = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings', 'breath_embeddings')
+EXACT_REFRESH_TYPES = ('tts_embeddings',)
 
 INVALID_TITLE_CHARS = re.compile(r'[*\n\[\]@$%"&.!?]|N/A')
 
@@ -157,9 +158,7 @@ class TTSGenerationService:
         self._background_semaphore = asyncio.Semaphore(settings.TTS_BACKGROUND_CONCURRENCY)
         self._pending_refreshes: Set[Tuple[str, str, str]] = set()
         self._recent_refreshes: Dict[Tuple[str, str, str], float] = {}
-        self._breath_refresh_times: Dict[str, List[float]] = {}
-        self._exact_refresh_times: Dict[str, List[float]] = {}
-        self._breath_library_counts: Dict[str, Tuple[float, int]] = {}
+        self._exact_refresh_times: List[float] = []
         self._clip_audio: "OrderedDict[Tuple, AudioSegment]" = OrderedDict()
         self._clip_audio_bytes = 0
         self._clip_rates: Dict[Tuple, int] = {}
@@ -436,27 +435,6 @@ class TTSGenerationService:
             'breath_embeddings': settings.BREATH_SIMILARITY_THRESHOLD,
         }.get(embeddings_type, settings.TTS_SIMILARITY_THRESHOLD)
 
-    async def resolve_breath_clip(self, context: str, content_voice: str,
-                                  rank: Tuple = RANK_UNRANKED_HIGH, listener: Optional[str] = None) -> Optional[str]:
-        cached = await self.lookup_clip(context, 'breath_embeddings', content_voice, float('-inf'), rank,
-                                        listener=listener)
-        if cached is None:
-            cached = await self.lookup_clip(context, 'breath_embeddings', content_voice, float('-inf'), rank,
-                                            listener=listener, respect_cooldown=False)
-        if cached is None:
-            self.schedule_refresh('breath_embeddings', content_voice, context)
-            log_service.detail(
-                f"Breath: no {content_voice} breath clips cached yet - skipping this breath, rendering one in the background",
-                "tts_generation")
-            return None
-
-        cached_file_path, similarity = cached
-        if similarity < settings.BREATH_SIMILARITY_THRESHOLD:
-            self.schedule_refresh('breath_embeddings', content_voice, context)
-        log_service.detail(
-            f"Breath: '{context[:40]}' -> {os.path.basename(cached_file_path)} (sim={similarity:.2f})", "tts_generation")
-        return cached_file_path
-
     def schedule_refresh(self, embeddings_type: str, content_voice: str, tag: str):
         permission_key = FILLER_TYPES.get(embeddings_type)
         if permission_key is None or content_voice not in settings.GENERATION_PERMISSIONS.get(permission_key, set()):
@@ -470,40 +448,13 @@ class TTSGenerationService:
             return
         if len(self._pending_refreshes) >= settings.TTS_BACKGROUND_MAX_PENDING:
             return
-        if embeddings_type == 'breath_embeddings':
-            if not self._breath_refresh_allowed(content_voice, now):
-                return
-            self._breath_refresh_times.setdefault(content_voice, []).append(now)
-        elif embeddings_type in EXACT_REFRESH_TYPES:
-            recent = [t for t in self._exact_refresh_times.get(embeddings_type, []) if now - t < 3600]
-            if len(recent) >= settings.TTS_EXACT_REFRESH_MAX_PER_HOUR:
-                self._exact_refresh_times[embeddings_type] = recent
-                return
-            recent.append(now)
-            self._exact_refresh_times[embeddings_type] = recent
-
+        self._exact_refresh_times = [t for t in self._exact_refresh_times if now - t < 3600]
+        if len(self._exact_refresh_times) >= settings.TTS_EXACT_REFRESH_MAX_PER_HOUR:
+            return
+        self._exact_refresh_times.append(now)
         self._recent_refreshes[key] = now
         self._pending_refreshes.add(key)
         spawn(self._refresh_clip(key, embeddings_type, content_voice, tag), name=f"tts_refresh:{permission_key}")
-
-    def _breath_refresh_allowed(self, content_voice: str, now: float) -> bool:
-        recent = [t for t in self._breath_refresh_times.get(content_voice, []) if now - t < 3600]
-        self._breath_refresh_times[content_voice] = recent
-        if len(recent) >= settings.BREATH_REFRESH_MAX_PER_HOUR:
-            return False
-        return self._breath_library_size(content_voice, now) < settings.BREATH_LIBRARY_TARGET_CLIPS
-
-    def _breath_library_size(self, content_voice: str, now: float) -> int:
-        cached = self._breath_library_counts.get(content_voice)
-        if cached and now - cached[0] < BREATH_LIBRARY_COUNT_TTL_S:
-            return cached[1]
-        directory = self.clip_directory('breath_embeddings', content_voice)
-        try:
-            count = sum(1 for name in os.listdir(directory) if name.endswith('.mp3')) if directory else 0
-        except OSError:
-            count = 0
-        self._breath_library_counts[content_voice] = (now, count)
-        return count
 
     def note_cache_match(self, embeddings_type: str, content_voice: str, tag: str, similarity: float):
         if not settings.TTS_EXACT_REFRESH_ENABLED or embeddings_type not in EXACT_REFRESH_TYPES:
@@ -511,16 +462,6 @@ class TTSGenerationService:
         if similarity >= settings.TTS_EXACT_REFRESH_BELOW:
             return
         self.schedule_refresh(embeddings_type, content_voice, tag)
-
-    async def _filler_description(self, embeddings_type: str, tag: str, content_voice: str) -> Optional[str]:
-        if embeddings_type in EXACT_REFRESH_TYPES:
-            return await self.generation_description(tag, embeddings_type, content_voice)
-        if embeddings_type != 'breath_embeddings':
-            return None
-        result = await self.ai_service.generate_breath_gpt_response(tag)
-        if not result or not result[1] or result[1] == "N/A":
-            return None
-        return result[1]
 
     async def _refresh_clip(self, key, embeddings_type: str, content_voice: str, tag: str):
         usage_tracking.bind(usage_tracking.system_subject("tts_library"))
@@ -530,7 +471,7 @@ class TTSGenerationService:
                 voice_settings = settings.VOICE_PREFERENCES.get(content_voice)
                 if not voice_settings:
                     return
-                description = await self._filler_description(embeddings_type, tag, content_voice)
+                description = await self.generation_description(tag, embeddings_type, content_voice)
                 if not description:
                     return
                 audio_data = await self.generate_local_tts(description, voice_settings, priority=PRIORITY_LOW)
@@ -543,9 +484,6 @@ class TTSGenerationService:
                     audio_path, audio_data, title or 'breath', description, content_voice, embeddings_type
                 )
                 log_service.detail(f"Background refresh: cached new {embeddings_type} clip for '{tag[:40]}'", "tts_generation")
-                counted = self._breath_library_counts.get(content_voice)
-                if embeddings_type == 'breath_embeddings' and counted:
-                    self._breath_library_counts[content_voice] = (counted[0], counted[1] + 1)
         except Exception as e:
             log_service.error(f"Background refresh failed for {embeddings_type}: {e}")
         finally:
@@ -664,6 +602,9 @@ class TTSGenerationService:
         if embeddings_type == 'impulse_embeddings':
             result = await self.ai_service.generate_impulse_gpt_response(tag, content_voice)
             return result[1] if result and result[1] and result[1] != "N/A" else None
+        if embeddings_type == 'breath_embeddings':
+            result = await self.ai_service.generate_breath_gpt_response(tag)
+            return result[1] if result and result[1] and result[1] != "N/A" else None
         return tag
 
     async def render_clip(
@@ -686,10 +627,11 @@ class TTSGenerationService:
             log_service.error(f"Unknown embeddings type: {embeddings_type}")
             return None, None
 
+        process = embeddings_type != 'breath_embeddings' or audio_process_mix > 0
         if cached_file_path:
             processed_audio = await self.load_clip(
                 cached_file_path, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix,
-                rank=rank
+                process=process, rank=rank
             )
             if processed_audio is not None:
                 self.metrics['hits'] += 1
@@ -705,7 +647,7 @@ class TTSGenerationService:
                     "Impulse: No suitable impulse found in vector DB and generation not permitted.", "tts_generation")
             return None, None
 
-        if embeddings_type not in ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings'):
+        if embeddings_type not in GENERATED_TYPES:
             return None, None
 
         voice_settings = settings.VOICE_PREFERENCES.get(content_voice)
@@ -728,11 +670,12 @@ class TTSGenerationService:
         raw_audio = AudioSegment(data=pcm, sample_width=2, frame_rate=settings.TTS_SAMPLE_RATE, channels=1)
         processed_audio = await self.process_clip(
             raw_audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
-        )
+        ) if process else raw_audio
 
         audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
+        title = (sanitize_clip_title(tag) or 'breath') if embeddings_type == 'breath_embeddings' else tag
         spawn(self.save_generated_clip(
-            pcm, audio_path, tag, audio_description, content_voice, embeddings_type
+            pcm, audio_path, title, audio_description, content_voice, embeddings_type
         ), name="tts_save_audio_and_embedding")
 
         return processed_audio, audio_path

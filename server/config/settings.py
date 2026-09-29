@@ -166,8 +166,6 @@ class Settings:
     TTS_EXACT_REFRESH_ENABLED: bool = os.getenv("TTS_EXACT_REFRESH_ENABLED", "true").lower() == "true"
     TTS_EXACT_REFRESH_BELOW: float = float(os.getenv("TTS_EXACT_REFRESH_BELOW", "0.97"))
     TTS_EXACT_REFRESH_MAX_PER_HOUR: int = int(os.getenv("TTS_EXACT_REFRESH_MAX_PER_HOUR", "40"))
-    BREATH_REFRESH_MAX_PER_HOUR: int = int(os.getenv("BREATH_REFRESH_MAX_PER_HOUR", "6"))
-    BREATH_LIBRARY_TARGET_CLIPS: int = int(os.getenv("BREATH_LIBRARY_TARGET_CLIPS", "150"))
 
     AUDIO_EFFECT_CONFIG: dict = {
         'global': {
@@ -345,7 +343,6 @@ class Settings:
     LLM_TOOL_COMPRESS_MIN_CHARS: int = int(os.getenv("LLM_TOOL_COMPRESS_MIN_CHARS", "600"))
 
     LLM_RESULT_CACHE_DIR: Path = BASE_DIR / "data" / "llm_result_cache"
-    LLM_CACHE_BREATH_TTL_S: int = int(os.getenv("LLM_CACHE_BREATH_TTL_S", str(30 * 86400)))
     LLM_CACHE_NEWS_TTL_S: int = int(os.getenv("LLM_CACHE_NEWS_TTL_S", "1200"))
     LLM_CACHE_WEATHER_TTL_S: int = int(os.getenv("LLM_CACHE_WEATHER_TTL_S", "3600"))
     LLM_CACHE_BIOGRAPHY_TTL_S: int = int(os.getenv("LLM_CACHE_BIOGRAPHY_TTL_S", str(7 * 86400)))
