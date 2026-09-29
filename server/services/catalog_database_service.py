@@ -12,6 +12,10 @@ from database.pg_pool import get_pooled_connection
 from config import settings
 from services.track_asset_stages import CATALOG_AUDIO_EXTENSIONS
 
+def is_hidden_track(metadata: Optional[Dict]) -> bool:
+    return (metadata or {}).get("visibility", "public") in ("unlisted", "private")
+
+
 class CatalogDatabaseService(SingletonService):
     def __init__(self):
         if getattr(self, '_initialized', False):
@@ -20,6 +24,7 @@ class CatalogDatabaseService(SingletonService):
         self.audio_dir = settings.AUDIO_DIR
         self.artwork_dir = settings.ARTWORK_DIR
         self.tracks = {}
+        self.hidden_ids = set()
         self.track_ids = []
         self._catalog_initialized = False
         self._artwork_cache = {}
@@ -95,6 +100,7 @@ class CatalogDatabaseService(SingletonService):
         self.tracks = tracks
         self.track_ids = track_ids
         self._artwork_cache = artwork_cache
+        self.hidden_ids = {tid for tid, meta in tracks.items() if is_hidden_track(meta)}
         self._bump_version()
 
     def _bump_version(self):
@@ -103,6 +109,10 @@ class CatalogDatabaseService(SingletonService):
 
     def add_track_to_memory(self, track_id: str, metadata: Dict, has_artwork: Optional[bool] = None):
         self.tracks[track_id] = metadata
+        if is_hidden_track(metadata):
+            self.hidden_ids.add(track_id)
+        else:
+            self.hidden_ids.discard(track_id)
         if track_id not in self.track_ids:
             self.track_ids.insert(0, track_id)
         if has_artwork is not None:
@@ -114,6 +124,7 @@ class CatalogDatabaseService(SingletonService):
 
     def remove_track_from_memory(self, track_id: str):
         self.tracks.pop(track_id, None)
+        self.hidden_ids.discard(track_id)
         if track_id in self.track_ids:
             self.track_ids.remove(track_id)
         self._artwork_cache.pop(track_id, None)
@@ -339,8 +350,9 @@ class CatalogDatabaseService(SingletonService):
             ids = [tid for tid in ids if
                    (self.tracks[tid].get("derived_tags", {}).get("primary_genre") or "").lower() == genre.lower()]
 
-        if banned_ids:
-            ids = [tid for tid in ids if tid not in banned_ids]
+        if banned_ids or self.hidden_ids:
+            excluded = (banned_ids or set()) | self.hidden_ids
+            ids = [tid for tid in ids if tid not in excluded]
 
         filtered_total = len(ids)
 

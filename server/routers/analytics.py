@@ -24,10 +24,13 @@ async def get_top_hits(period: str = "all", limit: int = 50):
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="Limit must be between 1 and 200")
 
-    hits = await analytics_service.get_top_hits(period=period, limit=limit)
+    hidden = services.catalog_service.hidden_ids
+    hits = await analytics_service.get_top_hits(period=period, limit=min(200, limit + len(hidden)))
 
     enriched_hits = []
     for hit in hits:
+        if hit["track_id"] in hidden or len(enriched_hits) >= limit:
+            continue
         track = services.catalog_service.get_track(hit["track_id"])  # type: ignore
         if track:
             enriched_hits.append({

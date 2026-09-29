@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from 'react'
-import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge, Mic2, Wand2, Plus } from 'lucide-react'
+import { Upload, Loader2, Check, X, Edit2, Sparkles, FileAudio, FileVideo, Image, Gauge, Mic2, Wand2, Plus, Globe, EyeOff, Lock } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
@@ -18,6 +18,14 @@ const SUPPORTED_FORMATS = [...AUDIO_FORMATS, ...VIDEO_FORMATS]
 const MAX_AUDIO_FILE_SIZE = 100 * 1024 * 1024
 const MAX_VIDEO_FILE_SIZE = 10 * 1024 * 1024 * 1024
 const ENHANCE_HINT = 'Restores detail on low-quality files. Slower.'
+const RIGHTS_LABEL = 'I made this music or have the rights to share it'
+const DESCRIPTION_MAX = 2000
+
+const VISIBILITY_OPTIONS = [
+  { value: 'public', label: 'Public', icon: Globe, hint: 'Plays on the station and shows everywhere.' },
+  { value: 'unlisted', label: 'Unlisted', icon: EyeOff, hint: 'Only people with the link.' },
+  { value: 'private', label: 'Private', icon: Lock, hint: 'Only you.' }
+]
 
 const UploadStage = {
   SELECT: 'select',
@@ -46,6 +54,47 @@ const sameTags = (a = [], b = []) => a.length === b.length && a.every((tag, i) =
 const pickDefaultArtist = (artists, lastId) => {
   if (artists.some(a => a.id === lastId)) return lastId
   return artists[0]?.id ?? null
+}
+
+const isRightsError = (err) => err?.status === 400 && /rights/i.test(err?.message || '')
+
+const trackToMetadata = (track) => {
+  const params = track?.generation_params || {}
+  const info = track?.track_info || {}
+  const tags = track?.derived_tags || {}
+  const quality = track?.source_quality
+  const lyrics = track?.transcribed_lyrics || (params.instrumental ? '' : params.prompt || '')
+  return {
+    title: params.title || info.title || '',
+    artist: params.artist_name || info.artist || '',
+    artist_profile_id: track?.artist_profile_id ?? null,
+    style: params.style || null,
+    primary_genre: tags.primary_genre || '',
+    secondary_genres: tags.secondary_genres || [],
+    mood_keywords: tags.mood_keywords || [],
+    similar_artists: tags.similar_artists || [],
+    vocal_style_keywords: tags.vocal_style_keywords || [],
+    transcribed_lyrics: lyrics || null,
+    has_lyrics: !!lyrics,
+    lyrical_interpretation: tags.lyrical_interpretation || null,
+    visibility: track?.visibility || 'public',
+    explicit: !!track?.explicit,
+    ai_assisted: !!track?.ai_assisted,
+    description: track?.description || '',
+    has_artwork: !!track?.has_artwork,
+    artwork_generated: !!track?.artwork_generated,
+    artwork_prompt: track?.artwork_prompt || null,
+    mastering_applied: !!track?.mastering_applied,
+    enhancement_applied: !!track?.enhancement_applied,
+    sonic_master_applied: !!track?.sonic_master_applied,
+    source_quality: quality ? {
+      tier: quality.quality_tier || quality.tier || 'unknown',
+      sample_rate: quality.sample_rate,
+      bit_depth: quality.bit_depth,
+      is_lossless: quality.is_lossless,
+      processing_notes: quality.processing_notes || ''
+    } : null
+  }
 }
 
 const FieldLabel = memo(function FieldLabel({ children }) {
@@ -88,11 +137,14 @@ const MetadataField = memo(function MetadataField({
   rows = 3,
   placeholder = '',
   emptyText = 'Unknown',
-  renderValue
+  renderValue,
+  maxLength,
+  startEditing = false,
+  onCancel
 }) {
   const { getWhite, getGrey400, getBorder } = useDynamicTheme()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [editing, setEditing] = useState(startEditing)
+  const [draft, setDraft] = useState(startEditing ? (value || '') : '')
   const [saving, setSaving] = useState(false)
 
   const startEdit = () => {
@@ -101,13 +153,15 @@ const MetadataField = memo(function MetadataField({
   }
 
   const cancel = () => {
-    if (!saving) setEditing(false)
+    if (saving) return
+    setEditing(false)
+    onCancel?.()
   }
 
   const save = async () => {
     if (saving) return
     if (draft === (value || '')) {
-      setEditing(false)
+      cancel()
       return
     }
     setSaving(true)
@@ -125,6 +179,7 @@ const MetadataField = memo(function MetadataField({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={placeholder}
+            maxLength={maxLength}
             className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500 resize-y"
             style={{ borderColor: getBorder(0.3), color: getWhite() }}
             rows={rows}
@@ -139,6 +194,7 @@ const MetadataField = memo(function MetadataField({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={placeholder}
+            maxLength={maxLength}
             className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
             style={{ borderColor: getBorder(0.3), color: getWhite() }}
             autoFocus
@@ -277,6 +333,76 @@ const TagEditor = memo(function TagEditor({ label, tags, color, onSave, placehol
       <div className="mt-1">
         <ModalTagList tags={current} color={color} />
       </div>
+    </div>
+  )
+})
+
+const VisibilityControl = memo(function VisibilityControl({ value, onChange }) {
+  const { getGrey400 } = useDynamicTheme()
+  const current = VISIBILITY_OPTIONS.find(opt => opt.value === value) || VISIBILITY_OPTIONS[0]
+
+  return (
+    <div>
+      <div role="radiogroup" aria-label="Visibility" className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-white/5">
+        {VISIBILITY_OPTIONS.map(({ value: optValue, label, icon: Icon }) => {
+          const active = optValue === current.value
+          return (
+            <button
+              key={optValue}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => { if (!active) onChange(optValue) }}
+              className={`ui-press flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition ${active ? 'bg-purple-500 text-white' : 'text-gray-400 hover:bg-white/10'}`}
+            >
+              <Icon size={14} />
+              {label}
+            </button>
+          )
+        })}
+      </div>
+      <p className="mt-1.5 text-xs" style={{ color: getGrey400() }}>{current.hint}</p>
+    </div>
+  )
+})
+
+const DescriptionField = memo(function DescriptionField({ value, onSave }) {
+  const [open, setOpen] = useState(false)
+
+  if (!value && !open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="ui-press text-xs text-purple-400 hover:text-purple-300"
+      >
+        + Add description
+      </button>
+    )
+  }
+
+  return (
+    <MetadataField
+      label="Description"
+      value={value}
+      onSave={onSave}
+      multiline
+      rows={3}
+      maxLength={DESCRIPTION_MAX}
+      placeholder="A line or two about this track"
+      emptyText="No description"
+      startEditing={!value}
+      onCancel={() => setOpen(false)}
+    />
+  )
+})
+
+const SettingToggle = memo(function SettingToggle({ label, on, onToggle }) {
+  const { getWhite } = useDynamicTheme()
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs whitespace-nowrap" style={{ color: getWhite() }}>{label}</span>
+      <ToggleChip on={on} onClick={onToggle} label={label} />
     </div>
   )
 })
@@ -561,7 +687,7 @@ const AudioFeaturesDisplay = memo(function AudioFeaturesDisplay({ features }) {
   )
 })
 
-export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin }) {
+export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin, editTrackId = null }) {
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
   const { isAuthenticated, user } = useAuth()
   const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
@@ -579,6 +705,11 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const [selectedArtistId, setSelectedArtistId] = useState(null)
   const [enhance, setEnhance] = useState(null)
   const [savingArtist, setSavingArtist] = useState(false)
+  const [rightsConfirmed, setRightsConfirmed] = useState(null)
+  const [rightsTicked, setRightsTicked] = useState(false)
+
+  const isEditing = !!editTrackId
+  const needsRights = rightsConfirmed === false && !rightsTicked
 
   const fileInputRef = useRef(null)
   const dragCounterRef = useRef(0)
@@ -599,7 +730,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     const list = data?.artists || []
     setArtists(list)
     setSelectedArtistId(pickDefaultArtist(list, data?.last_artist_profile_id))
-    if (!data?.offline) setEnhance(!!data?.upload_enhance)
+    if (!data?.offline) {
+      setEnhance(!!data?.upload_enhance)
+      setRightsConfirmed(!!data?.rights_confirmed)
+    }
   }, [])
 
   const loadSetup = useCallback(() => {
@@ -616,6 +750,25 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
     return () => { cancelled = true }
   }, [isOpen, isAuthenticated, applySetup])
+
+  useEffect(() => {
+    if (!isOpen || !isAuthenticated || !editTrackId) return
+    let cancelled = false
+    api.getTrack(editTrackId)
+      .then(track => {
+        if (cancelled) return
+        setTrackId(editTrackId)
+        setMetadata(trackToMetadata(track))
+        setStage(UploadStage.PREVIEW)
+      })
+      .catch(err => {
+        if (cancelled) return
+        logger.warn('[Upload] Could not load the track to edit:', err)
+        setError(err.message || 'Could not load the track')
+        setStage(UploadStage.ERROR)
+      })
+    return () => { cancelled = true }
+  }, [isOpen, isAuthenticated, editTrackId])
 
   const resetState = useCallback(() => {
     uploadIdRef.current = null
@@ -706,7 +859,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   }
 
   const handleUpload = async () => {
-    if (!file) return
+    if (!file || needsRights) return
 
     uploadIdRef.current = `up_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
     setStage(UploadStage.UPLOADING)
@@ -718,9 +871,11 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
 
       const result = await api.uploadMusic(file, uploadIdRef.current, {
         artistProfileId: selectedArtistId,
-        enableUpscaling: enhance
+        enableUpscaling: enhance,
+        rightsConfirmed: rightsTicked
       })
 
+      setRightsConfirmed(true)
       setProgress(100)
       setMetadata(result.metadata)
       setTrackId(result.track_id)
@@ -730,9 +885,18 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       triggerHaptic('success')
 
     } catch (err) {
+      triggerHaptic('error')
+      if (isRightsError(err)) {
+        uploadIdRef.current = null
+        setRightsConfirmed(false)
+        setRightsTicked(false)
+        setProgress(0)
+        setStage(UploadStage.SELECT)
+        toastError(err.message)
+        return
+      }
       setError(err.message || 'Upload failed. Please try again.')
       setStage(UploadStage.ERROR)
-      triggerHaptic('error')
     }
   }
 
@@ -801,6 +965,19 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     return true
   }, [saveTrack])
 
+  const saveSetting = useCallback(async (key, value) => {
+    const previous = metadata?.[key]
+    setMetadata(prev => ({ ...prev, [key]: value }))
+    if (!await saveTrack({ [key]: value })) setMetadata(prev => ({ ...prev, [key]: previous }))
+  }, [metadata, saveTrack])
+
+  const saveDescription = useCallback(async (value) => {
+    const description = String(value || '').trim()
+    if (!await saveTrack({ description })) return false
+    setMetadata(prev => ({ ...prev, description }))
+    return true
+  }, [saveTrack])
+
   const handleTrackArtistChange = useCallback(async (artistId, artist) => {
     if (artistId === metadata?.artist_profile_id || savingArtist) return
     setSavingArtist(true)
@@ -822,7 +999,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title="Upload Music"
+      title={isEditing ? 'Edit Track' : 'Upload Music'}
       maxWidth="max-w-lg"
       categoryOverride="all"
     >
@@ -842,7 +1019,17 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
           </motion.div>
         )}
 
-        {isAuthenticated && stage === UploadStage.SELECT && (
+        {isAuthenticated && isEditing && stage === UploadStage.SELECT && (
+          <motion.div
+            key="edit-loading"
+            {...PRESETS.stepSwap}
+            className="py-12 flex items-center justify-center"
+          >
+            <Loader2 size={28} className="animate-spin" style={{ color: getGrey400() }} />
+          </motion.div>
+        )}
+
+        {isAuthenticated && !isEditing && stage === UploadStage.SELECT && (
           <motion.div
             key="select"
             {...PRESETS.stepSwap}
@@ -934,13 +1121,24 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 </div>
               </div>
               <p className="mt-1.5 text-xs text-right" style={{ color: getGrey400() }}>{ENHANCE_HINT}</p>
+              {rightsConfirmed === false && (
+                <label className="mt-2 flex items-center gap-2 py-1 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rightsTicked}
+                    onChange={(e) => setRightsTicked(e.target.checked)}
+                    className="w-4 h-4 flex-shrink-0 accent-purple-500 cursor-pointer"
+                  />
+                  <span className="text-xs" style={{ color: getWhite() }}>{RIGHTS_LABEL}</span>
+                </label>
+              )}
             </ModalSection>
 
             {file && (
               <ModalFooter>
                 <ModalButton
                   onClick={handleUpload}
-                  disabled={!file}
+                  disabled={!file || needsRights}
                   variant="primary"
                 >
                   <Upload size={16} className="mr-2" />
@@ -969,7 +1167,31 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             key="preview"
             {...PRESETS.stepSwap}
           >
-            <ModalSuccessBanner message="Ready! Review and edit details if needed." className="mb-4" />
+            {!isEditing && <ModalSuccessBanner message="Ready! Review and edit details if needed." className="mb-4" />}
+
+            <ModalSection title="Sharing">
+              <ModalCard>
+                <VisibilityControl
+                  value={metadata.visibility}
+                  onChange={(value) => saveSetting('visibility', value)}
+                />
+                <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <SettingToggle
+                    label="Explicit"
+                    on={!!metadata.explicit}
+                    onToggle={() => saveSetting('explicit', !metadata.explicit)}
+                  />
+                  <SettingToggle
+                    label="Made with AI help"
+                    on={!!metadata.ai_assisted}
+                    onToggle={() => saveSetting('ai_assisted', !metadata.ai_assisted)}
+                  />
+                </div>
+                <div className="mt-3">
+                  <DescriptionField value={metadata.description} onSave={saveDescription} />
+                </div>
+              </ModalCard>
+            </ModalSection>
 
             {metadata.audio_extracted_from_video && (
               <ModalSection title="Source Media">
@@ -1238,13 +1460,22 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             </ModalSection>
 
             <ModalFooter>
-              <ModalButton onClick={resetState} variant="secondary">
-                Upload Another
-              </ModalButton>
-              <ModalButton onClick={handleSaveAndClose} variant="primary">
-                <Check size={16} className="mr-2" />
-                Save to Library
-              </ModalButton>
+              {isEditing ? (
+                <ModalButton onClick={handleClose} variant="primary" className="ml-auto">
+                  <Check size={16} className="mr-2" />
+                  Done
+                </ModalButton>
+              ) : (
+                <>
+                  <ModalButton onClick={resetState} variant="secondary">
+                    Upload Another
+                  </ModalButton>
+                  <ModalButton onClick={handleSaveAndClose} variant="primary">
+                    <Check size={16} className="mr-2" />
+                    Save to Library
+                  </ModalButton>
+                </>
+              )}
             </ModalFooter>
           </motion.div>
         )}
@@ -1256,9 +1487,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             className="py-8"
           >
             <ModalErrorState
-              title="Upload Failed"
+              title={isEditing ? "Couldn't open the track" : 'Upload Failed'}
               message={error}
-              onRetry={resetState}
+              onRetry={isEditing ? handleClose : resetState}
+              retryText={isEditing ? 'Close' : 'Try Again'}
             />
           </motion.div>
         )}

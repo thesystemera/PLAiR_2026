@@ -253,7 +253,9 @@ class PlaybackService(SingletonService):
                 if not top_hits:
                     raise Exception("Analytics returned no all-time top hits - analytics may not be initialized!")
 
-                valid_hits = [hit["track_id"] for hit in top_hits if hit["track_id"] in all_track_ids]
+                hidden = getattr(self.catalog, "hidden_ids", set())
+                valid_hits = [hit["track_id"] for hit in top_hits
+                              if hit["track_id"] in all_track_ids and hit["track_id"] not in hidden]
 
                 if not valid_hits:
                     raise Exception(f"No valid top hits found in catalog! Top hits: {len(top_hits)}, Catalog: {len(all_track_ids)}")

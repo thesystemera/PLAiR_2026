@@ -45,6 +45,7 @@ class User(Base):
 
     last_login = Column(DateTime(timezone=True), nullable=True)
     upload_enhance = Column(Boolean, default=False, nullable=False)
+    upload_rights_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     last_artist_profile_id = Column(Integer, nullable=True)
 
 class ArtistProfile(Base):

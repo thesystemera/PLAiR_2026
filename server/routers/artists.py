@@ -37,7 +37,8 @@ async def upload_setup(current_user: User = Depends(get_current_user)):
     for profile in mine:
         profile["track_count"] = len(_tracks_for_profile(profile["id"]))
     return {"artists": mine, "last_artist_profile_id": getattr(user, "last_artist_profile_id", None),
-            "upload_enhance": bool(getattr(user, "upload_enhance", False))}
+            "upload_enhance": bool(getattr(user, "upload_enhance", False)),
+            "rights_confirmed": getattr(user, "upload_rights_confirmed_at", None) is not None}
 
 
 @router.post("/api/artists")

@@ -18,6 +18,16 @@ from routers.deps import get_session_info, get_current_user, RateLimit, read_upl
 router = APIRouter()
 
 
+async def _remember_rights(user_id: int):
+    from datetime import datetime, timezone
+    from database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        user = await db.get(User, user_id)
+        if user is not None and user.upload_rights_confirmed_at is None:
+            user.upload_rights_confirmed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+
 async def _remember_enhance(user_id: int, enabled: bool):
     from database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
@@ -32,6 +42,7 @@ async def upload_user_music(
         title: Optional[str] = Form(None, max_length=120),
         artist_profile_id: Optional[int] = Form(None),
         enable_upscaling: Optional[bool] = Form(None),
+        rights_confirmed: bool = Form(False),
         upload_id: Optional[str] = Form(None, max_length=64),
         current_user: User = Depends(get_current_user),
         session: dict = Depends(get_session_info),
@@ -107,6 +118,12 @@ async def upload_user_music(
             staging_path.unlink()
         raise HTTPException(status_code=400, detail="File too small to be valid media")
 
+    if getattr(current_user, "upload_rights_confirmed_at", None) is None:
+        if not rights_confirmed:
+            staging_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Please confirm you own this music or have the rights to share it")
+        await _remember_rights(int(current_user.id))  # type: ignore
+
     if enable_upscaling is None:
         enable_upscaling = bool(getattr(current_user, "upload_enhance", False))
     elif enable_upscaling != bool(getattr(current_user, "upload_enhance", False)):
@@ -168,6 +185,9 @@ async def upload_user_music(
             "artist_profile_id": metadata.get("artist_profile_id"),
             "enhance_requested": bool(metadata.get("enhance_requested")),
             "embedded_tags": metadata.get("embedded_tags") or {},
+            "visibility": metadata.get("visibility", "public"),
+            "explicit": bool(metadata.get("explicit")),
+            "ai_assisted": bool(metadata.get("ai_assisted")),
             "style": metadata.get("generation_params", {}).get("style"),
             "primary_genre": metadata.get("derived_tags", {}).get("primary_genre"),
             "secondary_genres": metadata.get("derived_tags", {}).get("secondary_genres", []),

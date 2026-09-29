@@ -332,6 +332,7 @@ export function UIStateProvider({ children }) {
   })
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
+  const [uploadEditTrackId, setUploadEditTrackId] = useState(null)
   const [usageModalOpen, setUsageModalOpen] = useState(false)
 
   const [isOfflineRendering, setIsOfflineRendering] = useState(false)
@@ -1162,7 +1163,19 @@ export function UIStateProvider({ children }) {
 
   const openUploadModal = useCallback(() => {
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
-    startTransition(() => setUploadModalOpen(true))
+    startTransition(() => {
+      setUploadEditTrackId(null)
+      setUploadModalOpen(true)
+    })
+  }, [])
+
+  const openEditTrack = useCallback((trackId) => {
+    if (!trackId) return
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => {
+      setUploadEditTrackId(trackId)
+      setUploadModalOpen(true)
+    })
   }, [])
 
   const closeUploadModal = useCallback(() => {
@@ -1286,7 +1299,9 @@ export function UIStateProvider({ children }) {
     closeReviewModal,
 
     uploadModalOpen,
+    uploadEditTrackId,
     openUploadModal,
+    openEditTrack,
     closeUploadModal,
 
     usageModalOpen,
@@ -1313,7 +1328,7 @@ export function UIStateProvider({ children }) {
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
     shoutoutModalState, openShoutoutModal, closeShoutoutModal,
     reviewModalState, openReviewModal, closeReviewModal,
-    uploadModalOpen, openUploadModal, closeUploadModal,
+    uploadModalOpen, uploadEditTrackId, openUploadModal, openEditTrack, closeUploadModal,
     usageModalOpen, openUsageModal, closeUsageModal,
     isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
   ])

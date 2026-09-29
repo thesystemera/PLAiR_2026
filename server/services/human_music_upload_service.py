@@ -81,6 +81,7 @@ def _is_float_wav(path: Path) -> bool:
         return False
 
 TITLE_MAX = 120
+VISIBILITIES = ("public", "unlisted", "private")
 TAG_MAX = 60
 TAG_LIST_MAX = 8
 LYRICS_MAX = 20000
@@ -1146,6 +1147,13 @@ class HumanMusicUploadService(SingletonService):
             track["transcribed_lyrics"] = lyrics or None
             params["prompt"] = lyrics
             params["instrumental"] = not lyrics
+        if "visibility" in updates:
+            if updates["visibility"] not in VISIBILITIES:
+                return False, "Visibility must be public, unlisted or private"
+            track["visibility"] = updates["visibility"]
+        for flag in ("explicit", "ai_assisted"):
+            if flag in updates:
+                track[flag] = bool(updates[flag])
         if "description" in updates:
             track["description"] = str(updates["description"] or "").strip()[:DESCRIPTION_MAX] or None
 

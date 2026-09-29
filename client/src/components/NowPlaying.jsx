@@ -405,14 +405,22 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             <MediaActions type="track" itemId={track.id} overlay />
           </div>
 
-          <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
+          <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none flex items-center gap-1.5">
             <div className={`
               px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase
               border border-white/30 bg-black/40 backdrop-blur-sm
-              ${track.is_ai_generated === false ? 'text-emerald-300/70' : 'text-purple-300/70'}
+              ${track.is_ai_generated === false ? (track.ai_assisted === true ? 'text-sky-300/70' : 'text-emerald-300/70') : 'text-purple-300/70'}
             `}>
-              {track.is_ai_generated === false ? '100% Human' : '100% AI'}
+              {track.is_ai_generated === false ? (track.ai_assisted === true ? 'Human + AI' : '100% Human') : '100% AI'}
             </div>
+            {track.explicit === true && (
+              <div
+                className="px-1.5 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase border border-white/30 bg-black/40 backdrop-blur-sm text-white/70"
+                aria-label="Explicit"
+              >
+                E
+              </div>
+            )}
           </div>
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -290,12 +290,13 @@ const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, 
   )
 })
 
-const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, onDeleteUpload, isDeleting }) {
+const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, onEditUpload, onDeleteUpload, isDeleting }) {
   const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track.generation_params || {}
   const title = params.title || track.title || 'Untitled'
   const artist = params.artist_name || track.track_info?.artist || 'Unknown Artist'
   const genre = track.derived_tags?.primary_genre || params.style || 'Unknown Genre'
+  const visibility = track.visibility || 'public'
 
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition group">
@@ -315,7 +316,11 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
         className="flex-1 min-w-0 cursor-pointer"
         onClick={() => onPlayTrack(track.id)}
       >
-        <div className="font-medium truncate">{title}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {visibility === 'private' && <Lock size={12} className="flex-shrink-0 text-gray-400" aria-label="Private" />}
+          {visibility === 'unlisted' && <EyeOff size={12} className="flex-shrink-0 text-gray-400" aria-label="Unlisted" />}
+          <span className="font-medium truncate">{title}</span>
+        </div>
         <div className="text-sm text-gray-400 truncate">{artist} • {genre}</div>
       </div>
 
@@ -325,6 +330,15 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
         title="Play track"
       >
         <Play size={16} fill="currentColor" />
+      </button>
+
+      <button
+        onClick={() => onEditUpload(track.id)}
+        className="ui-press p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition"
+        title="Edit track"
+        aria-label="Edit track"
+      >
+        <Edit2 size={16} />
       </button>
 
       <button
@@ -544,6 +558,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     toastError,
     toastInfo,
     openUploadModal,
+    openEditTrack,
+    uploadModalOpen,
     openUsageModal,
     tiltEnabled,
     tiltNeedsPermission,
@@ -560,6 +576,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     toastError: state.toastError,
     toastInfo: state.toastInfo,
     openUploadModal: state.openUploadModal,
+    openEditTrack: state.openEditTrack,
+    uploadModalOpen: state.uploadModalOpen,
     openUsageModal: state.openUsageModal,
     tiltEnabled: state.tiltEnabled,
     tiltNeedsPermission: state.tiltNeedsPermission,
@@ -688,9 +706,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }, [deletePost])
 
-  const fetchUserUploads = useCallback(async () => {
+  const fetchUserUploads = useCallback(async ({ quiet = false } = {}) => {
     if (!isAuthenticated) return
-    setLoadingUploads(true)
+    if (!quiet) setLoadingUploads(true)
     try {
       const data = await api.getUserUploads()
       setUserUploads(data.tracks || [])
@@ -706,6 +724,15 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       void fetchUserUploads()
     }
   }, [uploadsExpanded, isAuthenticated, fetchUserUploads])
+
+  const uploadModalWasOpenRef = useRef(uploadModalOpen)
+  useEffect(() => {
+    const wasOpen = uploadModalWasOpenRef.current
+    uploadModalWasOpenRef.current = uploadModalOpen
+    if (wasOpen && !uploadModalOpen && uploadsExpanded && isAuthenticated) {
+      void fetchUserUploads({ quiet: true })
+    }
+  }, [uploadModalOpen, uploadsExpanded, isAuthenticated, fetchUserUploads])
 
   const fetchMyArtists = useCallback(async () => {
     if (!isAuthenticated) return
@@ -1609,6 +1636,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                   key={track.id}
                   track={track}
                   onPlayTrack={onPlayTrack}
+                  onEditUpload={openEditTrack}
                   onDeleteUpload={handleDeleteUpload}
                   isDeleting={deletingUploadId === track.id}
                 />

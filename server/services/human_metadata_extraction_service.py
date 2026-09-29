@@ -29,6 +29,7 @@ You must output valid JSON matching this exact schema:
     "style": "Detailed production style description (instruments, production techniques, era, sound characteristics) - be VERY specific about drums, synths, guitars, bass, production style, mix characteristics",
     "title": "The song's real title: the embedded tag title if given, else a real title in the filename (drop track numbers, the artist prefix, and words like final/master/mix/original/v2), else the sung hook, else 'Untitled'. Never invent a poetic title when the file names the song",
     "instrumental": true/false,
+    "explicit": true/false (true when the lyrics contain strong profanity, slurs or explicit sexual content),
     "vocal_gender": "m" | "f" | "mixed" | null (if instrumental),
     "primary_genre": "Main genre - be specific: e.g. 'Indie Folk', 'Tech House', 'Shoegaze', 'Trap', 'Bossa Nova', 'Post-Punk', 'Roots Reggae', 'Dream Pop'",
     "secondary_genres": ["Sub-genre 1", "Sub-genre 2", "Sub-genre 3"],
@@ -334,6 +335,9 @@ Output ONLY valid JSON with your analysis, no other text.""")
             "uploaded_by_user_id": user_id,
             "original_filename": original_filename,
             "artist_profile_id": (artist or {}).get("id"),
+            "visibility": "public",
+            "explicit": bool(extracted.get("explicit")),
+            "ai_assisted": False,
             "artist_slug": (artist or {}).get("slug"),
             "embedded_tags": tags or {},
 

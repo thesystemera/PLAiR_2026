@@ -1049,8 +1049,8 @@ class API {
     )
   }
 
-  async uploadMusic(file, uploadId = null, { artistProfileId = null, enableUpscaling = null } = {}) {
-    return this._routeRequest('uploadMusic', [file, uploadId, { artistProfileId, enableUpscaling }], async () => {
+  async uploadMusic(file, uploadId = null, { artistProfileId = null, enableUpscaling = null, rightsConfirmed = false } = {}) {
+    return this._routeRequest('uploadMusic', [file, uploadId, { artistProfileId, enableUpscaling, rightsConfirmed }], async () => {
       const sizeMb = file.size / (1024 * 1024)
       logger.info(`[API] Uploading media: ${file.name} (${sizeMb.toFixed(1)}MB, ${file.type || 'unknown type'})`)
       const formData = new FormData()
@@ -1058,6 +1058,7 @@ class API {
       if (uploadId) formData.append('upload_id', uploadId)
       if (artistProfileId !== null && artistProfileId !== undefined) formData.append('artist_profile_id', String(artistProfileId))
       if (enableUpscaling !== null && enableUpscaling !== undefined) formData.append('enable_upscaling', enableUpscaling ? 'true' : 'false')
+      if (rightsConfirmed) formData.append('rights_confirmed', 'true')
       const headers = this.getHeaders()
       delete headers['Content-Type']
       const res = await this._fetch(`${API_BASE}/user/music/upload`, {
@@ -1070,7 +1071,9 @@ class API {
         if (res.status === 413) {
           throw new Error('Upload is larger than the server currently accepts. Video uploads support up to 10GB once the proxy limit is active.')
         }
-        throw new Error(data.detail || 'Upload failed')
+        const err = new Error(data.detail || 'Upload failed')
+        err.status = res.status
+        throw err
       }
       return res.json()
     })

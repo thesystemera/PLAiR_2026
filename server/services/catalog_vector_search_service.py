@@ -46,8 +46,12 @@ class CatalogVectorSearchService:
             intent_category, query_weights, cleaned_query = await self._intent(query, use_ai_analysis)
             log_service.detail(f"  📊 Category weights: {query_weights}", "vector_music")
 
+            hidden = self.catalog.hidden_ids if self.catalog is not None else set()
+
             def keep(track: Dict[str, Any]) -> bool:
                 if banned_ids and track.get("id") in banned_ids:
+                    return False
+                if track.get("id") in hidden:
                     return False
                 params = track.get("generation_params", {})
                 if instrumental is not None and params.get("instrumental", False) != instrumental:
@@ -133,7 +137,7 @@ class CatalogVectorSearchService:
         nearest_ids = _safe_search(average_vector, n_results * 3)
 
         results = []
-        exclude_ids = (banned_ids or set()) | found_ids
+        exclude_ids = (banned_ids or set()) | found_ids | (self.catalog.hidden_ids if self.catalog is not None else set())
 
         for annoy_idx in nearest_ids:
             rowid = annoy_idx + 1

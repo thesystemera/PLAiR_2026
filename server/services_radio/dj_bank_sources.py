@@ -302,6 +302,8 @@ async def _station_stat_points(async_session_maker, catalog_service) -> list[Tal
 
     points = []
     week = datetime.now(timezone.utc).strftime("%G%V")
+    if top and top[0] in getattr(catalog_service, "hidden_ids", set()):
+        top = None
     if top:
         title, artist, _ = _track_facts(catalog_service, top[0])
         if title:

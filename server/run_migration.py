@@ -48,6 +48,7 @@ def migrate_users_table(conn):
         "subscription_status": "VARCHAR",
         "current_period_end": "TIMESTAMP WITH TIME ZONE",
         "upload_enhance": "BOOLEAN DEFAULT false NOT NULL",
+        "upload_rights_confirmed_at": "TIMESTAMP WITH TIME ZONE",
         "last_artist_profile_id": "INTEGER",
         # Add future columns here
         # "new_column": "VARCHAR DEFAULT 'something'",

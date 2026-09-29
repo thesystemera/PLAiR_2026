@@ -747,7 +747,7 @@ class RegionCharts:
         items = []
         for rank, (track_id, count, listeners) in enumerate(rows):
             track = catalog.get_track(track_id)
-            if not track:
+            if not track or track_id in getattr(catalog, "hidden_ids", set()):
                 continue
             tags = track.get("derived_tags") or {}
             genre = str(tags.get("primary_genre") or "").strip()

@@ -173,7 +173,7 @@ function App() {
     updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
     interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, reviewModalState, closeReviewModal, hasActiveJobs,
-    uploadModalOpen, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
+    uploadModalOpen, uploadEditTrackId, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
     tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
   } = useUISelector(state => ({
     updateShaderRegions: state.updateShaderRegions,
@@ -197,6 +197,7 @@ function App() {
     closeReviewModal: state.closeReviewModal,
     hasActiveJobs: state.queueState.hasActiveJobs,
     uploadModalOpen: state.uploadModalOpen,
+    uploadEditTrackId: state.uploadEditTrackId,
     closeUploadModal: state.closeUploadModal,
     usageModalOpen: state.usageModalOpen,
     closeUsageModal: state.closeUsageModal,
@@ -1096,6 +1097,7 @@ function App() {
         <LazyMount when={uploadModalOpen}>
           <UploadMusicModal
             isOpen={uploadModalOpen}
+            editTrackId={uploadEditTrackId}
             onClose={closeUploadModal}
             onLogin={() => setShowLogin(true)}
           />

@@ -13,13 +13,16 @@ def is_playlist_mode(mode: str) -> bool:
     return mode in PLAYLIST_MODES
 
 async def _get_user_preferences(user_id: Optional[int] = None):
+    from service_registry import services
+    hidden = set(getattr(services.catalog_service, "hidden_ids", set()))
     if not user_id:
-        return {"likes": set(), "super_likes": set(), "bans": set()}
+        return {"likes": set(), "super_likes": set(), "bans": hidden}
     try:
-        return await user_data_cache.get_preferences(user_id)
+        prefs = await user_data_cache.get_preferences(user_id)
+        return {**prefs, "bans": set(prefs.get("bans") or set()) | hidden}
     except Exception as e:
         log_service.error(f"Error getting user preferences: {e}")
-        return {"likes": set(), "super_likes": set(), "bans": set()}
+        return {"likes": set(), "super_likes": set(), "bans": hidden}
 
 def _build_category_query(track: Dict[str, Any], category: str) -> str:
     params = track.get("generation_params", {}) or {}
