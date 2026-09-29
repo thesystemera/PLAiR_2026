@@ -265,7 +265,7 @@ class Settings:
 
     GEMINI_DJ_MODEL: str = os.getenv("GEMINI_DJ_MODEL", "gemini-3.5-flash-lite")
     GEMINI_DJ_TEMPERATURE: float = float(os.getenv("GEMINI_DJ_TEMPERATURE", "0.9"))
-    GEMINI_DJ_MAX_TOKENS: int = int(os.getenv("GEMINI_DJ_MAX_TOKENS", "1000"))
+    GEMINI_DJ_MAX_TOKENS: int = int(os.getenv("GEMINI_DJ_MAX_TOKENS", "8192"))
 
     DJ_TOOL_MAX_LIVE_FETCHES: int = int(os.getenv("DJ_TOOL_MAX_LIVE_FETCHES", "2"))
     DJ_TOOL_FILLERS_PER_TURN: int = int(os.getenv("DJ_TOOL_FILLERS_PER_TURN", "2"))
@@ -297,22 +297,20 @@ class Settings:
     GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))
     GEO_LOCATE_PER_RUN: int = int(os.getenv("GEO_LOCATE_PER_RUN", "200"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
-    DJ_TOOL_THINKING_HEADROOM: int = int(os.getenv("DJ_TOOL_THINKING_HEADROOM", "6000"))
     DJ_TOOL_THINKING_BUDGET: Optional[int] = (int(os.getenv("DJ_TOOL_THINKING_BUDGET", "-1"))
                                               if os.getenv("DJ_TOOL_THINKING_BUDGET", "-1").strip() else None)
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))
-    DJ_MICRO_MAX_TOKENS: int = int(os.getenv("DJ_MICRO_MAX_TOKENS", "48"))
+    DJ_MICRO_MAX_TOKENS: int = int(os.getenv("DJ_MICRO_MAX_TOKENS", "2048"))
     DJ_TURN_CANCEL_TIMEOUT_S: float = float(os.getenv("DJ_TURN_CANCEL_TIMEOUT_S", "2"))
     BIOGRAPHY_DEADLINE_S: float = float(os.getenv("BIOGRAPHY_DEADLINE_S", "20"))
 
     GEMINI_COMMAND_MODEL: str = os.getenv("GEMINI_COMMAND_MODEL", "gemini-3.5-flash-lite")
     GEMINI_COMMAND_TEMPERATURE: float = float(os.getenv("GEMINI_COMMAND_TEMPERATURE", "0.2"))
-    GEMINI_COMMAND_MAX_TOKENS: int = int(os.getenv("GEMINI_COMMAND_MAX_TOKENS", "500"))
 
     GEMINI_AUDIO_MODEL: str = os.getenv("GEMINI_AUDIO_MODEL", "gemini-3.5-flash-lite")
     GEMINI_AUDIO_TEMPERATURE: float = float(os.getenv("GEMINI_AUDIO_TEMPERATURE", "0.8"))
-    GEMINI_AUDIO_MAX_TOKENS: int = int(os.getenv("GEMINI_AUDIO_MAX_TOKENS", "200"))
+    GEMINI_AUDIO_MAX_TOKENS: int = int(os.getenv("GEMINI_AUDIO_MAX_TOKENS", "2048"))
 
     GEMINI_NODE_PRODUCER_MODEL: str = os.getenv("GEMINI_NODE_PRODUCER_MODEL", "gemini-3.5-flash-lite")
     GEMINI_NODE_PRODUCER_TEMPERATURE: float = float(os.getenv("GEMINI_NODE_PRODUCER_TEMPERATURE", "0.1"))
@@ -586,7 +584,7 @@ class Settings:
     RADIO_ON_AIR_MAX_S: float = float(os.getenv("RADIO_ON_AIR_MAX_S", "180"))
     RADIO_WRITE_TIMEOUT_S: float = float(os.getenv("RADIO_WRITE_TIMEOUT_S", "60"))
     RADIO_WORDS_PER_SECOND: float = float(os.getenv("RADIO_WORDS_PER_SECOND", "3.0"))
-    RADIO_SEGMENT_MAX_TOKENS: int = int(os.getenv("RADIO_SEGMENT_MAX_TOKENS", "2000"))
+    RADIO_SEGMENT_MAX_TOKENS: int = int(os.getenv("RADIO_SEGMENT_MAX_TOKENS", "8192"))
     RADIO_MAX_SCRIPTS_PER_HOUR: int = int(os.getenv("RADIO_MAX_SCRIPTS_PER_HOUR", "300"))
     RADIO_SHARED_SCRIPT_TTL_S: float = float(os.getenv("RADIO_SHARED_SCRIPT_TTL_S", "1500"))
     RADIO_AIRED_MEMORY_S: float = float(os.getenv("RADIO_AIRED_MEMORY_S", str(6 * 3600)))

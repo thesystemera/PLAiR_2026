@@ -580,7 +580,7 @@ class UserContentSpeechEnhancementService:
                 ],
                 model=settings.GEMINI_DJ_MODEL,
                 temperature=0,
-                max_tokens=2000,
+                max_tokens=2048,
                 response_schema=ShoutoutOpinionResponse,
                 role=LLM_BACKGROUND
             )

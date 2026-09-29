@@ -120,6 +120,10 @@ textarea,
     animation: ui-pop-in var(--dur-badge) var(--ease-decelerate) backwards;
   }
 
+  .ui-layer-in {
+    animation: ui-layer-in var(--dur-theme) var(--ease-decelerate) backwards;
+  }
+
   .ui-pop {
     animation: ui-pop var(--dur-pop) var(--ease-decelerate) backwards;
   }
@@ -243,6 +247,12 @@ textarea,
   }
 }
 
+@keyframes ui-layer-in {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes ui-fade-in {
   from {
     opacity: 0;
@@ -345,6 +355,7 @@ textarea,
   .animate-bounce,
   .animate-ping,
   .ui-fade-in,
+  .ui-layer-in,
   .ui-pop-in,
   .ui-pop,
   .ui-badge-in,

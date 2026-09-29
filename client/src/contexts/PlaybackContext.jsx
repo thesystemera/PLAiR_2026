@@ -14,6 +14,7 @@ import { TalkBreakController } from '../lib/talkBreak'
 import { MusicBed } from '../lib/musicBed'
 import { canPlayCachedBlob, usesProgressiveStreaming } from '../lib/mediaSupport'
 import { reportClientEvent } from '../lib/errorReporter'
+import { splashReady } from '../lib/splash'
 import {
   NO_PENDING,
   PENDING_ACK_TIMEOUT_MS,
@@ -417,6 +418,7 @@ export function PlaybackProvider({ children }) {
 
   const handlePlaybackState = useCallback((data, { replay = false } = {}) => {
     if (!data) return
+    splashReady('playback')
 
     if (!replay) {
       if (isOutdatedSnapshot(data, cursorRef.current)) {

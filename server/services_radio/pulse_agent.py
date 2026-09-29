@@ -117,7 +117,7 @@ async def gather_facts(brief: str, user_id: Optional[int], session_id: Optional[
             function_declarations=AGENT_DECLARATIONS,
             dispatch=runtime.dispatch,
             temperature=0.4,
-            max_tokens=1400,
+            max_tokens=8192,
             max_rounds=max_rounds,
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             spec=LLM_INTERPRET,

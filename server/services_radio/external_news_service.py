@@ -198,7 +198,7 @@ class NewsService:
                 system_instruction="You are an experienced radio news editor.",
                 model=settings.GEMINI_COMMAND_MODEL,
                 temperature=0,
-                max_tokens=700 if with_tags else 100,
+                max_tokens=2048,
                 role=LLM_BACKGROUND,
                 validate=lambda text: bool(re.search(r"\[[\d,\s]*\]", text or "")),
             )

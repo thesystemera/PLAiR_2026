@@ -27,6 +27,7 @@ import {isWebGL2Available} from '../lib/utils'
 import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
+import {splashReady} from '../lib/splash'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -1702,6 +1703,7 @@ function MultiPassPlane({
       if (backdropMeshRef.current) backdropMeshRef.current.visible = !hasVisiblePanels
 
       gl.render(scene, camera)
+      splashReady('scene')
     }
 
     const frameEnd = performance.now()

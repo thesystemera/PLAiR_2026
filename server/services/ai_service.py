@@ -164,7 +164,7 @@ class AIService(SingletonService):
         if temperature is None:
             temperature = settings.GEMINI_TEMPERATURE
         if max_tokens is None:
-            max_tokens = 2048
+            max_tokens = 8192
         result = await llm_router.generate(
             spec=role,
             prompt=prompt,
@@ -339,7 +339,7 @@ class AIService(SingletonService):
         if temperature is None:
             temperature = settings.GEMINI_DJ_TEMPERATURE
         if max_tokens is None:
-            max_tokens = 2048
+            max_tokens = 8192
 
         base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
         if thinking_budget is not None:

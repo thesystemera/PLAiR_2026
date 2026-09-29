@@ -300,7 +300,7 @@ async def locate_texts(ai_service, texts: list[str], edition: str) -> list[Optio
             system_instruction="You are a careful news geographer.",
             model=settings.GEMINI_COMMAND_MODEL,
             temperature=0,
-            max_tokens=60 + 30 * len(texts),
+            max_tokens=2048,
             role=LLM_BACKGROUND,
             validate=lambda text: "{" in (text or ""),
         )

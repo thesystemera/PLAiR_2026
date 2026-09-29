@@ -255,19 +255,20 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artwor
     }
   }, [artworkUrl, onBlurReady])
 
-  if (!artworkUrl || !imageLoaded) {
-    return (
-      <div
-        className="absolute inset-0"
-        style={{
-          background: `radial-gradient(ellipse at 50% 30%, ${categoryColor}40 0%, ${categoryColor}20 40%, transparent 80%)`,
-        }}
-      />
-    )
-  }
+  const gradientBase = (
+    <div
+      className="absolute inset-0"
+      style={{
+        background: `radial-gradient(ellipse at 50% 30%, ${categoryColor}40 0%, ${categoryColor}20 40%, transparent 80%)`,
+      }}
+    />
+  )
+
+  if (!artworkUrl || !imageLoaded) return gradientBase
 
   return (
     <>
+      {gradientBase}
       <motion.div
         {...ARTWORK_MOTION}
         transition={MOTION.settle}
@@ -302,16 +303,13 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artwor
   )
 })
 
-const AnimatedBorder = memo(function AnimatedBorder({ categoryColor }) {
+const DialogEdge = memo(function DialogEdge({ categoryColor }) {
   return (
-    <motion.div
+    <div
       className="absolute inset-0 rounded-2xl pointer-events-none"
-      initial={{ opacity: 0.3 }}
-      animate={{ opacity: [0.3, 0.6, 0.3] }}
-      transition={MOTION.glow}
       style={{
-        border: `1px solid ${categoryColor}60`,
-        boxShadow: `0 0 30px ${categoryColor}20, inset 0 0 30px ${categoryColor}10`,
+        border: `1px solid ${categoryColor}40`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 24px ${categoryColor}14`,
       }}
     />
   )
@@ -475,7 +473,7 @@ export function Modal({
               onBlurReady={setBlurs}
             />
 
-            <AnimatedBorder categoryColor={categoryColor} />
+            <DialogEdge categoryColor={categoryColor} />
 
             <div className="relative z-10 flex flex-col" style={{ height: '100%', minHeight: 0 }}>
               {(title || showCloseButton) && (
@@ -488,7 +486,7 @@ export function Modal({
                 >
                   {blurs?.heavy && (
                     <div
-                      className="absolute inset-0 pointer-events-none"
+                      className="ui-layer-in absolute inset-0 pointer-events-none"
                       style={{
                         backgroundImage: `url(${blurs.heavy})`,
                         backgroundSize: '108%',
@@ -501,7 +499,7 @@ export function Modal({
                     <motion.div
                       {...TITLE_MOTION}
                       transition={MODAL_TITLE_TRANSITION}
-                      className="text-xl md:text-2xl font-bold relative z-10"
+                      className="text-lg md:text-xl font-bold relative z-10"
                       style={{ color: getWhite() }}
                     >
                       {title}
@@ -545,7 +543,7 @@ export function Modal({
                 >
                   {blurs?.light && (
                     <div
-                      className="absolute inset-0 pointer-events-none"
+                      className="ui-layer-in absolute inset-0 pointer-events-none"
                       style={{
                         backgroundImage: `url(${blurs.light})`,
                         backgroundSize: '102%',
@@ -573,7 +571,7 @@ export const ModalTitle = memo(function ModalTitle({ title, subtitle, subtitleHi
 
   return (
     <div>
-      <div className="text-2xl font-bold">{title}</div>
+      <div className="text-xl font-bold">{title}</div>
       {subtitle && (
         <p className="text-sm mt-1 font-normal" style={{ color: getGrey400() }}>
           {subtitle}
@@ -647,7 +645,7 @@ export const ModalButton = memo(function ModalButton({
       whileTap={disabled ? undefined : PRESETS.softPress.whileTap}
       onClick={handleClick}
       disabled={disabled}
-      className={`px-6 py-3 rounded-lg font-medium transition-[background-color,border-color,color,box-shadow,opacity] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
+      className={`px-5 py-2.5 rounded-xl font-medium transition-[background-color,border-color,color,box-shadow,opacity] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
       style={variantStyles[variant]}
       {...props}
     >
@@ -724,7 +722,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
     >
       {blurs?.medium && (
         <div
-          className="absolute inset-0 pointer-events-none"
+          className="ui-layer-in absolute inset-0 pointer-events-none"
           style={{
             backgroundImage: `url(${blurs.medium})`,
             backgroundSize: '105%',
