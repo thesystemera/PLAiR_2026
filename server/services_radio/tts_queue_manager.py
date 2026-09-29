@@ -25,6 +25,7 @@ RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
 FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
+VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 TTS_TYPE_LABELS = {
     'interactive': 'chat reply',
     'announcer': 'track announcement',
@@ -138,6 +139,10 @@ class IncrementalBlend:
                 overlap_duration = int(self.total_duration * overlap_ratio)
                 overlap_duration = min(overlap_duration, self.total_duration)
                 blend_position = self.total_duration - overlap_duration
+                own_voice_end = self._voice_end(speaker)
+                if blend_position < own_voice_end:
+                    blend_position = own_voice_end
+                    overlap_duration = self.total_duration - blend_position
 
             try:
                 self.timeline.append({
@@ -161,6 +166,14 @@ class IncrementalBlend:
 
         except Exception as e:
             log_service.error(f"Audio Blending: Failed to process segment {i}: {e}")
+
+    def _voice_end(self, speaker: str) -> int:
+        if speaker not in VOICE_SPEAKERS:
+            return 0
+        return max(
+            (entry['start'] + entry['duration'] for entry in self.timeline if entry['speaker'] == speaker),
+            default=0
+        )
 
     def safe_end(self, future_segments: List[Dict]) -> int:
         total = self.total_duration
