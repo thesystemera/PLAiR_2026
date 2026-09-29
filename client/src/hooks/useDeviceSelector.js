@@ -86,7 +86,8 @@ export function useDeviceSelector() {
 
   const requestPermissions = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach(track => track.stop())
       await loadDevices()
     } catch (error) {
       logger.error('Failed to get media permissions:', error)

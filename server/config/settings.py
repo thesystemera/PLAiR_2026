@@ -133,7 +133,7 @@ class Settings:
     USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
     IMPULSE_SIMILARITY_THRESHOLD: float = 0.75
-    TTS_SIMILARITY_THRESHOLD: float = 0.8
+    TTS_SIMILARITY_THRESHOLD: float = 0.95
     META_SIMILARITY_THRESHOLD: float = 0.75
     AUDIO_SIMILARITY_THRESHOLD: float = 0.5
     BREATH_SIMILARITY_THRESHOLD: float = 0.65

@@ -19,6 +19,25 @@ const getSupportedAudioMimeType = () => {
   return null
 }
 
+const setAudioSessionType = (type) => {
+  if (!navigator.audioSession) return
+  try {
+    if (navigator.audioSession.type !== type) navigator.audioSession.type = type
+  } catch (error) {
+    logger.warn('[VoiceRecorder] Could not set the audio session type:', error)
+  }
+}
+
+const releaseStream = (stream) => {
+  if (!stream) return
+  stream.getTracks().forEach(track => {
+    try {
+      track.stop()
+      stream.removeTrack(track)
+    } catch { /* track already gone */ }
+  })
+}
+
 export const useVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false)
   const [analyser, setAnalyser] = useState(null)
@@ -61,18 +80,8 @@ export const useVoiceRecorder = () => {
       }
     }
 
-    if (streamRef.current) {
-      try {
-        const tracks = streamRef.current.getTracks()
-        tracks.forEach(track => {
-          track.stop()
-          streamRef.current.removeTrack(track)
-        })
-        streamRef.current = null
-      } catch {
-        streamRef.current = null
-      }
-    }
+    releaseStream(streamRef.current)
+    streamRef.current = null
 
     if (audioContext.current && audioContext.current.state !== 'closed') {
       try {
@@ -82,6 +91,8 @@ export const useVoiceRecorder = () => {
         audioContext.current = null
       }
     }
+
+    setAudioSessionType('playback')
 
     audioChunks.current = []
     recordingStartTime.current = 0
@@ -125,6 +136,8 @@ export const useVoiceRecorder = () => {
       const analysisContext = audioContext.current
       if (analysisContext.state !== 'running') analysisContext.resume().catch(() => {})
 
+      setAudioSessionType('play-and-record')
+
       let stream
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
@@ -137,7 +150,8 @@ export const useVoiceRecorder = () => {
       }
 
       if (!isStarting.current || audioContext.current !== analysisContext) {
-        stream.getTracks().forEach(track => track.stop())
+        releaseStream(stream)
+        setAudioSessionType('playback')
         return false
       }
 
@@ -202,16 +216,25 @@ export const useVoiceRecorder = () => {
         return
       }
 
-      mediaRecorder.current.requestData()
-
-      mediaRecorder.current.onstop = () => {
+      const recorder = mediaRecorder.current
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(fallback)
         const audioBlob = new Blob(audioChunks.current, { type: recordingMimeType.current })
-
         cleanup()
         resolve(audioBlob)
       }
+      const fallback = setTimeout(finish, 1500)
 
-      mediaRecorder.current.stop()
+      recorder.requestData()
+      recorder.onstop = finish
+      recorder.stop()
+
+      releaseStream(streamRef.current)
+      streamRef.current = null
+      setAudioSessionType('playback')
     })
   }, [cleanup])
 
