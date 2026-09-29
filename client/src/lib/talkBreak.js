@@ -1,4 +1,4 @@
-export const TALK_BREAK_TIMING = {
+const TALK_BREAK_TIMING = {
   talkUpMaxMs: 12000,
   talkUpMinMs: 800,
   postLeadS: 2.5,

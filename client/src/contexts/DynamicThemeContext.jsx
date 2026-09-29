@@ -24,11 +24,9 @@ import {
 } from 'lucide-react'
 import {
   extractColorsFromImage,
-  SPACING,
   PANEL,
   PANEL_SCROLL,
   TRANSITIONS,
-  ANIMATION,
   UI_FULLSCREEN,
   BUTTON,
   CATALOG_HEADER
@@ -38,11 +36,9 @@ import { logger } from '../lib/logger'
 import { useUISelector, useArtwork } from './UIStateContext'
 
 export {
-  SPACING,
   PANEL,
   PANEL_SCROLL,
   TRANSITIONS,
-  ANIMATION,
   UI_FULLSCREEN,
   BUTTON,
   CATALOG_HEADER

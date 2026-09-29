@@ -1,5 +1,5 @@
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
-import Modal, { ModalSection, ModalOptionButton } from './Modal'
+import { Modal, ModalSection, ModalOptionButton } from './Modal'
 
 const ANALYTICS_OPTIONS = [
   { id: 'top_hits_all', description: 'Most popular tracks ever' },

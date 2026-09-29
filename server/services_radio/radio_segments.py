@@ -8,7 +8,6 @@ from typing import Any, Callable, Optional
 import pytz
 
 from services import log_service
-from services.user_content_database_service import coarse_location
 import time
 
 from config import settings

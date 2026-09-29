@@ -76,7 +76,7 @@ function capabilities() {
   }
 }
 
-export function breadcrumb(line) {
+function breadcrumb(line) {
   state.breadcrumbs.push(`${new Date().toISOString().slice(11, 23)} ${scrub(line).slice(0, MAX_TEXT)}`)
   if (state.breadcrumbs.length > MAX_BREADCRUMBS) state.breadcrumbs.splice(0, state.breadcrumbs.length - MAX_BREADCRUMBS)
 }

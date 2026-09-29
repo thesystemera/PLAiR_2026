@@ -4,7 +4,7 @@ import { cacheManager } from './cacheManager'
 
 const THUMB_SIZES = [256, 512, 768]
 
-export function isSlowConnection() {
+function isSlowConnection() {
   const connection = typeof navigator !== 'undefined' ? navigator.connection : null
   if (!connection) return false
   return !!connection.saveData || ['slow-2g', '2g', '3g'].includes(connection.effectiveType)
@@ -22,7 +22,7 @@ function pickThumbSize() {
   return THUMB_SIZES.find(size => size >= needed) || THUMB_SIZES[THUMB_SIZES.length - 1]
 }
 
-export const ARTWORK_THUMB_SIZE = pickThumbSize()
+const ARTWORK_THUMB_SIZE = pickThumbSize()
 
 const CACHE_CONFIGS = {
   artwork: {
@@ -399,5 +399,3 @@ export const artworkCache = new MediaCache('artwork')
 export const artworkThumbCache = new MediaCache('artwork_thumb')
 export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
-
-export { MediaCache }

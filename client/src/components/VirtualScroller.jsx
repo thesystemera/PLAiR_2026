@@ -30,7 +30,7 @@ function defaultPlaceholder(index, itemHeight) {
   )
 }
 
-export function VirtualScroller({
+function VirtualScroller({
   items = [],
   totalCount = 0,
   windowStart = 0,

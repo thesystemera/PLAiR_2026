@@ -977,5 +977,3 @@ export const ModalTagList = memo(function ModalTagList({
     </div>
   )
 })
-
-export default Modal

@@ -53,7 +53,7 @@ const KIND_ICONS = {
   trend: TrendingUp,
 }
 
-export const SOURCES = {
+const SOURCES = {
   producer: { name: 'Producer', icon: Brain, bubble: 'bg-violet-500/10 border-violet-500/30 text-violet-300', chip: 'border-violet-400/40 text-violet-300' },
   tool: { name: 'Studio tool', icon: Wrench, bubble: 'bg-teal-500/10 border-teal-500/30 text-teal-300', chip: 'border-teal-400/40 text-teal-300' },
   review: { name: 'Review', icon: ClipboardCheck, bubble: 'bg-sky-500/10 border-sky-500/30 text-sky-300', chip: 'border-sky-400/40 text-sky-300' },

@@ -1,4 +1,4 @@
-export const EASE = {
+const EASE = {
   standard: 'easeInOut',
   out: 'easeOut',
   linear: 'linear',
@@ -47,7 +47,7 @@ export const TWEEN = {
   micro: { duration: DURATION.micro, ease: EASE.decelerate },
 }
 
-export const STAGGER = {
+const STAGGER = {
   step: 0.035,
   max: 0.3,
   delay: 0.04,

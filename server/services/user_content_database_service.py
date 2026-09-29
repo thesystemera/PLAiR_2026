@@ -508,7 +508,7 @@ class UserContentDatabaseService(SingletonService):
     def get_enriched_shoutouts(self, shoutout_ids: List[str]) -> List[Optional[Dict]]:
         return [self.get_enriched_shoutout(sid) for sid in shoutout_ids]
 
-    def get_enriched_shoutout(self, shoutout_id: str, reply_info: Optional[Dict] = None) -> Optional[Dict]:
+    def get_enriched_shoutout(self, shoutout_id: str) -> Optional[Dict]:
         shoutout_data = self.shoutouts.get(shoutout_id)
         if not shoutout_data:
             return None

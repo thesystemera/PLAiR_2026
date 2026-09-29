@@ -147,7 +147,7 @@ function createUIStore() {
   return store
 }
 
-export function shallowEqual(a, b) {
+function shallowEqual(a, b) {
   if (Object.is(a, b)) return true
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false
   const keys = Object.keys(a)
@@ -207,7 +207,7 @@ export const uiState = {
 
 let updateDownloadStateCallback = null
 
-export function setDownloadStateUpdater(callback) {
+function setDownloadStateUpdater(callback) {
   updateDownloadStateCallback = callback
 }
 
@@ -1357,12 +1357,6 @@ export function UIStateProvider({ children }) {
     </UIStateContext.Provider>
     </UIStoreContext.Provider>
   )
-}
-
-export function useUIState() {
-  const context = useContext(UIStateContext)
-  if (!context) throw new Error('useUIState must be used within UIStateProvider')
-  return context
 }
 
 export function useUISelector(selector, isEqual = shallowEqual) {

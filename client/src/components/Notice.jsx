@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
 
-export const NOTICE_TONES = {
+const NOTICE_TONES = {
   success: { border: 'border-emerald-400/45', iconColor: 'text-emerald-300', icon: CheckCircle2 },
   error: { border: 'border-red-400/50', iconColor: 'text-red-300', icon: XCircle },
   warning: { border: 'border-amber-400/50', iconColor: 'text-amber-300', icon: AlertTriangle },

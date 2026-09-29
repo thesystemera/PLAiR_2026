@@ -12,7 +12,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
-import Modal, { ModalSection, ModalMetadataField, ModalCard } from './Modal'
+import { Modal, ModalSection, ModalMetadataField, ModalCard } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
 
 const NO_TRANSITION = {}

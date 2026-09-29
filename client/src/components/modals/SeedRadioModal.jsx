@@ -1,7 +1,7 @@
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useViewport } from '../../contexts/ViewportContext'
 import { useAuth } from '../../contexts/AuthContext'
-import Modal, { ModalSection, ModalOptionButton, ModalTitle } from './Modal'
+import { Modal, ModalSection, ModalOptionButton, ModalTitle } from './Modal'
 
 const SEED_OPTIONS = [
   { id: 'favorites', label: 'My Favorites', description: 'Your library on shuffle' },

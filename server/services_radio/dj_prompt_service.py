@@ -8,7 +8,6 @@ from typing import List, Dict
 from functools import lru_cache
 
 from services_radio.dj_prompt_helper_service import (
-    filter_meta_tags_for_gpt_prompt_cleaning,
     clean_gpt_output,
     is_valid_dj_script,
     assemble_prompt,

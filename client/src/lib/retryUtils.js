@@ -1,6 +1,6 @@
 import { logger } from './logger'
 
-export async function retryWithBackoff(fn, options = {}) {
+async function retryWithBackoff(fn, options = {}) {
   const {
     maxAttempts = 3,
     baseDelay = 1000,
@@ -40,7 +40,7 @@ export async function retryWithBackoff(fn, options = {}) {
   throw lastError
 }
 
-export function isNetworkError(error) {
+function isNetworkError(error) {
   if (!error) return false
 
   const errorMessage = error.message?.toLowerCase() || ''

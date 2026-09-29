@@ -48,7 +48,7 @@ function createVoiceElement() {
   return element
 }
 
-export function useDJAudioStream() {
+function useDJAudioStream() {
   const {
     reportEngineStatus,
     speakerColorRef,

@@ -671,14 +671,6 @@ function getDefaultColors() {
   }
 }
 
-export const SPACING = {
-  panelPaddingX: { mobile: '0.75rem', desktop: '1.5rem' },
-  panelPaddingY: { mobile: '0.75rem', desktop: '1.5rem' },
-  panelPaddingBottom: { mobile: '0.75rem', desktop: '0.75rem' },
-  gridGap: { mobile: '0.75rem', desktop: '1rem' },
-  cardPadding: { mobile: '0.5rem', desktop: '1rem' }
-}
-
 export const PANEL = {
   headerHeight: 72
 }
@@ -695,13 +687,6 @@ export const TRANSITIONS = {
   colorShift: { duration: DURATION.theme * 1000 }
 }
 
-export const ANIMATION = {
-  springStiffness: MOTION.spring.stiffness,
-  springDamping: MOTION.spring.damping,
-  fadeInDuration: DURATION.fade * 1000,
-  colorTransitionMs: DURATION.theme * 1000
-}
-
 export const EDGE_FADE_MASK = (fadeTop, fadeBottom, fadeSide) =>
   `linear-gradient(0deg, transparent, black ${fadeBottom}, black calc(100% - ${fadeTop}), transparent), linear-gradient(90deg, transparent, black ${fadeSide}, black calc(100% - ${fadeSide}), transparent)`
 
@@ -712,7 +697,7 @@ export const CATEGORY_FALLBACK_COLORS = ['#8b5cf6', '#ec4899', '#06b6d4', '#10b9
 
 export const ON_AIR_LAMP = '#ef4444'
 
-export const ON_AIR_SEGMENTS = {
+const ON_AIR_SEGMENTS = {
   news: { label: 'News', color: CATEGORY_FALLBACK_COLORS[4] },
   city: { label: 'Weather & City', color: CATEGORY_FALLBACK_COLORS[2] },
   local: { label: 'Local & Gigs', color: CATEGORY_FALLBACK_COLORS[3] },

@@ -399,7 +399,6 @@ class HumanMusicUploadService(SingletonService):
         content_type: Optional[str] = None,
         upload_path: Optional[Path] = None,
         file_size: Optional[int] = None,
-        content_seed: Optional[bytes] = None,
         enable_upscaling: bool = True,
         progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
         content_sha256: Optional[str] = None,

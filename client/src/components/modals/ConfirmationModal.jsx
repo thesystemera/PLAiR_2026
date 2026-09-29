@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
-import Modal, { ModalButton } from './Modal'
+import { Modal, ModalButton } from './Modal'
 
 export function ConfirmationModal({ isOpen, config }) {
   const { getWhite, getBorder } = useDynamicTheme()

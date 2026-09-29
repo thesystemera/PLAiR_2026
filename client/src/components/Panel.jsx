@@ -53,7 +53,7 @@ export function TextRadioIcon({ className = 'w-6 h-6 mb-1' }) {
   )
 }
 
-export const PANEL_TRANSITION = TRANSITIONS.panel
+const PANEL_TRANSITION = TRANSITIONS.panel
 
 export const PANEL_FADE_TRANSITION = TRANSITIONS.fade
 

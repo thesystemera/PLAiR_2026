@@ -36,7 +36,8 @@ __pycache__/
 # ----------------------------------------------------------------------
 .idea/
 *.iml
-.claude/
+.claude/*
+!.claude/skills/
 .DS_Store
 Thumbs.db
 

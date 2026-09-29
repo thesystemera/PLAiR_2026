@@ -20,8 +20,8 @@ export function setMotionPolicy({ tier, reduceMotion }) {
   if (typeof document !== 'undefined') document.documentElement.dataset.motion = motionLevel()
 }
 
-export const canAnimate = () => !policy.reduceMotion
-export const canDecorate = () => !policy.reduceMotion && policy.tier >= MICRO.richTier
+const canAnimate = () => !policy.reduceMotion
+const canDecorate = () => !policy.reduceMotion && policy.tier >= MICRO.richTier
 
 const secondsToMs = (seconds) => Math.round(seconds * 1000)
 
@@ -77,7 +77,7 @@ function baseTransform(el) {
   return computed && computed !== 'none' ? computed : ''
 }
 
-export function releasePop(el, spec = releaseSpec(el), base = baseTransform(el)) {
+function releasePop(el, spec = releaseSpec(el), base = baseTransform(el)) {
   if (!el || !canAnimate()) return
   replace(el, releaseFrames(base, spec), { duration: secondsToMs(MICRO.release.duration) })
 }
@@ -111,7 +111,7 @@ export function artPop(el, variant = 'artPop') {
   replace(el, scaleFrames(spec.frames, [0, 0.6, 1]), { duration: secondsToMs(spec.duration), easing: CSS_EASE.decelerate })
 }
 
-export function artReveal(img) {
+function artReveal(img) {
   const { artReveal: spec } = MICRO
   replace(img, [
     { opacity: 0, transform: `scale(${spec.fromScale})` },

@@ -7,7 +7,7 @@ import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useWebSocketSubscribe } from '../../contexts/WebSocketContext'
 import { useAuth } from '../../contexts/AuthContext'
-import Modal, { ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
+import { Modal, ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
 
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
 const VIDEO_FORMATS = ['mp4', 'mov', 'm4v', 'mkv', 'avi']

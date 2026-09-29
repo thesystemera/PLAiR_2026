@@ -8,7 +8,7 @@ const StorageContext = createContext(null)
 
 let refreshStorageCallback = null
 
-export function setStorageRefreshCallback(callback) {
+function setStorageRefreshCallback(callback) {
   refreshStorageCallback = callback
 }
 

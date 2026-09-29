@@ -52,4 +52,3 @@ export function CostTicker() {
   )
 }
 
-export default CostTicker

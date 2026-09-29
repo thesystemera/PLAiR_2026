@@ -12,7 +12,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
-import Modal, { ModalSection } from './Modal'
+import { Modal, ModalSection } from './Modal'
 import { MOTION, PRESETS } from '../../lib/motion'
 
 const REVIEW_MIN_CHARS = 2

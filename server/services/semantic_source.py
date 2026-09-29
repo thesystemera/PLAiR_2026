@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-import json
 
 import numpy as np
 import psycopg2

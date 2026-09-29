@@ -8,7 +8,7 @@ function generateUUID() {
   })
 }
 
-export function getDeviceInfo() {
+function getDeviceInfo() {
   const ua = navigator.userAgent
   let deviceType = 'desktop'
   let osName = 'Unknown'
@@ -57,7 +57,7 @@ export function getDeviceInfo() {
   }
 }
 
-export function getGuestId() {
+function getGuestId() {
   let guestId = safeStorage.get('guest_id')
   if (!guestId) {
     guestId = `guest_${generateUUID()}`
@@ -81,7 +81,7 @@ export function getDeviceId() {
   return deviceId
 }
 
-export function getDeviceName() {
+function getDeviceName() {
   let deviceName = safeStorage.get('device_name')
   if (!deviceName) {
     const deviceInfo = getDeviceInfo()
@@ -91,7 +91,7 @@ export function getDeviceName() {
   return deviceName
 }
 
-export function getDeviceType() {
+function getDeviceType() {
   let deviceType = safeStorage.get('device_type')
   if (!deviceType) {
     const deviceInfo = getDeviceInfo()

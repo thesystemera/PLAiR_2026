@@ -29,7 +29,7 @@ import { useEntranceWindow } from '../hooks/useEntranceWindow'
 
 const CATALOG_ERROR_GRACE_MS = 4000
 
-export function createCatalogScrollLabel(tracks, sortMode, options = {}) {
+function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
 
   if (!tracks || tracks.length === 0) return () => null

@@ -1510,12 +1510,6 @@ export function PlaybackProvider({ children }) {
   )
 }
 
-export function usePlayback() {
-  const context = useContext(PlaybackContext)
-  if (!context) throw new Error('usePlayback must be used within PlaybackProvider')
-  return context
-}
-
 export function usePlaybackActions() {
   const context = useContext(PlaybackActionsContext)
   if (!context) throw new Error('usePlaybackActions must be used within PlaybackProvider')

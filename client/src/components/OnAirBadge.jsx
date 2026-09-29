@@ -6,7 +6,7 @@ import { ON_AIR_LAMP, getOnAirSegment } from '../lib/themeManager'
 
 const LAMP_GLOW = `0 0 6px 2px ${ON_AIR_LAMP}d9, 0 0 14px 4px #f59e0b59`
 
-export const OnAirLamp = memo(function OnAirLamp({ paused = false, large = false }) {
+const OnAirLamp = memo(function OnAirLamp({ paused = false, large = false }) {
   const size = large ? 'w-2.5 h-2.5' : 'w-2 h-2'
   return (
     <span className={`relative inline-flex flex-shrink-0 ${size}`} aria-hidden="true">

@@ -7,7 +7,7 @@ const BREAKPOINTS = { xs: 0, sm: 640, md: 768, lg: 1024, xl: 1440, '2xl': 1920, 
 
 const SHORT_VIEWPORT_MAX_HEIGHT = 500
 
-export const UI_TEXT_SCALE = 0.94
+const UI_TEXT_SCALE = 0.94
 
 const getBp = (w) => {
   if (w >= BREAKPOINTS['3xl']) return '3xl'

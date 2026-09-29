@@ -60,4 +60,3 @@ export const logger = {
   },
 }
 
-export { LOG_LEVELS }

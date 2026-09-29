@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "check:ui-state": "node scripts/check-ui-state.mjs",
+    "dead-code": "knip --no-progress",
+    "quality": "npm run lint && npm run check:ui-state && npm run dead-code && npm run build"
   },
   "dependencies": {
     "@react-three/fiber": "^8.18.0",
@@ -26,6 +30,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "globals": "^17.3.0",
+    "knip": "^6.38.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.9.3",

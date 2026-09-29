@@ -2,7 +2,7 @@ import { Shuffle, User, Users } from 'lucide-react'
 import { useState } from 'react'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
-import Modal, { ModalSection, ModalButton, ModalOptionButton, ModalTitle, ModalFooter } from './Modal'
+import { Modal, ModalSection, ModalButton, ModalOptionButton, ModalTitle, ModalFooter } from './Modal'
 
 const ARTIST_COLORS = [
   { bg: '#8b5cf620', border: '#8b5cf6', text: '#a78bfa' },

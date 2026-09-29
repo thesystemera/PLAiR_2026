@@ -368,7 +368,6 @@ class StingService:
 
     @staticmethod
     def _review_path(review: dict):
-        from pathlib import Path
         uid, _sep, _stem = str(review.get("id") or "").partition("_")
         filename = (review.get("sting") or {}).get("file") or ""
         if not uid.isdigit() or not filename:

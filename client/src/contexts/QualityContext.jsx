@@ -5,7 +5,7 @@ import { logger } from '../lib/logger'
 import { pauseSceneRendering } from '../lib/renderPause'
 import { setMotionPolicy } from '../lib/microMotion'
 
-export const QUALITY_TIERS = [
+const QUALITY_TIERS = [
   { name: 'minimal', sceneDpr: 0.7, fpsCap: 30, glassTaps: 1, parallaxDpr: 1, parallaxFpsCap: 30, parallaxStepPx: 2 },
   { name: 'low', sceneDpr: 0.85, fpsCap: 30, glassTaps: 1, parallaxDpr: 1.5, parallaxFpsCap: 30, parallaxStepPx: 1.5 },
   { name: 'balanced', sceneDpr: 1.0, fpsCap: 0, glassTaps: 3, parallaxDpr: 2, parallaxFpsCap: 0, parallaxStepPx: 1 },
@@ -13,7 +13,7 @@ export const QUALITY_TIERS = [
   { name: 'high', sceneDpr: 1.5, fpsCap: 0, glassTaps: 3, parallaxDpr: Infinity, parallaxFpsCap: 0, parallaxStepPx: 0 },
 ]
 
-export const TOP_TIER = QUALITY_TIERS.length - 1
+const TOP_TIER = QUALITY_TIERS.length - 1
 export const REFERENCE_SCENE_DPR = QUALITY_TIERS[TOP_TIER].sceneDpr
 
 const FORCED_TIER_KEY = 'plair_quality_tier'

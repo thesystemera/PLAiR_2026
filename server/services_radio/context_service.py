@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database.models import User, TrackPreference, PreferenceType, WeatherData
 from services import log_service
-from services.user_content_database_service import coarse_location
 from services_radio.external_news_service import resolve_country, resolve_city
 from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver

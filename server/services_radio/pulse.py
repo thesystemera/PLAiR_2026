@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional
 
-import numpy as np
 import pytz
 from sqlalchemy import String, cast, func, select
 
@@ -1189,7 +1188,6 @@ class Pulse:
             return []
         index = self._region_index(listener.region.key)
         found: Dict[str, dict] = {}
-        region_key = listener.region.key
 
         own_base = _base_title((index["by_id"].get(pulse_id) or {}).get("title") or "")
 

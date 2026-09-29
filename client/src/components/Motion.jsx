@@ -1,4 +1,4 @@
-import { memo, forwardRef } from 'react'
+import { memo } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { ChevronDown } from 'lucide-react'
 import { CSS_TRANSITION, PRESETS, VARIANTS } from '../lib/motion'
@@ -37,7 +37,7 @@ export const ExpandChevron = memo(function ExpandChevron({ open, size = 16, clas
   )
 })
 
-export function ExpandToggle({ open, onToggle, icon: Icon, iconClassName = '', title, children, className = '' }) {
+function ExpandToggle({ open, onToggle, icon: Icon, iconClassName = '', title, children, className = '' }) {
   return (
     <button
       type="button"
@@ -67,29 +67,6 @@ export function ExpandSection({ open, onToggle, icon, iconClassName, title, meta
     </div>
   )
 }
-
-export function MotionList({ as = 'div', className = '', children, animateOnMount = true }) {
-  const Component = motion[as]
-  return (
-    <Component
-      className={className}
-      variants={VARIANTS.stagger}
-      initial={animateOnMount ? 'hidden' : false}
-      animate="show"
-    >
-      {children}
-    </Component>
-  )
-}
-
-export const MotionItem = forwardRef(function MotionItem({ as = 'div', children, ...props }, ref) {
-  const Component = motion[as]
-  return (
-    <Component ref={ref} variants={VARIANTS.staggerItem} {...props}>
-      {children}
-    </Component>
-  )
-})
 
 export function FadeSwap({ swapKey, children, className = '', mode = 'popLayout', preset = PRESETS.panelSwap, animateOnMount = false }) {
   return (

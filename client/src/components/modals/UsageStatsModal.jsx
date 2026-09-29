@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw, ArrowUpDown } from 'lucide-react'
-import Modal, { ModalSection, ModalCard, ModalErrorState } from './Modal'
+import { Modal, ModalSection, ModalCard, ModalErrorState } from './Modal'
 import { Expandable } from '../Motion'
 import { api } from '../../lib/api'
 import { formatUsd, formatCount, formatDuration } from '../../lib/usageFormat'
@@ -368,4 +368,3 @@ export function UsageStatsModal({ isOpen, onClose, isAdmin }) {
   )
 }
 
-export default UsageStatsModal

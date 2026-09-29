@@ -1,6 +1,6 @@
-export const DJ_STREAM_MIME = 'audio/webm; codecs="opus"'
+const DJ_STREAM_MIME = 'audio/webm; codecs="opus"'
 
-export const DJ_STREAM_TIMING = {
+const DJ_STREAM_TIMING = {
   firstAudioTimeoutMs: 30000,
   stallTimeoutMs: 45000,
   reconnectStallTimeoutMs: 8000,
