@@ -902,7 +902,7 @@ class DJPromptService:
             review=self._review_step,
             dispatch=tool_runtime.dispatch,
             temperature=self.config['dj_temperature'],
-            max_tokens=self.config['dj_tokens'],
+            max_tokens=self.config['dj_tokens'] + settings.DJ_TOOL_THINKING_HEADROOM,
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
             spec=LLM_DJ,
             thinking_budget=settings.DJ_TOOL_THINKING_BUDGET,

@@ -397,6 +397,16 @@ class AIService(SingletonService):
             parts = list(content.parts) if content and content.parts else []
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
             text = self._visible_text(parts)
+            finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
+
+            if not function_calls and finish == "MAX_TOKENS" and strikes < settings.LLM_RECOVERY_MAX_STRIKES:
+                strikes += 1
+                log_service.warning(f"DJ tool turn: reply cut off at the token limit - asking again (strike {strikes})")
+                if parts:
+                    contents.append(content)
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                    text=self._recovery_message("MAX_TOKENS", bool(calls_log)))]))
+                continue
 
             if not function_calls and review is not None and not reviewed and not is_last:
                 prompt = review(text, calls_log)
@@ -416,7 +426,6 @@ class AIService(SingletonService):
                     continue
 
             if not function_calls:
-                finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
                 said_enough = bool(preambles) and not any(
                     call["name"] in (followup_tools or set()) for call in calls_log)
                 recovery = None if text.strip() or said_enough else self._recovery_message(finish, bool(calls_log))

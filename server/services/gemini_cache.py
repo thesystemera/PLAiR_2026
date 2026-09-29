@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 from google.genai import types
@@ -63,10 +64,18 @@ class SystemCacheManager:
     async def _create(self, client, key: str, label: str, model: str, system_instruction: str, tools) -> Optional[str]:
         from services.llm_telemetry import record_usage
 
+        display_name = key.replace(":", "_")[:120]
+        existing = await self._find_existing(client, display_name)
+        if existing is not None:
+            name, seconds_left = existing
+            self._memo[key] = (name, time.monotonic() + seconds_left * 0.9)
+            log_service.system(f"[GEMINI CACHE] {label} on {model}: reusing {name} ({int(seconds_left)}s left)")
+            return name
+
         started = time.perf_counter()
         try:
             cache = await client.aio.caches.create(model=model, config=types.CreateCachedContentConfig(
-                system_instruction=system_instruction, tools=tools, display_name=key.replace(":", "_")[:120],
+                system_instruction=system_instruction, tools=tools, display_name=display_name,
                 ttl=f"{settings.GEMINI_CACHE_TTL_S}s"))
         except Exception as e:
             log_service.warning(f"[GEMINI CACHE] {label} on {model} not cached "
@@ -79,6 +88,20 @@ class SystemCacheManager:
         self._memo[key] = (cache.name, time.monotonic() + settings.GEMINI_CACHE_TTL_S * 0.9)
         log_service.system(f"[GEMINI CACHE] {label} on {model}: {tokens} tokens cached as {cache.name}")
         return cache.name
+
+    @staticmethod
+    async def _find_existing(client, display_name: str) -> Optional[Tuple[str, float]]:
+        try:
+            pager = await client.aio.caches.list()
+            async for cache in pager:
+                if getattr(cache, "display_name", None) != display_name or not getattr(cache, "expire_time", None):
+                    continue
+                seconds_left = (cache.expire_time - datetime.now(timezone.utc)).total_seconds()
+                if seconds_left > 120:
+                    return cache.name, seconds_left
+        except Exception as e:
+            log_service.warning(f"[GEMINI CACHE] listing caches failed: {type(e).__name__}: {e}")
+        return None
 
     def invalidate(self, name: str) -> None:
         for key in [key for key, (cached, _) in self._memo.items() if cached == name]:

@@ -297,6 +297,7 @@ class Settings:
     GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))
     GEO_LOCATE_PER_RUN: int = int(os.getenv("GEO_LOCATE_PER_RUN", "200"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
+    DJ_TOOL_THINKING_HEADROOM: int = int(os.getenv("DJ_TOOL_THINKING_HEADROOM", "6000"))
     DJ_TOOL_THINKING_BUDGET: Optional[int] = (int(os.getenv("DJ_TOOL_THINKING_BUDGET", "-1"))
                                               if os.getenv("DJ_TOOL_THINKING_BUDGET", "-1").strip() else None)
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
