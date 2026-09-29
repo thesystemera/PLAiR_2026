@@ -401,6 +401,9 @@ class AIService(SingletonService):
             finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
             trace.append({"round": rounds, "model": model, "finish": finish, "text": text,
                           "thought": any(getattr(p, "thought", False) for p in parts),
+                          "parts": [{"chars": len(p.text or ""), "thought": bool(getattr(p, "thought", False)),
+                                     "signed": bool(getattr(p, "thought_signature", None)),
+                                     "call": bool(p.function_call)} for p in parts],
                           "calls": [{"name": fc.name, "args": dict(fc.args) if fc.args else {}}
                                     for fc in function_calls]})
 

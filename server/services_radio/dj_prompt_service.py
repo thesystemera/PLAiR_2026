@@ -836,7 +836,13 @@ class DJPromptService:
     def _split_interactive_response(response_text: str) -> tuple[str, str]:
         cut = min((index for index in (response_text.find("[INTERNAL DIALOGUE]"), response_text.find("[TASK]"))
                    if index >= 0), default=len(response_text))
-        return response_text[:cut].strip(), response_text[cut:].strip()
+        notes = response_text[cut:]
+        repeat = min((index for index in (notes.find("[BROADCAST]"), notes.find("[TXT]")) if index >= 0),
+                     default=len(notes))
+        if repeat < len(notes):
+            log_service.warning(f"DJ reply repeated its script after the notes ({len(notes) - repeat} chars) - "
+                                f"kept out of the notes and history")
+        return response_text[:cut].strip(), notes[:repeat].strip()
 
     @gpt_error_handler
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
