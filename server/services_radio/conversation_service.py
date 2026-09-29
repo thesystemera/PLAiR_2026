@@ -19,7 +19,6 @@ from config.settings import settings
 
 TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
-RECENT_ACTION_WINDOW_S = 15 * 60
 FAILED_TURN_LINES = (
     "[BROADCAST] [LEO] &0.2& ~groans~ Ah, the desk just ate that one. &0.1& Hit us again?",
     "[BROADCAST] [JESS] &0.2& ~sighs~ Lost you in the static there. &0.1& Say that again for us?",
@@ -259,7 +258,6 @@ class ConversationService:
         self.broadcast_all_func: Optional[Callable] = None
         self._active_turns: Dict[str, Set[asyncio.Task]] = {}
         self._turn_started_at: Dict[str, float] = {}
-        self._recent_actions: Dict[str, List[tuple]] = {}
 
     def initialize(self,
                    dj_prompt_service,
@@ -530,27 +528,13 @@ class ConversationService:
             await queue.add_clip_request(PrerenderedClip(audio, label=f"filler:{voice}"), user_id or 0,
                                          "interactive", is_guest, session_id)
 
-    def _recent_commands(self, session_id: str) -> set:
-        now = time.time()
-        return {command for at, command in self._recent_actions.get(session_id, ())
-                if now - at < RECENT_ACTION_WINDOW_S}
-
-    def _remember_actions(self, session_id: str, commands: List[str]):
-        now = time.time()
-        kept = [(at, command) for at, command in self._recent_actions.pop(session_id, [])
-                if now - at < RECENT_ACTION_WINDOW_S]
-        self._recent_actions[session_id] = (kept + [(now, command) for command in commands])[-12:]
-        while len(self._recent_actions) > TEMP_CONVERSATION_MAX_SESSIONS:
-            self._recent_actions.pop(next(iter(self._recent_actions)))
-
     async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
         from services_radio.dj_tools import DJToolRuntime, DJTurnContext, tool_activity
 
         if self.dj_prompt_service is None:
             raise RuntimeError("dj_prompt_service not initialized")
 
-        ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin,
-                            recent_commands=self._recent_commands(session_id))
+        ctx = DJTurnContext(session_dict=session_dict, transcription=transcription, origin=origin)
         if self.broadcast_func:
             broadcast = self.broadcast_func
 
@@ -642,7 +626,6 @@ class ConversationService:
             full_response = full_main + "\n" + notes if notes else full_main
 
             commands_for_display = runtime.commands_for_display()
-            self._remember_actions(session_id, runtime.action_commands())
             log_service.commands(
                 f"{log_service.who(session_id)}: DJ turn | {trace['route']}"
                 f" | tools: {runtime.summary() or 'none'} | {(result or {}).get('rounds') or 0} round(s)"

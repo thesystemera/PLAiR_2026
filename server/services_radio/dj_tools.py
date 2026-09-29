@@ -63,19 +63,6 @@ FAILED_ACTION_NOTE = "This did NOT happen. Don't pretend it did - tell the liste
 SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. "
                 "Acknowledge it briefly and hand off - do not invent the details.")
 
-_SHOUTOUT_INTENT = re.compile(
-    r"\b(shout[\s-]?outs?|save|record|post|publish|share|broadcast|on (the )?air|"
-    r"tell (everyone|everybody|the community|all)|message (to|for) (everyone|everybody|the community|listeners))\b",
-    re.IGNORECASE)
-_REPLY_INTENT = re.compile(r"\b(repl(y|ies|ying)|respond|response|answer|get back to|shout[\s-]?back)\b", re.IGNORECASE)
-_REVIEW_INTENT = re.compile(r"\b(opinion|review|feedback|verdict|rate|rating|save|record|post)\b", re.IGNORECASE)
-_TRACK_REFERENCE = re.compile(
-    r"\b(song|track|tune|beat|jam|banger|album|chorus|verse|vocals?|lyrics|melody|drop|production|this one|that one)\b",
-    re.IGNORECASE)
-_NEGATIVE_INTENT = re.compile(
-    r"\b(ban|never|hate|dislike|don'?t (like|want|enjoy)|do not (like|want)|not (a )?fan|can'?t stand|remove|block|"
-    r"awful|terrible|sucks?|crap|shit|garbage|trash|annoying|worst|thumbs down|unlike|undo|clear|get rid)\b",
-    re.IGNORECASE)
 _PARENT_ID = re.compile(r"^\d+_\d+$")
 
 
@@ -565,7 +552,6 @@ class DJTurnContext:
     activity_sent: bool = False
     planned: Optional[set] = None
     granted: set = field(default_factory=set)
-    recent_commands: set = field(default_factory=set)
 
     async def activity(self, phase: str, **data) -> None:
         if self.notify is None:
@@ -677,18 +663,6 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError(f"Unknown tool '{name}'")
 
 
-PLAN_GATED_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist", "rate_track"}
-
-
-def _words(text: str) -> set:
-    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
-
-
-def _mentions(listener_text: str, query: str) -> bool:
-    wanted = {word for word in _words(query) if len(word) > 2}
-    return bool(wanted) and len(wanted & _words(listener_text)) * 2 >= len(wanted)
-
-
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
     if name in READ_TOOLS and ctx.calls_made < settings.DJ_TOOL_MAX_CALLS_PER_TURN:
         return None
@@ -699,32 +673,15 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
     if name in READ_TOOLS:
         return None
 
-    listener_text = ctx.transcription or ""
-
-    if (name in PLAN_GATED_TOOLS and args.get("query") and command_string(name, args) in ctx.recent_commands
-            and not _mentions(listener_text, args["query"])):
-        return (f"'{args['query']}' was already handled for an earlier message and this message doesn't ask for it. "
-                "Answer this message only.")
-
     if name in SAVE_TOOLS:
         if not ctx.user_id:
             return "Only signed-in listeners can save shoutouts, replies or reviews."
         if ctx.saves:
             return "Only one shoutout, reply or review can be saved per turn."
-        if name == "save_shoutout" and not _SHOUTOUT_INTENT.search(listener_text):
-            return "The listener did not ask to save or post a shoutout in their own message."
-        if name == "save_shoutout_reply" and not _REPLY_INTENT.search(listener_text):
-            return "The listener did not ask to reply to a shoutout in their own message."
-        if name == "save_review" and not (
-                _REVIEW_INTENT.search(listener_text)
-                or (_TRACK_REFERENCE.search(listener_text) and len(listener_text.split()) >= 8)):
-            return "The listener did not give or ask to save a review of a track in their own message."
 
     if name == "rate_track":
         if not ctx.user_id:
             return "Only signed-in listeners can rate tracks."
-        if args["rating"] in ("ban", "dislike") and not _NEGATIVE_INTENT.search(listener_text):
-            return "The listener did not ask to ban or clear the rating of a track in their own message."
 
     if name in SEGMENT_TOOLS:
         if name in ctx.segments:
@@ -826,9 +783,6 @@ class DJToolRuntime:
         call_id = f"{self.ctx.turn_id}:x{len(self.ctx.records)}"
         await self.ctx.activity("start", call_id=call_id, tool=name, source="tool", label=activity_label(name, args))
         await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome=outcome, summary=summary)
-
-    def action_commands(self) -> List[str]:
-        return [record["command"] for record in self.ctx.executed if record["name"] in PLAN_GATED_TOOLS]
 
     def commands_for_display(self) -> Optional[str]:
         commands = [record["command"] for record in self.ctx.executed]
