@@ -2,6 +2,8 @@ import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { useRef, useState, useEffect, useCallback } from 'react'
 
+const SPEECH_BITRATE = { opus: 32000, aac: 64000 }
+
 const getSupportedAudioMimeType = () => {
   const webmOpus = 'audio/webm;codecs=opus'
   if (MediaRecorder.isTypeSupported(webmOpus)) {
@@ -121,7 +123,6 @@ export const useVoiceRecorder = () => {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
-        sampleRate: 16000,
         channelCount: 1
       }
 
@@ -169,16 +170,20 @@ export const useVoiceRecorder = () => {
       const mimeType = getSupportedAudioMimeType()
       recordingMimeType.current = mimeType || 'audio/webm;codecs=opus'
 
-      const recorderOptions = mimeType ? { mimeType } : {}
-      mediaRecorder.current = new MediaRecorder(stream, recorderOptions)
+      const recorderOptions = {
+        audioBitsPerSecond: mimeType === 'audio/mp4' ? SPEECH_BITRATE.aac : SPEECH_BITRATE.opus,
+        ...(mimeType ? { mimeType } : {})
+      }
+      const recorder = new MediaRecorder(stream, recorderOptions)
+      mediaRecorder.current = recorder
 
-      mediaRecorder.current.ondataavailable = (event) => {
-        if (event.data.size > 0 && recordingStartTime.current > 0) {
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && mediaRecorder.current === recorder) {
           audioChunks.current.push(event.data)
         }
       }
 
-      mediaRecorder.current.start(100)
+      recorder.start(100)
 
       recordingStartTime.current = Date.now()
       setIsRecording(true)

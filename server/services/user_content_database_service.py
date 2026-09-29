@@ -1,9 +1,10 @@
 import asyncio
 import json
 import os
+import time
 import aiofiles
 from typing import Dict, List, Optional, Union, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from services import log_service
 from services.base_service import SingletonService
 from database.pg_pool import get_pooled_connection
@@ -13,6 +14,34 @@ from sqlalchemy import select
 from database.models import User
 
 PRIVATE_SHOUTOUT_KEYS = ("latitude", "longitude", "lat", "lon", "lng", "coordinates", "distance_km")
+KIND_SHOUTOUT = "shoutout"
+KIND_REPLY = "reply"
+KIND_REVIEW = "review"
+KINDS = (KIND_SHOUTOUT, KIND_REPLY, KIND_REVIEW)
+
+
+def kind_of(item: Optional[Dict]) -> str:
+    if not isinstance(item, dict):
+        return KIND_SHOUTOUT
+    kind = item.get("content_type")
+    if kind in KINDS:
+        return kind
+    return KIND_REPLY if item.get("parent_id") else KIND_SHOUTOUT
+
+
+def track_ref(track: Optional[Dict]) -> Optional[Dict]:
+    if not track or not track.get("id"):
+        return None
+    params = track.get("generation_params") or {}
+    artists = log_service.track_artists(track)
+    genre = (track.get("derived_tags") or {}).get("primary_genre") or params.get("style")
+    return {"id": str(track["id"]), "title": params.get("title") or track.get("title") or str(track["id"]),
+            "artist": artists[0] if artists else None, "genre": genre}
+
+
+def sting_file(mp3_path) -> str:
+    base, _ext = os.path.splitext(str(mp3_path))
+    return f"{base}_sting.mp3"
 
 
 def coarse_location(location: Optional[str]) -> Optional[str]:
@@ -55,6 +84,7 @@ class UserContentDatabaseService(SingletonService):
 
         self.shoutouts = {}
         self.shoutout_ids = []
+        self.children: Dict[str, set] = {}
         self._service_initialized = False
         self._initialized = True
 
@@ -89,6 +119,10 @@ class UserContentDatabaseService(SingletonService):
         c.execute('CREATE INDEX IF NOT EXISTS idx_shoutouts_user_id ON shoutouts(user_id)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_shoutouts_category ON shoutouts(category)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_shoutouts_parent_id ON shoutouts(parent_id)')
+        c.execute("ALTER TABLE shoutouts ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'shoutout'")
+        c.execute('ALTER TABLE shoutouts ADD COLUMN IF NOT EXISTS track_id TEXT DEFAULT NULL')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_shoutouts_kind ON shoutouts(kind)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_shoutouts_track_id ON shoutouts(track_id)')
 
         conn.commit()
         conn.close()
@@ -157,7 +191,7 @@ class UserContentDatabaseService(SingletonService):
                     audio_path = json_path.with_suffix('.mp3')
                     has_mp3 = audio_path.exists()
 
-                    if has_mp3:
+                    if has_mp3 or metadata.get('text_only'):
                         metadata['id'] = shoutout_id
                         user_id_from_path = json_path.parent.parent.name
 
@@ -188,6 +222,10 @@ class UserContentDatabaseService(SingletonService):
                     updated_count += 1
 
         self.shoutout_ids.sort(key=lambda sid: self.shoutouts[sid].get("timestamp", ""), reverse=True)
+        self.children = {}
+        for sid, meta in self.shoutouts.items():
+            if meta.get("parent_id"):
+                self.children.setdefault(meta["parent_id"], set()).add(sid)
 
         log_service.user_content(
             f"Shoutouts synced: {len(self.shoutouts)} shoutouts | +{added_count} new | ~{updated_count} updated | -{len(removed_ids)} removed")
@@ -217,27 +255,21 @@ class UserContentDatabaseService(SingletonService):
             log_service.error(f"Failed to save metadata file: {e}")
             return None
 
-    async def _find_latest_upload(self, user_id: int) -> Optional[Path]:
-        uploads_dir = settings.get_user_uploads_dir(user_id)
-        if not uploads_dir.exists():
-            return None
-        try:
-            files = list(uploads_dir.glob("*.webm"))
-            if not files:
-                return None
-            return max(files, key=lambda f: f.stat().st_mtime)
-        except Exception as e:
-            log_service.error(f"Error finding latest upload for user {user_id}: {e}")
-            return None
-
     def remember_shoutout(self, shoutout_id: str, metadata: Dict):
+        previous = self.shoutouts.get(shoutout_id)
+        if previous and previous.get("parent_id"):
+            self.children.get(previous["parent_id"], set()).discard(shoutout_id)
         self.shoutouts[shoutout_id] = metadata
+        if metadata.get("parent_id"):
+            self.children.setdefault(metadata["parent_id"], set()).add(shoutout_id)
         if shoutout_id not in self.shoutout_ids:
             self.shoutout_ids.insert(0, shoutout_id)
             self.shoutout_ids.sort(key=lambda sid: self.shoutouts[sid].get("timestamp", ""), reverse=True)
 
     def forget_shoutout(self, shoutout_id: str):
-        self.shoutouts.pop(shoutout_id, None)
+        previous = self.shoutouts.pop(shoutout_id, None)
+        if previous and previous.get("parent_id"):
+            self.children.get(previous["parent_id"], set()).discard(shoutout_id)
         if shoutout_id in self.shoutout_ids:
             self.shoutout_ids.remove(shoutout_id)
 
@@ -250,153 +282,154 @@ class UserContentDatabaseService(SingletonService):
             except Exception as e:
                 log_service.warning(f"Failed to remove {path}: {e}")
 
-    async def process_shoutout_upload(self, user_id: int, enhancement_service,
-                                      gemini_service, vector_db_service=None, broadcast_callback: Optional[Callable] = None,
-                                      parent_id: Optional[str] = None, webm_path: Optional[Path] = None) -> tuple[bool, str]:
+    def parent_problem(self, parent_id: Optional[str]) -> Optional[str]:
+        parent = self.shoutouts.get(parent_id) if parent_id else None
+        if parent is None:
+            return "That shoutout no longer exists"
+        if kind_of(parent) != KIND_SHOUTOUT:
+            return "Replies can only go to a shoutout, not to a reply or a review"
+        return None
+
+    def _llm_context(self, kind: str, parent_id: Optional[str], track: Optional[Dict]) -> Dict:
+        if kind == KIND_REPLY and parent_id in self.shoutouts:
+            parent = self.shoutouts[parent_id]
+            return {"replying_to": {"from": (parent.get("user_data") or {}).get("username"),
+                                    "message": parent.get("full_transcription", "")}}
+        if kind == KIND_REVIEW and track:
+            return {"track": {k: track.get(k) for k in ("title", "artist", "genre") if track.get(k)}}
+        return {}
+
+    def _new_stamp(self, user_id: int) -> str:
+        stamp = int(time.time())
+        shoutouts_dir = settings.get_user_shoutouts_dir(user_id)
+        while (shoutouts_dir / f"{stamp}.json").exists() or f"{user_id}_{stamp}" in self.shoutouts:
+            stamp += 1
+        return str(stamp)
+
+    async def create_voice_item(self, user_id: int, kind: str, webm_path: Optional[Path], enhancement_service,
+                                ai_service, vector_db_service=None, broadcast_callback: Optional[Callable] = None,
+                                parent_id: Optional[str] = None, track: Optional[Dict] = None) -> Optional[Dict]:
         target_mp3_path = None
         target_json_path = None
         registered = False
         try:
-            if parent_id:
-                if parent_id not in self.shoutouts:
-                    log_service.error(f"Parent shoutout not found: {parent_id}")
-                    return (False, "")
-                if not await asyncio.to_thread(self.is_root_shoutout, parent_id):
-                    log_service.error(f"Cannot reply to a reply: {parent_id}")
-                    return (False, "")
-
-            if webm_path is None:
-                webm_path = await self._find_latest_upload(user_id)
-            if not webm_path or not webm_path.exists():
-                return (False, "")
+            if kind == KIND_REPLY and self.parent_problem(parent_id):
+                log_service.error(f"Reply refused for {parent_id}: {self.parent_problem(parent_id)}")
+                return None
+            if not webm_path or not webm_path.exists() or not webm_path.with_suffix(".json").exists():
+                log_service.error(f"No recording to save as a {kind} for user {user_id}")
+                return None
 
             timestamp = webm_path.stem
-            json_path = webm_path.with_suffix(".json")
-
-            if not json_path.exists():
-                return (False, "")
-
             shoutouts_dir = settings.get_user_shoutouts_dir(user_id)
-
             target_mp3_path = shoutouts_dir / f"{timestamp}.mp3"
             target_json_path = shoutouts_dir / f"{timestamp}.json"
 
             enhanced = await enhancement_service.enhance_audio(
-                str(webm_path),
-                str(target_mp3_path),
-                "shoutout",
-                str(json_path),
-                str(target_json_path),
-                gemini_service
+                str(webm_path), str(target_mp3_path), kind, str(webm_path.with_suffix(".json")),
+                str(target_json_path), ai_service, context=self._llm_context(kind, parent_id, track)
             )
-
             if not enhanced or not target_json_path.exists() or not target_mp3_path.exists():
-                log_service.error(f"Shoutout processing produced no audio/transcript for {user_id}_{timestamp}")
-                await asyncio.to_thread(self._remove_files, [target_mp3_path, target_json_path])
-                return (False, "")
+                log_service.error(f"{kind} processing produced no audio/transcript for {user_id}_{timestamp}")
+                await asyncio.to_thread(self._remove_files, [target_mp3_path, target_json_path,
+                                                             Path(sting_file(target_mp3_path))])
+                return None
 
             async with aiofiles.open(target_json_path, 'r', encoding='utf-8') as f:
-                processed_metadata = json.loads(await f.read())
-
-            transcription = processed_metadata.get('full_transcription', '')
-
-            shoutout_id = f"{user_id}_{timestamp}"
-            processed_metadata['id'] = shoutout_id
-            processed_metadata['content_type'] = 'reply' if parent_id else 'shoutout'
-            if parent_id:
-                processed_metadata['parent_id'] = parent_id
-
-            async with aiofiles.open(target_json_path, 'w', encoding='utf-8') as f:
-                await f.write(json.dumps(processed_metadata, indent=2, ensure_ascii=False))
-
-            await asyncio.to_thread(self._upsert_shoutout_to_db, shoutout_id, user_id, processed_metadata, True, parent_id)
+                metadata = json.loads(await f.read())
             registered = True
-            self.remember_shoutout(shoutout_id, processed_metadata)
-
-            if vector_db_service:
-                try:
-                    await asyncio.to_thread(vector_db_service.add_single_shoutout, processed_metadata)
-                    all_shoutouts = await self.load_all_shoutouts_for_indexing()
-                    await asyncio.to_thread(vector_db_service.rebuild_indexes, all_shoutouts)
-                except Exception as e:
-                    log_service.warning(f"Shoutout {shoutout_id} saved but indexing failed (background rebuild will retry): {e}")
-
-            if broadcast_callback:
-                event_type = "reply" if parent_id else "shoutout"
-                await broadcast_callback(event_type, shoutout_id, processed_metadata)
-
-            content_type_label = "Reply" if parent_id else "Shoutout"
-            log_service.user_content(f"✅ {content_type_label} {shoutout_id} fully indexed and ready")
-            return (True, transcription)
-
+            return await self._register_item(user_id, f"{user_id}_{timestamp}", metadata, kind, target_json_path,
+                                             True, vector_db_service, broadcast_callback, parent_id, track)
         except Exception as e:
-            log_service.error(f"Failed to process shoutout upload: {e}")
+            log_service.error(f"Failed to process {kind} upload: {e}")
             if not registered:
                 await asyncio.to_thread(self._remove_files, [target_mp3_path, target_json_path])
-            return (False, "")
+            return None
 
-    async def process_opinion_upload(self, user_id: int, track_info: Dict, enhancement_service, gemini_service) -> bool:
+    async def create_text_item(self, user_id: int, kind: str, text: str, user_data: Dict, enhancement_service,
+                               ai_service, vector_db_service=None, broadcast_callback: Optional[Callable] = None,
+                               parent_id: Optional[str] = None, track: Optional[Dict] = None) -> Optional[Dict]:
+        text = (text or "").strip()
+        if not text:
+            return None
+        if kind == KIND_REPLY and self.parent_problem(parent_id):
+            log_service.error(f"Reply refused for {parent_id}: {self.parent_problem(parent_id)}")
+            return None
         try:
-            webm_path = await self._find_latest_upload(user_id)
-            if not webm_path:
-                return False
-
-            json_path = webm_path.with_suffix(".json")
-            if not json_path.exists():
-                return False
-
-            track_id = str(track_info.get('id', 'unknown'))
-            opinions_dir = settings.OPINIONS_DIR / track_id
-            opinions_dir.mkdir(parents=True, exist_ok=True)
-
-            opinion_id = f"{user_id}_{int(datetime.now().timestamp())}"
-            target_mp3_path = opinions_dir / f"{opinion_id}.mp3"
-            target_json_path = opinions_dir / f"{opinion_id}.json"
-
-            enhanced = await enhancement_service.enhance_audio(
-                str(webm_path),
-                str(target_mp3_path),
-                "opinion",
-                str(json_path),
-                str(target_json_path),
-                gemini_service
+            processed = await enhancement_service.filter_text(
+                text, kind, ai_service, context=self._llm_context(kind, parent_id, track),
+                location=coarse_location(user_data.get("location"))
             )
-
-            if not enhanced or not target_mp3_path.exists():
-                await asyncio.to_thread(self._remove_files, [target_mp3_path, target_json_path])
-                return False
-
-            if target_json_path.exists():
-                async with aiofiles.open(target_json_path, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    opinion_data = json.loads(content)
-
-                opinion_data['track_info'] = {
-                    'track_id': track_id,
-                    'title': track_info.get('generation_params', {}).get('title', 'Unknown'),
-                    'artist': track_info.get('generation_params', {}).get('artist_name', 'Unknown'),
-                    'style': track_info.get('generation_params', {}).get('style', 'Unknown')
-                }
-
-                async with aiofiles.open(target_json_path, 'w', encoding='utf-8') as f:
-                    await f.write(json.dumps(opinion_data, indent=2, ensure_ascii=False))
-                return True
-
-            return False
+            filtered_text = (processed.get("full_transcription") or "").strip() if processed else ""
+            metadata_in = dict((processed or {}).get("transcription_metadata") or {})
+            metadata_in.pop("sting_quote", None)
+            metadata_in["total_words"] = len((filtered_text or text).split())
+            metadata_in["duration"] = 0
+            where = await self._where(metadata_in, user_data)
+            if where:
+                metadata_in["where"] = where
+            metadata = {
+                "full_transcription": filtered_text or text,
+                "transcription_metadata": metadata_in,
+                "word_level_transcription": [],
+                "user_data": user_data,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "text_only": True,
+                "transcript_filtered": bool(filtered_text),
+            }
+            stamp = self._new_stamp(user_id)
+            json_path = settings.get_user_shoutouts_dir(user_id) / f"{stamp}.json"
+            return await self._register_item(user_id, f"{user_id}_{stamp}", metadata, kind, json_path, False,
+                                             vector_db_service, broadcast_callback, parent_id, track)
         except Exception as e:
-            log_service.error(f"Failed to process opinion: {e}")
-            return False
+            log_service.error(f"Failed to save typed {kind}: {e}")
+            return None
+
+    @staticmethod
+    async def _where(metadata: Dict, user_data: Dict) -> Optional[Dict]:
+        from services.user_content_speech_enhancement_service import shoutout_where
+        try:
+            where = await shoutout_where(metadata, user_data)
+            return where.as_dict() if where is not None else None
+        except Exception:
+            return None
+
+    async def _register_item(self, user_id: int, item_id: str, metadata: Dict, kind: str, json_path: Path,
+                             has_audio: bool, vector_db_service, broadcast_callback, parent_id, track) -> Dict:
+        metadata['id'] = item_id
+        metadata['content_type'] = kind
+        if parent_id:
+            metadata['parent_id'] = parent_id
+        if track:
+            metadata['track'] = {k: track.get(k) for k in ("id", "title", "artist", "genre") if track.get(k)}
+
+        async with aiofiles.open(json_path, 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(metadata, indent=2, ensure_ascii=False))
+
+        await asyncio.to_thread(self._upsert_shoutout_to_db, item_id, user_id, metadata, has_audio, parent_id)
+        self.remember_shoutout(item_id, metadata)
+
+        if vector_db_service:
+            try:
+                await asyncio.to_thread(vector_db_service.add_single_shoutout, metadata)
+                all_items = await self.load_all_shoutouts_for_indexing()
+                await asyncio.to_thread(vector_db_service.rebuild_indexes, all_items)
+            except Exception as e:
+                log_service.warning(f"{kind} {item_id} saved but indexing failed (background rebuild will retry): {e}")
+
+        if broadcast_callback:
+            await broadcast_callback(kind, item_id, public_shoutout(metadata))
+
+        log_service.user_content(f"✅ {kind.capitalize()} {item_id} saved ({'voice' if has_audio else 'typed'})")
+        return metadata
 
     async def load_all_shoutouts_for_indexing(self) -> List[Dict]:
         all_data = []
         for sid, data in self.shoutouts.items():
             item = data.copy()
             item['id'] = sid
-            item['content_type'] = 'shoutout'
-            if 'user_data' in item and 'timestamp' in item['user_data']:
-                item['date'] = item['user_data']['timestamp']
-            else:
-                item['date'] = ''
+            item['content_type'] = kind_of(data)
+            item['date'] = item.get('timestamp', '')
             all_data.append(item)
         return all_data
 
@@ -434,6 +467,8 @@ class UserContentDatabaseService(SingletonService):
 
         if parent_id is None:
             parent_id = metadata.get("parent_id")
+        kind = kind_of(metadata)
+        track_id = (metadata.get("track") or {}).get("id")
 
         if exists:
             c.execute('''UPDATE shoutouts
@@ -446,16 +481,19 @@ class UserContentDatabaseService(SingletonService):
                              username=%s,
                              location=%s,
                              has_mp3=%s,
-                             parent_id=%s
+                             parent_id=%s,
+                             kind=%s,
+                             track_id=%s
                          WHERE content_id = %s''',
                       (user_id, json.dumps(metadata), created_at, transcription, category,
-                       duration, username, location, int(has_mp3), parent_id, shoutout_id))
+                       duration, username, location, int(has_mp3), parent_id, kind, track_id, shoutout_id))
         else:
             c.execute('''INSERT INTO shoutouts (user_id, metadata_json, created_at, transcription, category,
-                                                duration, username, location, has_mp3, parent_id, content_id)
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                                                duration, username, location, has_mp3, parent_id, kind,
+                                                track_id, content_id)
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
                       (user_id, json.dumps(metadata), created_at, transcription, category,
-                       duration, username, location, int(has_mp3), parent_id, shoutout_id))
+                       duration, username, location, int(has_mp3), parent_id, kind, track_id, shoutout_id))
 
             if parent_id:
                 c.execute("UPDATE shoutouts SET reply_count = reply_count + 1 WHERE content_id = %s", (parent_id,))
@@ -468,12 +506,7 @@ class UserContentDatabaseService(SingletonService):
         return self.shoutouts.get(shoutout_id)
 
     def get_enriched_shoutouts(self, shoutout_ids: List[str]) -> List[Optional[Dict]]:
-        known_ids = [sid for sid in shoutout_ids if sid in self.shoutouts]
-        reply_infos = self._get_reply_info_batch(known_ids)
-        return [
-            self.get_enriched_shoutout(sid, reply_info=reply_infos.get(sid, {'reply_count': 0, 'parent_id': None}))
-            for sid in shoutout_ids
-        ]
+        return [self.get_enriched_shoutout(sid) for sid in shoutout_ids]
 
     def get_enriched_shoutout(self, shoutout_id: str, reply_info: Optional[Dict] = None) -> Optional[Dict]:
         shoutout_data = self.shoutouts.get(shoutout_id)
@@ -482,60 +515,33 @@ class UserContentDatabaseService(SingletonService):
 
         try:
             uid, timestamp = shoutout_id.split('_', 1)
-
-            enriched = shoutout_data.copy()
-            enriched['id'] = shoutout_id
-            enriched['audio_url'] = f"/api/user_content/shoutouts/audio/{uid}/{timestamp}.mp3"
-            enriched['has_audio'] = True
-
-            if 'full_transcription' in enriched and 'transcription' not in enriched:
-                enriched['transcription'] = enriched['full_transcription']
-
-            if 'user_data' in enriched and 'user_id' not in enriched:
-                enriched['user_id'] = enriched['user_data'].get('user_id')
-
-            if reply_info is None:
-                reply_info = self._get_reply_info(shoutout_id)
-            enriched['reply_count'] = reply_info.get('reply_count', 0)
-            enriched['parent_id'] = reply_info.get('parent_id')
-            enriched['is_reply'] = enriched['parent_id'] is not None
-
-            return enriched
-        except (ValueError, KeyError):
+        except ValueError:
             return None
 
-    def _get_reply_info(self, shoutout_id: str) -> Dict:
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute("SELECT reply_count, parent_id FROM shoutouts WHERE content_id = %s", (shoutout_id,))
-                row = c.fetchone()
-            finally:
-                conn.close()
-            if row:
-                return {'reply_count': row[0] or 0, 'parent_id': row[1]}
-            return {'reply_count': 0, 'parent_id': None}
-        except Exception:
-            return {'reply_count': 0, 'parent_id': None}
+        enriched = shoutout_data.copy()
+        enriched['id'] = shoutout_id
+        enriched['kind'] = kind_of(shoutout_data)
+        enriched['has_audio'] = not shoutout_data.get('text_only')
+        enriched['audio_url'] = f"/api/user_content/shoutouts/audio/{uid}/{timestamp}.mp3" if enriched['has_audio'] else None
+        sting = shoutout_data.get('sting') or {}
+        enriched['sting_url'] = f"/api/user_content/shoutouts/audio/{uid}/{sting['file']}" if sting.get('file') else None
 
-    def _get_reply_info_batch(self, shoutout_ids: List[str]) -> Dict[str, Dict]:
-        if not shoutout_ids:
-            return {}
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT content_id, reply_count, parent_id FROM shoutouts WHERE content_id = ANY(%s)",
-                    (list(shoutout_ids),)
-                )
-                rows = c.fetchall()
-            finally:
-                conn.close()
-            return {row[0]: {'reply_count': row[1] or 0, 'parent_id': row[2]} for row in rows}
-        except Exception:
-            return {}
+        if 'full_transcription' in enriched and 'transcription' not in enriched:
+            enriched['transcription'] = enriched['full_transcription']
+        if 'user_data' in enriched and 'user_id' not in enriched:
+            enriched['user_id'] = enriched['user_data'].get('user_id')
+
+        enriched['reply_count'] = len(self.children.get(shoutout_id, ()))
+        enriched['parent_id'] = shoutout_data.get('parent_id')
+        enriched['is_reply'] = enriched['parent_id'] is not None
+        parent = self.shoutouts.get(enriched['parent_id']) if enriched['parent_id'] else None
+        if parent:
+            enriched['parent_preview'] = {
+                'id': enriched['parent_id'],
+                'username': (parent.get('user_data') or {}).get('username'),
+                'transcription': (parent.get('full_transcription') or '')[:200],
+            }
+        return enriched
 
     async def enrich_shoutout_results(self, results: List[Dict], db_session=None) -> List[Dict]:
         user_ids = list(set(
@@ -619,18 +625,9 @@ class UserContentDatabaseService(SingletonService):
         try:
             uid, timestamp = shoutout_id.split('_', 1)
             user_dir = settings.get_user_shoutouts_dir(int(uid))
-            json_path = user_dir / f"{timestamp}.json"
             mp3_path = user_dir / f"{timestamp}.mp3"
-
-            if json_path.exists():
-                os.remove(json_path)
-            if mp3_path.exists():
-                os.remove(mp3_path)
-
-            if shoutout_id in self.shoutouts:
-                del self.shoutouts[shoutout_id]
-            if shoutout_id in self.shoutout_ids:
-                self.shoutout_ids.remove(shoutout_id)
+            self._remove_files([user_dir / f"{timestamp}.json", mp3_path, Path(sting_file(mp3_path))])
+            self.forget_shoutout(shoutout_id)
         except Exception as e:
             log_service.error(f"Error deleting files for {shoutout_id}: {e}")
 
@@ -639,10 +636,11 @@ class UserContentDatabaseService(SingletonService):
         duration = 0.0
         categories = {}
         for t in self.shoutouts.values():
+            if kind_of(t) != KIND_SHOUTOUT:
+                continue
             shoutout_category = t.get("transcription_metadata", {}).get("category", "unknown")
-            if category:
-                if shoutout_category.lower() != category.lower():
-                    continue
+            if category and shoutout_category.lower() != category.lower():
+                continue
             total += 1
             dur = t.get("transcription_metadata", {}).get("duration", 0)
             if dur:
@@ -661,43 +659,24 @@ class UserContentDatabaseService(SingletonService):
         h, m = divmod(m, 60)
         return f"{h}h {m}m" if h else f"{m}m {s}s"
 
-    def get_replies(self, parent_id: str, sort_by: str = 'popularity') -> List[Dict]:
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute("SELECT content_id, reply_count, parent_id FROM shoutouts WHERE parent_id = %s", (parent_id,))
-                rows = c.fetchall()
-            finally:
-                conn.close()
+    def get_replies(self, parent_id: str) -> List[Dict]:
+        replies = [self.get_enriched_shoutout(rid) for rid in self.children.get(parent_id, ())]
+        replies = [r for r in replies if r]
+        replies.sort(key=lambda r: r.get('timestamp', ''), reverse=True)
+        return replies
 
-            replies = []
-            for rid, reply_count, reply_parent_id in rows:
-                enriched = self.get_enriched_shoutout(
-                    rid, reply_info={'reply_count': reply_count or 0, 'parent_id': reply_parent_id}
-                )
-                if enriched:
-                    replies.append(enriched)
-
-            if sort_by == 'popularity':
-                replies.sort(key=lambda r: r.get('popularity_score', 0), reverse=True)
-            else:
-                replies.sort(key=lambda r: r.get('timestamp', ''), reverse=True)
-
-            return replies
-        except Exception as e:
-            log_service.error(f"Error getting replies for {parent_id}: {e}")
-            return []
+    def reviews_for_track(self, track_id: str, with_audio: bool = False) -> List[Dict]:
+        reviews = []
+        for sid in self.shoutout_ids:
+            data = self.shoutouts.get(sid) or {}
+            if kind_of(data) != KIND_REVIEW or str((data.get('track') or {}).get('id')) != str(track_id):
+                continue
+            if with_audio and data.get('text_only'):
+                continue
+            enriched = self.get_enriched_shoutout(sid)
+            if enriched:
+                reviews.append(enriched)
+        return reviews
 
     def is_root_shoutout(self, shoutout_id: str) -> bool:
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute("SELECT parent_id FROM shoutouts WHERE content_id = %s", (shoutout_id,))
-                row = c.fetchone()
-            finally:
-                conn.close()
-            return row is None or row[0] is None
-        except Exception:
-            return True
+        return self.parent_problem(shoutout_id) is None

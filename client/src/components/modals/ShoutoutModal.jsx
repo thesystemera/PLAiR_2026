@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react'
-import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Meh, Smile, MessageCircle, Mic, ChevronRight, Play, Pause, Square, Loader } from 'lucide-react'
+import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Meh, Smile, MessageCircle, Mic, ChevronRight, Play, Pause, Square, Loader, Send, Keyboard } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
@@ -10,6 +10,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
+import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
 import Modal, { ModalSection, ModalMetadataField, ModalCard } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
@@ -18,6 +19,11 @@ const NO_TRANSITION = {}
 const FFT_FADE_TRANSITION = CSS_TRANSITION.fadeOpacity
 
 const NUM_BARS = 32
+const REPLY_MIN_CHARS = 2
+const REPLY_MAX_CHARS = 600
+const KIND_TITLES = { shoutout: 'Shoutout', reply: 'Reply', review: 'Review' }
+
+const hasPlayableAudio = (item) => item?.has_audio !== false && !!item?.audio_url
 
 const FFTVisualizer = memo(function FFTVisualizer({ fftData, isPlaying, categoryColor }) {
   const canvasRef = useRef(null)
@@ -246,7 +252,10 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
     return reply.username?.charAt(0).toUpperCase() || 'U'
   }
 
+  const canPlay = hasPlayableAudio(reply)
+
   const getDuration = () => {
+    if (!canPlay) return null
     if (reply.word_level_transcription?.length > 0) {
       const words = reply.word_level_transcription
       const duration = (words[words.length - 1].end || 0) - (words[0].start || 0)
@@ -286,25 +295,39 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
               {getDuration()}
             </span>
           )}
+          {reply.timestamp && (
+            <span className="text-xs" style={{ color: getGrey400() }}>
+              {formatTimeAgo(reply.timestamp)}
+            </span>
+          )}
+          {!canPlay && (
+            <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: getBorder(0.1), color: getGrey400() }}>
+              <Keyboard size={10} />
+              Typed
+            </span>
+          )}
         </div>
-        <p className="text-sm line-clamp-2" style={{ color: getGrey300() }}>
+        <p className="text-sm line-clamp-3" style={{ color: getGrey300() }}>
           &ldquo;{reply.transcription}&rdquo;
         </p>
       </div>
 
-      <motion.button
-        whileHover={PRESETS.hoverPressLarge.whileHover}
-        whileTap={PRESETS.hoverPressLarge.whileTap}
-        onClick={() => isPlaying ? onStop() : onPlay(reply)}
-        className="p-2 rounded-full flex-shrink-0"
-        style={{ backgroundColor: isPlaying ? 'rgba(139, 92, 246, 0.3)' : getBorder(0.1) }}
-      >
-        {isPlaying ? (
-          <Pause size={16} style={{ color: getWhite() }} />
-        ) : (
-          <Play size={16} style={{ color: getWhite() }} />
-        )}
-      </motion.button>
+      {canPlay && (
+        <motion.button
+          whileHover={PRESETS.hoverPressLarge.whileHover}
+          whileTap={PRESETS.hoverPressLarge.whileTap}
+          onClick={() => isPlaying ? onStop() : onPlay(reply)}
+          className="p-2 rounded-full flex-shrink-0"
+          style={{ backgroundColor: isPlaying ? 'rgba(139, 92, 246, 0.3)' : getBorder(0.1) }}
+          aria-label={isPlaying ? 'Stop reply' : 'Play reply'}
+        >
+          {isPlaying ? (
+            <Pause size={16} style={{ color: getWhite() }} />
+          ) : (
+            <Play size={16} style={{ color: getWhite() }} />
+          )}
+        </motion.button>
+      )}
 
       <div className="flex-shrink-0">
         <MediaActions type="shoutout" itemId={reply.id} compact={true} />
@@ -343,16 +366,20 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
   const [repliesLoading, setRepliesLoading] = useState(false)
   const [replySortBy, setReplySortBy] = useState('popularity')
   const [isSubmittingReply, setIsSubmittingReply] = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [isOpeningParent, setIsOpeningParent] = useState(false)
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const { getWhite, getGrey300, getGrey400, getBorder, getCategoryMetadata } = useDynamicTheme()
   const {
     shoutoutFftDataRef,
-    contentUpdates,
+    shoutoutsUpdateCount,
+    openShoutoutModal,
     toastSuccess,
     toastError,
   } = useUISelector(state => ({
     shoutoutFftDataRef: state.shoutoutFftDataRef,
-    contentUpdates: state.contentUpdates,
+    shoutoutsUpdateCount: state.contentUpdates.shoutouts,
+    openShoutoutModal: state.openShoutoutModal,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
   }))
@@ -364,7 +391,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     !!shoutout?.profile_picture
   )
 
-  const isRootShoutout = shoutout && !shoutout.is_reply && !shoutout.parent_id
+  const isRootShoutout = !!shoutout && (shoutout.kind ? shoutout.kind === 'shoutout' : !shoutout.is_reply && !shoutout.parent_id)
+  const shoutoutHasAudio = hasPlayableAudio(shoutout)
 
   useEffect(() => {
     if (!shoutout?.id) return
@@ -403,7 +431,13 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     }
 
     void fetchReplies()
-  }, [shoutout?.id, isRootShoutout, replySortBy, contentUpdates.shoutouts])
+  }, [shoutout?.id, isRootShoutout, replySortBy, shoutoutsUpdateCount])
+
+  const refreshReplies = useCallback(async () => {
+    if (!shoutout?.id) return
+    const data = await api.getShoutoutReplies(shoutout.id, replySortBy)
+    setReplies(data.replies || [])
+  }, [shoutout?.id, replySortBy])
 
   const handleStartRecording = useCallback(async () => {
     if (isRecording) return
@@ -426,26 +460,60 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     setIsSubmittingReply(true)
 
     try {
-      const base64Audio = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result.split(',')[1])
-        reader.onerror = reject
-        reader.readAsDataURL(audioBlob)
-      })
-
+      const base64Audio = await blobToBase64(audioBlob)
       const result = await api.uploadShoutoutReply(shoutout.id, base64Audio)
       logger.info('[ShoutoutModal] Reply uploaded directly:', result)
       toastSuccess('Reply submitted!', 3000)
-
-      const data = await api.getShoutoutReplies(shoutout.id, replySortBy)
-      setReplies(data.replies || [])
+      await refreshReplies()
     } catch (err) {
       logger.error('[ShoutoutModal] Failed to submit reply:', err)
       toastError(err instanceof Error ? err.message : 'Failed to submit reply', 3000)
     } finally {
       setIsSubmittingReply(false)
     }
-  }, [isRecording, stopRecording, shoutout?.id, replySortBy, toastSuccess, toastError])
+  }, [isRecording, stopRecording, shoutout?.id, refreshReplies, toastSuccess, toastError])
+
+  const trimmedReply = replyText.trim()
+  const canSendReply = !isSubmittingReply && !isRecording && trimmedReply.length >= REPLY_MIN_CHARS
+
+  const handleSendTypedReply = useCallback(async (e) => {
+    e?.preventDefault()
+    if (!canSendReply || !shoutout?.id) return
+    triggerHaptic('medium')
+    setIsSubmittingReply(true)
+    try {
+      await api.typeShoutoutReply(shoutout.id, trimmedReply)
+      setReplyText('')
+      toastSuccess('Reply posted!', 3000)
+      await refreshReplies()
+    } catch (err) {
+      logger.error('[ShoutoutModal] Failed to post typed reply:', err)
+      toastError(err instanceof Error ? err.message : 'Failed to post reply', 3000)
+    } finally {
+      setIsSubmittingReply(false)
+    }
+  }, [canSendReply, shoutout?.id, trimmedReply, refreshReplies, toastSuccess, toastError])
+
+  const handleOpenParent = useCallback(async () => {
+    const parentId = shoutout?.parent_id
+    if (!parentId || isOpeningParent) return
+    triggerHaptic('light')
+    setIsOpeningParent(true)
+    try {
+      const parent = await api.getShoutout(parentId)
+      if (parent) {
+        if (playingShoutout?.id === shoutout.id) stopShoutout()
+        openShoutoutModal(parent)
+      } else {
+        toastError('That shoutout is no longer available', 3000)
+      }
+    } catch (err) {
+      logger.error('[ShoutoutModal] Failed to open parent shoutout:', err)
+      toastError(err instanceof Error ? err.message : 'Could not open that shoutout', 3000)
+    } finally {
+      setIsOpeningParent(false)
+    }
+  }, [shoutout?.parent_id, shoutout?.id, isOpeningParent, playingShoutout, stopShoutout, openShoutoutModal, toastError])
 
   const handleCancelRecording = useCallback(() => {
     if (isRecording) {
@@ -555,7 +623,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
 
   return (
     <>
-      {isOpen && (
+      {isOpen && shoutoutHasAudio && (
         <FFTVisualizer
           fftData={fftData}
           isPlaying={isPlaying}
@@ -590,13 +658,16 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   className="text-xl font-bold mb-1 transition-colors duration-theme"
                   style={{ color: getWhite() }}
                 >
-                  Shoutout
+                  {KIND_TITLES[shoutout.kind] || 'Shoutout'}
                 </h2>
                 <p
                   className="text-sm transition-colors duration-theme"
                   style={{ color: getGrey300() }}
                 >
                   {shoutout.username || 'Anonymous'}
+                  {shoutout.kind === 'review' && shoutout.track?.title && (
+                    <span style={{ color: getGrey400() }}> · on {shoutout.track.title}</span>
+                  )}
                 </p>
               </div>
 
@@ -628,17 +699,21 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
             <ModalSection title={
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <motion.button
-                    onClick={() => isPlaying ? stopShoutout() : playShoutout(shoutout, { showModal: false })}
-                    className="p-1 rounded hover:bg-white/10 transition-colors cursor-pointer"
-                    whileHover={PRESETS.hoverPressLarge.whileHover}
-                    whileTap={PRESETS.hoverPressLarge.whileTap}
-                    animate={isPlaying ? { scale: [1, 1.2, 1] } : {}}
-                    transition={isPlaying ? MOTION.pulse : NO_TRANSITION}
-                  >
-                    <Volume2 size={14} />
-                  </motion.button>
-                  Transcription
+                  {shoutoutHasAudio ? (
+                    <motion.button
+                      onClick={() => isPlaying ? stopShoutout() : playShoutout(shoutout, { showModal: false })}
+                      className="p-1 rounded hover:bg-white/10 transition-colors cursor-pointer"
+                      whileHover={PRESETS.hoverPressLarge.whileHover}
+                      whileTap={PRESETS.hoverPressLarge.whileTap}
+                      animate={isPlaying ? { scale: [1, 1.2, 1] } : {}}
+                      transition={isPlaying ? MOTION.pulse : NO_TRANSITION}
+                    >
+                      <Volume2 size={14} />
+                    </motion.button>
+                  ) : (
+                    <Keyboard size={14} />
+                  )}
+                  {shoutoutHasAudio ? 'Transcription' : 'Typed message'}
                 </div>
                 <MediaActions type="shoutout" itemId={shoutout.id} compact={true} />
               </div>
@@ -842,6 +917,30 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   </div>
                 </div>
               }>
+                {user && !isRecording && (
+                  <form onSubmit={handleSendTypedReply} className="flex items-center gap-2 mb-3">
+                    <input
+                      type="text"
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      maxLength={REPLY_MAX_CHARS}
+                      disabled={isSubmittingReply}
+                      placeholder="Type a reply..."
+                      className="flex-1 min-w-0 rounded-xl px-3 py-2 text-sm bg-black/30 border outline-none disabled:opacity-50"
+                      style={{ borderColor: getBorder(0.2), color: getWhite() }}
+                      aria-label="Type a reply"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!canSendReply}
+                      className="ui-tap p-2.5 rounded-xl flex-shrink-0 disabled:opacity-40"
+                      style={{ background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.4) 0%, rgba(236, 72, 153, 0.4) 100%)', color: getWhite() }}
+                      aria-label="Post reply"
+                    >
+                      <Send size={16} />
+                    </button>
+                  </form>
+                )}
                 {repliesLoading ? (
                   <div className="flex items-center justify-center py-6">
                     <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
@@ -883,9 +982,29 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   Reply To
                 </div>
               }>
-                <p className="text-sm" style={{ color: getGrey300() }}>
-                  This is a reply to another shoutout
-                </p>
+                <button
+                  type="button"
+                  onClick={handleOpenParent}
+                  disabled={isOpeningParent}
+                  className="ui-press w-full text-left p-3 rounded-lg flex items-start gap-2 disabled:opacity-60"
+                  style={{ backgroundColor: getBorder(0.05) }}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs mb-1" style={{ color: getGrey400() }}>
+                      Replying to <span style={{ color: getWhite() }}>{shoutout.parent_preview?.username || 'another listener'}</span>
+                    </div>
+                    <p className="text-sm line-clamp-3" style={{ color: getGrey300() }}>
+                      {shoutout.parent_preview?.transcription
+                        ? <>&ldquo;{shoutout.parent_preview.transcription}&rdquo;</>
+                        : 'Tap to open the original shoutout'}
+                    </p>
+                  </div>
+                  {isOpeningParent ? (
+                    <Loader size={14} className="animate-spin flex-shrink-0 mt-1" style={{ color: getGrey400() }} />
+                  ) : (
+                    <ChevronRight size={14} className="flex-shrink-0 mt-1" style={{ color: getGrey400() }} />
+                  )}
+                </button>
               </ModalSection>
             )}
           </div>

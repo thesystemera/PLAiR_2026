@@ -32,7 +32,7 @@ const TOOL_ICONS = {
   play_shoutouts: Megaphone,
   save_shoutout: Save,
   save_shoutout_reply: Save,
-  save_opinion: Save,
+  save_review: Save,
   listener_context: User,
   city_trends: TrendingUp,
   pulse_detail: FileText,

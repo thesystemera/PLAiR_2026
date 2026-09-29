@@ -11,6 +11,7 @@ import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
 import {artPop, watchOffscreen} from '../lib/microMotion'
+import {MessageSquareText} from 'lucide-react'
 
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
 const LYRIC_STATE_CLASSES = [
@@ -184,6 +185,51 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
         ))}
       </div>
     </div>
+  )
+})
+
+const OVERLAY_BUTTON_CLASS = `${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`
+
+const ReviewsButton = memo(function ReviewsButton({ track }) {
+  const { reviewsUpdateCount, openReviewModal } = useUISelector(state => ({
+    reviewsUpdateCount: state.contentUpdates.reviews,
+    openReviewModal: state.openReviewModal,
+  }))
+  const [reviewCount, setReviewCount] = useState({ trackId: null, count: 0 })
+  const trackId = track?.id
+
+  useEffect(() => {
+    if (!trackId) return
+    let cancelled = false
+    api.getTrackReviews(trackId)
+      .then(data => {
+        if (!cancelled) setReviewCount({ trackId, count: data?.count ?? data?.reviews?.length ?? 0 })
+      })
+      .catch(error => logger.warn('Failed to fetch review count:', error))
+    return () => { cancelled = true }
+  }, [trackId, reviewsUpdateCount])
+
+  const count = reviewCount.trackId === trackId ? reviewCount.count : 0
+  const label = count > 0 ? `Reviews (${count})` : 'Reviews'
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        openReviewModal(trackId, track)
+      }}
+      disabled={!trackId}
+      className={`relative ${OVERLAY_BUTTON_CLASS}`}
+      title={label}
+      aria-label={label}
+    >
+      <MessageSquareText className={BUTTON.icon.small} />
+      {count > 0 && (
+        <span className="absolute -top-1.5 -right-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-pink-500 text-white text-[10px] font-bold leading-[1.125rem] text-center shadow">
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </button>
   )
 })
 
@@ -363,6 +409,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
           </div>
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">
+            <ReviewsButton track={track} />
             <button
               onClick={(e) => {
                 e.stopPropagation()

@@ -485,6 +485,17 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 - Service worker: precaches the build's `asset-manifest.json`, matches with `ignoreVary`, never intercepts `/api/*` (incl. streams), answers `Range` from cache with 206. Bump the cache names in `sw.js` when changing its caching rules.
 - Download space = half the browser quota (max 2 GB) on every platform, iOS included; `navigator.storage.persist()` is requested once downloads exist (not on Firefox). Background downloads back off 15 min after a < 1 Mbps download; Wi-Fi vs cellular is unknowable on Safari/Firefox (accepted).
 
+### 17. Community: Shoutouts, Replies & Reviews
+
+**Files:** `services/user_content_database_service.py` (store), `services/user_content_speech_enhancement_service.py` (audio + LLM filter), `services/community_engagement.py` (likes/bans/plays), `services_radio/community_on_air.py` (what airs), `routers/shoutouts.py`, `sting_service.py` / `announcer_service.py` (review stings); client `ShoutoutModal.jsx`, `ReviewModal.jsx`, `Shoutouts.jsx`.
+
+- **One store:** every item is a row in `shoutouts` plus `USERS_DIR/<uid>/shoutouts/<ts>.json` (+ `.mp3`), with `content_type` = `shoutout` | `reply` (`parent_id`, one level deep, only to a shoutout) | `review` (`track` {id,title,artist,genre}). Use `kind_of()`, never assume. Items are voice (mp3) or typed (`text_only`, no mp3, `audio_url` null). The JSON on disk is the source of truth (self-syncs at boot); reply counts come from the in-memory `children` index.
+- **Saving:** `create_voice_item` (from the turn's own recording: the WebSocket voice turn puts its webm in `session_dict['recording']`; routes save uploads with `_ingest_recording`; never "latest upload") and `create_text_item`. Both index the vector DB at once and broadcast `public_shoutout()` (no coordinates). DJ tools `save_shoutout`, `save_shoutout_reply` (no `parent_id` = the shoutout that just aired for this listener, `community_engagement.last_aired`), `save_review`; voice or typed, signed-in only.
+- **Audio chain (`SHOUTOUT_ENHANCEMENT_VERSION` 3):** native 48 kHz decode (browsers record Opus at 48 kHz; the client records mono Opus at 32 kbps / AAC 64 kbps) → MossFormer2_SE_48K (4 s windows under `no_grad`, ~0.6 GB) → 75 Hz low cut → LLM filter on `LLM_BACKGROUND` (process talk, stumbles) cut on Whisper word timestamps → Silero VAD shortens pauses over 0.45 s (never where a word starts) → -14 LUFS → MP3. No compression server-side: the client DJ broadcast chain compresses on air. Measured with Audiobox Aesthetics on real uploads: the old 16 kHz DeepFilterNet + super-resolution chain scored below the raw recording. Bumping the version makes the asset doctor re-render every item from its source webm (backups kept).
+- **Reviews → stings:** the review prompt returns `sting_quote` (3-12 exact words that stand alone over the song, null for negative/unsafe); `_sting.mp3` is cut from the final audio. When a track starts, `_schedule_review_sting` finds a quiet or lyric-free window (loudness or lyric gaps, 5-85 %) and plays the best-ranked fresh review of that track (`build_review`/`play_review`, `REVIEW_STINGS_*`); it replaces that track's mid-track sting. Applies to all listeners, gated by the `reviews` radio pref (default on, "Listener reviews over songs") and the usual sting gate minus the stings pref.
+- **On air:** `community_on_air.pick` is the one way to choose shoutouts for the DJ (`play_shoutouts`), Community Corner and Pulse: shoutouts only, minus the listener's bans, items buried by bans (≥3 bans and more bans than likes) and anything aired to this listener in the last 30 min; each carries its `top_reply` (ranked by likes/plays) and the DJ is told to play it right after. Plays inside the DJ mix are logged (`record_on_air_play`, deduped 6 h). Pulse has a `review` kind (`ReviewsNode`); community `detail()` includes the top reply.
+- **Tests:** `tests/community_test.py --base URL [--recording file.webm] [--keep]` (typed review, spoken review + sting, typed reply, ranking, no coordinates; cleans up after itself).
+
 ## State Flow Architecture
 
 **Frontend → Backend:** Component → Context → API → Service → Database → WebSocket Broadcast → All Clients
@@ -662,7 +673,7 @@ Design doc: `docs/CITY_PULSE.md`. Latest status and open work: `docs/HANDOVER_20
 - `server/services/user_content_vector_database_service.py` - User content vector DB (semantic search for user audio)
 - `server/services/user_content_vector_search_service.py` - User content vector search
 - `server/services/user_content_vector_search_prompt_cache_service.py` - User content prompt cache
-- `server/services/user_content_speech_enhancement_service.py` - User speech enhancement (noise reduction, normalization)
+- `server/services/user_content_speech_enhancement_service.py` - Shoutout/reply/review audio (MossFormer2_SE_48K, VAD pause trim, LLM filter, review stings) - see section 17
 
 **Database Core:**
 - `server/database/connection.py` - Database connection (async SQLAlchemy)

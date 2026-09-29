@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from 'react'
-import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock } from 'lucide-react'
+import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock, MessageSquareText } from 'lucide-react'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
@@ -140,6 +140,24 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
       </Expandable>
 
       {stingsOutside && stingsRow}
+
+      <SettingRow
+        icon={MessageSquareText}
+        label="Listener reviews over songs"
+        color="text-pink-400"
+        headerContent={
+          <ToggleChip
+            on={radioMode.reviews !== false}
+            onClick={() => updateRadioMode({ reviews: radioMode.reviews === false })}
+            disabled={radioModeSaving}
+            label="Listener reviews over songs"
+          />
+        }
+      >
+        <div className="text-xs text-gray-400">
+          Hear what other listeners said about a song while it plays, with or without Radio Mode
+        </div>
+      </SettingRow>
     </ExpandSection>
   )
 })

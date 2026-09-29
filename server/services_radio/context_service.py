@@ -426,32 +426,17 @@ async def get_shoutouts_data(
     try:
         user_location = (await _listener(listener, user, session_id)).coords
 
-        search_query = query if query else "Recent community messages and shoutouts"
-
-        shoutouts = await dj_service.user_content_vector_search_service.search(
-            query=search_query,
-            n_results=n_results,
-            user_location=user_location,
-            use_ai_analysis=False
+        from service_registry import services
+        from services_radio import community_on_air
+        shoutouts = await community_on_air.pick(
+            dj_service.user_content_vector_search_service, services.user_content_service,
+            query=query or "Recent community messages and shoutouts", n=n_results,
+            user_id=getattr(user, "id", None), session_id=session_id, user_location=user_location,
         )
-
         if not shoutouts:
             return ""
-
-        formatted = "AVAILABLE SHOUTOUTS:\n"
-        for i, shoutout in enumerate(shoutouts, 1):
-            user_data = shoutout.get('user_data', {})
-            username = user_data.get('username') or shoutout.get('username', 'Unknown Listener')
-            location = coarse_location(user_data.get('location') or shoutout.get('location')) or 'Unknown Location'
-            score = shoutout.get('final_score', 0)
-            transcription = shoutout.get('transcription', '').strip()
-            audio_url = shoutout.get('audio_url', '')
-
-            formatted += f"{i}. From: {username} ({location}) | Score: {score:.2f}\n"
-            formatted += f"   Message: \"{transcription}\"\n"
-            formatted += f"   Audio: ${audio_url}$\n\n"
-
-        return formatted
+        return "AVAILABLE SHOUTOUTS:\n" + "\n\n".join(
+            community_on_air.describe(shoutout, i) for i, shoutout in enumerate(shoutouts, 1)) + "\n"
 
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch shoutouts: {e}")

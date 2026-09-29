@@ -5,11 +5,13 @@ import time
 import uuid
 import os
 from pydub import AudioSegment
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
+from services.task_utils import spawn
 from services_radio.tts_broadcast_service import TimelineMixer, limit_peaks, CLIP_CHUNK_MS
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE
 from services_radio.tts_live_stream import LiveStreamEncoder
@@ -612,6 +614,7 @@ class TTSQueueManager:
                 render.resolve(await generation.clip_rate(file_path) if file_path else NO_AUDIO)
                 if file_path:
                     audio_segment = await voice_thread(decode_mp3, file_path)
+                    self._note_community_play(file_path, owner)
                     log_service.detail(
                         f"TTS: Successfully loaded user content: {os.path.basename(file_path)}", "tts_queue_manager")
                 else:
@@ -648,6 +651,14 @@ class TTSQueueManager:
             render.resolve(NO_AUDIO)
 
         return None
+
+    @staticmethod
+    def _note_community_play(file_path: str, owner: str):
+        from services.community_engagement import community_engagement
+        path = Path(file_path)
+        item_id = f"{path.parent.parent.name}_{path.stem.removesuffix('_sting')}"
+        user_id = int(owner) if owner.isdigit() else None
+        spawn(community_engagement.record_on_air_play(item_id, owner, user_id), name=f"community_play:{item_id}")
 
     @staticmethod
     def _resolve_user_content(raw_content: str) -> Optional[str]:

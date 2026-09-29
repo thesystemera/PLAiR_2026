@@ -35,6 +35,8 @@ class _SessionStings:
         self.tz_name: Optional[str] = None
         self.city: Optional[str] = None
         self.location_at = 0.0
+        self.last_review_at: Optional[float] = None
+        self.reviews_heard: Dict[str, float] = {}
 
 
 class StingService:
@@ -311,6 +313,93 @@ class StingService:
             log_service.announcer(f"[STINGS] [{session_id[:8]}] mid-track {decision.kind} in a "
                                   f"{quiet_window_s:.1f}s quiet passage")
         return decision.kind
+
+    def _review_candidates(self, track_id: str) -> list:
+        from service_registry import services
+        store = services.user_content_service
+        if store is None:
+            return []
+        return [r for r in store.reviews_for_track(track_id, with_audio=True)
+                if (r.get("sting") or {}).get("file") and r.get("sting_url")]
+
+    def review_sting_possible(self, session_id: str, track_id: str) -> bool:
+        if not (settings.STINGS_ENABLED and settings.REVIEW_STINGS_ENABLED):
+            return False
+        radio = self._radio()
+        if radio is not None and not radio.reviews_pref(session_id):
+            return False
+        entry = self._session(session_id)
+        last = entry.last_review_at
+        if last is not None and self.clock() - last < settings.REVIEW_STINGS_MIN_INTERVAL_S:
+            return False
+        return any(self._review_fresh(entry, r["id"]) for r in self._review_candidates(track_id))
+
+    def _review_fresh(self, entry: _SessionStings, review_id: str) -> bool:
+        heard = entry.reviews_heard.get(review_id)
+        return heard is None or self.clock() - heard >= settings.REVIEW_STINGS_REPEAT_S
+
+    async def build_review(self, session_id: str, user_id: Optional[int], track_id: str,
+                           max_len_s: float) -> Optional[sting_types.StingRender]:
+        from services.community_engagement import community_engagement
+        entry = self._session(session_id)
+        candidates = [r for r in self._review_candidates(track_id) if self._review_fresh(entry, r["id"])
+                      and (r["sting"].get("duration") or 0) <= max_len_s + 0.25]
+        allowed = await community_engagement.airable([r["id"] for r in candidates], user_id)
+        ranked = await community_engagement.rank([r for r in candidates if r["id"] in allowed])
+        if not ranked:
+            return None
+        top = ranked[:3]
+        review = self.rng.choices(top, weights=[max(0.5, 1.0 + r["engagement"].get("score", 0)) for r in top])[0]
+        path = self._review_path(review)
+        if path is None:
+            return None
+        try:
+            audio = await asyncio.to_thread(AudioSegment.from_file, str(path))
+        except Exception as e:
+            log_service.warning(f"[STINGS] Review sting {review['id']} unreadable: {type(e).__name__}: {e}")
+            return None
+        audio = sting_types.trim_to(sting_types.to_output(audio), int(max_len_s * 1000))
+        who = (review.get("user_data") or {}).get("username") or "a listener"
+        entry.reviews_heard[review["id"]] = self.clock()
+        return sting_types.StingRender(kind="listener_review", label=f"review from {who}", audio=audio,
+                                       marks=sting_types.voice_marks(0, len(audio), len(audio)),
+                                       text=review["sting"].get("text") or "", voice_s=len(audio) / 1000,
+                                       parts=[review["id"]])
+
+    @staticmethod
+    def _review_path(review: dict):
+        from pathlib import Path
+        uid, _sep, _stem = str(review.get("id") or "").partition("_")
+        filename = (review.get("sting") or {}).get("file") or ""
+        if not uid.isdigit() or not filename:
+            return None
+        folder = (settings.USERS_DIR / uid / "shoutouts").resolve()
+        path = (folder / filename).resolve()
+        return path if path.parent == folder and path.is_file() else None
+
+    async def play_review(self, session_id: str, user_id: Optional[int], render: sting_types.StingRender) -> bool:
+        radio = self._radio()
+        if radio is not None and not radio.reviews_pref(session_id):
+            return False
+        gate = self._gate(session_id, user_id)
+        gate = sting_schedule.Gate(enabled=gate.enabled, radio_mode=gate.radio_mode, stings_pref=True,
+                                   radio_blocked=gate.radio_blocked, conversing=gate.conversing, tts_busy=gate.tts_busy)
+        if not gate.allowed():
+            log_service.announcer(f"[STINGS] [{session_id[:8]}] review sting dropped at air time (gate closed)")
+            return False
+        clip = PrerenderedClip(render.audio, render.marks, render.label)
+        accepted = await self.tts_queue_manager.add_clip_request(
+            clip, user_id=user_id or 0, tts_type=TTS_TYPE, is_temp_user=user_id is None, session_id=session_id)
+        if not accepted:
+            return False
+        self._session(session_id).last_review_at = self.clock()
+        self.plays[render.kind] = self.plays.get(render.kind, 0) + 1
+        from services.community_engagement import community_engagement
+        for review_id in render.parts:
+            await community_engagement.record_on_air_play(review_id, session_id, user_id)
+        log_service.announcer(f"[STINGS] [{session_id[:8]}] ON AIR {render.label} ({len(render.audio) / 1000:.1f}s)"
+                              + (f": \"{render.text}\"" if render.text else ""))
+        return True
 
     async def build(self, session_id: str, user_id: Optional[int], kind: str, max_len_s: float,
                     midtrack: bool = False, lead_s: float = 0.0) -> Optional[sting_types.StingRender]:

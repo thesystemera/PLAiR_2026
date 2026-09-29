@@ -411,6 +411,7 @@ class ConversationService:
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
                 await asyncio.shield(self.user_content_service.save_metadata_file(user_id or session_id, timestamp, metadata))  # type: ignore
+                session_dict['recording'] = str(webm_path)
 
             await self._process_gpt_and_orchestrate(transcription, user_id, session_id, is_guest, session_dict,
                                                     origin="voice")

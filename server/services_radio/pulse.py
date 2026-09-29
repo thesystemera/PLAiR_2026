@@ -37,13 +37,15 @@ KIND_COMMUNITY = "community"
 KIND_CHART = "chart"
 KIND_TREND = "trend"
 KIND_TRACK = "track"
+KIND_REVIEW = "review"
 PLACED_KINDS = frozenset(("event", "place", "news", "community"))
 ALL_KINDS = (KIND_EVENT, KIND_PLACE, KIND_NEWS, KIND_WEATHER, KIND_AREA, KIND_ARTIST, KIND_COMMUNITY, KIND_CHART,
-             KIND_TREND, KIND_TRACK)
+             KIND_TREND, KIND_TRACK, KIND_REVIEW)
 WHEN_VALUES = ("now", "today", "tonight", "tomorrow", "weekend", "week", "month")
 
 INTENTS = {KIND_EVENT: "events", KIND_PLACE: "places", KIND_NEWS: "news", KIND_COMMUNITY: "community",
-           KIND_WEATHER: "weather", KIND_AREA: "area", KIND_ARTIST: "artists", KIND_TRACK: "music"}
+           KIND_WEATHER: "weather", KIND_AREA: "area", KIND_ARTIST: "artists", KIND_TRACK: "music",
+           KIND_REVIEW: "reviews"}
 TEXT_MAX = 180
 SHOUTOUT_BROWSE = "recent community messages and shoutouts"
 LISTENER_CACHE_S = 60
@@ -571,17 +573,37 @@ def shoutout_meta(shoutout: Dict[str, Any]) -> Dict[str, Any]:
     parts = [p.strip() for p in address.split(",") if p.strip() and not any(ch.isdigit() for ch in p)]
     shoutout_id = str(shoutout.get("id") or "")
     where = geo.Where.from_dict(meta.get("where")) or geo.resolver.cached(shoutout_place(shoutout))
+    replies = shoutout.get("reply_count") or len((getattr(services.user_content_service, "children", None) or {}).get(shoutout_id, ()))
     return {
         "id": f"community:shoutouts:{shoutout_id}", "shoutout_id": shoutout_id,
-        "title": f"{'Reply' if shoutout.get('parent_id') else 'Shoutout'} from {user_data.get('username') or 'a listener'}",
+        "title": f"{'Reply' if shoutout.get('parent_id') else 'Shoutout'} from {user_data.get('username') or 'a listener'}"
+                 + (f" ({replies} {'reply' if replies == 1 else 'replies'})" if replies else ""),
         "text": " ".join((shoutout.get("transcription") or shoutout.get("full_transcription") or "").split()),
         "tags": [t for t in [meta.get("category"), *(meta.get("tags") or [])] if t],
         "area": ", ".join(dict.fromkeys(parts[1:3] if len(parts) > 2 else parts[:2])) or coarse_location(address) or "",
         "published_at": shoutout.get("timestamp"),
-        "audio": shoutout.get("audio_url") or (
+        "audio": "" if shoutout.get("text_only") or shoutout.get("has_audio") is False else shoutout.get("audio_url") or (
             f"/api/user_content/shoutouts/audio/{shoutout_id.replace('_', '/', 1)}.mp3" if "_" in shoutout_id else ""),
         "where": _where_dict(where),
     }
+
+
+async def _top_reply_entry(listener: PulseListener, shoutout_id: str) -> dict:
+    from services_radio import community_on_air
+    store = services.user_content_service
+    replies = store.get_replies(shoutout_id) if store is not None else []
+    if not replies:
+        return {}
+    from services.community_engagement import community_engagement
+    top = await community_engagement.top_reply(replies, listener.user_id)
+    if not top:
+        return {"replies": len(replies)}
+    reply = {"from": community_on_air.speaker(top), "said": community_on_air.text_of(top)}
+    marker = community_on_air.audio_marker(top)
+    if marker:
+        reply["audio"] = marker
+    return {"replies": len(replies), "top_reply": reply,
+            "how_to_play_reply": "Play or read the top reply straight after the shoutout, introduced as a reply."}
 
 
 def shoutout_place(shoutout: Dict[str, Any]) -> str:
@@ -626,13 +648,42 @@ class CommunityNode(KnowledgeNode):
         search = services.user_content_vector_search_service
         if search is None:
             return []
-        results = await search.search(query=q.text or SHOUTOUT_BROWSE, n_results=q.per_kind * 4,
-                                      user_location=q.listener.location.coords, use_ai_analysis=q.use_ai)
+        from services_radio import community_on_air
+        results = await community_on_air.pick(
+            search, services.user_content_service, query=q.text or SHOUTOUT_BROWSE, n=q.per_kind * 4,
+            user_id=q.listener.user_id, session_id=q.listener.session_id,
+            user_location=q.listener.location.coords, fresh_only=False)
         items = []
         for shoutout in results or []:
             if shoutout_in_region(shoutout, q.listener):
                 items.append(shoutout_item(shoutout, float(shoutout.get("final_score") or 0.0), q.listener))
         return items[:q.per_kind]
+
+
+def review_item(review: Dict[str, Any], score: float) -> PulseItem:
+    from services_radio import community_on_air
+    track = review.get("track") or {}
+    song = f"'{track.get('title')}'" + (f" by {track.get('artist')}" if track.get("artist") else "")
+    audio = community_on_air.audio_marker(review) or ""
+    return PulseItem(
+        id=f"{KIND_REVIEW}:{review.get('id')}", kind=KIND_REVIEW,
+        title=f"Review of {song} from {community_on_air.speaker(review)}",
+        text=f'"{_clip(community_on_air.text_of(review), 160)}"', source="PLAiR listeners", score=score,
+        published=_parse_time(review.get("timestamp")),
+        payload={"audio_path": audio.strip("$"), "shoutout_id": review.get("id"), "track_id": track.get("id")})
+
+
+class ReviewsNode(KnowledgeNode):
+    name = "reviews"
+    kinds = (KIND_REVIEW,)
+
+    async def search(self, q: PulseQuery) -> list[PulseItem]:
+        from services_radio import community_on_air
+        results = await community_on_air.pick(
+            services.user_content_vector_search_service, services.user_content_service,
+            query=q.text or "what listeners think of songs", n=q.per_kind, user_id=q.listener.user_id,
+            session_id=q.listener.session_id, kinds="review", fresh_only=False)
+        return [review_item(review, float(review.get("final_score") or 0.0)) for review in results]
 
 
 class ChartsNode(KnowledgeNode):
@@ -1250,6 +1301,23 @@ class Pulse:
                 if sm["audio"]:
                     entry["audio"] = f"${sm['audio']}$"
                     entry["how_to_play"] = "Put the audio value in your reply to play the clip on air."
+                entry.update(await _top_reply_entry(listener, shoutout.get("id") or key.split(":", 1)[-1]))
+        elif kind == KIND_REVIEW:
+            from services_radio import community_on_air
+            review = (getattr(services.user_content_service, "shoutouts", None) or {}).get(key)
+            enriched = services.user_content_service.get_enriched_shoutout(key) if review is not None else None
+            if enriched is not None:
+                track = enriched.get("track") or {}
+                entry = {"id": item_id, "kind": kind, "title": f"Review from {community_on_air.speaker(enriched)}",
+                         "song": {k: track.get(k) for k in ("title", "artist") if track.get(k)},
+                         "said": community_on_air.text_of(enriched)}
+                published = _parse_time(enriched.get("timestamp"))
+                if published:
+                    entry["age"] = _age(published)
+                marker = community_on_air.audio_marker(enriched)
+                if marker:
+                    entry["audio"] = marker
+                    entry["how_to_play"] = "Put the audio value in your reply to play the review on air."
         elif kind == KIND_PLACE and ":" not in key:
             place = await place_memory.get_place(key)
             if place:
@@ -1337,4 +1405,4 @@ def get_pulse() -> Optional[Pulse]:
 
 def default_nodes() -> list[KnowledgeNode]:
     return [LocalNuggetsNode(), PlacesNode(), NewsNode(), MusicNode(), WeatherNode(), AreaNode(), ArtistNode(),
-            CommunityNode(), ChartsNode(), TrendsNode()]
+            CommunityNode(), ReviewsNode(), ChartsNode(), TrendsNode()]

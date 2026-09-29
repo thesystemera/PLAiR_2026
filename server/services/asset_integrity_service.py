@@ -18,6 +18,7 @@ from PIL import Image
 
 import models_global
 from services import log_service
+from services.user_content_database_service import kind_of, sting_file
 from services import usage_tracking
 from services import track_asset_stages as stages
 from services.task_utils import spawn
@@ -557,6 +558,14 @@ class AssetIntegrityService:
         findings = subject.findings
         findings.clear()
         info = subject.info
+        typed, _problem = self._read_json(info["json"])
+        if isinstance(typed, dict) and typed.get("text_only"):
+            subject.metadata = typed
+            ok = Finding(OK, "typed, no audio")
+            findings.update({"shoutout_audio": ok, "shoutout_transcript": ok, "shoutout_duration": ok,
+                             "shoutout_enhancement": ok,
+                             "shoutout_db": ok if subject.db is not None else Finding(MISSING, "no DB row")})
+            return
         audio = self._check_audio_file(info["mp3"], "mp3", None, min_bytes=MIN_SHOUTOUT_AUDIO_BYTES)
         if audio.status == OK:
             stat = _file_stat(info["mp3"])
@@ -1165,13 +1174,13 @@ class AssetIntegrityService:
             raise RuntimeError("transcript unavailable after repair")
         parent_id = data.get("parent_id") or (subject.db or {}).get("parent_id")
         data["id"] = subject.id
-        data["content_type"] = "reply" if parent_id else data.get("content_type") or "shoutout"
+        data["content_type"] = kind_of({**data, "parent_id": parent_id})
         if parent_id:
             data["parent_id"] = parent_id
         await asyncio.to_thread(self._write_json_atomic, info["json"], data)
         has_mp3 = _file_stat(info["mp3"]) is not None
         await asyncio.to_thread(user_content._upsert_shoutout_to_db, subject.id, info["user_id"], data, has_mp3, parent_id)
-        if has_mp3:
+        if has_mp3 or data.get("text_only"):
             user_content.remember_shoutout(subject.id, data)
         else:
             user_content.forget_shoutout(subject.id)
@@ -1186,10 +1195,10 @@ class AssetIntegrityService:
             await self._quarantine(info["mp3"])
         transcript_ok = subject.findings.get("shoutout_transcript", Finding(MISSING)).status == OK
         if transcript_ok:
-            ok = await enhancement.rerender_audio(str(info["source_webm"]), str(info["mp3"]), "shoutout",
+            ok = await enhancement.rerender_audio(str(info["source_webm"]), str(info["mp3"]), kind_of(subject.metadata),
                                                   str(info["source_json"]), str(info["json"]))
         else:
-            ok = await enhancement.enhance_audio(str(info["source_webm"]), str(info["mp3"]), "shoutout",
+            ok = await enhancement.enhance_audio(str(info["source_webm"]), str(info["mp3"]), kind_of(subject.metadata),
                                                  str(info["source_json"]), str(info["json"]), self._svc("ai"))
         if not ok:
             raise RuntimeError("shoutout re-render failed")
@@ -1200,7 +1209,7 @@ class AssetIntegrityService:
         if finding.status == INVALID:
             await self._quarantine(info["json"])
         ok = await self._svc("speech_enhancement").enhance_audio(
-            str(info["source_webm"]), str(info["mp3"]), "shoutout",
+            str(info["source_webm"]), str(info["mp3"]), kind_of(subject.metadata),
             str(info["source_json"]), str(info["json"]), self._svc("ai")
         )
         if not ok:
@@ -1256,6 +1265,11 @@ class AssetIntegrityService:
         shutil.copy2(info["json"], paths["backup_json"])
         os.replace(paths["work_mp3"], info["mp3"])
         os.replace(paths["work_json"], info["json"])
+        work_sting, sting = sting_file(paths["work_mp3"]), sting_file(info["mp3"])
+        if os.path.exists(work_sting):
+            os.replace(work_sting, sting)
+        elif os.path.exists(sting):
+            os.remove(sting)
         log_service.detail(f"[AssetDoctor] Backed up previous shoutout render to {paths['backup_mp3']}", "catalog")
 
     async def _repair_shoutout_enhancement(self, subject: Subject, finding: Finding):
@@ -1263,7 +1277,7 @@ class AssetIntegrityService:
         paths = self._reenhance_paths(subject)
         await asyncio.to_thread(self._stage_reenhance_sync, info, paths)
         ok = await self._svc("speech_enhancement").rerender_audio(
-            str(info["source_webm"]), str(paths["work_mp3"]), "shoutout",
+            str(info["source_webm"]), str(paths["work_mp3"]), kind_of(subject.metadata),
             str(info["source_json"]), str(paths["work_json"])
         )
         rendered, _problem = await asyncio.to_thread(self._read_json, paths["work_json"])

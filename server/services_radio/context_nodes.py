@@ -127,7 +127,7 @@ async def get_station_capabilities(**_) -> str:
         "STATION CAPABILITIES:\n"
         "PLAiR.fm provides: Music (AI-generated local catalog), Event information, Location services, "
         "News updates, Weather, Song lyrics, Artist biographies, and User-driven content in the form of "
-        "Shoutouts and Opinions."
+        "Shoutouts, replies to shoutouts, and song reviews (spoken or typed)."
     )
 
 @node_registry.register(
@@ -188,9 +188,10 @@ async def get_station_capabilities_detailed(**_) -> str:
         "- Artist Biography - Background, history, and stories about artists\n\n"
 
         "USER CONTENT:\n"
-        "- Save Shoutout - Record personal messages to share with PLAiR community\n"
+        "- Save Shoutout - Share a message (spoken or typed) with the PLAiR community\n"
+        "- Reply to a shoutout - Answer the shoutout that just played; the top reply airs after it\n"
         "- Play Shoutouts - Listen to community messages and announcements\n"
-        "- Save Opinion - Record detailed music reviews and track feedback\n\n"
+        "- Save Review - React to a song; the best spoken line can play over that song\n\n"
 
         "ENGAGEMENT:\n"
         "- Like - Mark tracks/content you enjoy, improves recommendations\n"
@@ -416,10 +417,10 @@ async def get_instruction_announcements(transition_duration_ms: Optional[int] = 
         "- Share brief, interesting facts about artists, music history, or relevant current events.\n"
         "- Use all content provided to make your announcements feel timely and relevant.\n\n"
 
-        "AUDIENCE SHOUTOUTS & OPINIONS:\n"
+        "AUDIENCE SHOUTOUTS & REVIEWS:\n"
         "- Integrate and respond directly to the specific words and details from transcriptions (if provided).\n"
         "- Balance original dialogue with listener-generated content.\n"
-        "- Use AUDIENCE SHOUTOUTS & OPINIONS strategically to create a sense of community participation.\n"
+        "- Use AUDIENCE SHOUTOUTS & REVIEWS strategically to create a sense of community participation.\n"
         "- React authentically and feel free to continue the conversation after playback.\n\n"
 
         f"{time_constraint_section}"
@@ -646,7 +647,10 @@ async def get_instruction_shoutouts(**_) -> str:
         "- Reference or paraphrase the content in your dialogue\n"
         "- Insert the audio path exactly as shown in the data where you want it to play\n"
         "- Keep reactions natural and brief between shoutouts\n"
-        "- Let the community voices do most of the talking\n\n"
+        "- Let the community voices do most of the talking\n"
+        "- When a shoutout lists a top reply, play the reply right after its shoutout and introduce it as a reply\n"
+        "- Typed shoutouts have no audio: read them out in your own words\n"
+        "- Close by inviting listeners to reply to what they heard\n\n"
         "The $filepath$ tag works on its own - don't wrap it in other tags or announce it."
     )
 

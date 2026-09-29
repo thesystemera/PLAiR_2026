@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react'
-import { Trash2, MessageCircle } from 'lucide-react'
+import { Trash2, MessageCircle, MessageSquareText, Keyboard } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { Scroller } from './Scroller'
 import { MediaSearch } from './MediaSearch'
@@ -108,11 +108,14 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
 
   const metadata = shoutout.transcription_metadata || shoutout.metadata || {}
   const tags = metadata.tags || []
-  const duration = getDurationSeconds()
+  const hasAudio = shoutout.has_audio !== false && !!shoutout.audio_url
+  const isReview = shoutout.kind === 'review'
+  const duration = hasAudio ? getDurationSeconds() : 0
 
   return (
     <MediaCardAnimation
       index={index}
+      onClick={hasAudio ? undefined : (e) => onPlayPause(e, shoutout)}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card ${
         isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
       }`}
@@ -134,7 +137,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
           />
         )}
 
-        <div className="absolute left-2 z-20 top-2">
+        <div className="absolute left-2 z-20 top-2" onClick={(e) => e.stopPropagation()}>
           <MediaActions type="shoutout" itemId={shoutout.id} compact />
         </div>
 
@@ -157,7 +160,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
         <MediaCardPlayOverlay
           isPlaying={isPlaying}
           onPlayPause={(e) => onPlayPause(e, shoutout)}
-          hasAudio={shoutout.has_audio}
+          hasAudio={hasAudio}
           variant="voice"
         />
 
@@ -175,10 +178,26 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
         </div>
       </div>
 
-      {shoutout.is_reply && (
-        <div className="flex items-center gap-1 mb-1">
-          <MessageCircle size={10} className="text-purple-400" />
-          <span className="text-xs text-purple-400">Reply</span>
+      {(shoutout.is_reply || isReview || !hasAudio) && (
+        <div className="flex items-center gap-2 mb-1 min-w-0">
+          {shoutout.is_reply && (
+            <span className="flex items-center gap-1 text-xs text-purple-400">
+              <MessageCircle size={10} />
+              Reply
+            </span>
+          )}
+          {isReview && (
+            <span className="flex items-center gap-1 text-xs text-pink-400 min-w-0">
+              <MessageSquareText size={10} className="flex-shrink-0" />
+              <span className="truncate">{shoutout.track?.title ? `Review · ${shoutout.track.title}` : 'Review'}</span>
+            </span>
+          )}
+          {!hasAudio && (
+            <span className="flex items-center gap-1 text-xs text-gray-400">
+              <Keyboard size={10} />
+              Typed
+            </span>
+          )}
         </div>
       )}
 

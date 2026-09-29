@@ -67,6 +67,9 @@ class UserProfileUpdate(BaseModel):
 class DirectReplyUploadRequest(BaseModel):
     audio: str = Field(..., max_length=settings.MAX_BASE64_AUDIO_CHARS)
 
+class CommunityTextRequest(BaseModel):
+    text: str = Field(..., min_length=2, max_length=600)
+
 class ActivateDeviceRequest(BaseModel):
     device_id: Optional[str] = None
 

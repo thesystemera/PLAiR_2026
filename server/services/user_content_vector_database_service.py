@@ -92,7 +92,9 @@ class UserContentVectorDatabaseService(BaseVectorDatabaseService):
         urgency_label = metadata.get("urgency_label", "")
         importance_label = metadata.get("importance_label", "")
         tags = metadata.get("tags") or []
-        tags_text = ', '.join(tags) if isinstance(tags, list) else ""
+        track = item.get("track") or {}
+        about_track = [f"song review of {track.get('title')}", track.get("artist"), track.get("genre")] if track else []
+        tags_text = ', '.join([t for t in (tags if isinstance(tags, list) else []) + about_track if t])
         username = user_data.get("username", "")
         location = ", ".join(dict.fromkeys(p for p in (metadata.get("about_place"), user_data.get("location")) if p))
         target_audience = metadata.get("target_audience", "")

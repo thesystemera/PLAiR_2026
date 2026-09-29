@@ -202,8 +202,13 @@ export function PlaybackShoutoutProvider({ children }) {
   const playShoutout = useCallback(async (shoutout, options = {}) => {
     const { showModal = true } = options
 
-    if (!shoutout?.id || !shoutout?.audio_url) {
+    if (!shoutout?.id) {
       logger.error('[PlaybackShoutout] Invalid shoutout:', shoutout)
+      return
+    }
+
+    if (!shoutout.audio_url) {
+      if (showModal && openShoutoutModal) openShoutoutModal(shoutout)
       return
     }
 

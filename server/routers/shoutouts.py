@@ -3,6 +3,7 @@ import base64
 import binascii
 import re
 import time
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,14 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.whisper_dual_service import whisper_dual_service
 from services.preferences_service import preferences_service
 from services import log_service
-from services.user_content_database_service import public_shoutout, public_shoutouts
+from services.user_content_database_service import (public_shoutout, public_shoutouts, track_ref,
+                                                     KIND_REPLY, KIND_REVIEW)
+from services.community_engagement import community_engagement
 from database import get_db, User
 from config import settings
 from service_registry import services
 from routers.deps import get_current_user, RateLimit, enforce_rate_limit
 from security_middleware import is_valid_guest_id
 from services_radio import listener_location as location_resolver
-from routers.schemas import ShoutoutSearchRequest, PreferenceRequest, DirectReplyUploadRequest
+from routers.schemas import ShoutoutSearchRequest, PreferenceRequest, DirectReplyUploadRequest, CommunityTextRequest
 
 router = APIRouter()
 
@@ -131,22 +134,95 @@ async def search_shoutouts(
         log_service.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Search failed")
 
+def _user_data(user: User) -> dict:
+    return {
+        "user_id": int(user.id),  # type: ignore
+        "username": user.username,
+        "location": getattr(user, "location", None) or "Unknown",
+        "latitude": float(str(user.latitude)) if getattr(user, "latitude", None) is not None else None,
+        "longitude": float(str(user.longitude)) if getattr(user, "longitude", None) is not None else None,
+    }
+
+
+async def _ingest_recording(user: User, audio_b64: str):
+    try:
+        audio_bytes = base64.b64decode(audio_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid audio data")
+
+    assert services.user_content_service is not None
+    timestamp = str(int(time.time()))
+    webm_path = await services.user_content_service.save_audio_file(int(user.id), timestamp, audio_bytes)  # type: ignore
+    if not webm_path:
+        raise HTTPException(status_code=500, detail="Failed to save audio file")
+
+    result = await whisper_dual_service.transcribe_quality(audio_bytes)
+    if not result or not (result.get("text") or "").strip():
+        raise HTTPException(status_code=400, detail="Couldn't hear any words in that recording")
+
+    metadata = {
+        "full_transcription": result["text"].strip(),
+        "word_level_transcription": result.get("words", []),
+        "transcription_metadata": {
+            "language": result.get("language", "en"),
+            "language_probability": result.get("language_probability", 1.0),
+            "duration": result.get("duration", 0),
+        },
+        "user_data": _user_data(user),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await services.user_content_service.save_metadata_file(int(user.id), timestamp, metadata)  # type: ignore
+    return webm_path
+
+
+async def _save_item(user: User, kind: str, *, audio: Optional[str] = None, text: Optional[str] = None,
+                     parent_id: Optional[str] = None, track: Optional[dict] = None) -> dict:
+    content = services.user_content_service
+    assert content is not None and services.websocket_service is not None
+    common = dict(enhancement_service=services.user_content_speech_enhancement_service,
+                  ai_service=services.ai_service, vector_db_service=services.user_content_vector_db_service,
+                  broadcast_callback=services.websocket_service.broadcast_content_updated,
+                  parent_id=parent_id, track=track)
+    if audio is not None:
+        webm_path = await _ingest_recording(user, audio)
+        item = await content.create_voice_item(int(user.id), kind, webm_path, **common)  # type: ignore
+    else:
+        item = await content.create_text_item(int(user.id), kind, text or "", _user_data(user), **common)  # type: ignore
+    if not item:
+        raise HTTPException(status_code=400, detail=f"Couldn't save that {kind}")
+    target = f" to {parent_id}" if parent_id else (f" on {track.get('title')}" if track else "")
+    log_service.listener(
+        f"{log_service.who(user_id=user.id)}: {'recorded' if audio is not None else 'typed'} a {kind}{target}")
+    return {"status": "success", "id": item["id"], "kind": kind, "transcription": item.get("full_transcription", "")}
+
+
+def _require_parent(parent_id: str):
+    assert services.user_content_service is not None
+    problem = services.user_content_service.parent_problem(parent_id)
+    if problem:
+        raise HTTPException(status_code=404 if parent_id not in services.user_content_service.shoutouts else 400,
+                            detail=problem)
+
+
+def _require_track(track_id: str) -> dict:
+    assert services.catalog_service is not None
+    reference = track_ref(services.catalog_service.get_track(track_id))
+    if not reference:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return reference
+
+
 @router.get("/api/user_content/shoutouts/{shoutout_id}/replies")
 async def get_shoutout_replies(
         shoutout_id: str,
         sort_by: str = "popularity",
         db: AsyncSession = Depends(get_db)
 ):
+    _require_parent(shoutout_id)
     assert services.user_content_service is not None
-    parent = services.user_content_service.get_shoutout(shoutout_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="Shoutout not found")
-
-    if not await asyncio.to_thread(services.user_content_service.is_root_shoutout, shoutout_id):
-        raise HTTPException(status_code=400, detail="Cannot get replies of a reply")
-
-    replies = await asyncio.to_thread(services.user_content_service.get_replies, shoutout_id, sort_by)
-
+    replies = services.user_content_service.get_replies(shoutout_id)
+    if sort_by == "popularity":
+        replies = await community_engagement.rank(replies)
     if replies:
         replies = await services.user_content_service.enrich_shoutout_results(replies, db)  # type: ignore
 
@@ -156,43 +232,6 @@ async def get_shoutout_replies(
         "parent_id": shoutout_id
     }
 
-@router.post("/api/user_content/shoutouts/{parent_id}/reply")
-async def create_shoutout_reply(
-        parent_id: str,
-        current_user: User = Depends(get_current_user),
-        _rate_limit=Depends(RateLimit("transcribe"))
-):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    assert services.user_content_service is not None
-    parent = services.user_content_service.get_shoutout(parent_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="Parent shoutout not found")
-
-    if not await asyncio.to_thread(services.user_content_service.is_root_shoutout, parent_id):
-        raise HTTPException(status_code=400, detail="Cannot reply to a reply - only root shoutouts can receive replies")
-
-    assert services.websocket_service is not None
-    success, transcription = await services.user_content_service.process_shoutout_upload(
-        user_id=int(current_user.id),  # type: ignore
-        enhancement_service=services.user_content_speech_enhancement_service,
-        gemini_service=services.ai_service,
-        vector_db_service=None,
-        broadcast_callback=services.websocket_service.broadcast_content_updated,
-        parent_id=parent_id
-    )
-
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to process reply. Make sure you've recorded audio first.")
-
-    log_service.listener(f"{log_service.who(user_id=current_user.id)}: replied to shoutout {parent_id}")
-
-    return {
-        "status": "success",
-        "parent_id": parent_id,
-        "transcription": transcription
-    }
 
 @router.post("/api/user_content/shoutouts/{parent_id}/reply/upload")
 async def upload_shoutout_reply(
@@ -203,80 +242,60 @@ async def upload_shoutout_reply(
 ):
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    _require_parent(parent_id)
+    return {**await _save_item(current_user, KIND_REPLY, audio=request.audio, parent_id=parent_id),
+            "parent_id": parent_id}
 
+
+@router.post("/api/user_content/shoutouts/{parent_id}/reply/text")
+async def type_shoutout_reply(
+        parent_id: str,
+        request: CommunityTextRequest,
+        current_user: User = Depends(get_current_user),
+        _rate_limit=Depends(RateLimit("dj_talk"))
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    _require_parent(parent_id)
+    return {**await _save_item(current_user, KIND_REPLY, text=request.text, parent_id=parent_id),
+            "parent_id": parent_id}
+
+
+@router.get("/api/tracks/{track_id}/reviews")
+async def get_track_reviews(
+        track_id: str,
+        db: AsyncSession = Depends(get_db)
+):
+    _require_track(track_id)
     assert services.user_content_service is not None
-    parent = services.user_content_service.get_shoutout(parent_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="Parent shoutout not found")
+    reviews = await community_engagement.rank(services.user_content_service.reviews_for_track(track_id))
+    if reviews:
+        reviews = await services.user_content_service.enrich_shoutout_results(reviews, db)  # type: ignore
+    return {"reviews": public_shoutouts(reviews), "count": len(reviews), "track_id": track_id}
 
-    if not await asyncio.to_thread(services.user_content_service.is_root_shoutout, parent_id):
-        raise HTTPException(status_code=400, detail="Cannot reply to a reply - only root shoutouts can receive replies")
 
-    try:
-        audio_bytes = base64.b64decode(request.audio, validate=True)
-    except (binascii.Error, ValueError) as e:
-        log_service.error(f"Failed to decode audio: {e}")
-        raise HTTPException(status_code=400, detail="Invalid audio data")
+@router.post("/api/tracks/{track_id}/reviews/upload")
+async def upload_track_review(
+        track_id: str,
+        request: DirectReplyUploadRequest,
+        current_user: User = Depends(get_current_user),
+        _rate_limit=Depends(RateLimit("transcribe"))
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return await _save_item(current_user, KIND_REVIEW, audio=request.audio, track=_require_track(track_id))
 
-    timestamp = str(int(time.time()))
 
-    webm_path = await services.user_content_service.save_audio_file(int(current_user.id), timestamp, audio_bytes)  # type: ignore
-    if not webm_path:
-        raise HTTPException(status_code=500, detail="Failed to save audio file")
-
-    transcription_result = None
-    try:
-        transcription_result = await whisper_dual_service.transcribe_quality(audio_bytes)
-        full_transcription = transcription_result.get("text", "").strip() if transcription_result else ""
-        words = transcription_result.get("words", []) if transcription_result else []
-        duration = transcription_result.get("duration", 0) if transcription_result else 0
-    except Exception as e:
-        log_service.error(f"Transcription failed: {e}")
-        full_transcription = ""
-        words = []
-        duration = 0
-
-    from datetime import datetime, timezone
-    metadata = {
-        "full_transcription": full_transcription,
-        "word_level_transcription": words,
-        "transcription_metadata": {
-            "language": transcription_result.get("language", "en") if transcription_result else "en",
-            "language_probability": transcription_result.get("language_probability", 1.0) if transcription_result else 1.0,
-            "duration": duration
-        },
-        "user_data": {
-            "user_id": int(current_user.id),  # type: ignore
-            "username": current_user.username,
-            "location": current_user.location if hasattr(current_user, 'location') else "Unknown",
-            "latitude": float(str(current_user.latitude)) if hasattr(current_user, 'latitude') and current_user.latitude is not None else None,
-            "longitude": float(str(current_user.longitude)) if hasattr(current_user, 'longitude') and current_user.longitude is not None else None,
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    await services.user_content_service.save_metadata_file(int(current_user.id), timestamp, metadata)  # type: ignore
-
-    assert services.websocket_service is not None
-    success, transcription = await services.user_content_service.process_shoutout_upload(
-        user_id=int(current_user.id),  # type: ignore
-        enhancement_service=services.user_content_speech_enhancement_service,
-        gemini_service=services.ai_service,
-        vector_db_service=None,
-        broadcast_callback=services.websocket_service.broadcast_content_updated,
-        parent_id=parent_id,
-        webm_path=webm_path
-    )
-
-    if not success:
-        raise HTTPException(status_code=400, detail="Failed to process reply audio")
-
-    log_service.listener(f"{log_service.who(user_id=current_user.id)}: uploaded a voice reply to shoutout {parent_id}")
-
-    return {
-        "status": "success",
-        "parent_id": parent_id,
-        "transcription": transcription
-    }
+@router.post("/api/tracks/{track_id}/reviews/text")
+async def type_track_review(
+        track_id: str,
+        request: CommunityTextRequest,
+        current_user: User = Depends(get_current_user),
+        _rate_limit=Depends(RateLimit("dj_talk"))
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return await _save_item(current_user, KIND_REVIEW, text=request.text, track=_require_track(track_id))
 
 @router.post("/api/shoutouts/{shoutout_id}/preference")
 async def set_shoutout_preference(

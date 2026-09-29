@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from services_radio.dj_command_executor import CommandExecutorService
     from services.user_content_speech_enhancement_service import UserContentSpeechEnhancementService
     from services.user_content_vector_search_service import UserContentVectorSearchService
+    from services.user_content_vector_database_service import UserContentVectorDatabaseService
     from services.user_content_vector_search_prompt_cache_service import UserContentVectorSearchPromptCacheService
     from services_radio.background_tasks_service import BackgroundTasksService
     from services_radio.announcer_service import AnnouncerService
@@ -73,6 +74,7 @@ class ServiceRegistry:
         self.command_executor: Optional["CommandExecutorService"] = None
         self.user_content_speech_enhancement_service: Optional["UserContentSpeechEnhancementService"] = None
         self.user_content_vector_search_service: Optional["UserContentVectorSearchService"] = None
+        self.user_content_vector_db_service: Optional["UserContentVectorDatabaseService"] = None
         self.user_content_prompt_cache_service: Optional["UserContentVectorSearchPromptCacheService"] = None
         self.background_tasks_service: Optional["BackgroundTasksService"] = None
         self.announcer_service: Optional["AnnouncerService"] = None

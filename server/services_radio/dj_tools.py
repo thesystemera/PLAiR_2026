@@ -22,10 +22,10 @@ PLAYLISTS = list(PLAYLIST_DISPLAY.keys())
 TRACK_TARGETS = ["current", "previous", "next"]
 BRACE_TARGETS = {"current": "current", "previous": "earlier", "next": "later"}
 
-SAVE_TOOLS = {"save_shoutout", "save_shoutout_reply", "save_opinion"}
+SAVE_TOOLS = {"save_shoutout", "save_shoutout_reply", "save_review"}
 READ_TOOLS = {"pulse_search", "pulse_detail", "listener_context", "city_trends"}
 TOOLS_PREFIX = "[STUDIO TOOLS]"
-PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
+PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "review", "chart", "trend"]
 PULSE_WHEN = ["now", "today", "tonight", "tomorrow", "weekend", "week", "month"]
 PULSE_SORT = ["relevance", "newest", "soonest", "nearest"]
 READ_NOTE = ("These are the closest matches from each source - the lookup is finished. They are candidates, not "
@@ -68,7 +68,7 @@ _SHOUTOUT_INTENT = re.compile(
     r"tell (everyone|everybody|the community|all)|message (to|for) (everyone|everybody|the community|listeners))\b",
     re.IGNORECASE)
 _REPLY_INTENT = re.compile(r"\b(repl(y|ies|ying)|respond|response|answer|get back to|shout[\s-]?back)\b", re.IGNORECASE)
-_OPINION_INTENT = re.compile(r"\b(opinion|review|feedback|verdict|rate|rating|save|record)\b", re.IGNORECASE)
+_REVIEW_INTENT = re.compile(r"\b(opinion|review|feedback|verdict|rate|rating|save|record|post)\b", re.IGNORECASE)
 _TRACK_REFERENCE = re.compile(
     r"\b(song|track|tune|beat|jam|banger|album|chorus|verse|vocals?|lyrics|melody|drop|production|this one|that one)\b",
     re.IGNORECASE)
@@ -99,7 +99,7 @@ COST_TEXT = {
     "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
     "segment": "expensive: gathers the material and airs a full produced segment of 30-60 s",
 }
-VOICE_SAVE_REQUIRES = "the listener's own voice recording from this turn; signed-in listener"
+SAVE_REQUIRES = "the listener's own words from this turn (voice or typed); signed-in listener"
 
 TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
@@ -285,32 +285,35 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "save_shoutout",
         "cost": "memory",
-        "requires": VOICE_SAVE_REQUIRES,
-        "summary": "publish the listener's voice message as a shoutout",
-        "description": "Publishes the listener's own voice message from this turn as a shoutout to the PLAiR "
-                       "community. Use it when the listener is giving a shoutout or a message meant for everyone.",
+        "requires": SAVE_REQUIRES,
+        "summary": "publish the listener's message as a shoutout",
+        "description": "Publishes the listener's own message from this turn as a shoutout to the PLAiR community: "
+                       "their recording when they spoke, their words when they typed. Use it when the listener is "
+                       "giving a shoutout or a message meant for everyone. Instructions to you are trimmed off.",
         "parameters": _schema({}),
     },
     {
         "name": "save_shoutout_reply",
         "cost": "memory",
-        "requires": VOICE_SAVE_REQUIRES,
-        "summary": "publish the listener's voice message as a reply to a shoutout",
-        "description": "Publishes the listener's own voice message from this turn as a reply to an existing "
-                       "shoutout.",
+        "requires": SAVE_REQUIRES,
+        "summary": "publish the listener's message as a reply to a shoutout",
+        "description": "Publishes the listener's own message from this turn (voice or typed) as a reply to a "
+                       "shoutout. Leave parent_id out to answer the shoutout that just played for this listener "
+                       "(\"reply to that\", \"tell her congrats\"). Top replies play on air after their shoutout.",
         "parameters": _schema({
-            "parent_id": _string("ID of the shoutout being answered, '<userId>_<timestamp>' as seen in its audio "
-                                 "path /shoutouts/audio/<userId>/<timestamp>.mp3."),
-        }, ["parent_id"]),
+            "parent_id": _string("Optional ID of a different shoutout, '<userId>_<timestamp>' as seen in its audio "
+                                 "path /shoutouts/audio/<userId>/<timestamp>.mp3 or its pulse id."),
+        }),
     },
     {
-        "name": "save_opinion",
+        "name": "save_review",
         "cost": "memory",
-        "requires": VOICE_SAVE_REQUIRES,
-        "summary": "save the listener's spoken review of a track",
-        "description": "Saves the listener's own spoken review of a track from this turn so other listeners can "
-                       "hear it.",
-        "parameters": _schema({"target": _enum(TRACK_TARGETS, "Which track the opinion is about.")}, ["target"]),
+        "requires": SAVE_REQUIRES,
+        "summary": "save the listener's review of a track",
+        "description": "Saves the listener's own review of a track from this turn (voice or typed). Other "
+                       "listeners see it on the song, and the best line of a spoken review can play over the song "
+                       "as a sting. Use it when the listener reacts to a song and wants it kept or shared.",
+        "parameters": _schema({"target": _enum(TRACK_TARGETS, "Which track the review is about.")}, ["target"]),
     },
 ]
 DONE_WITH = {"type": "object", "additionalProperties": {"type": "string"},
@@ -435,7 +438,7 @@ LABELS = {
     "rate_track": "rating the track",
     "save_shoutout": "posting the shoutout",
     "save_shoutout_reply": "posting the reply",
-    "save_opinion": "saving the review",
+    "save_review": "saving the review",
 }
 
 
@@ -460,7 +463,8 @@ def tool_activity(calls) -> str:
 KIND_NOUNS = {"event": ("gig", "gigs"), "place": ("place", "places"), "news": ("story", "stories"),
               "weather": ("forecast", "forecasts"), "area": ("area note", "area notes"),
               "artist": ("artist bio", "artist bios"), "track": ("track", "tracks"),
-              "community": ("shoutout", "shoutouts"), "chart": ("chart", "charts"), "trend": ("trend", "trends")}
+              "community": ("shoutout", "shoutouts"), "review": ("review", "reviews"), "chart": ("chart", "charts"),
+              "trend": ("trend", "trends")}
 
 
 def activity_summary(name: str, result: Any) -> tuple[str, str]:
@@ -537,9 +541,9 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "save_shoutout":
         return _brace("save_shoutout")
     if name == "save_shoutout_reply":
-        return _brace("save_shoutout_reply", value=args["parent_id"])
-    if name == "save_opinion":
-        return _brace("save_opinion", BRACE_TARGETS[args["target"]])
+        return _brace("save_shoutout_reply", value=args.get("parent_id") or "just played")
+    if name == "save_review":
+        return _brace("save_review", BRACE_TARGETS[args["target"]])
     return _brace(name)
 
 
@@ -664,11 +668,11 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "save_shoutout":
         return {}
     if name == "save_shoutout_reply":
-        parent_id = text("parent_id", True) or ""
-        if not _PARENT_ID.match(parent_id):
-            raise ValueError("parent_id must look like '<userId>_<timestamp>'")
-        return {"parent_id": parent_id}
-    if name == "save_opinion":
+        parent_id = (text("parent_id") or "").split(":")[-1]
+        if parent_id and not _PARENT_ID.match(parent_id):
+            raise ValueError("parent_id must look like '<userId>_<timestamp>', or be left out")
+        return {"parent_id": parent_id or None}
+    if name == "save_review":
         return {"target": choice("target", TRACK_TARGETS, "current")}
     raise ValueError(f"Unknown tool '{name}'")
 
@@ -704,19 +708,17 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
 
     if name in SAVE_TOOLS:
         if not ctx.user_id:
-            return "Only signed-in listeners can save shoutouts, replies or opinions."
-        if ctx.origin != "voice":
-            return "Saving needs the listener's own voice recording from this turn; ask them to record it with the mic."
+            return "Only signed-in listeners can save shoutouts, replies or reviews."
         if ctx.saves:
-            return "Only one shoutout, reply or opinion can be saved per turn."
+            return "Only one shoutout, reply or review can be saved per turn."
         if name == "save_shoutout" and not _SHOUTOUT_INTENT.search(listener_text):
             return "The listener did not ask to save or post a shoutout in their own message."
         if name == "save_shoutout_reply" and not _REPLY_INTENT.search(listener_text):
             return "The listener did not ask to reply to a shoutout in their own message."
-        if name == "save_opinion" and not (
-                _OPINION_INTENT.search(listener_text)
+        if name == "save_review" and not (
+                _REVIEW_INTENT.search(listener_text)
                 or (_TRACK_REFERENCE.search(listener_text) and len(listener_text.split()) >= 8)):
-            return "The listener did not give or ask to save an opinion about a track in their own message."
+            return "The listener did not give or ask to save a review of a track in their own message."
 
     if name == "rate_track":
         if not ctx.user_id:
@@ -752,7 +754,7 @@ class DJToolRuntime:
             "play_shoutouts": self._play_shoutouts,
             "save_shoutout": self._save_shoutout,
             "save_shoutout_reply": self._save_shoutout_reply,
-            "save_opinion": self._save_opinion,
+            "save_review": self._save_review,
             "pulse_search": self._pulse_search,
             "pulse_detail": self._pulse_detail,
             "listener_context": self._listener_context,
@@ -978,24 +980,43 @@ class DJToolRuntime:
             self.executor._trigger_shoutouts_interpretation(self.session_dict, args.get("query"), gate=self.ctx.gate),
             "play_shoutouts")
 
+    def _own_words(self) -> str:
+        return "voice message" if self.session_dict.get("recording") else "typed message"
+
     async def _save_shoutout(self, _args):
-        spawn(self.executor._save_shoutout(self.session_dict), name="dj_tool_save_shoutout")
-        return {"status": "saving", "note": "The listener's voice message from this turn is being posted as a shoutout; a confirmation appears when it's done."}
+        spawn(self.executor.save_community_item(self.session_dict, "shoutout", text=self.ctx.transcription),
+              name="dj_tool_save_shoutout")
+        return {"status": "saving",
+                "note": f"The listener's {self._own_words()} from this turn is being posted as a shoutout; a confirmation appears when it's done."}
 
     async def _save_shoutout_reply(self, args):
+        from services.community_engagement import community_engagement
         content_service = self.executor.user_content_service
-        if content_service is not None and not await asyncio.to_thread(content_service.is_root_shoutout,
-                                                                       args["parent_id"]):
-            return {"status": "error", "reason": "That shoutout doesn't exist or is already a reply"}
-        spawn(self.executor._save_shoutout_reply(self.session_dict, args["parent_id"]),
-              name="dj_tool_save_shoutout_reply")
-        return {"status": "saving", "note": "The listener's voice reply from this turn is being posted; a confirmation appears when it's done."}
+        parent_id = args.get("parent_id")
+        if not parent_id and content_service is not None:
+            for aired_id in community_engagement.last_aired(self.session_dict.get("session_id")):
+                aired = content_service.get_shoutout(aired_id) or {}
+                candidate = aired.get("parent_id") or aired_id
+                if content_service.parent_problem(candidate) is None:
+                    parent_id = candidate
+                    break
+        if not parent_id:
+            return {"status": "error", "reason": "No shoutout has played for this listener recently; ask which one they mean"}
+        problem = content_service.parent_problem(parent_id) if content_service is not None else "unavailable"
+        if problem:
+            return {"status": "error", "reason": problem}
+        parent = content_service.get_shoutout(parent_id) or {}
+        spawn(self.executor.save_community_item(self.session_dict, "reply", text=self.ctx.transcription,
+                                                parent_id=parent_id), name="dj_tool_save_shoutout_reply")
+        return {"status": "saving", "replying_to": (parent.get("user_data") or {}).get("username") or "a listener",
+                "note": f"The listener's {self._own_words()} from this turn is being posted as a reply; a confirmation appears when it's done."}
 
-    async def _save_opinion(self, args):
+    async def _save_review(self, args):
         session_id = self.session_dict.get("session_id")
         track_id = self.executor._resolve_track_id(session_id, args["target"]) if session_id else None
         if not track_id:
             return {"status": "error", "reason": "No track at that position"}
-        spawn(self.executor.execute_save_opinion(self.session_dict, args["target"]), name="dj_tool_save_opinion")
+        spawn(self.executor.save_community_item(self.session_dict, "review", text=self.ctx.transcription,
+                                                track_id=track_id), name="dj_tool_save_review")
         return {"status": "saving", "track": self.executor._track_label(track_id),
-                "note": "The listener's spoken opinion from this turn is being saved for this track."}
+                "note": f"The listener's {self._own_words()} from this turn is being saved as a review of this track."}

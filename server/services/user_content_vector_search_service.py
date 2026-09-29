@@ -1,7 +1,8 @@
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Collection, List, Dict, Any, Optional, Tuple, Union
 from services import log_service
 from services.semantic_source import SemanticSearch
+from services.user_content_database_service import kind_of
 from math import radians, sin, cos, sqrt, atan2
 
 class UserContentVectorSearchService:
@@ -17,9 +18,11 @@ class UserContentVectorSearchService:
             self,
             query: str,
             n_results: int = 20,
-            content_type: Optional[str] = None,
+            content_type: Union[str, Collection[str], None] = "shoutout",
             user_location: Optional[Tuple[float, float]] = None,
-            use_ai_analysis: bool = False
+            use_ai_analysis: bool = False,
+            exclude: Optional[Collection[str]] = None,
+            track_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
 
         if not self.user_content_service or not self.user_content_service.shoutouts:
@@ -31,8 +34,15 @@ class UserContentVectorSearchService:
             intent_category, query_weights, cleaned_query = await self._intent(query, use_ai_analysis)
             log_service.detail(f"Category weights: {query_weights}", "user_content")
 
+            kinds = {content_type} if isinstance(content_type, str) else set(content_type or ())
+            excluded = set(exclude or ())
+
             def keep(item: Dict[str, Any]) -> bool:
-                return not content_type or item.get('content_type', 'shoutout') == content_type
+                if kinds and kind_of(item) not in kinds:
+                    return False
+                if track_id and str((item.get('track') or {}).get('id')) != str(track_id):
+                    return False
+                return not excluded or item.get('id') not in excluded
 
             def boost(item: Dict[str, Any]) -> float:
                 distance_km = self._distance_to(item, user_location)
@@ -56,8 +66,12 @@ class UserContentVectorSearchService:
                     'user_data': user_data,
                     'metadata': full_data.get('transcription_metadata', {}),
                     'date': full_data.get('date', ''),
-                    'has_audio': True,
-                    'audio_url': self._construct_audio_url({'id': content_id}),
+                    'kind': kind_of(full_data),
+                    'parent_id': full_data.get('parent_id'),
+                    'track': full_data.get('track'),
+                    'sting': full_data.get('sting'),
+                    'has_audio': not full_data.get('text_only'),
+                    'audio_url': None if full_data.get('text_only') else self._construct_audio_url({'id': content_id}),
                     'similarity_score': match.similarity,
                     'final_score': match.score,
                     'intent_category': display_category,

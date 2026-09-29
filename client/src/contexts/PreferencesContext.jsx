@@ -10,7 +10,7 @@ import { useUIActions, uiState, useUISelector } from './UIStateContext'
 const PreferencesContext = createContext(null)
 
 const RADIO_MODE_STORAGE_KEY = 'radioMode'
-const RADIO_MODE_TOGGLES = ['enabled', 'news', 'city', 'local', 'community', 'features', 'stings']
+const RADIO_MODE_TOGGLES = ['enabled', 'news', 'city', 'local', 'community', 'features', 'stings', 'reviews']
 export const DEFAULT_RADIO_MODE = Object.freeze({
   enabled: false,
   news: true,
@@ -19,6 +19,7 @@ export const DEFAULT_RADIO_MODE = Object.freeze({
   community: true,
   features: true,
   stings: true,
+  reviews: true,
   feature_interval_min: 20,
 })
 const DEFAULT_RADIO_OPTIONS = Object.freeze({ feature_intervals_min: [15, 20, 30], stings_outside_radio_mode: true })

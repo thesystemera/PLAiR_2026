@@ -390,37 +390,26 @@ class CommunitySegment(RadioSegment):
         "COMMUNITY CORNER. The hosts celebrate the PLAiR crowd: one or two listener shoutouts from SEGMENT DATA "
         "(paraphrase them warmly, say who and roughly where from), plus any station or listener stats listed. You may "
         "play AT MOST ONE shoutout recording by inserting its exact audio path from SEGMENT DATA wrapped in $ signs "
-        "with no spaces ($/api/user_content/shoutouts/audio/1/123.mp3$), then react to it. Never read out anything "
-        "private. Close by handing back to the music."
+        "with no spaces ($/api/user_content/shoutouts/audio/1/123.mp3$), then react to it. If that shoutout lists a "
+        "top reply, play the reply's audio right after it, introduced as a reply, so the conversation lands on air. "
+        "Never read out anything private. Close by handing back to the music."
     )
 
     async def build(self, ctx: SegmentContext) -> Optional[SegmentContent]:
         facts, keys = [], []
-        search = getattr(ctx.dj_service, "user_content_vector_search_service", None)
-        if search is not None:
-            user_location = ctx.location.coords if ctx.location is not None else None
-            try:
-                shoutouts = await search.search(query="Recent community messages and shoutouts", n_results=6,
-                                                user_location=user_location, use_ai_analysis=False)
-            except Exception as e:
-                log_service.warning(f"[RADIO] shoutout search failed: {type(e).__name__}: {e}")
-                shoutouts = []
-            for shoutout in shoutouts or []:
-                audio_url = (shoutout.get("audio_url") or "").strip()
-                transcription = " ".join((shoutout.get("transcription") or "").split())
-                key = f"shoutout:{audio_url or _key('t', transcription)}"
-                if not transcription or key in ctx.aired:
-                    continue
-                user_data = shoutout.get("user_data") or {}
-                username = user_data.get("username") or shoutout.get("username") or "a listener"
-                place = coarse_location(user_data.get("location") or shoutout.get("location")) or "somewhere out there"
-                line = f"Shoutout from {username} ({place}): \"{clip(transcription, 260)}\""
-                if audio_url:
-                    line += f" Audio: ${audio_url}$"
-                facts.append(line)
-                keys.append(key)
-                if len(keys) >= 2:
-                    break
+        from service_registry import services
+        from services_radio import community_on_air
+        aired_ids = {key.split(":", 1)[1] for key in ctx.aired if key.startswith("shoutout:")}
+        shoutouts = await community_on_air.pick(
+            getattr(ctx.dj_service, "user_content_vector_search_service", None), services.user_content_service,
+            query="Recent community messages and shoutouts", n=2, user_id=ctx.user_id, session_id=ctx.session_id,
+            user_location=ctx.location.coords if ctx.location is not None else None, skip=aired_ids,
+        )
+        for shoutout in shoutouts:
+            if not community_on_air.text_of(shoutout):
+                continue
+            facts.append(community_on_air.describe(shoutout, max_chars=260))
+            keys.append(f"shoutout:{shoutout['id']}")
         for point in await dj_bank_sources.station_stat_points(ctx.async_session_maker, ctx.catalog_service):
             if point.key not in ctx.aired:
                 facts.append(point.text)

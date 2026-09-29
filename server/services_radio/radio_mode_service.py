@@ -103,7 +103,7 @@ class RadioModeService:
         self._shared_scripts: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
         self._shared_inflight: dict[str, asyncio.Future] = {}
         self._script_times: deque = deque()
-        self._sting_prefs: "OrderedDict[str, bool]" = OrderedDict()
+        self._sting_prefs: "OrderedDict[str, tuple]" = OrderedDict()
         self._loop_task: Optional[asyncio.Task] = None
         self._tick_lock = asyncio.Lock()
 
@@ -156,18 +156,21 @@ class RadioModeService:
         return sess.prefs.to_dict() if sess else None
 
     def stings_pref(self, session_id: str) -> bool:
-        return self._sting_prefs.get(session_id, True)
+        return self._sting_prefs.get(session_id, (True, True))[0]
 
-    def _remember_sting_pref(self, session_id: str, enabled: bool):
+    def reviews_pref(self, session_id: str) -> bool:
+        return self._sting_prefs.get(session_id, (True, True))[1]
+
+    def _remember_sting_pref(self, session_id: str, stings: bool, reviews: bool = True):
         self._sting_prefs.pop(session_id, None)
-        self._sting_prefs[session_id] = enabled
+        self._sting_prefs[session_id] = (stings, reviews)
         while len(self._sting_prefs) > STING_PREFS_MAX:
             self._sting_prefs.popitem(last=False)
 
     def _apply_prefs(self, session_id: str, user_id: Optional[int], prefs: schedule.RadioPrefs,
                      tz_name: Optional[str], tts_muted: bool) -> Optional[SessionRadio]:
         now = self.clock()
-        self._remember_sting_pref(session_id, prefs.stings)
+        self._remember_sting_pref(session_id, prefs.stings, prefs.reviews)
         sess = self.sessions.get(session_id)
         if sess is None:
             if not prefs.enabled:

@@ -1,30 +1,20 @@
 """
 User Content Speech Enhancement Service
 
-Processes user-generated audio (shoutouts/opinions) through hybrid enhancement chain.
-
-Current State:
-- Uses DeepFilterNet for noise reduction at 48kHz
-- Uses ClearVoice MossFormer2 SR model for super-resolution (band-limited 48kHz → full-band 48kHz)
-- Applies spectral balance for frequency flattening
-- Applies proper broadcast-standard LUFS normalization (-14 LUFS, Spotify standard)
-- GPT processes transcriptions to remove filler words and extract metadata
-- Energy-based audio segment extraction finds natural silence points for clean cuts
+Turns a listener's phone recording (shoutout, reply or song review) into clean, snappy radio audio.
 
 Processing Pipeline:
-1. Convert WebM → 16kHz mono WAV (native input)
-2. Upsample 16kHz → 48kHz (for DeepFilterNet requirement)
-3. DeepFilterNet (48kHz, CPU tensors in/out) - removes background noise
-4. MossFormer2_SR_48K (band-limited 48kHz numpy in → full-band 48kHz out) - adds realistic high frequencies back
-5. Spectral balance - gentle tilt-corrected equalisation towards a speech target curve
-6. Loudness normalize (-14 LUFS, -1 dBFS peak ceiling)
+1. Decode the upload at its native 48 kHz (browsers record Opus at 48 kHz; nothing is thrown away)
+2. MossFormer2_SE_48K speech enhancement (removes background music and noise; 4 s windows, bounded memory)
+3. 75 Hz low cut (handling rumble and wind)
+4. The LLM (LLM_BACKGROUND chain) filters the transcript: process talk, stumbles and false starts go
+5. Cut to the kept words (Whisper word timestamps) and shorten long pauses found by Silero VAD
+6. Loudness normalise (-14 LUFS, -1 dBFS peak ceiling) and write MP3
+7. Reviews: the LLM's best short line is cut out as a separate sting clip for playing over the song
 
-TODO - Streaming Pipeline Integration:
-- Currently outputs MP3 which creates wasteful double-encoding
-- System already has multi-bitrate streaming pipeline (OPUS_128K/192K/256K + WebM)
-- Should integrate directly with streaming encoder instead of intermediate MP3
-- This would eliminate double-encoding and provide proper adaptive streaming support
-- See settings.py: OPUS_128K_DIR, OPUS_192K_DIR, OPUS_256K_DIR, streaming infrastructure
+No compression here: on air the DJ broadcast chain in the client compresses and limits every voice.
+Measured on real uploads with Audiobox Aesthetics (2026-09-29): raw PQ 5.24 / PC 4.57, the old
+16 kHz DeepFilterNet + super-resolution chain PQ 4.24 / PC 2.38, this chain PQ 5.68 / PC 1.82.
 """
 
 import asyncio
@@ -32,7 +22,6 @@ import subprocess
 import threading
 import torch
 import torchaudio
-import torch.nn.functional as F
 import traceback
 import gc
 import json
@@ -45,7 +34,6 @@ from scipy.ndimage import maximum_filter1d, minimum_filter1d
 from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 from services.audio_clearvoice_service import ClearVoice
-from df.enhance import enhance, init_df
 
 from services import log_service
 from services.llm_router import LLM_BACKGROUND
@@ -54,8 +42,6 @@ from models_global import gpu_lease
 from config import settings
 from config.settings import BASE_DIR
 
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
 
 class TranscriptionMetadata(BaseModel):
     total_words: int
@@ -71,54 +57,31 @@ class TranscriptionMetadata(BaseModel):
     time_sensitive: Optional[bool] = None
     target_audience: Optional[str] = None
     quality_rating: int = Field(..., ge=1, le=5)
-    opinion_type: Optional[str] = None
     sentiment: Optional[str] = None
     about_place: Optional[str] = None
+    sting_quote: Optional[str] = None
+
 
 class ShoutoutOpinionResponse(BaseModel):
     full_transcription: str
     transcription_metadata: TranscriptionMetadata
 
-PROMPT_SETTINGS = {
-    "opinion": {
-        "system": "You are a LOSSLESS FILTER. Your job is to delete garbage, NOT to rewrite content.",
-        "prompt": """Filter this content to remove noise while keeping the exact original phrasing.
 
-                    RULES:
-                    1. NO REWRITING. Do not fix grammar. Do not summarize.
-                    2. KEEP: The core opinion, the exact words used, and the natural tone.
-                    3. REMOVE ONLY: Stutters (um, uh), false starts (restarted sentences), and unintelligible glitches.
-
-                    PLACE:
+PLACE_RULES = """PLACE:
                     - about_place: the real place the message is about, as specific as the speaker makes it, written so a
                       map search finds it ("Karangahape Road, Auckland, New Zealand", "Ponsonby, Auckland, New Zealand").
                       Resolve "my street", "round here" or "down the road" against the given location at the level they
-                      imply. Use null when the message isn't about a place.
+                      imply. Use null when the message isn't about a place."""
 
-                    Input JSON:
-                    {text}
-
-                    Return EXACTLY this JSON structure (do not repeat user_data):
-                    {{
-                        "full_transcription": "The filtered text (must be exact original words)",
-                        "transcription_metadata": {{
-                            "total_words": 123,
-                            "language": "en",
-                            "language_probability": 1.0,
-                            "opinion_type": "loves new restaurant",
-                            "quality_rating": 4,
-                            "sentiment": "positive",
-                            "about_place": null
-                        }}
-                    }}"""
-    },
-    "shoutout": {
-        "system": "You are a LOSSLESS FILTER for radio. Your goal is to delete 'Process Talk' but keep the exact 'Message'.",
-        "prompt": """Filter this shoutout. You must keep the original wording exactly as is, only deleting specific segments.
+SHOUTOUT_PROMPT = {
+    "system": "You are a LOSSLESS FILTER for radio. Your goal is to delete 'Process Talk' but keep the exact 'Message'.",
+    "prompt": """Filter this listener message. You must keep the original wording exactly as is, only deleting specific segments.
+                    If "replying_to" is given, the message is a reply to that shoutout: keep everything that answers it.
 
                     STRICT RULES:
                     1. DO NOT REWRITE. DO NOT FIX GRAMMAR. If they say "me and him went," KEEP IT.
-                    2. REMOVE "Process Talk": Phrases *about* the recording (e.g., "Can I get a shoutout?", "Is this on?").
+                    2. REMOVE "Process Talk": Phrases *about* the recording or the app (e.g., "Can I get a shoutout?",
+                       "Is this on?", "Hey DJ, save this", "reply to that one").
                     3. KEEP "Conversational Greetings": "Hey guys", "Hi everyone", "Yo bro" - these are ESSENTIAL.
                     4. REMOVE Stumbles: Stutters, false starts, and dead air.
 
@@ -126,12 +89,9 @@ PROMPT_SETTINGS = {
                     - Category: Short descriptive topic (e.g., "birthday_wishes")
                     - Urgency (0.0-1.0): 1.0 = Emergency, 0.5 = Event Soon, 0.0 = Casual
                     - Importance (0.0-1.0): 1.0 = Citywide, 0.5 = Local, 0.0 = Personal
+                    - Sentiment: positive, negative, mixed or neutral
 
-                    PLACE:
-                    - about_place: the real place the message is about, as specific as the speaker makes it, written so a
-                      map search finds it ("Karangahape Road, Auckland, New Zealand", "Ponsonby, Auckland, New Zealand").
-                      Resolve "my street", "round here" or "down the road" against the given location at the level they
-                      imply. Use null when the message isn't about a place.
+                    """ + PLACE_RULES + """
 
                     Input JSON:
                     {text}
@@ -153,23 +113,73 @@ PROMPT_SETTINGS = {
                             "time_sensitive": false,
                             "target_audience": "personal",
                             "quality_rating": 4,
+                            "sentiment": "positive",
                             "about_place": null
                         }}
                     }}"""
-    }
 }
 
+PROMPT_SETTINGS = {
+    "shoutout": SHOUTOUT_PROMPT,
+    "reply": SHOUTOUT_PROMPT,
+    "review": {
+        "system": "You are a LOSSLESS FILTER for radio. Delete 'Process Talk' but keep the listener's exact words about the song.",
+        "prompt": """Filter this listener's review of the song given in "track". Keep the original wording exactly, only delete segments.
 
-SPEECH_TARGET_PIVOT_HZ = 500.0
-SPEECH_TARGET_SLOPE_DB_PER_OCTAVE = 4.5
-SPECTRAL_BALANCE_STRENGTH = 0.5
-SPECTRAL_MAX_BOOST_DB = 6.0
-SPECTRAL_MAX_CUT_DB = 9.0
-SPECTRAL_NOISE_FLOOR_DB = 60.0
+                    STRICT RULES:
+                    1. NO REWRITING. Do not fix grammar. Do not summarize.
+                    2. REMOVE "Process Talk": anything *about* saving or recording it ("save this as my review",
+                       "hey DJ", "record this", "rate this song").
+                    3. REMOVE Stumbles: Stutters (um, uh), false starts, and unintelligible glitches.
+                    4. KEEP the reaction, the reasons and the natural tone.
+
+                    STING:
+                    - sting_quote: the single best short line, 3 to 12 words, copied EXACTLY and contiguously from the
+                      filtered text, that works on its own when played over this song on air ("oh my god I love this
+                      song", "this is my summer anthem"). Use null when no line stands on its own, or when the review
+                      is negative, rude or not fit for air.
+
+                    CATEGORIZATION:
+                    - Category: short descriptive topic (e.g., "loves_the_chorus", "gym_anthem")
+                    - Sentiment: positive, negative, mixed or neutral
+                    - Tags: what they talk about (vocals, beat, lyrics, memories, mood...)
+
+                    """ + PLACE_RULES + """
+
+                    Input JSON:
+                    {text}
+
+                    Return EXACTLY this JSON structure (do not repeat user_data):
+                    {{
+                        "full_transcription": "The filtered text (must be exact original words)",
+                        "transcription_metadata": {{
+                            "total_words": 123,
+                            "language": "en",
+                            "language_probability": 1.0,
+                            "category": "loves_the_chorus",
+                            "tags": ["chorus", "summer"],
+                            "quality_rating": 4,
+                            "sentiment": "positive",
+                            "sting_quote": "oh my god I love this song",
+                            "about_place": null
+                        }}
+                    }}"""
+    },
+}
+
+ENHANCED_SAMPLE_RATE = 48000
+SE_DECODE_WINDOW_S = 4.0
+LOW_CUT_HZ = 75.0
 PEAK_CEILING = 10 ** (-1.0 / 20)
 LIMITER_WINDOW_S = 0.02
 LIMITER_MAX_REDUCTION_DB = 6.0
-ENHANCED_SAMPLE_RATE = 48000
+VAD_SAMPLE_RATE = 16000
+VAD_THRESHOLD = 0.45
+VAD_MIN_SILENCE_MS = 200
+VAD_SPEECH_PAD_MS = 60
+MAX_PAUSE_S = 0.45
+WORD_GUARD_S = 0.05
+MIN_INTERVAL_S = 0.03
 SPAN_MERGE_GAP_S = 0.8
 SPAN_PRE_PAD_S = 0.08
 SPAN_POST_PAD_S = 0.12
@@ -177,11 +187,15 @@ LAST_SPAN_TAIL_S = 0.15
 SPAN_FADE_S = 0.02
 MIN_KEPT_WORD_RATIO = 0.35
 MIN_CLEAN_MATCH_RATIO = 0.8
+STING_PRE_PAD_S = 0.06
+STING_TAIL_S = 0.2
+STING_MIN_WORDS = 2
+STING_MAX_S = 6.0
 
 
 def _default_transcription_metadata(content_type: str) -> dict:
-    if content_type == "opinion":
-        return {"opinion_type": None, "sentiment": "neutral", "quality_rating": 3}
+    if content_type == "review":
+        return {"category": "song_review", "sentiment": "neutral", "tags": [], "quality_rating": 3, "sting_quote": None}
     return {
         "category": "general",
         "urgency_score": 0.0,
@@ -196,18 +210,43 @@ def _default_transcription_metadata(content_type: str) -> dict:
     }
 
 
+def _token(word: str) -> str:
+    return "".join(char for char in word.lower() if char.isalnum())
+
+
+def sting_path_for(mp3_path) -> str:
+    base, _ext = os.path.splitext(str(mp3_path))
+    return f"{base}_sting.mp3"
+
+
 async def shoutout_where(metadata: dict, user_data: dict):
     from services_radio import geo
     phrase = metadata.get('about_place') or coarse_location(user_data.get('location'))
     return await geo.resolver.resolve(phrase) if phrase else None
 
 
+def _subtract(intervals: List[Tuple[float, float]], cuts: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    result = []
+    for start, end in intervals:
+        pieces = [(start, end)]
+        for cut_start, cut_end in cuts:
+            next_pieces = []
+            for a, b in pieces:
+                if cut_end <= a or cut_start >= b:
+                    next_pieces.append((a, b))
+                    continue
+                if cut_start > a:
+                    next_pieces.append((a, cut_start))
+                if cut_end < b:
+                    next_pieces.append((cut_end, b))
+            pieces = next_pieces
+        result.extend(p for p in pieces if p[1] - p[0] >= MIN_INTERVAL_S)
+    return result
+
+
 class UserContentSpeechEnhancementService:
     def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.sr_model = None
-        self.df_model = None
-        self.df_state = None
+        self.se_model = None
         self.model_loaded = False
         self._gpu_lock = threading.Lock()
 
@@ -218,53 +257,30 @@ class UserContentSpeechEnhancementService:
         original_cwd = os.getcwd()
         try:
             os.chdir(BASE_DIR)
-
-            log_service.system(f"Loading Audio Enhancement Chain on {self.device}...")
-
-            log_service.system("  - Loading DeepFilterNet...")
-            self.df_model, self.df_state, _ = init_df()
-            self.df_model = self.df_model.to(self.device)
-            log_service.system("  - DeepFilterNet loaded")
-
-            log_service.system("  - Loading SR Model (MossFormer2_SR_48K)...")
-            self.sr_model = ClearVoice(
-                task='speech_super_resolution',
-                model_names=['MossFormer2_SR_48K'],
-            )
-
+            log_service.system("Loading speech enhancement (MossFormer2_SE_48K)...")
+            self.se_model = ClearVoice(task='speech_enhancement', model_names=['MossFormer2_SE_48K'])
+            self.se_model.models[0].args.one_time_decode_length = SE_DECODE_WINDOW_S
             self.model_loaded = True
-            log_service.success(f"✓ Vocal enhancement chain loaded (DeepFilterNet + ClearVoice SR on {self.device})")
-
+            log_service.success("✓ Speech enhancement loaded (MossFormer2_SE_48K)")
         except Exception as e:
-            log_service.error(f"Failed to load vocal enhancement models: {str(e)}\n{traceback.format_exc()}")
+            log_service.error(f"Failed to load speech enhancement: {str(e)}\n{traceback.format_exc()}")
             self.model_loaded = False
         finally:
             os.chdir(original_cwd)
 
-    def convert_webm_to_wav(self, input_path, output_path, target_sample_rate=16000):
-
+    @staticmethod
+    def decode_audio(input_path: str, sample_rate: int = ENHANCED_SAMPLE_RATE) -> np.ndarray:
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
-
         if os.path.getsize(input_path) == 0:
             raise ValueError(f"Input file is empty: {input_path}")
-
-        command = [
-            'ffmpeg',
-            '-y',
-            '-i', input_path,
-            '-acodec', 'pcm_s16le',
-            '-ac', '1',
-            '-ar', str(target_sample_rate),
-            output_path,
-            '-loglevel', 'error'
-        ]
-        try:
-            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            log_service.detail(f"User Content Processing: Converted WebM to mono WAV @ {target_sample_rate}Hz", "user_content")
-        except subprocess.CalledProcessError as e:
-            log_service.error(f"FFmpeg conversion failed: {e.stderr.decode(errors='ignore')}")
-            raise
+        result = subprocess.run(
+            ['ffmpeg', '-v', 'error', '-i', input_path, '-ac', '1', '-ar', str(sample_rate), '-f', 'f32le', '-'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg decode failed: {result.stderr.decode(errors='ignore')}")
+        return np.frombuffer(result.stdout, np.float32).copy()
 
     @staticmethod
     def _limit_peaks(signal: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -289,171 +305,63 @@ class UserContentSpeechEnhancementService:
             limited = limited * (PEAK_CEILING / final_peak)
         return limited
 
-    def loudness_normalize(self, audio_tensor: torch.Tensor, sample_rate: int, target_lufs=-14.0) -> torch.Tensor:
+    def loudness_normalize(self, audio: np.ndarray, sample_rate: int, target_lufs=-14.0) -> np.ndarray:
         try:
-            meter = pyln.Meter(sample_rate)
-            audio_np = audio_tensor.detach().cpu().numpy().astype(np.float64)
-
-            if audio_tensor.dim() == 2:
-                if audio_np.shape[0] < audio_np.shape[1]:
-                    audio_np = audio_np.T
-
-            loudness = meter.integrated_loudness(audio_np)
-
+            samples = audio.astype(np.float64)
+            loudness = pyln.Meter(sample_rate).integrated_loudness(samples)
             if not np.isfinite(loudness) or loudness <= -70.0:
-                return audio_tensor
-
-            normalized_np = self._limit_peaks(pyln.normalize.loudness(audio_np, loudness, target_lufs), sample_rate)
-
-            normalized = torch.from_numpy(normalized_np.astype(np.float32))
-
-            if audio_tensor.dim() == 2:
-                if normalized.shape[0] > normalized.shape[1]:
-                    normalized = normalized.t()
-
-            return normalized.to(audio_tensor.device)
+                return audio
+            return self._limit_peaks(pyln.normalize.loudness(samples, loudness, target_lufs), sample_rate).astype(np.float32)
         except Exception as e:
             log_service.error(f"Normalization failed: {e}")
-            return audio_tensor
-
-    def spectral_balance(self, audio, sr):
-
-        log_service.detail(f"User Content Processing: Applying spectral balance, shape={np.shape(audio)}, sample_rate={sr}", "user_content")
-
-        audio_tensor = torch.as_tensor(np.asarray(audio), dtype=torch.float32)
-
-        if audio_tensor.dim() == 2 and audio_tensor.shape[0] == 2:
-            balanced_left = self.spectral_balance_mono(audio_tensor[0], sr)
-            balanced_right = self.spectral_balance_mono(audio_tensor[1], sr)
-            return torch.stack([balanced_left, balanced_right]).numpy()
-        return self.spectral_balance_mono(audio_tensor, sr).numpy()
-
-    def spectral_balance_mono(self, audio, sr):
-
-        if audio.dim() == 2 and audio.shape[0] == 1:
-            audio = audio.squeeze(0)
-        audio = audio.detach().float().cpu()
-
-        n_fft = 4096
-        hop_length = 1024
-        if audio.shape[-1] < n_fft:
             return audio
 
-        window = torch.hann_window(n_fft)
-        stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length, window=window, return_complex=True)
-
-        power_spec = torch.mean(torch.abs(stft) ** 2, dim=1)
-        power_spec_smooth = torch.nn.functional.conv1d(
-            power_spec.unsqueeze(0).unsqueeze(0),
-            torch.ones(1, 1, 51) / 51,
-            padding='same'
-        ).squeeze()
-
-        freqs = torch.linspace(0, sr / 2, n_fft // 2 + 1)
-        measured_db = 10 * torch.log10(power_spec_smooth + 1e-12)
-        octaves = torch.log2(torch.clamp(freqs, min=SPEECH_TARGET_PIVOT_HZ) / SPEECH_TARGET_PIVOT_HZ)
-        target_db = -SPEECH_TARGET_SLOPE_DB_PER_OCTAVE * octaves
-
-        speech_band = (freqs >= 200) & (freqs <= 4000)
-        difference = target_db - measured_db
-        difference = difference - difference[speech_band].mean()
-
-        correction_db = torch.clamp(difference * SPECTRAL_BALANCE_STRENGTH, -SPECTRAL_MAX_CUT_DB, SPECTRAL_MAX_BOOST_DB)
-        near_floor = measured_db < (measured_db.max() - SPECTRAL_NOISE_FLOOR_DB)
-        correction_db = torch.where(near_floor, torch.clamp(correction_db, max=0.0), correction_db)
-        gain = torch.pow(10.0, correction_db / 20)
-
-        balanced_audio = torch.istft(
-            stft * gain.unsqueeze(1), n_fft=n_fft, hop_length=hop_length, window=window, length=audio.shape[-1]
-        )
-
-        max_amplitude = torch.max(torch.abs(balanced_audio))
-        if max_amplitude > 1.0:
-            balanced_audio /= max_amplitude
-
-        log_service.detail(f"User Content Processing: Spectral balance complete, max amplitude: {max_amplitude:.4f}", "user_content")
-        return balanced_audio
-
-    @staticmethod
-    def _resample(audio_tensor: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
-        if orig_sr == target_sr:
-            return audio_tensor
-        return torchaudio.functional.resample(audio_tensor, orig_sr, target_sr)
-
-    def upsample_audio(self, audio_tensor: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
-        log_service.detail(f"User Content Processing: Upsampling audio from {orig_sr}Hz to {target_sr}Hz", "user_content")
-        return self._resample(audio_tensor.detach().float().cpu(), orig_sr, target_sr)
-
-    def downsample_audio(self, audio_tensor: torch.Tensor, orig_sr: int, target_sr: int) -> torch.Tensor:
-        log_service.detail(f"User Content Processing: Downsampling audio from {orig_sr}Hz to {target_sr}Hz", "user_content")
-        return self._resample(audio_tensor.detach().float().cpu(), orig_sr, target_sr)
-
-    def _super_resolve(self, audio_48k: torch.Tensor) -> torch.Tensor:
-        signal = audio_48k.reshape(-1).numpy().astype(np.float32)
-        model_args = getattr(self.sr_model.models[0], 'args', None)
-        one_pass_samples = int(getattr(model_args, 'sampling_rate', ENHANCED_SAMPLE_RATE) *
-                               getattr(model_args, 'one_time_decode_length', 20))
-        batch = np.stack([signal, signal]) if signal.shape[0] <= one_pass_samples else signal[np.newaxis, :]
+    def _enhance_sync(self, audio: np.ndarray) -> np.ndarray:
+        if self.se_model is None:
+            raise RuntimeError("Speech enhancement not initialized. Call initialize() first.")
         with torch.no_grad():
-            restored = self.sr_model.call_t2t_mode(batch)
+            restored = self.se_model.call_t2t_mode(audio[np.newaxis, :])
         if restored is None:
-            raise RuntimeError("SR model returned None")
-        restored = np.asarray(restored, dtype=np.float32)
-        return torch.as_tensor(restored[0] if restored.ndim == 2 else restored).reshape(1, -1)
+            raise RuntimeError("Speech enhancement returned None")
+        restored = np.asarray(restored, dtype=np.float32).reshape(-1)[:audio.shape[0]]
+        if restored.shape[0] < audio.shape[0]:
+            restored = np.pad(restored, (0, audio.shape[0] - restored.shape[0]))
+        low_cut = torchaudio.functional.highpass_biquad(torch.from_numpy(restored), ENHANCED_SAMPLE_RATE, LOW_CUT_HZ)
+        return low_cut.numpy().astype(np.float32)
 
-    def _run_enhancement_chain(self, audio: torch.Tensor, sr_input: int) -> torch.Tensor:
-        if self.df_model is None or self.df_state is None:
-            raise RuntimeError("DeepFilterNet model not initialized. Call initialize() first.")
-        if self.sr_model is None:
-            raise RuntimeError("SR model not initialized. Call initialize() first.")
-
-        if audio.dim() == 1:
-            audio = audio.unsqueeze(0)
-        if audio.shape[0] > 1:
-            audio = audio.mean(dim=0, keepdim=True)
-
-        audio_48k = self.upsample_audio(audio, sr_input, ENHANCED_SAMPLE_RATE).contiguous()
-        log_service.detail(f"User Content Processing: Applying DeepFilterNet noise reduction, shape: {tuple(audio_48k.shape)}", "user_content")
-        denoised_48k = enhance(self.df_model, self.df_state, audio_48k).float().cpu()
-
-        log_service.detail("User Content Processing: Applying SR model to restore high frequencies...", "user_content")
-        restored_48k = self._super_resolve(denoised_48k)
-
-        target_len = denoised_48k.shape[-1]
-        if restored_48k.shape[-1] > target_len:
-            restored_48k = restored_48k[:, :target_len]
-        elif restored_48k.shape[-1] < target_len:
-            restored_48k = F.pad(restored_48k, (0, target_len - restored_48k.shape[-1]))
-
-        balanced = self.spectral_balance(restored_48k.numpy(), ENHANCED_SAMPLE_RATE)
-        return torch.as_tensor(np.asarray(balanced, dtype=np.float32)).reshape(1, -1)
-
-    def _enhance_file_sync(self, input_wav_mono: str):
-        original_audio, sr_input = torchaudio.load(input_wav_mono)
-        log_service.detail(f"User Content Processing: Loaded mono audio @ {sr_input}Hz, shape: {tuple(original_audio.shape)}", "user_content")
+    def _enhance_file_sync(self, input_path: str) -> Tuple[np.ndarray, bool]:
+        audio = self.decode_audio(input_path)
         try:
             with self._gpu_lock:
-                enhanced = self._run_enhancement_chain(original_audio, sr_input)
-            return enhanced, ENHANCED_SAMPLE_RATE, True
+                return self._enhance_sync(audio), True
         except Exception as e:
             log_service.error(f"Vocal enhancement failed: {str(e)}\n{traceback.format_exc()}")
-            return original_audio.float(), sr_input, False
+            return audio, False
         finally:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    async def _enhance_to_tensor(self, input_path: str, temp_wav_16k_mono: str):
-        await asyncio.to_thread(self.convert_webm_to_wav, input_path, temp_wav_16k_mono, 16000)
+    async def _enhance(self, input_path: str) -> Tuple[np.ndarray, bool]:
         async with gpu_lease("Shoutout enhancement"):
-            return await asyncio.to_thread(self._enhance_file_sync, temp_wav_16k_mono)
+            return await asyncio.to_thread(self._enhance_file_sync, input_path)
+
+    @staticmethod
+    def _speech_regions(audio: np.ndarray) -> List[Tuple[float, float]]:
+        try:
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
+            audio_16k = torchaudio.functional.resample(torch.from_numpy(audio), ENHANCED_SAMPLE_RATE, VAD_SAMPLE_RATE)
+            options = VadOptions(threshold=VAD_THRESHOLD, min_silence_duration_ms=VAD_MIN_SILENCE_MS,
+                                 speech_pad_ms=VAD_SPEECH_PAD_MS)
+            stamps = get_speech_timestamps(audio_16k.numpy(), options, sampling_rate=VAD_SAMPLE_RATE)
+            return [(s['start'] / VAD_SAMPLE_RATE, s['end'] / VAD_SAMPLE_RATE) for s in stamps]
+        except Exception as e:
+            log_service.warning(f"User Content Processing: VAD unavailable ({e}), pauses kept")
+            return []
 
     def _get_keep_spans(self, original_words: List[dict], cleaned_text: str) -> List[dict]:
-        def clean_word(w):
-            return "".join(char for char in w.lower() if char.isalnum())
-
-        cleaned_tokens = [clean_word(w) for w in cleaned_text.split() if clean_word(w)]
-        original_tokens = [clean_word(w['word']) for w in original_words]
+        cleaned_tokens = [_token(w) for w in cleaned_text.split() if _token(w)]
+        original_tokens = [_token(w['word']) for w in original_words]
 
         matcher = difflib.SequenceMatcher(None, original_tokens, cleaned_tokens, autojunk=False)
 
@@ -461,8 +369,6 @@ class UserContentSpeechEnhancementService:
         for tag, i1, i2, _j1, _j2 in matcher.get_opcodes():
             if tag == 'equal':
                 raw_matches.append({
-                    "start_index": i1,
-                    "end_index": i2,
                     "start_time": original_words[i1]['start'],
                     "end_time": original_words[i2 - 1]['end'],
                     "words": list(original_words[i1:i2])
@@ -474,14 +380,11 @@ class UserContentSpeechEnhancementService:
         merged_spans = [raw_matches[0]]
         for next_span in raw_matches[1:]:
             current_span = merged_spans[-1]
-            gap = next_span['start_time'] - current_span['end_time']
-            if gap < SPAN_MERGE_GAP_S:
+            if next_span['start_time'] - current_span['end_time'] < SPAN_MERGE_GAP_S:
                 current_span['end_time'] = next_span['end_time']
                 current_span['words'].extend(next_span['words'])
-                current_span['end_index'] = next_span['end_index']
             else:
                 merged_spans.append(next_span)
-
         return merged_spans
 
     @staticmethod
@@ -496,49 +399,91 @@ class UserContentSpeechEnhancementService:
             return False
         return True
 
-    def _recalibrate_and_stitch(self, audio: torch.Tensor, sr: int, spans: List[dict]) -> Tuple[torch.Tensor, List[dict]]:
-        if not spans:
-            return audio, []
+    @staticmethod
+    def _keep_intervals(duration: float, words: List[dict], spans: Optional[List[dict]],
+                        speech: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        if spans:
+            base = []
+            last = len(spans) - 1
+            for i, span in enumerate(spans):
+                start = span['start_time'] - SPAN_PRE_PAD_S
+                end = span['end_time'] + (max(SPAN_POST_PAD_S, LAST_SPAN_TAIL_S) if i == last else SPAN_POST_PAD_S)
+                if i > 0:
+                    start = max(start, (spans[i - 1]['end_time'] + span['start_time']) / 2)
+                if i < last:
+                    end = min(end, (span['end_time'] + spans[i + 1]['start_time']) / 2)
+                base.append((max(0.0, start), min(duration, end)))
+        else:
+            starts = [s for s, _e in speech[:1]] + [w['start'] for w in words[:1]]
+            ends = [e for _s, e in speech[-1:]] + [w['end'] for w in words[-1:]]
+            if starts and ends:
+                base = [(max(0.0, min(starts) - SPAN_PRE_PAD_S), min(duration, max(ends) + LAST_SPAN_TAIL_S))]
+            else:
+                base = [(0.0, duration)]
 
-        total_samples = audio.shape[-1]
-        last_index = len(spans) - 1
-        fade_len = int(SPAN_FADE_S * sr)
-        audio_segments = []
-        recalibrated_words = []
-        cursor = 0
-
-        for i, span in enumerate(spans):
-            start_time = span['start_time'] - SPAN_PRE_PAD_S
-            end_time = span['end_time'] + (max(SPAN_POST_PAD_S, LAST_SPAN_TAIL_S) if i == last_index else SPAN_POST_PAD_S)
-            if i > 0:
-                start_time = max(start_time, (spans[i - 1]['end_time'] + span['start_time']) / 2)
-            if i < last_index:
-                end_time = min(end_time, (span['end_time'] + spans[i + 1]['start_time']) / 2)
-
-            start_sample = min(max(0, int(round(start_time * sr))), total_samples)
-            end_sample = min(max(0, int(round(end_time * sr))), total_samples)
-            if end_sample <= start_sample:
+        cuts = []
+        half = MAX_PAUSE_S / 2
+        for (_s0, gap_start), (gap_end, _e1) in zip(speech, speech[1:]):
+            if gap_end - gap_start <= MAX_PAUSE_S:
                 continue
+            if any(gap_start + WORD_GUARD_S < w['start'] < gap_end - WORD_GUARD_S for w in words):
+                continue
+            cuts.append((gap_start + half, gap_end - half))
+        return _subtract([iv for iv in base if iv[1] > iv[0]], cuts)
 
-            segment = audio[..., start_sample:end_sample].clone()
-            if segment.shape[-1] > 2 * fade_len > 0:
-                segment[..., :fade_len] *= torch.linspace(0, 1, fade_len, device=segment.device)
-                segment[..., -fade_len:] *= torch.linspace(1, 0, fade_len, device=segment.device)
+    @staticmethod
+    def _stitch(audio: np.ndarray, sr: int, intervals: List[Tuple[float, float]],
+                words: List[dict]) -> Tuple[np.ndarray, List[dict]]:
+        if not intervals:
+            return audio, [dict(w) for w in words]
 
-            time_shift = (cursor - start_sample) / sr
-            for word in span['words']:
-                new_word = dict(word)
-                new_word['start'] = round(max(0.0, word['start'] + time_shift), 3)
-                new_word['end'] = round(max(0.0, word['end'] + time_shift), 3)
-                recalibrated_words.append(new_word)
+        fade_len = int(SPAN_FADE_S * sr)
+        segments = []
+        offsets = []
+        cursor = 0
+        for start, end in intervals:
+            a = min(max(0, int(round(start * sr))), audio.shape[0])
+            b = min(max(0, int(round(end * sr))), audio.shape[0])
+            if b <= a:
+                continue
+            segment = audio[a:b].copy()
+            if segment.shape[0] > 2 * fade_len > 0:
+                segment[:fade_len] *= np.linspace(0, 1, fade_len, dtype=np.float32)
+                segment[-fade_len:] *= np.linspace(1, 0, fade_len, dtype=np.float32)
+            offsets.append((a / sr, b / sr, cursor / sr))
+            segments.append(segment)
+            cursor += segment.shape[0]
 
-            audio_segments.append(segment)
-            cursor += segment.shape[-1]
+        if not segments:
+            return audio, [dict(w) for w in words]
 
-        if not audio_segments:
-            return audio, []
+        remapped = []
+        for word in words:
+            for start, end, offset in offsets:
+                if start - 0.01 <= word['start'] < end:
+                    new_word = dict(word)
+                    new_word['start'] = round(offset + max(0.0, word['start'] - start), 3)
+                    new_word['end'] = round(offset + max(0.0, min(word['end'], end) - start), 3)
+                    remapped.append(new_word)
+                    break
+        return np.concatenate(segments), remapped
 
-        return torch.cat(audio_segments, dim=-1), recalibrated_words
+    @staticmethod
+    def _sting_bounds(words: List[dict], quote: Optional[str], duration: float) -> Optional[Tuple[float, float]]:
+        quote_tokens = [_token(w) for w in (quote or "").split() if _token(w)]
+        if len(quote_tokens) < STING_MIN_WORDS or not words:
+            return None
+        word_tokens = [_token(w['word']) for w in words]
+        matcher = difflib.SequenceMatcher(None, word_tokens, quote_tokens, autojunk=False)
+        match = matcher.find_longest_match(0, len(word_tokens), 0, len(quote_tokens))
+        if match.size < max(STING_MIN_WORDS, int(0.7 * len(quote_tokens))):
+            return None
+        first, last = words[match.a], words[match.a + match.size - 1]
+        start = max(0.0, first['start'] - STING_PRE_PAD_S)
+        end = min(duration, last['end'] + STING_TAIL_S)
+        if end - start > STING_MAX_S or end <= start:
+            return None
+        return start, end
 
     @staticmethod
     async def _load_json(path) -> Optional[dict]:
@@ -559,16 +504,13 @@ class UserContentSpeechEnhancementService:
             await f.write(json.dumps(data, indent=2, ensure_ascii=False))
         await asyncio.to_thread(os.replace, temp_path, path)
 
-    async def process_transcription_with_gpt(self, json_path: str, content_type: str, ai_service) -> dict:
+    async def filter_text(self, text: str, content_type: str, ai_service, context: Optional[dict] = None,
+                          location: Optional[str] = None) -> dict:
         try:
-            original_data = await self._load_json(json_path)
-            if not original_data:
-                return {}
-
-            payload = {"transcription": original_data.get("full_transcription", "")}
-            location = coarse_location((original_data.get("user_data") or {}).get("location"))
+            payload = {"transcription": text}
             if location:
                 payload["location"] = location
+            payload.update({k: v for k, v in (context or {}).items() if v})
 
             prompt_settings = PROMPT_SETTINGS[content_type]
             prompt = prompt_settings["prompt"].format(text=json.dumps(payload, ensure_ascii=False))
@@ -578,22 +520,15 @@ class UserContentSpeechEnhancementService:
                     {"role": "system", "content": prompt_settings["system"]},
                     {"role": "user", "content": prompt}
                 ],
-                model=settings.GEMINI_DJ_MODEL,
                 temperature=0,
-                max_tokens=2048,
                 response_schema=ShoutoutOpinionResponse,
                 role=LLM_BACKGROUND
             )
 
-            if not completion:
-                log_service.error("User Content Enhancement: LLM returned no response")
-                return {}
-
-            processed_data = getattr(completion, 'structured_data', None)
-            if processed_data is None:
-                response_text = (completion.choices[0].message.content or "").strip()
+            processed_data = getattr(completion, 'structured_data', None) if completion else None
+            if processed_data is None and completion:
                 try:
-                    processed_data = json.loads(response_text)
+                    processed_data = json.loads((completion.choices[0].message.content or "").strip())
                 except json.JSONDecodeError as e:
                     log_service.error(f"Failed to parse LLM response as JSON: {e}")
                     return {}
@@ -607,12 +542,22 @@ class UserContentSpeechEnhancementService:
                 processed_data['transcription_metadata'] = {}
 
             log_service.detail(
-                f"User Content Enhancement: Processed {content_type} with category '{processed_data['transcription_metadata'].get('category', 'N/A')}'", "user_content")
+                f"User Content Enhancement: Processed {content_type} with category "
+                f"'{processed_data['transcription_metadata'].get('category', 'N/A')}'", "user_content")
             return processed_data
 
         except Exception as e:
-            log_service.error(f"Error in process_transcription_with_gpt: {str(e)}\n{traceback.format_exc()}")
+            log_service.error(f"Error filtering {content_type} text: {str(e)}\n{traceback.format_exc()}")
             return {}
+
+    async def process_transcription_with_gpt(self, json_path: str, content_type: str, ai_service,
+                                             context: Optional[dict] = None) -> dict:
+        original_data = await self._load_json(json_path)
+        if not original_data:
+            return {}
+        location = coarse_location((original_data.get("user_data") or {}).get("location"))
+        return await self.filter_text(original_data.get("full_transcription", ""), content_type, ai_service,
+                                      context=context, location=location)
 
     @staticmethod
     def _build_transcript(original_data: dict, processed: Optional[dict], content_type: str) -> Tuple[dict, bool]:
@@ -642,45 +587,52 @@ class UserContentSpeechEnhancementService:
                 transcript[key] = original_data[key]
         return transcript, filtered
 
-    def _finalize_sync(self, enhanced_audio: torch.Tensor, sr: int, spans: Optional[List[dict]],
-                       temp_final_wav: str, output_path: str) -> Tuple[float, List[dict]]:
-        final_audio = enhanced_audio
-        new_word_timestamps = []
-
-        if spans:
-            final_audio, new_word_timestamps = self._recalibrate_and_stitch(enhanced_audio, sr, spans)
-
-        final_audio = self.loudness_normalize(final_audio, sr)
-
-        if final_audio.dim() == 1:
-            final_audio = final_audio.unsqueeze(0)
-
-        final_audio = final_audio.detach().cpu().float()
-        final_audio_int16 = (final_audio * 32767).clamp(-32768, 32767).short()
-        torchaudio.save(temp_final_wav, final_audio_int16, sr)
-
+    def _write_mp3(self, audio: np.ndarray, sr: int, output_path: str):
         temp_mp3 = f"{output_path}.tmp"
+        pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
         command = [
-            'ffmpeg', '-y',
-            '-i', temp_final_wav,
-            '-codec:a', 'libmp3lame',
-            '-ac', '1',
-            '-ar', '48000',
-            '-qscale:a', '2',
-            '-f', 'mp3',
-            '-loglevel', 'error',
-            temp_mp3
+            'ffmpeg', '-y', '-loglevel', 'error',
+            '-f', 's16le', '-ar', str(sr), '-ac', '1', '-i', 'pipe:0',
+            '-codec:a', 'libmp3lame', '-qscale:a', '2', '-f', 'mp3', temp_mp3
         ]
         try:
-            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(command, input=pcm, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             os.replace(temp_mp3, output_path)
         finally:
             if os.path.exists(temp_mp3):
                 os.remove(temp_mp3)
-        return final_audio.shape[-1] / sr, new_word_timestamps
+
+    def _finalize_sync(self, enhanced: np.ndarray, sr: int, words: List[dict], spans: Optional[List[dict]],
+                       output_path: str, sting_quote: Optional[str]) -> Tuple[float, List[dict], Optional[dict]]:
+        speech = self._speech_regions(enhanced)
+        duration = enhanced.shape[0] / sr
+        kept_words = [w for span in spans for w in span['words']] if spans else list(words)
+        intervals = self._keep_intervals(duration, kept_words, spans, speech)
+        final_audio, new_words = self._stitch(enhanced, sr, intervals, kept_words)
+        final_audio = self.loudness_normalize(final_audio, sr)
+        self._write_mp3(final_audio, sr, output_path)
+        final_duration = final_audio.shape[0] / sr
+
+        sting = None
+        bounds = self._sting_bounds(new_words, sting_quote, final_duration)
+        if bounds:
+            a, b = int(bounds[0] * sr), int(bounds[1] * sr)
+            clip = final_audio[a:b].copy()
+            fade_len = int(SPAN_FADE_S * sr)
+            if clip.shape[0] > 2 * fade_len:
+                clip[:fade_len] *= np.linspace(0, 1, fade_len, dtype=np.float32)
+                clip[-fade_len:] *= np.linspace(1, 0, fade_len, dtype=np.float32)
+            sting_path = sting_path_for(output_path)
+            self._write_mp3(clip, sr, sting_path)
+            sting = {'file': os.path.basename(sting_path), 'text': sting_quote,
+                     'duration': round(clip.shape[0] / sr, 3)}
+        elif os.path.exists(sting_path_for(output_path)):
+            os.remove(sting_path_for(output_path))
+        return final_duration, new_words, sting
 
     async def enhance_audio(self, input_path: str, output_path: str, content_type: str,
-                            json_path=None, filtered_json_path=None, ai_service=None) -> bool:
+                            json_path=None, filtered_json_path=None, ai_service=None,
+                            context: Optional[dict] = None) -> bool:
         if content_type not in PROMPT_SETTINGS:
             raise ValueError(f"Unknown content type: {content_type}")
 
@@ -693,7 +645,8 @@ class UserContentSpeechEnhancementService:
 
         llm_task = None
         if original_data is not None and filtered_json_path and ai_service:
-            llm_task = asyncio.create_task(self.process_transcription_with_gpt(json_path, content_type, ai_service))
+            llm_task = asyncio.create_task(
+                self.process_transcription_with_gpt(json_path, content_type, ai_service, context=context))
 
         return await self._render(input_path, output_path, content_type, original_data, filtered_json_path, llm_task, None)
 
@@ -714,14 +667,9 @@ class UserContentSpeechEnhancementService:
 
     async def _render(self, input_path: str, output_path: str, content_type: str, original_data: Optional[dict],
                       filtered_json_path: Optional[str], llm_task, existing_transcript: Optional[dict]) -> bool:
-        temp_dir = os.path.dirname(output_path)
-        base_name = os.path.splitext(os.path.basename(output_path))[0]
-        temp_wav_16k_mono = os.path.join(temp_dir, f"{base_name}_input_16k_mono.wav")
-        temp_final_wav = os.path.join(temp_dir, f"{base_name}_final.wav")
         written = []
-
         try:
-            enhanced_audio, sr, enhanced_ok = await self._enhance_to_tensor(input_path, temp_wav_16k_mono)
+            enhanced_audio, enhanced_ok = await self._enhance(input_path)
             processed = await llm_task if llm_task is not None else None
 
             transcript = None
@@ -743,31 +691,37 @@ class UserContentSpeechEnhancementService:
                 else:
                     log_service.warning("User Content Processing: Filtered transcript does not match the audio closely, keeping full audio")
 
-            duration_s, new_word_timestamps = await asyncio.to_thread(
-                self._finalize_sync, enhanced_audio, sr, spans, temp_final_wav, output_path
+            sting_quote = ((transcript or {}).get('transcription_metadata') or {}).get('sting_quote') \
+                if content_type == "review" else None
+            duration_s, new_words, sting = await asyncio.to_thread(
+                self._finalize_sync, enhanced_audio, ENHANCED_SAMPLE_RATE, original_words, spans, output_path, sting_quote
             )
             written.append(output_path)
+            if sting:
+                written.append(sting_path_for(output_path))
 
             if transcript is not None:
-                words = new_word_timestamps if spans else [dict(w) for w in original_words]
                 metadata = dict(transcript.get('transcription_metadata') or {})
-                metadata['total_words'] = len(words) if words else len(transcript.get('full_transcription', '').split())
+                metadata['total_words'] = len(new_words) if new_words else len(transcript.get('full_transcription', '').split())
                 metadata['duration'] = round(duration_s, 3)
                 if not metadata.get('where'):
                     where = await shoutout_where(metadata, transcript.get('user_data') or {})
                     if where is not None:
                         metadata['where'] = where.as_dict()
                 transcript['transcription_metadata'] = metadata
-                transcript['word_level_transcription'] = words
+                transcript['word_level_transcription'] = new_words
                 transcript['audio_enhanced'] = enhanced_ok
                 transcript['enhancement_version'] = settings.SHOUTOUT_ENHANCEMENT_VERSION if enhanced_ok else 0
                 transcript['transcript_filtered'] = filtered
+                transcript.pop('sting', None)
+                if sting:
+                    transcript['sting'] = sting
                 await self._write_json_atomic(filtered_json_path, transcript)
                 written.append(filtered_json_path)
 
             log_service.detail(
                 f"User Content Processing: Saved {output_path} ({duration_s:.1f}s, enhanced={enhanced_ok}, "
-                f"sliced={bool(spans)}, filtered={filtered})", "user_content"
+                f"sliced={bool(spans)}, filtered={filtered}, sting={bool(sting)})", "user_content"
             )
             return True
 
@@ -782,10 +736,3 @@ class UserContentSpeechEnhancementService:
                 except Exception as cleanup_error:
                     log_service.error(f"Failed to remove partial output {path}: {cleanup_error}")
             return False
-        finally:
-            for temp_file in [temp_wav_16k_mono, temp_final_wav]:
-                if temp_file and os.path.exists(temp_file):
-                    try:
-                        os.remove(temp_file)
-                    except Exception as cleanup_error:
-                        log_service.error(f"Failed to clean up {temp_file}: {cleanup_error}")

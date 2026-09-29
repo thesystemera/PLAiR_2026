@@ -7,7 +7,7 @@ import pytz
 from config.settings import settings
 
 SEGMENT_PREF_KEYS = ("news", "city", "local", "community", "features")
-EXTRA_PREF_KEYS = ("stings",)
+EXTRA_PREF_KEYS = ("stings", "reviews")
 SERVED_MEMORY_S = 6 * 3600
 
 
@@ -31,6 +31,7 @@ class RadioPrefs:
     community: bool = True
     features: bool = True
     stings: bool = True
+    reviews: bool = True
     feature_interval_min: int = field(default_factory=default_feature_interval)
 
     def to_dict(self) -> dict:

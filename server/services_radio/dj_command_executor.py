@@ -52,8 +52,6 @@ TRACK_TARGET_LABELS = {"current": "current track", "previous": "previous track",
 
 INTERPRETATION_GATE_TIMEOUT_S = 90.0
 
-SHOUTOUT_REPLY_INLINE = re.compile(r'\{save_shoutout_reply:([0-9_]+)\}')
-SHOUTOUT_ID = re.compile(r'^\d+_\d+$')
 
 
 class CommandExecutorService:
@@ -408,190 +406,47 @@ class CommandExecutorService:
             "changed": bool(feedback_msg)
         }
 
-    async def execute_save_opinion(self, session_dict, target):
-        session_id = session_dict.get('session_id')
-        if not session_id:
-            log_service.error("No session_id provided")
-            return {"status": "error", "reason": "No active session"}
-
-        track_id = self._resolve_track_id(session_id, target) if target else None
-        if not track_id:
-            log_service.error(f"No track found for opinion target: {target}")
-            return {"status": "error", "reason": "No track available for that position"}
-
-        track = self.catalog_service.get_track(track_id)
-        if not track:
-            log_service.error(f"Track {track_id} not found in catalog")
-            return {"status": "error", "reason": "Track not found in catalog"}
-
-        return await self._save_opinion(track, session_dict)
-
-    async def _save_opinion(self, track, session_dict):
+    async def save_community_item(self, session_dict, kind: str, text: str = "", parent_id=None, track_id=None):
+        from pathlib import Path
+        from services.user_content_database_service import track_ref
         user_id = session_dict.get('user_id')
-        if not user_id:
-            return {"status": "refused", "reason": "Only signed-in listeners can save opinions"}
-
-        if not self.user_content_service:
-            log_service.error("User Content Service not available")
-            return {"status": "error", "reason": "User content service unavailable"}
-
-        log_service.detail(f"Delegating opinion processing for user {user_id} on track {track['id']}", "commands")
-
-        success = await self.user_content_service.process_opinion_upload(
-            user_id=user_id,
-            track_info=track,
-            enhancement_service=self.user_content_speech_enhancement_service,
-            gemini_service=self.gemini_ai_service
-        )
-
         session_id = session_dict.get('session_id')
-        track_title = track.get('generation_params', {}).get('title', 'this track')
-        track_artist = track.get('generation_params', {}).get('artist_name', '')
-        track_name = f"'{track_title}' by {track_artist}" if track_artist else f"'{track_title}'"
+        labels = {"shoutout": "Shoutout", "reply": "Reply", "review": "Review"}
+        track = track_ref(self.catalog_service.get_track(track_id)) if track_id else None
+        item = None
+        if user_id and self.user_content_service:
+            common = dict(enhancement_service=self.user_content_speech_enhancement_service,
+                          ai_service=self.gemini_ai_service, vector_db_service=self.user_content_vector_db_service,
+                          broadcast_callback=self.broadcast_content_func, parent_id=parent_id, track=track)
+            recording = session_dict.get('recording')
+            if recording:
+                item = await self.user_content_service.create_voice_item(int(user_id), kind, Path(recording), **common)
+            else:
+                user_data = await self._user_data(user_id)
+                item = await self.user_content_service.create_text_item(int(user_id), kind, text, user_data, **common)
 
-        if success:
-            feedback_msg = f"Your opinion on {track_name} has been saved"
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    info=feedback_msg,
-                    message_type='interactive'
-                )
-            if session_id:
-                await self.sio.emit('conversation_update', {
-                    'info': feedback_msg,
-                    'message_type': 'interactive'
-                }, room=session_id)
-            return {"status": "ok", "track": track_name}
-
-        feedback_msg = f"Failed to save opinion on {track_name} - no recent audio found"
+        what = f"{labels.get(kind, kind)}" + (f" on {track['title']}" if track else "")
+        if item:
+            message = {'info': f"{what} saved: \"{item.get('full_transcription', '')}\""}
+        else:
+            message = {'error': f"Couldn't save that {kind.lower()}"}
         async with self.async_session_maker() as db:
-            await save_conversation_to_database(
-                user_id=user_id,
-                db=db,
-                error=feedback_msg,
-                message_type='interactive'
-            )
+            await save_conversation_to_database(user_id=user_id, db=db, message_type='shoutouts', **message)
         if session_id:
-            await self.sio.emit('conversation_update', {
-                'error': feedback_msg,
-                'message_type': 'interactive'
-            }, room=session_id)
-        return {"status": "error", "reason": "No recent voice recording found"}
+            await self.sio.emit('conversation_update', {**message, 'message_type': 'shoutouts'}, room=session_id)
+        return {"status": "ok" if item else "error", "id": (item or {}).get("id")}
 
-    async def _save_shoutout(self, session_dict):
-        user_id = session_dict.get('user_id')
-        if not user_id:
-            return {"status": "refused", "reason": "Only signed-in listeners can save shoutouts"}
-
-        if not self.user_content_service:
-            log_service.error("User Content Service not available")
-            return {"status": "error", "reason": "User content service unavailable"}
-
-        log_service.detail(f"Delegating shoutout processing for user {user_id}", "commands")
-
-        success, transcription = await self.user_content_service.process_shoutout_upload(
-            user_id=user_id,
-            enhancement_service=self.user_content_speech_enhancement_service,
-            gemini_service=self.gemini_ai_service,
-            vector_db_service=self.user_content_vector_db_service,
-            broadcast_callback=self.broadcast_content_func
-        )
-
-        session_id = session_dict.get('session_id')
-        if success:
-            feedback_msg = f"Shoutout saved: \"{transcription}\""
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    info=feedback_msg,
-                    message_type='shoutouts'
-                )
-            if session_id:
-                await self.sio.emit('conversation_update', {
-                    'info': feedback_msg,
-                    'message_type': 'shoutouts'
-                }, room=session_id)
-            return {"status": "ok"}
-
-        feedback_msg = "Failed to save shoutout - no recent audio found"
+    async def _user_data(self, user_id):
         async with self.async_session_maker() as db:
-            await save_conversation_to_database(
-                user_id=user_id,
-                db=db,
-                error=feedback_msg,
-                message_type='shoutouts'
-            )
-        if session_id:
-            await self.sio.emit('conversation_update', {
-                'error': feedback_msg,
-                'message_type': 'shoutouts'
-            }, room=session_id)
-        return {"status": "error", "reason": "No recent voice recording found"}
-
-    async def _save_shoutout_reply(self, session_dict, parent_id: str):
-        user_id = session_dict.get('user_id')
-        if not user_id:
-            return {"status": "refused", "reason": "Only signed-in listeners can reply to shoutouts"}
-
-        if not self.user_content_service:
-            log_service.error("User Content Service not available")
-            return {"status": "error", "reason": "User content service unavailable"}
-
-        if not await asyncio.to_thread(self.user_content_service.is_root_shoutout, parent_id):
-            log_service.error(f"Cannot reply to {parent_id} - not a root shoutout or doesn't exist")
-            session_id = session_dict.get('session_id')
-            if session_id:
-                await self.sio.emit('conversation_update', {
-                    'error': "Cannot reply - parent shoutout not found or is already a reply",
-                    'message_type': 'shoutouts'
-                }, room=session_id)
-            return {"status": "error", "reason": "Parent shoutout not found or is already a reply"}
-
-        log_service.detail(f"Delegating shoutout reply processing for user {user_id} to parent {parent_id}", "commands")
-
-        success, transcription = await self.user_content_service.process_shoutout_upload(
-            user_id=user_id,
-            enhancement_service=self.user_content_speech_enhancement_service,
-            gemini_service=self.gemini_ai_service,
-            vector_db_service=None,
-            broadcast_callback=self.broadcast_content_func,
-            parent_id=parent_id
-        )
-
-        session_id = session_dict.get('session_id')
-        if success:
-            feedback_msg = f"Reply saved: \"{transcription}\""
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    info=feedback_msg,
-                    message_type='shoutouts'
-                )
-            if session_id:
-                await self.sio.emit('conversation_update', {
-                    'info': feedback_msg,
-                    'message_type': 'shoutouts'
-                }, room=session_id)
-            return {"status": "ok"}
-
-        feedback_msg = "Failed to save reply - no recent audio found"
-        async with self.async_session_maker() as db:
-            await save_conversation_to_database(
-                user_id=user_id,
-                db=db,
-                error=feedback_msg,
-                message_type='shoutouts'
-            )
-        if session_id:
-            await self.sio.emit('conversation_update', {
-                'error': feedback_msg,
-                'message_type': 'shoutouts'
-            }, room=session_id)
-        return {"status": "error", "reason": "No recent voice recording found"}
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+        return {
+            "user_id": int(user_id),
+            "username": getattr(user, "username", None) or "Listener",
+            "location": getattr(user, "location", None) or "Unknown",
+            "latitude": float(user.latitude) if user is not None and user.latitude is not None else None,
+            "longitude": float(user.longitude) if user is not None and user.longitude is not None else None,
+        }
 
     async def _listener_location(self, session_dict):
         user = None

@@ -269,7 +269,7 @@ async def lifespan(_app: FastAPI):
     log_service.system("Initializing user content vector database service...")
     user_content_vector_db_service = None
     try:
-        user_content_vector_db_service = UserContentVectorDatabaseService(user_content_service)
+        services.user_content_vector_db_service = user_content_vector_db_service = UserContentVectorDatabaseService(user_content_service)
         await asyncio.to_thread(user_content_vector_db_service.load_initial_data)
         log_service.success("✓ User content vector database service initialized")
 

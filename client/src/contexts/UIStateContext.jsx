@@ -326,6 +326,12 @@ export function UIStateProvider({ children }) {
     shoutout: null
   })
 
+  const [reviewModalState, setReviewModalState] = useState({
+    isOpen: false,
+    trackId: null,
+    track: null
+  })
+
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [usageModalOpen, setUsageModalOpen] = useState(false)
 
@@ -656,7 +662,8 @@ export function UIStateProvider({ children }) {
 
   const [contentUpdates, setContentUpdates] = useState({
     tracks: 0,
-    shoutouts: 0
+    shoutouts: 0,
+    reviews: 0
   })
 
   const publishContentUpdate = useCallback((contentType) => {
@@ -1137,6 +1144,16 @@ export function UIStateProvider({ children }) {
     setShoutoutModalState({ isOpen: false, shoutout: null })
   }, [])
 
+  const openReviewModal = useCallback((trackId, track = null) => {
+    if (!trackId) return
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setReviewModalState({ isOpen: true, trackId, track }))
+  }, [])
+
+  const closeReviewModal = useCallback(() => {
+    setReviewModalState(prev => ({ ...prev, isOpen: false }))
+  }, [])
+
   const openUploadModal = useCallback(() => {
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
     startTransition(() => setUploadModalOpen(true))
@@ -1256,6 +1273,10 @@ export function UIStateProvider({ children }) {
     openShoutoutModal,
     closeShoutoutModal,
 
+    reviewModalState,
+    openReviewModal,
+    closeReviewModal,
+
     uploadModalOpen,
     openUploadModal,
     closeUploadModal,
@@ -1283,6 +1304,7 @@ export function UIStateProvider({ children }) {
     getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
     shoutoutModalState, openShoutoutModal, closeShoutoutModal,
+    reviewModalState, openReviewModal, closeReviewModal,
     uploadModalOpen, openUploadModal, closeUploadModal,
     usageModalOpen, openUsageModal, closeUsageModal,
     isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,

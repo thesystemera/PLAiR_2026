@@ -23,7 +23,7 @@ class Settings:
     # Catalog database (tracks, metadata)
     CATALOG_DATABASE_URL: str = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/ai_radio_catalog"
 
-    # User content database (shoutouts, opinions)
+    # User content database (shoutouts, replies, reviews)
     USER_CONTENT_DATABASE_URL: str = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/ai_radio_user_content"
 
     # Embeddings database (vector caches, query caches, TTS embeddings)
@@ -74,7 +74,6 @@ class Settings:
         return user_dir / filename
 
     USER_CONTENT_DIR: Path = BASE_DIR / "data" / "user_content"
-    OPINIONS_DIR: Path = USER_CONTENT_DIR / "opinions"
 
     TTS_ENGINE_DATA_DIR: Path = BASE_DIR / "data" / "tts_dj_engine_data"
     TTS_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "tts_audio"
@@ -479,7 +478,7 @@ class Settings:
     ASSET_DOCTOR_QUARANTINE_DIR: Path = Path(os.getenv("ASSET_DOCTOR_QUARANTINE_DIR", str(CATALOG_DIR / "_asset_doctor_quarantine")))
     ASSET_DOCTOR_SHOUTOUT_REENHANCE_ENABLED: bool = os.getenv("ASSET_DOCTOR_SHOUTOUT_REENHANCE_ENABLED", "true").lower() == "true"
     ASSET_DOCTOR_SHOUTOUT_REENHANCE_PER_HOUR: int = int(os.getenv("ASSET_DOCTOR_SHOUTOUT_REENHANCE_PER_HOUR", "6"))
-    SHOUTOUT_ENHANCEMENT_VERSION: int = 2
+    SHOUTOUT_ENHANCEMENT_VERSION: int = 3
 
     SUNO_MODEL_VERSION: str = os.getenv("SUNO_MODEL_VERSION", "V5")
 
@@ -629,6 +628,12 @@ class Settings:
     STINGS_MIDTRACK_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_MAX_LEN_S", "2.5"))
     STINGS_MIDTRACK_CLEAR_S: float = float(os.getenv("STINGS_MIDTRACK_CLEAR_S", "120"))
     STINGS_MIDTRACK_VOICE_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_VOICE_MAX_LEN_S", "4.5"))
+    REVIEW_STINGS_ENABLED: bool = os.getenv("REVIEW_STINGS_ENABLED", "true").lower() == "true"
+    REVIEW_STINGS_PROBABILITY: float = float(os.getenv("REVIEW_STINGS_PROBABILITY", "0.7"))
+    REVIEW_STINGS_MIN_INTERVAL_S: float = float(os.getenv("REVIEW_STINGS_MIN_INTERVAL_S", "240"))
+    REVIEW_STINGS_REPEAT_S: float = float(os.getenv("REVIEW_STINGS_REPEAT_S", "21600"))
+    REVIEW_STINGS_MAX_LEN_S: float = float(os.getenv("REVIEW_STINGS_MAX_LEN_S", "6"))
+    REVIEW_STINGS_DUCK_S: float = float(os.getenv("REVIEW_STINGS_DUCK_S", "1.5"))
     STINGS_PRERENDER_ENABLED: bool = os.getenv("STINGS_PRERENDER_ENABLED", "true").lower() == "true"
     STINGS_PRERENDER_DELAY_S: float = float(os.getenv("STINGS_PRERENDER_DELAY_S", "90"))
     STINGS_PRERENDER_SPACING_S: float = float(os.getenv("STINGS_PRERENDER_SPACING_S", "2"))
@@ -714,7 +719,6 @@ class Settings:
 
         # User content directories
         cls.USERS_DIR.mkdir(parents=True, exist_ok=True)
-        cls.OPINIONS_DIR.mkdir(parents=True, exist_ok=True)
 
         # TTS engine directories
         cls.TTS_AUDIO_DIR.mkdir(parents=True, exist_ok=True)

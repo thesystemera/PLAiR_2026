@@ -72,7 +72,7 @@ def tool_names() -> set:
     return TOOL_NAMES
 
 
-PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
+PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "review", "chart", "trend"]
 PULSE_WHEN = ["now", "today", "tonight", "tomorrow", "weekend", "week", "month"]
 
 
@@ -483,7 +483,7 @@ Set needs_tools=true when the hosts must find something out or make something ha
   air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what the city is playing or asking about
   (pulse_search, pulse_detail, city_trends, listener_context);
 - a music request or a question about what the catalog has (search_and_play, pulse_search);
-- saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_opinion);
+- saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_review);
 - any command: skip, go back, pause, resume (playback_control), like or ban a track (rate_track), more like this
   (seed_radio), a playlist (play_playlist). Nothing happens unless a tool is called, so every action needs its step.
 - the segment tools (get_news, get_weather, get_events, find_places, get_artist_biography, explain_lyrics,
@@ -501,9 +501,10 @@ Leave tool_plan empty when needs_tools is false.
 
 STATION KNOWLEDGE (pulse_topic, pulse_kinds, pulse_near_me, pulse_when):
 Decide what the station's own knowledge could add to the reply, whether or not tools are needed.
-- pulse_kinds: the kinds that could genuinely help, from ["event", "place", "news", "weather", "area", "artist", "track", "community", "chart", "trend"]
+- pulse_kinds: the kinds that could genuinely help, from ["event", "place", "news", "weather", "area", "artist", "track", "community", "review", "chart", "trend"]
   (event = gigs and shows, place = venues, cafes, bars, shops, news = news stories, weather, area = air quality, pollen,
   neighbourhood, artist = artist biographies, track = songs in the station's catalog, community = listener shoutouts,
+  review = what listeners said about songs,
   chart = what the city is playing, trend = what locals have been asking about). Empty for greetings, banter and
   plain commands.
 - pulse_topic: the subject as a short search phrase, without filler ("any good cafes near me?" -> "good cafes").

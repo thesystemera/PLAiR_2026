@@ -118,6 +118,12 @@ class PreferencesService(SingletonService):
 
         return {"status": "success"}
 
+    @staticmethod
+    def _forget_community(user_id: int, shoutout_id: str):
+        from services.community_engagement import community_engagement
+        community_engagement.forget(shoutout_id)
+        community_engagement.forget_bans(user_id)
+
     async def set_shoutout_preference(
         self,
         user_id: int,
@@ -158,6 +164,7 @@ class PreferencesService(SingletonService):
         log_service.listener(
             f"{log_service.who(user_id=user_id)}: {PREFERENCE_VERBS.get(preference_type, preference_type)} "
             f"shoutout {shoutout_id}")
+        self._forget_community(user_id, shoutout_id)
 
         if broadcast_callback:
             await broadcast_callback(user_id, shoutout_id, preference_type)
@@ -183,6 +190,7 @@ class PreferencesService(SingletonService):
             await db.delete(existing)
             await db.commit()
             log_service.listener(f"{log_service.who(user_id=user_id)}: cleared their rating of shoutout {shoutout_id}")
+            self._forget_community(user_id, shoutout_id)
 
             if broadcast_callback:
                 await broadcast_callback(user_id, shoutout_id, "none")
