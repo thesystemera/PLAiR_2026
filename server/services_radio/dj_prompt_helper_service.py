@@ -2,6 +2,20 @@ import re
 from services import log_service
 from services_radio.tts_stream_planner import TTSStreamPlanner
 
+PARALANGUAGE_EXAMPLES_FROM_LIBRARY = 20
+STARTER_PARALANGUAGE_TAGS = (
+    "laughs", "laughs heartily", "chuckles", "chuckles softly", "giggles", "snorts with laughter", "sighs",
+    "sighs deeply", "groans", "gasps", "scoffs", "clears throat", "hums thoughtfully", "whistles", "nods",
+    "grins", "yawns", "sniffs", "inhales sharply", "cracks up",
+)
+_CLEAN_PARALANGUAGE = re.compile(r"[a-z][a-z' -]{1,38}[a-z]")
+WELL_FORMED_TAG = re.compile(r"(~[^~*$%@&\[\]\n]+~|%[^~*$%@&\[\]\n]+%|\$[^~*$%@&\[\]\n]+\$|@\d+@|&\d+(?:\.\d+)?&)")
+
+
+def is_clean_paralanguage(tag: str) -> bool:
+    return bool(_CLEAN_PARALANGUAGE.fullmatch((tag or "").strip().lower()))
+
+
 THIRD_PARTY_NODE_KEYS = {
     "data_shoutouts_data",
     "data_news_report",
@@ -49,18 +63,6 @@ def assemble_prompt(context_data, nodes, untrusted_keys=THIRD_PARTY_NODE_KEYS, n
     if wrapped and note:
         parts.append(note)
     return "\n\n".join(parts)
-
-def filter_meta_tags_for_gpt_prompt_cleaning(text):
-    pattern = re.compile(
-        r'\s*\*[^*]+\*\s*'
-        r'|\s*%[^%]+%\s*'
-        r'|\s*\$[^$]+\$\s*'
-        r'|\s*@\d+@\s*'
-        r'|\s*&\d+(?:\.\d+)?&\s*'
-    )
-    text = pattern.sub(' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
 
 def filter_response_by_role(text: str, role: str) -> str:
     if not isinstance(text, str):
@@ -203,22 +205,37 @@ def clean_gpt_output(text, role='dj_content'):
     def remove_char_counts(text):
         return re.sub(r'\s*\([^)]*\)\s*', ' ', text)
 
+    def strip_asterisks(text):
+        if '*' in text:
+            log_service.filter("[PARALANGUAGE CLEANUP] ✗ Removed asterisks (tildes mark paralanguage)")
+            removed_parts.append("Removed asterisks")
+        return text.replace('*', '')
+
     def handle_mismatched_tags(text):
         pattern = r'(' + '|'.join([
-            r'\*[^*$%@&\s][^*$%@&]*[$%@&]',
-            r'\$[^*$%@&\s][^*$%@&]*[*%@&]',
-            r'%[^*$%@&\s][^*$%@&]*[*$@&]',
-            r'@[^*$%@&\s][^*$%@&]*[*$%&]',
-            r'&[^*$%@&\s][^*$%@&]*[*$%@]'
+            r'~[^~$%@&\s\[\n][^~$%@&\[\n]*[$%@&]',
+            r'\$[^~$%@&\s\[\n][^~$%@&\[\n]*[~%@&]',
+            r'%[^~$%@&\s\[\n][^~$%@&\[\n]*[~$@&]',
+            r'@[^~$%@&\s\[\n][^~$%@&\[\n]*[~$%&]',
+            r'&[^~$%@&\s\[\n][^~$%@&\[\n]*[~$%@]'
         ]) + r')'
 
         def replacer(match):
             mismatched = match.group(0)
-            log_service.filter(f"[META CLEANUP] ✗ Removed mismatched tag: {mismatched}")
+            log_service.filter(f"[PARALANGUAGE CLEANUP] ✗ Removed mismatched tag: {mismatched}")
             removed_parts.append(f"Removed mismatched tag: {mismatched}")
             return ' '
 
-        return re.sub(pattern, replacer, text)
+        def clean_gap(gap):
+            gap = re.sub(pattern, replacer, gap)
+            if '~' in gap:
+                log_service.filter(f"[PARALANGUAGE CLEANUP] ✗ Removed unpaired tilde in: {gap.strip()}")
+                removed_parts.append(f"Removed unpaired tilde in: {gap.strip()}")
+                gap = re.sub(r'~\w[^~]*$', ' ', gap).replace('~', ' ')
+            return gap
+
+        parts = WELL_FORMED_TAG.split(text)
+        return ''.join(part if i % 2 else clean_gap(part) for i, part in enumerate(parts))
 
     def reduce_double_tags(text):
         def replacer(match, tag_type):
@@ -226,7 +243,7 @@ def clean_gpt_output(text, role='dj_content'):
             removed_parts.append(f"Reduced double {tag_type} tags: {match.group(0)} -> {tag_type}")
             return tag_type
 
-        text = re.sub(r'\*\*', lambda m: replacer(m, '*'), text)
+        text = re.sub(r'~~', lambda m: replacer(m, '~'), text)
         text = re.sub(r'%%', lambda m: replacer(m, '%'), text)
         text = re.sub(r'@@', lambda m: replacer(m, '@'), text)
         text = re.sub(r'&&', lambda m: replacer(m, '&'), text)
@@ -255,6 +272,8 @@ def clean_gpt_output(text, role='dj_content'):
         log_service.filter(f"[META CLEANUP] Input ({len(original_text)} chars):\n{original_text[:200]}{'...' if len(original_text) > 200 else ''}")
 
         text = remove_char_counts(text)
+        text = strip_asterisks(text)
+        text = re.sub(r"\+(['\"])", r"", text)
         text = handle_mismatched_tags(text)
         text = reduce_double_tags(text)
         text = keep_valid_tags(text)
@@ -272,7 +291,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     return text
 
-MARKUP_TOKEN_PATTERN = re.compile(r'\*[^*]+\*|%[^%]+%|\$[^$\s]+\$|@\d+@|&\d+(?:\.\d+)?&')
+MARKUP_TOKEN_PATTERN = re.compile(r'~[^~]+~|%[^%]+%|\$[^$\s]+\$|@\d+@|&\d+(?:\.\d+)?&')
 PROXIMITY_TAG_PATTERN = re.compile(r'&\d+(?:\.\d+)?&')
 SPEAKER_TAG_PATTERN = re.compile(r'\[(LEO|JESS)]')
 
@@ -292,7 +311,7 @@ def dj_script_problems(text, role='dj_content'):
     if not PROXIMITY_TAG_PATTERN.search(body):
         problems.append("no mic-proximity tags")
     residue = MARKUP_TOKEN_PATTERN.sub(' ', body)
-    if '*' in residue or '@' in residue:
+    if '~' in residue or '@' in residue:
         problems.append("broken markup")
 
     try:

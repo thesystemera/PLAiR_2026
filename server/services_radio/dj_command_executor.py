@@ -102,7 +102,9 @@ class CommandExecutorService:
         track = self.catalog_service.get_track(track_id) if track_id else None
         if not track or not track.get('generation_params', {}).get('title'):
             return None
-        return log_service.track_label(track)
+        params = track.get("generation_params") or {}
+        artists = log_service.track_artists(track)
+        return f"{params['title']} by {artists[0]}" if artists else params['title']
 
     def _upcoming_labels(self, session_id, limit=3):
         state = self.playback_service.get_state(session_id) or {}

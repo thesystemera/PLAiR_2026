@@ -23,7 +23,7 @@ class TTSStreamPlanner:
             log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
 
         parts = re.split(
-            r'(\*[^*]+\*|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
+            r'(~[^~]+~|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
             text
         )
 
@@ -75,7 +75,7 @@ class TTSStreamPlanner:
                     current_overlap = 0
                     current_audio_process = 0.0
                 current_speaker = part[1:-1].lower()
-            elif part.startswith('*') and part.endswith('*'):
+            elif part.startswith('~') and part.endswith('~'):
                 if current_sentence:
                     ordered_content.append({
                         'type': 'sentence',
@@ -87,7 +87,7 @@ class TTSStreamPlanner:
                     })
                     current_sentence = ""
                     current_overlap = 0
-                meta_tag = part.strip('*')
+                meta_tag = part.strip('~')
                 ordered_content.append({
                     'type': 'meta',
                     'content': meta_tag,
@@ -191,6 +191,9 @@ class TTSStreamPlanner:
                 'char_count': len(current_sentence.strip()),
                 'audio_process': current_audio_process
             })
+
+        ordered_content = [item for item in ordered_content
+                           if item['type'] != 'sentence' or re.search(r'[A-Za-z0-9]', item['content'])]
 
         final_content = []
         for i, item in enumerate(ordered_content):

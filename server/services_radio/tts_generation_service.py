@@ -23,6 +23,7 @@ from services import log_service
 from services import usage_tracking
 from services_radio.tts_processing_service import decode_mp3
 from services_radio.tts_voice_threads import voice_thread
+from services_radio.dj_prompt_helper_service import is_clean_paralanguage
 from services.task_utils import spawn
 
 PRIORITY_HIGH = "high"
@@ -56,7 +57,7 @@ FILLER_TYPES = {
 GENERATED_TYPES = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings', 'breath_embeddings')
 EXACT_REFRESH_TYPES = ('tts_embeddings',)
 
-INVALID_TITLE_CHARS = re.compile(r'[*\n\[\]@$%"&.!?]|N/A')
+INVALID_TITLE_CHARS = re.compile(r'[*~\n\[\]@$%"&.!?]|N/A')
 
 def sanitize_clip_title(text: str) -> str:
     return re.sub(r'\s+', ' ', INVALID_TITLE_CHARS.sub(' ', text or '')).strip()[:200]
@@ -644,6 +645,9 @@ class TTSGenerationService:
             return None, None
 
         if embeddings_type not in GENERATED_TYPES:
+            return None, None
+        if embeddings_type == 'meta_embeddings' and not is_clean_paralanguage(tag):
+            log_service.filter(f"[PARALANGUAGE CLEANUP] ✗ Not rendering malformed paralanguage tag: {tag}")
             return None, None
 
         voice_settings = settings.VOICE_PREFERENCES.get(content_voice)

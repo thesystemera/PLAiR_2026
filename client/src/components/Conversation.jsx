@@ -45,7 +45,7 @@ const MESSAGE_TYPES = {
 function cleanMetadata(text) {
   if (!text) return text
   return text
-    .replace(/\*.*?\*|%.*?%|@.*?@|&.*?&/g, '')
+    .replace(/~.*?~|\*.*?\*|%.*?%|@.*?@|&.*?&/g, '')
     .replace(/\[HAL11000]/g, '')
     .trim()
 }
@@ -337,7 +337,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
   const renderDJMessage = ({ type, speaker, content, timestamp, messageType, key }) => {
     let displayContent = content;
     if (typeof displayContent === 'string') {
-        displayContent = displayContent.replace(/\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ');
+        displayContent = displayContent.replace(/~.*?~|\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ');
         displayContent = displayContent.replace(/\s{2,}/g, ' ').trim();
     }
 
@@ -726,7 +726,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
 
     const colors = getMessageColors(conv.type)
 
-    const displayContent = conv.content.replace(/\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ').replace(/\s{2,}/g, ' ').trim()
+    const displayContent = conv.content.replace(/~.*?~|\*.*?\*|%.*?%|@.*?@|&.*?&/g, ' ').replace(/\s{2,}/g, ' ').trim()
 
     return (
       <div className={`border ${colors} max-w-[80%] w-fit ${['info', 'warning', 'error'].includes(conv.type) ? 'mx-auto px-3 py-1.5 rounded-full' : 'p-3 rounded-lg'}`}>

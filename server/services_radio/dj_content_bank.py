@@ -19,7 +19,7 @@ NON_ARTISTS = {"", "n/a", "unknown", "unknown artist", "ai generated", "various 
 TIMEZONE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+){0,2}$")
 
 _CHANNEL_TAG = re.compile(r"\[(?:BROADCAST|TXT)\]")
-_CUE = re.compile(r"\*[^*\n]*\*|%[^%\n]*%|\$[^$\n]*\$|@[\d.]+@|&[\d.]+&")
+_CUE = re.compile(r"~[^~\n]*~|\*[^*\n]*\*|%[^%\n]*%|\$[^$\n]*\$|@[\d.]+@|&[\d.]+&")
 _SPACES = re.compile(r"\s+")
 _SPACE_BEFORE_PUNCT = re.compile(r"\s+([;,.:!?)])")
 _EMPTY_PARENS = re.compile(r"\(\s*[;,]?\s*\)")

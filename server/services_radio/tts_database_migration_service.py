@@ -38,7 +38,7 @@ class TTSDatabaseMigrationService:
 
             title = str(title_frame[0]).strip()
 
-            invalid_chars = {'*', '\n', '[', ']', '🎵', '@', '$', '%', 'N/A', '"'}
+            invalid_chars = {'*', '~', '\n', '[', ']', '🎵', '@', '$', '%', 'N/A', '"'}
             if any(char in title for char in invalid_chars):
                 return None, None
 

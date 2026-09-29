@@ -8,6 +8,7 @@ from typing import List, Dict
 from functools import lru_cache
 
 from services_radio.dj_prompt_helper_service import (
+    PARALANGUAGE_EXAMPLES_FROM_LIBRARY, STARTER_PARALANGUAGE_TAGS, is_clean_paralanguage,
     clean_gpt_output,
     is_valid_dj_script,
     assemble_prompt,
@@ -28,8 +29,8 @@ BROADCAST_CUE = "Write the script for this segment now, following the instructio
 
 SCRIPT_PROVIDER_NOTES = {
     "deepseek": (
-        "\n\nMARKUP DISCIPLINE: Asterisks are reserved for *paralanguage* sound cues - never use them for emphasis "
-        "inside spoken words (use CAPITALS for emphasis). Every *, %, @, & and $ must belong to a complete tag."
+        "\n\nMARKUP DISCIPLINE: Tildes are reserved for ~paralanguage~ sound cues. Never write asterisks; use "
+        "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
         "\n\nLENGTH: This is live radio - keep it tight. Use at most 90 spoken words in total across all hosts "
         "(tags and cues don't count). Cover only the most interesting points; never pad."
     )
@@ -65,8 +66,8 @@ RADIO_SEGMENT_BASE_NODES = [
     'user_local_time'
 ]
 RADIO_SEGMENT_MARKUP_NOTE = (
-    "\n\nMARKUP DISCIPLINE: Asterisks are reserved for *paralanguage* sound cues - never use them for emphasis "
-    "inside spoken words (use CAPITALS for emphasis). Every *, %, @, & and $ must belong to a complete tag."
+    "\n\nMARKUP DISCIPLINE: Tildes are reserved for ~paralanguage~ sound cues. Never write asterisks; use "
+    "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
 )
 
 SEGMENT_DATA_NODES = {
@@ -92,14 +93,14 @@ LOCATION_SEGMENTS = {
     'events': ('events near you', False),
 }
 UNAVAILABLE_SEGMENT_LINES = (
-    "[BROADCAST] [{host}] &0.2& *sighs* Damn, {subject} just came back empty on us. &0.2& Nothing to report right "
-    "now, so give it a minute and ask again.\n[{cohost}] &0.3& *chuckles* Pirate radio, baby. Held together with duct tape.",
-    "[BROADCAST] [{host}] &0.2& *groans* Ugh, nothing's coming through on {subject} right now. &0.2& Not gonna make "
-    "stuff up, so ask us again in a bit.\n[{cohost}] &0.3& *laughs* Honest radio. What a concept.",
+    "[BROADCAST] [{host}] &0.2& ~sighs~ Damn, {subject} just came back empty on us. &0.2& Nothing to report right "
+    "now, so give it a minute and ask again.\n[{cohost}] &0.3& ~chuckles~ Pirate radio, baby. Held together with duct tape.",
+    "[BROADCAST] [{host}] &0.2& ~groans~ Ugh, nothing's coming through on {subject} right now. &0.2& Not gonna make "
+    "stuff up, so ask us again in a bit.\n[{cohost}] &0.3& ~laughs~ Honest radio. What a concept.",
 )
 NO_LOCATION_SEGMENT_LINES = (
-    "[TXT] [{host}] &0.2& *clears throat* I can't pull up {subject} without knowing where you're tuned in from. "
-    "&0.2& {fix}\n[{cohost}] &0.3& *chuckles* We're pirates, not psychics.",
+    "[TXT] [{host}] &0.2& ~clears throat~ I can't pull up {subject} without knowing where you're tuned in from. "
+    "&0.2& {fix}\n[{cohost}] &0.3& ~chuckles~ We're pirates, not psychics.",
 )
 NO_LOCATION_FIX_GUEST = "Let the app use your location, then ask me again."
 NO_LOCATION_FIX_USER = "Set your location in your profile and ask me again."
@@ -528,9 +529,11 @@ class DJPromptService:
         log_service.external(f"Segment {gpt_type}: no data - airing honest fallback ({feedback})")
         return UnavailableSegment(text, feedback)
 
-    @lru_cache(maxsize=1)
     def get_all_paralanguage_meta_tags(self):
-        return self.vector_db_service.titles('meta_embeddings')
+        titles = [t for t in self.vector_db_service.titles('meta_embeddings') if is_clean_paralanguage(t)]
+        if len(titles) >= PARALANGUAGE_EXAMPLES_FROM_LIBRARY:
+            return titles
+        return sorted(set(titles) | set(STARTER_PARALANGUAGE_TAGS))
 
     @lru_cache(maxsize=1)
     def get_all_audio_meta_tags(self):
@@ -539,21 +542,21 @@ class DJPromptService:
     @lru_cache(maxsize=1)
     def get_all_correlated_tags(self):
         return [
-            ("*leans back and stretches arms*", "%chair squeaking%"),
-            ("*laughs heartily*", "%chair rolling slightly%"),
-            ("*excited*", "%taps microphone%"),
-            ("*sighs deeply*", "%coffee mug clinking%"),
-            ("*clears throat*", "%papers shuffling%"),
-            ("*yawns*", "%keyboard typing%"),
-            ("*gasps in surprise*", "%pen dropping%"),
-            ("*chuckles softly*", "%fingers drumming on desk%"),
-            ("*takes a deep breath*", "%chair creaking%"),
-            ("*sneezes*", "%tissue being pulled from box%"),
-            ("*hums thoughtfully*", "%pencil tapping%"),
-            ("*whispers excitedly*", "%soft popping on mic%"),
-            ("*groans in frustration*", "%crumpling paper%"),
-            ("*laughs nervously*", "%fidgeting with pen%"),
-            ("*inhales sharply*", "%mic drop%")
+            ("~leans back and stretches arms~", "%chair squeaking%"),
+            ("~laughs heartily~", "%chair rolling slightly%"),
+            ("~excited~", "%taps microphone%"),
+            ("~sighs deeply~", "%coffee mug clinking%"),
+            ("~clears throat~", "%papers shuffling%"),
+            ("~yawns~", "%keyboard typing%"),
+            ("~gasps in surprise~", "%pen dropping%"),
+            ("~chuckles softly~", "%fingers drumming on desk%"),
+            ("~takes a deep breath~", "%chair creaking%"),
+            ("~sneezes~", "%tissue being pulled from box%"),
+            ("~hums thoughtfully~", "%pencil tapping%"),
+            ("~whispers excitedly~", "%soft popping on mic%"),
+            ("~groans in frustration~", "%crumpling paper%"),
+            ("~laughs nervously~", "%fidgeting with pen%"),
+            ("~inhales sharply~", "%mic drop%")
         ]
 
     async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list,
