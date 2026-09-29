@@ -87,7 +87,7 @@ async def get_format_tone(**_) -> str:
         "LANGUAGE AND TONE:\n"
         "- Rapid-fire conversation with constant co-host engagement.\n"
         "- Use casual language with frequent swearing for emphasis or humor.\n"
-        "- Add natural stuttering stutters and slightly off spoken wording (li-like thiss).\n"
+        "- The odd natural stutter or restart is fine, but keep it rare.\n"
         "- Keep responses informal, lively, and engaging.\n"
         "- No long monologues without reactions."
     )
