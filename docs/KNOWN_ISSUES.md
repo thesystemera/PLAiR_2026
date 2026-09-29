@@ -2,6 +2,16 @@
 
 Critical bugs and architectural issues that need to be addressed.
 
+## Open as of 2026-09-30 (DJ voice)
+
+Details and plans are in `docs/HANDOVER_2026-09-30.md` ("Open"), and the full list in `docs/AUDIT_2026-09-30_DJ_VOICE.md`.
+
+- **Repeated DJ script after `[TASK]`.** Gemini sometimes writes the whole script twice in one reply (4 of 45 turns). It no longer reaches the notes or history, but it is still generated and paid for. The cause is unproven; the likely lead is the history format. The turn trace now records every returned part.
+- **Clip-match thresholds not re-tuned for mpnet.** Sound effects are cache-only, so a missed `%sfx%` is silently dropped. Measure hit rates first.
+- **`search_and_play` plays the closest match straight away** when nothing matches, before the DJs can ask.
+- **Hosts name the listener's street on air.** The listener context allows it; privacy decision pending.
+- **Segment scripts cached word for word** (bio and lyrics for 7 days), and DeepSeek segments are capped at 90 words.
+
 ---
 
 ## 🔴 CRITICAL: Session State Resyncing on Reconnect
