@@ -2,6 +2,7 @@ from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from database.models import UserDevice
 from services import log_service
 
@@ -32,29 +33,15 @@ class DeviceManagementService:
                 update(UserDevice).where(UserDevice.user_id == user_id).values(is_active=False)
             )
 
-        result = await db.execute(
-            select(UserDevice).where(
-                UserDevice.user_id == user_id,
-                UserDevice.device_id == device_id
-            )
-        )
-        device = result.scalar_one_or_none()
-
-        if device:
-            device.is_active = set_active  # type: ignore
-            device.last_active = datetime.now(timezone.utc)  # type: ignore
-        else:
-            device = UserDevice(
-                user_id=user_id,
-                device_id=device_id,
-                auto_name=device_name,
-                display_name="",
-                device_type=device_type,
-                is_active=set_active,
-                last_active=datetime.now(timezone.utc)
-            )
-            db.add(device)
-
+        now = datetime.now(timezone.utc)
+        upsert = pg_insert(UserDevice).values(
+            user_id=user_id, device_id=device_id, auto_name=device_name, display_name="",
+            device_type=device_type, is_active=set_active, last_active=now, created_at=now
+        ).on_conflict_do_update(
+            index_elements=[UserDevice.user_id, UserDevice.device_id],
+            set_={"is_active": set_active, "last_active": now}
+        ).returning(UserDevice)
+        device = (await db.execute(upsert)).scalar_one()
         await db.commit()
         return device
 
