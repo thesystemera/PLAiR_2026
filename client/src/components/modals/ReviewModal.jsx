@@ -12,6 +12,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
+import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection } from './Modal'
 import { MOTION, PRESETS } from '../../lib/motion'
 
@@ -27,7 +28,7 @@ function trackLabel(track) {
   }
 }
 
-const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop }) {
+const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop, onDelete }) {
   const { getWhite, getGrey300, getGrey400, getBorder } = useDynamicTheme()
   const profilePictureUrl = useProfilePicture(review?.user_id, !!review?.profile_picture)
   const canPlay = review.has_audio !== false && !!review.audio_url
@@ -99,7 +100,7 @@ const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop 
       )}
 
       <div className="flex-shrink-0">
-        <MediaActions type="shoutout" itemId={review.id} compact={true} />
+        <MediaActions type="shoutout" itemId={review.id} compact={true} onDelete={() => onDelete(review)} />
       </div>
     </motion.div>
   )
@@ -126,6 +127,11 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
   }))
   const { isRecording, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { user } = useAuth()
+  const deletePost = useDeletePost()
+
+  const handleDelete = useCallback(async (review) => {
+    if (await deletePost(review)) setReviews(prev => prev.filter(r => r.id !== review.id))
+  }, [deletePost])
 
   const loadReviews = useCallback(async (id) => {
     const data = await api.getTrackReviews(id)
@@ -399,6 +405,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
                     isPlaying={playingShoutout?.id === review.id}
                     onPlay={(r) => playShoutout(r, { showModal: false })}
                     onStop={stopShoutout}
+                    onDelete={handleDelete}
                   />
                 ))}
               </AnimatePresence>

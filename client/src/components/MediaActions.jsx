@@ -1,5 +1,5 @@
 import { logger } from '../lib/logger'
-import { Heart, Star, Ban } from 'lucide-react'
+import { Heart, Star, Ban, Trash2 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUIActions } from '../contexts/UIStateContext'
@@ -36,7 +36,7 @@ function ActionIcon({ icon: Icon, size, on, fill }) {
   )
 }
 
-export default function MediaActions({ type = 'track', itemId, compact = false, overlay = false }) {
+export default function MediaActions({ type = 'track', itemId, compact = false, overlay = false, onDelete = null }) {
   const { isAuthenticated, user } = useAuth()
   const { getPreference, setPreference, removePreference } = usePreferences()
   const { toastError } = useUIActions()
@@ -44,6 +44,7 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
   const likeInteraction = usePointerInteraction()
   const superLikeInteraction = usePointerInteraction()
   const banInteraction = usePointerInteraction()
+  const deleteInteraction = usePointerInteraction()
   const interactions = { like: likeInteraction, super_like: superLikeInteraction, ban: banInteraction }
 
   const preference = getPreference(type, itemId)
@@ -94,7 +95,8 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
     return null
   }
 
-  if (type === 'shoutout' && user?.id != null && String(itemId).startsWith(`${user.id}_`)) {
+  const ownPost = type === 'shoutout' && user?.id != null && String(itemId).startsWith(`${user.id}_`)
+  if (ownPost && !onDelete) {
     return null
   }
 
@@ -117,6 +119,32 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
   const iconSize = overlay ? 20 : (compact ? 14 : 16)
   const buttonPadding = overlay ? 'p-2.5' : (compact ? 'p-1.5' : 'p-2')
   const activeStyle = { transition: CSS_TRANSITION.quick }
+
+  if (ownPost) {
+    return (
+      <div className="flex">
+        <button
+          onPointerDown={deleteInteraction.onPointerDown}
+          onPointerMove={deleteInteraction.onPointerMove}
+          onPointerUp={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            if (deleteInteraction.shouldTrigger()) onDelete()
+          }}
+          className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg hover:text-red-400`}
+          style={baseButtonStyle}
+          onMouseEnter={(e) => Object.assign(e.currentTarget.style, hoverStyle)}
+          onMouseLeave={(e) => Object.assign(e.currentTarget.style, baseButtonStyle)}
+          title="Delete"
+          aria-label="Delete"
+        >
+          <span className="inline-flex" data-icon>
+            <Trash2 size={iconSize} />
+          </span>
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className={`flex ${overlay ? 'gap-2' : (compact ? 'gap-1' : 'gap-2')}`}>

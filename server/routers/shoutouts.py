@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.whisper_dual_service import whisper_dual_service
 from services.preferences_service import preferences_service
 from services import log_service
-from services.user_content_database_service import (public_shoutout, public_shoutouts, track_ref,
+from services.user_content_database_service import (public_shoutout, public_shoutouts, track_ref, kind_of,
                                                      KIND_SHOUTOUT, KIND_REPLY, KIND_REVIEW)
 from services.community_engagement import community_engagement
 from database import get_db, User
@@ -43,10 +43,13 @@ async def delete_shoutout(
         if str(parts[0]) != str(current_user.id):
             raise HTTPException(status_code=403, detail="You can only delete your own shoutouts")
 
+    kind = kind_of(services.user_content_service.get_shoutout(shoutout_id))
     success = await asyncio.to_thread(services.user_content_service.delete_shoutout, shoutout_id)
 
     if not success:
         raise HTTPException(status_code=404, detail="Shoutout not found")
+    if services.websocket_service is not None:
+        await services.websocket_service.broadcast_content_updated(kind, shoutout_id, {"deleted": True})
 
     return {"status": "success", "deleted": [shoutout_id]}
 

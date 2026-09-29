@@ -235,7 +235,8 @@ class WebSocketService:
             }
         }
         await self.broadcast_to_all_users(message)
-        log_service.system(f"New {content_type} added ({content_id}) - announced to all listeners")
+        action = "removed" if (metadata or {}).get("deleted") else "added"
+        log_service.system(f"{content_type.capitalize()} {action} ({content_id}) - announced to all listeners")
 
     async def _cleanup_stale_connections(self):
         while True:

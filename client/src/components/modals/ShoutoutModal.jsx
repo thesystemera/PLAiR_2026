@@ -12,6 +12,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
+import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection, ModalMetadataField, ModalCard } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
 
@@ -244,7 +245,7 @@ const SENTIMENT_CONFIG = {
   neutral: { icon: Meh, label: 'Neutral' }
 }
 
-const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) {
+const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop, onDelete }) {
   const { getWhite, getGrey300, getGrey400, getBorder } = useDynamicTheme()
   const profilePictureUrl = useProfilePicture(reply?.user_id, !!reply?.profile_picture)
 
@@ -330,7 +331,7 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop }) 
       )}
 
       <div className="flex-shrink-0">
-        <MediaActions type="shoutout" itemId={reply.id} compact={true} />
+        <MediaActions type="shoutout" itemId={reply.id} compact={true} onDelete={() => onDelete(reply)} />
       </div>
     </motion.div>
   )
@@ -369,6 +370,15 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
   const [replyText, setReplyText] = useState('')
   const [isOpeningParent, setIsOpeningParent] = useState(false)
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
+  const deletePost = useDeletePost()
+
+  const handleDeleteReply = useCallback(async (reply) => {
+    if (await deletePost(reply)) setReplies(prev => prev.filter(r => r.id !== reply.id))
+  }, [deletePost])
+
+  const handleDeleteShoutout = useCallback(async () => {
+    if (await deletePost(shoutout)) onClose()
+  }, [deletePost, shoutout, onClose])
   const { getWhite, getGrey300, getGrey400, getBorder, getCategoryMetadata } = useDynamicTheme()
   const {
     shoutoutFftDataRef,
@@ -715,7 +725,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   )}
                   {shoutoutHasAudio ? 'Transcription' : 'Typed message'}
                 </div>
-                <MediaActions type="shoutout" itemId={shoutout.id} compact={true} />
+                <MediaActions type="shoutout" itemId={shoutout.id} compact={true} onDelete={handleDeleteShoutout} />
               </div>
             }>
               {shoutout.word_level_transcription?.length > 0 ? (
@@ -967,6 +977,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                           isPlaying={playingShoutout?.id === reply.id}
                           onPlay={(r) => playShoutout(r, { showModal: false })}
                           onStop={stopShoutout}
+                          onDelete={handleDeleteReply}
                         />
                       ))}
                     </AnimatePresence>

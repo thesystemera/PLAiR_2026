@@ -13,6 +13,7 @@ import { applySoundMode, SOUND_MODES, soundModeFor } from '../lib/soundModes'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
+import { useDeletePost } from '../hooks/useDeletePost'
 import { profilePictureCache } from '../lib/mediaCache'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
@@ -461,6 +462,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { devices, selectedMicrophone, selectedSpeaker, selectMicrophone, selectSpeaker, requestPermissions } = useDeviceSelector()
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const { showConfirm } = useDialog()
+  const deletePost = useDeletePost()
 
   const [loading, setLoading] = useState(true)
   const [showCachedTracks, setShowCachedTracks] = useState(false)
@@ -556,38 +558,17 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
   const handleDeletePost = useCallback(async (post) => {
     if (!post?.id) return
-    const noun = post.kind === 'review' ? 'review' : post.kind === 'reply' ? 'reply' : 'shoutout'
-    const confirmed = await showConfirm({
-      title: `Delete ${noun.charAt(0).toUpperCase()}${noun.slice(1)}?`,
-      message: post.kind === 'shoutout'
-        ? 'This deletes the shoutout and every reply to it. This action cannot be undone.'
-        : `Are you sure you want to delete this ${noun}? This action cannot be undone.`,
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'danger'
-    })
-    if (!confirmed) return
-
     setDeletingPostId(post.id)
     try {
-      const deleted = await api.deleteShoutout(post.id)
-      if (!deleted) {
-        error(`Failed to delete ${noun}`)
-        return
-      }
-      if (playingShoutout?.id === post.id) stopShoutout()
+      if (!await deletePost(post)) return
       setMyPosts(prev => ({
         shoutouts: prev.shoutouts.filter(p => p.id !== post.id && p.parent_id !== post.id),
         reviews: prev.reviews.filter(p => p.id !== post.id),
       }))
-      success(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} deleted`)
-    } catch (err) {
-      error(err.message || `Failed to delete ${noun}`)
-      logger.error('Failed to delete post:', err)
     } finally {
       setDeletingPostId(null)
     }
-  }, [showConfirm, playingShoutout, stopShoutout, success, error])
+  }, [deletePost])
 
   const fetchUserUploads = useCallback(async () => {
     if (!isAuthenticated) return
