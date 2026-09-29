@@ -430,7 +430,7 @@ class StingService:
         self.plays[render.kind] = self.plays.get(render.kind, 0) + 1
         with usage_tracking.subject_scope(session_id=session_id, user_id=user_id):
             usage_tracking.record_gpu(f"stings.{render.kind}", 0.0, audio_seconds=len(render.audio) / 1000,
-                                      model="orpheus-3b" if render.voice_s else "suno", cache_hit=True)
+                                      model="chatterbox-turbo" if render.voice_s else "suno", cache_hit=True)
         log_service.announcer(f"[STINGS] [{session_id[:8]}] ON AIR {render.label} ({len(render.audio) / 1000:.1f}s)"
                               + (f": \"{render.text}\"" if render.text else ""))
         return True

@@ -147,9 +147,9 @@ class Settings:
     TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-30"))
     TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-8"))
     VOICE_PREFERENCES: dict = {
-        "jess": {"orpheus_voice": "jess", "temperature": 0.7},
-        "leo": {"orpheus_voice": "leo", "temperature": 0.8},
-        "station": {"orpheus_voice": "zac", "temperature": 0.6},
+        "jess": {"voice": "jess", "temperature": 0.8},
+        "leo": {"voice": "leo", "temperature": 0.8},
+        "station": {"voice": "station", "temperature": 0.8},
     }
 
     GENERATION_PERMISSIONS: dict = {
@@ -165,7 +165,7 @@ class Settings:
     TTS_BACKGROUND_REFRESH_COOLDOWN_S: int = int(os.getenv("TTS_BACKGROUND_REFRESH_COOLDOWN_S", "600"))
     TTS_EXACT_REFRESH_ENABLED: bool = os.getenv("TTS_EXACT_REFRESH_ENABLED", "true").lower() == "true"
     TTS_EXACT_REFRESH_BELOW: float = float(os.getenv("TTS_EXACT_REFRESH_BELOW", "0.97"))
-    TTS_EXACT_REFRESH_MAX_PER_HOUR: int = int(os.getenv("TTS_EXACT_REFRESH_MAX_PER_HOUR", "40"))
+    TTS_EXACT_REFRESH_MAX_PER_HOUR: int = int(os.getenv("TTS_EXACT_REFRESH_MAX_PER_HOUR", "600"))
 
     AUDIO_EFFECT_CONFIG: dict = {
         'global': {

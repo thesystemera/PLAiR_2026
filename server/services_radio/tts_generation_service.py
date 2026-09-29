@@ -28,7 +28,7 @@ from services.task_utils import spawn
 PRIORITY_HIGH = "high"
 PRIORITY_LOW = "low"
 
-ENGINE_SLOTS = max(1, int(os.getenv("TTS_ENGINE_SLOTS", os.getenv("TTS_NUM_WORKERS", "2"))))
+ENGINE_SLOTS = max(1, int(os.getenv("TTS_ENGINE_SLOTS", "8")))
 TURN_GENERATION_PARALLEL_START = max(1, int(os.getenv("TTS_TURN_GENERATION_PARALLEL_START", "1")))
 TURN_GENERATION_PARALLEL = max(1, int(os.getenv("TTS_TURN_GENERATION_PARALLEL", "2")))
 PROCESSING_PARALLEL = max(1, int(os.getenv("TTS_PROCESSING_PARALLEL", "2")))
@@ -281,7 +281,7 @@ class TTSGenerationService:
 
         payload = {
             "text": sentence,
-            "voice": voice_settings["orpheus_voice"],
+            "voice": voice_settings["voice"],
             "temperature": voice_settings["temperature"],
         }
         for option in ENGINE_OPTIONS:
@@ -333,7 +333,7 @@ class TTSGenerationService:
 
         if 'started' in job:
             usage_tracking.record_gpu(feature, time.perf_counter() - job['started'],
-                                      audio_seconds=len(pcm) / 2 / settings.TTS_SAMPLE_RATE, model="orpheus-3b",
+                                      audio_seconds=len(pcm) / 2 / settings.TTS_SAMPLE_RATE, model="chatterbox-turbo",
                                       error=bool(job.get('failed')))
         job_id = job.get('id')
         if job_id is not None and job_id in self._aborted_jobs:
@@ -633,7 +633,7 @@ class TTSGenerationService:
                 self.metrics['hits'] += 1
                 self._log_metrics("hit")
                 usage_tracking.record_gpu(f"tts.clip_cache.{embeddings_type.removesuffix('_embeddings')}", 0.0,
-                                          audio_seconds=len(processed_audio) / 1000, model="orpheus-3b",
+                                          audio_seconds=len(processed_audio) / 1000, model="chatterbox-turbo",
                                           cache_hit=True)
                 return processed_audio, cached_file_path
 

@@ -38,7 +38,7 @@ def voice_settings() -> dict:
 
 def clip_key(text: str) -> str:
     voice = voice_settings()
-    raw = f"{voice['orpheus_voice']}|{voice['temperature']}|{settings.STATION_VOICE_VERSION}|{normalize_text(text)}"
+    raw = f"{voice['voice']}|{voice['temperature']}|{settings.STATION_VOICE_VERSION}|{normalize_text(text)}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -116,7 +116,7 @@ class StationClipStore:
 
     @property
     def voice_dir(self) -> Path:
-        return self.base_dir / voice_settings()["orpheus_voice"]
+        return self.base_dir / voice_settings()["voice"]
 
     @property
     def index_path(self) -> Path:
@@ -150,7 +150,7 @@ class StationClipStore:
 
     def _save_index(self):
         self.voice_dir.mkdir(parents=True, exist_ok=True)
-        payload = {"voice": voice_settings()["orpheus_voice"], "version": settings.STATION_VOICE_VERSION,
+        payload = {"voice": voice_settings()["voice"], "version": settings.STATION_VOICE_VERSION,
                    "clips": [clip.to_dict() for clip in sorted(list(self._clips.values()), key=lambda c: c.text)]}
         tmp = self.index_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")

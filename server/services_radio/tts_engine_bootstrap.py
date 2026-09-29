@@ -8,7 +8,7 @@ import aiohttp
 from config.settings import settings, BASE_DIR
 from services import log_service
 
-TTS_SERVER_DIR = BASE_DIR / "tts_server"
+TTS_SERVER_DIR = BASE_DIR / "tts_chatterbox"
 TTS_SERVER_SCRIPT = TTS_SERVER_DIR / "server.py"
 TTS_PYTHON = TTS_SERVER_DIR / ".venv" / "Scripts" / "python.exe"
 TTS_LOG_FILE = BASE_DIR / "data" / "logs" / "tts_server.log"
@@ -43,7 +43,7 @@ class TTSEngineBootstrap:
             return
 
         if not TTS_PYTHON.exists():
-            log_service.error(f"TTS engine venv missing at {TTS_PYTHON} - DJ speech disabled. See tts_server/README.md")
+            log_service.error(f"TTS engine venv missing at {TTS_PYTHON} - DJ speech disabled. See tts_chatterbox/README.md")
             return
 
         TTS_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,7 @@ class TTSEngineBootstrap:
             status = await self.health()
             if status and status.get("status") == "ok":
                 self.ready.set()
-                log_service.success(f"✓ TTS engine ready ({status.get('workers')} workers, {status.get('quality')})")
+                log_service.success(f"✓ TTS engine ready ({status.get('engine')}, {status.get('workers')} slots)")
                 return
             await asyncio.sleep(1)
         log_service.error(f"TTS engine not ready after {timeout:.0f}s - see {TTS_LOG_FILE}")
