@@ -1152,9 +1152,30 @@ class HumanMusicUploadService(SingletonService):
         files_to_remove.extend(await asyncio.to_thread(lambda: list(user_tracks_dir.glob(f"{track_id}*"))))
 
         deleted_count = await self._remove_paths(files_to_remove)
+        stems_dir = settings.DEMUCS_STEMS_DIR / track_id
+        if stems_dir.is_dir():
+            await asyncio.to_thread(shutil.rmtree, stems_dir, True)
+        await self._forget_track_preferences(track_id)
+        asset_integrity_service.notify_tracks_changed([track_id], "upload deleted")
 
-        log_service.info(f"[Upload] Deleted {deleted_count} files for track: {track_id}")
+        log_service.upload(f"[Upload] {log_service.who(user_id=user_id)} deleted {track_id} ({deleted_count} files)")
         return True, "Track deleted successfully"
+
+    @staticmethod
+    async def _forget_track_preferences(track_id: str):
+        from sqlalchemy import delete
+        from database import AsyncSessionLocal, TrackPreference
+        from services.user_data_cache_service import user_data_cache
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(delete(TrackPreference).where(TrackPreference.track_id == track_id)
+                                          .returning(TrackPreference.user_id))
+                user_ids = {row[0] for row in result.all()}
+                await db.commit()
+            for uid in user_ids:
+                await user_data_cache.invalidate_preferences(uid)
+        except Exception as e:
+            log_service.warning(f"[Upload] Clearing likes/bans for deleted {track_id} failed: {e}")
 
     async def update_track_metadata(
         self,

@@ -8,11 +8,13 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { getFallbackGradientClass } from '../lib/themeManager'
+import { isHumanTrack } from '../lib/utils'
 import { triggerHaptic } from '../lib/haptics'
 import { PanelHeader } from './Panel'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { Scroller } from './Scroller'
+import { HumanBadge } from './MediaShared'
 import { MOTION, PRESETS, TWEEN } from '../lib/motion'
 import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
 
@@ -165,6 +167,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
   colors,
   onPlay,
   onRemove,
+  onArtist,
   onPlayPointerDown,
   onPlayPointerMove,
   onRemovePointerDown,
@@ -201,10 +204,23 @@ const QueueRow = memo(forwardRef(function QueueRow({
         <TrackArtwork track={track} />
 
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
-          {track.artist_name && (
+          <div className="flex items-center gap-1.5 min-w-0">
+            <div className="font-medium truncate min-w-0 transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
+            {isHumanTrack(track) && <HumanBadge />}
+          </div>
+          {track.artist_name && (track.artist_slug ? (
+            <button
+              type="button"
+              onPointerUp={(e) => onArtist(e, track.artist_slug)}
+              className="ui-tap block max-w-full text-left text-sm truncate underline-offset-2 hover:underline transition-colors duration-theme"
+              style={{ color: colors.grey300 }}
+              title={`Open ${track.artist_name}'s page`}
+            >
+              {track.artist_name}
+            </button>
+          ) : (
             <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{track.artist_name}</div>
-          )}
+          ))}
           <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey400 }}>{track.style || 'No style'}</div>
         </div>
 
@@ -252,7 +268,8 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   const playback = usePlaybackActions()
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
-  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode } = useUISelector(state => ({
+  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode, openArtist } = useUISelector(state => ({
+    openArtist: state.openArtist,
     queue: state.engineState.queue,
     currentTrackId: state.engineState.currentTrack?.id,
     currentIndex: state.engineState.currentIndex,
@@ -334,6 +351,14 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
       })
     })
   }, [playback, shouldTriggerRemove])
+
+  const handleArtist = useCallback((e, slug) => {
+    e?.preventDefault()
+    e?.stopPropagation()
+    if (!shouldTriggerPlay()) return
+    triggerHaptic('light')
+    openArtist(slug)
+  }, [openArtist, shouldTriggerPlay])
 
   const handleSeedButtonClick = useCallback((e) => {
     e?.preventDefault()
@@ -609,6 +634,7 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
                     colors={rowColors}
                     onPlay={handlePlay}
                     onRemove={handleRemove}
+                    onArtist={handleArtist}
                     onPlayPointerDown={onPlayPointerDown}
                     onPlayPointerMove={onPlayPointerMove}
                     onRemovePointerDown={onRemovePointerDown}

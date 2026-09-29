@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { memo, useState, useCallback } from 'react'
-import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, getCategoryMetadata, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { Play, Pause } from 'lucide-react'
 import { formatDuration } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
@@ -127,6 +127,27 @@ export const MediaStatusBadge = memo(function MediaStatusBadge({
     >
       {displayText}
     </div>
+  )
+})
+
+const HUMAN_IDENTITY = getCategoryMetadata('human')
+const HUMAN_BADGE_STYLE = {
+  color: HUMAN_IDENTITY.color,
+  backgroundColor: `${HUMAN_IDENTITY.color}26`,
+  boxShadow: `inset 0 0 0 1px ${HUMAN_IDENTITY.color}4d`
+}
+
+export const HumanBadge = memo(function HumanBadge({ className = '' }) {
+  const Icon = HUMAN_IDENTITY.icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold leading-none flex-shrink-0 ${className}`}
+      style={HUMAN_BADGE_STYLE}
+      title="Made by a real artist"
+    >
+      <Icon size={10} strokeWidth={2.5} aria-hidden="true" />
+      Human
+    </span>
   )
 })
 

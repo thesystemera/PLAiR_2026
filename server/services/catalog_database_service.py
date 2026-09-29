@@ -343,8 +343,11 @@ class CatalogDatabaseService(SingletonService):
         return self.tracks.get(track_id)
 
     def get_all_tracks(self, skip: int = 0, limit: int = 100, sort_by: str = "created_at", order: str = "desc",
-                       genre: Optional[str] = None, banned_ids: Optional[set] = None) -> tuple:
+                       genre: Optional[str] = None, banned_ids: Optional[set] = None, human_only: bool = False) -> tuple:
         ids = self.track_ids
+
+        if human_only:
+            ids = [tid for tid in ids if self.tracks[tid].get("is_ai_generated") is False]
 
         if genre:
             ids = [tid for tid in ids if

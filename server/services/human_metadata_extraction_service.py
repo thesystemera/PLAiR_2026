@@ -1,7 +1,9 @@
 import json
 import asyncio
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
+
+from pydantic import BaseModel
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -153,6 +155,29 @@ Identify similar artists based on what the music ACTUALLY sounds like, not assum
 
 """ + VIDEO_SEARCH_TERMS_PROMPT
 
+class UploadAnalysis(BaseModel):
+    style: str
+    title: str
+    instrumental: bool
+    explicit: bool
+    vocal_gender: Optional[str] = None
+    primary_genre: str
+    secondary_genres: List[str]
+    inspired_artist: Optional[str] = None
+    mood_keywords: List[str]
+    lyrical_interpretation: Optional[str] = None
+    vocal_style_keywords: List[str]
+    similar_artists: List[str]
+    transcribed_lyrics: Optional[str] = None
+    mix_analysis: str
+    sonic_master_prompt: Optional[str] = None
+    sonic_master_blend: int
+    mastering_blend: int
+    enhance_vocals: bool
+    artwork_prompt: str
+    video_search_terms: List[str]
+
+
 class HumanMetadataExtractionService(SingletonService):
 
     def __init__(self):
@@ -187,8 +212,10 @@ class HumanMetadataExtractionService(SingletonService):
         user_provided_title: Optional[str] = None,
         user_provided_artist: Optional[str] = None,
         filename: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None
+        tags: Optional[Dict[str, str]] = None,
+        model: Optional[str] = None
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        model = model or self.model
 
         if not self._service_initialized or not self.client:
             log_service.error("HumanMetadataExtractionService not initialized")
@@ -234,15 +261,16 @@ class HumanMetadataExtractionService(SingletonService):
 
                 started = time.perf_counter()
                 response = await self.client.aio.models.generate_content(
-                    model=self.model,
+                    model=model,
                     contents=[audio_part, user_prompt],
                     config=types.GenerateContentConfig(
                         temperature=0.3,
                         system_instruction=SYSTEM_PROMPT,
-                        response_mime_type="application/json"
+                        response_mime_type="application/json",
+                        response_schema=UploadAnalysis
                     )
                 )
-                record_gemini_usage("upload", self.model, response.usage_metadata, (time.perf_counter() - started) * 1000)
+                record_gemini_usage("upload", model, response.usage_metadata, (time.perf_counter() - started) * 1000)
 
                 if not response.text:
                     log_service.error("Gemini returned empty response")

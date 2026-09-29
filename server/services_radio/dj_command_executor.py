@@ -41,6 +41,7 @@ SEED_MODE_DISPLAY = {
 PLAYLIST_DISPLAY = {
     "favorites": "your favorites",
     "discovery": "smart discovery",
+    "human": "human-made music from independent artists",
     "top_hits_all": "all-time top hits",
     "top_hits_week": "this week's top hits",
     "top_hits_day": "today's top hits",

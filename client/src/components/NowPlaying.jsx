@@ -258,7 +258,9 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
     queueState,
     interfaceState,
     engineState,
+    openArtist,
   } = useUISelector(state => ({
+    openArtist: state.openArtist,
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
     queueState: state.queueState,
@@ -469,9 +471,21 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         <div className={isSplit ? 'flex-1 min-w-0' : undefined}>
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
-          {params.artist_name && (
+          {params.artist_name && (track.artist_slug ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                openArtist(track.artist_slug)
+              }}
+              className="ui-press block max-w-full text-left text-lg text-gray-300 mb-1 break-words underline-offset-4 hover:underline hover:text-white transition-colors"
+              title={`Open ${params.artist_name}'s page`}
+            >
+              {params.artist_name}
+            </button>
+          ) : (
             <p className="text-lg text-gray-300 mb-1">{params.artist_name}</p>
-          )}
+          ))}
           <p className="text-lg text-gray-400">{params.style_canonical || params.style || 'No style'}</p>
         </div>
 

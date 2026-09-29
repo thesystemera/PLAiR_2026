@@ -361,7 +361,7 @@ const ARTIST_INPUT_CLASS = 'w-full px-3 py-2 bg-dark-hover border border-gray-70
 
 const parseLinks = (text) => String(text || '').split(/[\s,]+/).map(link => link.trim()).filter(Boolean)
 
-const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDelete, isDeleting }) {
+const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDelete, onView, isDeleting }) {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [name, setName] = useState('')
@@ -457,6 +457,14 @@ const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDe
           {[`${count} track${count === 1 ? '' : 's'}`, artistLinks.length ? `${artistLinks.length} link${artistLinks.length === 1 ? '' : 's'}` : null].filter(Boolean).join(' • ')}
         </div>
         {artist.bio && <div className="text-xs text-gray-500 truncate">{artist.bio}</div>}
+        {artist.slug && (
+          <button
+            onClick={() => onView(artist.slug)}
+            className="ui-tap mt-0.5 text-xs font-medium text-fuchsia-300 hover:text-fuchsia-200 underline-offset-2 hover:underline transition-colors"
+          >
+            View page
+          </button>
+        )}
       </div>
       <button onClick={startEdit} className="ui-tap p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition" title="Edit artist" aria-label={`Edit ${artist.name}`}>
         <Edit2 size={16} />
@@ -561,6 +569,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     openEditTrack,
     uploadModalOpen,
     openUsageModal,
+    openArtist,
     tiltEnabled,
     tiltNeedsPermission,
     enableTiltEffects,
@@ -580,6 +589,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     openEditTrack: state.openEditTrack,
     uploadModalOpen: state.uploadModalOpen,
     openUsageModal: state.openUsageModal,
+    openArtist: state.openArtist,
     tiltEnabled: state.tiltEnabled,
     tiltNeedsPermission: state.tiltNeedsPermission,
     enableTiltEffects: state.enableTiltEffects,
@@ -1600,6 +1610,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                     artist={artist}
                     onSave={handleSaveArtist}
                     onDelete={handleDeleteArtist}
+                    onView={openArtist}
                     isDeleting={deletingArtistId === artist.id}
                   />
                 ))}

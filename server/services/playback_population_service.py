@@ -5,7 +5,7 @@ from services.user_data_cache_service import user_data_cache
 from services.analytics_service import analytics_service
 
 PLAYLIST_MODES = frozenset([
-    "favorites", "discovery",
+    "favorites", "discovery", "human",
     "top_hits_all", "top_hits_week", "top_hits_day",
 ])
 
@@ -216,7 +216,26 @@ class PlaybackPopulationService:
             return self._fill_favorites(needed, prefs, existing_ids, session_id)
         if mode == "discovery":
             return await self._fill_discovery(needed, prefs, existing_ids, session_id)
+        if mode == "human":
+            return self._fill_human(needed, prefs, existing_ids, session_id)
         return []
+
+    def _fill_human(self, needed: int, prefs: Dict, existing_ids: Set[str], session_id: str) -> List[Dict]:
+        if not self.catalog:
+            return []
+        liked = prefs["likes"] | prefs["super_likes"]
+        pool = [t for tid, t in self.catalog.tracks.items()
+                if t.get("is_ai_generated") is False and tid not in prefs["bans"] and tid not in existing_ids]
+        weights = [3.0 if t.get("id") in liked else 1.0 for t in pool]
+        new_tracks = []
+        while pool and len(new_tracks) < needed:
+            index = random.choices(range(len(pool)), weights=weights)[0]
+            track = pool.pop(index)
+            weights.pop(index)
+            new_tracks.append(track)
+            existing_ids.add(track["id"])
+        log_service.detail(f"{log_service.who(session_id)}: human-made added {len(new_tracks)}/{needed} tracks", "playback")
+        return new_tracks
 
     async def _fill_top_hits(
         self, mode: str, needed: int, banned_ids: Set[str],

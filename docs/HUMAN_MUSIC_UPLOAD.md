@@ -1,502 +1,64 @@
-# Human Music Upload System
-
-## Overview
-
-The human music upload system allows users to upload their own music to the PLAiR.fm catalog. **Critically, uploaded human tracks are treated identically to AI-generated tracks** - they use the same database schema, the same playback systems, the same queue mechanics, and the same metadata structure. This DRY approach ensures consistency and reduces maintenance burden.
-
-## Architecture Principle: Same as AI Catalog
-
-**Human uploads are NOT a separate system.** They are first-class citizens in the existing catalog:
-
-```
-AI-Generated Track (Suno)     Human Upload
-        │                           │
-        └───────────┬───────────────┘
-                    │
-                    ▼
-            Same Database Table
-            Same Metadata Schema
-            Same Playback System
-            Same Queue System
-            Same Search/Discovery
-            Same Artwork Pipeline
-```
-
-### Key Design Decisions
-
-1. **Single `tracks` Table**: Human uploads go in the same table as AI tracks
-   - `is_ai_generated` column distinguishes them (0 = human, 1 = AI)
-   - `uploaded_by_user_id` links to the uploader (NULL for AI tracks)
-
-2. **Same Metadata Schema**: `generation_params` and `derived_tags` work identically
-   - AI tracks: metadata comes from Suno generation
-   - Human tracks: metadata extracted by Gemini Pro audio analysis
-
-3. **Same ID Format**: Track IDs use consistent hashing
-   - AI: `{suno_clip_id}`
-   - Human: `user_{user_id}_{timestamp}_{hash}`
-
-4. **Same File Structure**: Audio files stored in same location
-   - `/catalog/audio/{track_id}.opus`
-   - `/catalog/artwork/{track_id}.jpg`
-
-## Current Implementation
-
-### Backend Services
-
-| Service | File | Purpose |
-|---------|------|---------|
-| `HumanMusicUploadService` | `server/services/human_music_upload_service.py` | Upload pipeline orchestration (10 stages) |
-| `HumanMetadataExtractionService` | `server/services/human_metadata_extraction_service.py` | Gemini Pro audio analysis |
-| `SourceQualityAnalysisService` | `server/services/source_quality_analysis_service.py` | Source quality detection & processing recommendations |
-| `EmbeddedArtworkService` | `server/services/embedded_artwork_service.py` | Extract artwork from MP3/FLAC/etc |
-| `ArtworkGenerationService` | `server/services/artwork_generation_service.py` | **NEW** SDXL Lightning AI artwork generation |
-| `TrackArtworkService` | `server/services/track_artwork_service.py` | Manual artwork upload for tracks |
-| `AudioMasterService` | `server/services/audio_master_service.py` | Loudness normalization (-14.0 LUFS) |
-| `AudioFeaturesService` | `server/services/audio_features_service.py` | Tempo, beats, sections extraction |
-| `ArtworkEnrichmentService` | `server/services/suno_artwork_enrichment_service.py` | Depth map generation for parallax |
-
-### API Endpoints
-
-```
-POST   /api/user/music/upload                    Upload a track (multipart/form-data)
-GET    /api/user/music/tracks                    List user's uploaded tracks
-PUT    /api/user/music/tracks/{id}               Update track metadata
-DELETE /api/user/music/tracks/{id}               Delete uploaded track
-POST   /api/user/music/tracks/{id}/artwork       Upload artwork for a track
-DELETE /api/user/music/tracks/{id}/artwork       Delete artwork for a track
-POST   /api/user/music/tracks/{id}/artwork/generate  Generate AI artwork (SDXL Lightning)
-```
-
-### Upload API Response
-
-The upload endpoint returns rich metadata from Gemini analysis:
-
-```json
-{
-  "status": "success",
-  "message": "Successfully uploaded: Track Title (Genre)",
-  "track_id": "user_123_1705123456_abc12345",
-  "metadata": {
-    "title": "Track Title",
-    "artist": "Artist Name",
-    "style": "Detailed production style description...",
-    "primary_genre": "Indie Folk",
-    "secondary_genres": ["Singer-Songwriter", "Acoustic"],
-    "mood_keywords": ["melancholic", "introspective"],
-    "similar_artists": ["Elliott Smith", "Nick Drake"],
-    "vocal_style_keywords": ["soft", "breathy"],
-    "duration_ms": 180000,
-    "has_lyrics": true,
-    "transcribed_lyrics": "Full lyrics text...",
-    "lyrical_interpretation": "Themes of isolation and longing..."
-  }
-}
-```
-
-### Frontend Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| `UploadMusicModal` | `client/src/components/modals/UploadMusicModal.jsx` | Upload UI with drag/drop |
-| MediaSearch upload button | `client/src/components/MediaSearch.jsx` | Quick access in search bar |
-| User panel uploads section | `client/src/components/User.jsx` | "My Uploads" accordion |
-
-### Modal Architecture
-
-The upload modal follows the app's standard modal pattern (same as ShoutoutModal, GenerationModal, etc.):
-
-1. **State lives in UIStateContext** (not local component state)
-   - `uploadModalOpen` - boolean state
-   - `openUploadModal()` - function to open
-   - `closeUploadModal()` - function to close
-
-2. **Modal rendered at App.jsx level** (not inside triggering component)
-   - Required for proper mobile positioning
-   - Prevents CSS transform issues with `position: fixed`
-
-3. **Components just call `openUploadModal()`**
-   - MediaSearch.jsx: Green upload button in search bar
-   - User.jsx: "Upload Your Music" button in My Uploads section
-
-4. **Uses shared Modal components** from `Modal.jsx`:
-   - `ModalSection` - titled sections
-   - `ModalCard` - content containers
-   - `ModalOptionButton` - toggleable options (used for Apollo upscaling)
-   - `ModalButton` - action buttons
-   - `ModalFooter` - footer with actions
-
-### Preview Screen Fields
-
-After upload, the modal shows a preview with all extracted metadata:
-
-- **Track Info**: Title, Artist (editable)
-- **Genre & Classification**: Primary genre (editable), secondary genres
-- **Mood & Vibe**: Mood keywords, similar artists
-- **Production Style**: Detailed sonic description
-- **Vocal Style**: Vocal characteristics tags
-- **Lyrics**: Lyrical interpretation + full transcribed lyrics (scrollable)
-
-### Metadata Extraction (Gemini Pro)
-
-Human uploads use Google's Gemini 2.5 Pro model to analyze audio and extract:
-
-- **Title** (if not provided by user)
-- **Primary Artist** (detected or user-provided)
-- **Primary Genre** (e.g., "Roots Reggae", "Indie Folk", "Industrial Rock")
-- **Secondary Genres** (sub-genres, tags)
-- **Mood Keywords** (emotional descriptors)
-- **Similar Artists** (for discovery/recommendations)
-- **Vocal Style** (if vocals present)
-- **Production Style** (sonic characteristics)
-- **Lyrical Themes** (if lyrics detected)
-- **Transcribed Lyrics** (via Whisper)
-
-**Cost**: ~$0.002 per 3-minute track (25 tokens/sec audio, $2.50/1M tokens)
-
-**Why Gemini Pro over Flash**: Testing showed Flash Lite misclassified genres frequently (e.g., Roots Reggae → "Urban Funk"). Pro provides dramatically better accuracy for genre classification.
-
-## Database Schema
-
-The `tracks` table includes these columns for human upload support:
-
-```sql
--- Added columns for human uploads
-is_ai_generated INTEGER DEFAULT 1      -- 0 = human, 1 = AI
-uploaded_by_user_id INTEGER DEFAULT NULL  -- FK to users table
-```
-
-Metadata JSON structure is identical to AI tracks:
-
-```json
-{
-  "generation_params": {
-    "title": "Track Title",
-    "style": "Genre / Style description",
-    "prompt": "Lyrics if available",
-    "primary_artist": "Artist Name"
-  },
-  "derived_tags": {
-    "primary_genre": "Indie Folk",
-    "secondary_genres": ["Singer-Songwriter", "Acoustic"],
-    "mood_keywords": ["melancholic", "introspective"],
-    "similar_artists": ["Elliott Smith", "Nick Drake"],
-    "vocal_style_keywords": ["soft", "breathy"],
-    "production_style_description": "Sparse acoustic arrangement...",
-    "lyrical_interpretation": "Themes of isolation..."
-  }
-}
-```
-
-## Upload Flow (Full Processing Pipeline)
-
-Human uploads now receive the **SAME processing pipeline** as AI-generated tracks. This ensures consistent quality across the catalog.
-
-```
-User selects file
-       │
-       ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 1: Validation & Storage (5-10%)                       │
-│ • Validate format (mp3, wav, flac, ogg, m4a, aac, opus)     │
-│ • Max 100MB, 30sec-15min duration                           │
-│ • Store original: /catalog/users/{user_id}/tracks/          │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 2: Source Quality Analysis (10-15%)                   │
-│ • Analyze sample rate, bit depth, format                    │
-│ • Spectral analysis (bandwidth utilization)                 │
-│ • Detect compression artifacts                              │
-│ • Classify: STUDIO | HIGH | MEDIUM | LOW                    │
-│ • Generate processing recommendations                       │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 3: Metadata Extraction (15-30%)                       │
-│ • Gemini Pro multimodal audio analysis                      │
-│ • Extract: genre, mood, artists, lyrics, production style   │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 4: Artwork Extraction/Generation (30-35%)             │
-│ • First: Extract embedded artwork (MP3 ID3, FLAC, M4A, OGG) │
-│ • Supports: APIC frames, FLAC PICTURE blocks, MP4 covr      │
-│ • Fallback: Generate artwork using SDXL Lightning           │
-│   - Uses track metadata (title, genre, mood) to build prompt│
-│   - Produces 1024x1024 album-style artwork in ~1 second     │
-│ • Save to: /catalog/artwork/{track_id}.jpeg                 │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 5: Smart Audio Enhancement (35-55%)                   │
-│ • Based on quality tier from Stage 2:                       │
-│   - STUDIO/HIGH: Skip Apollo (preserve original quality)    │
-│   - MEDIUM: Apply Apollo bandwidth restoration              │
-│   - LOW: Full enhancement pipeline                          │
-│ • Apollo: Bandwidth restoration neural network              │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 6: Final Mastering (55-65%)                           │
-│ • AudioMasterService (same as Suno tracks)                  │
-│ • Target: -14.0 LUFS loudness normalization                 │
-│ • Adaptive notch filtering (remove resonant peaks)          │
-│ • Multiband tonality analysis (body/presence/air)           │
-│ • Output: /catalog/master_wav/{track_id}.wav                │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 7: Audio Features Extraction (65-75%)                 │
-│ • AudioFeaturesService (same as Suno tracks)                │
-│ • Extract: tempo, beats, sections, key, mode, loudness      │
-│ • Crossfade points (beat-aligned)                           │
-│ • Announcer safe zones (for DJ talk-over)                   │
-│ • Output: /catalog/audiofeatures/{track_id}.json            │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 8: Transcoding (75-85%)                               │
-│ • Opus encoding at 128k, 192k, 256k bitrates                │
-│ • Source: mastered WAV (or enhanced/original if no master)  │
-│ • Output: /catalog/opus_*/[webm/]{track_id}.*               │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 9: Artwork Enrichment (85-90%)                        │
-│ • ArtworkEnrichmentService (same as Suno tracks)            │
-│ • Generate depth map using Depth Anything V2                │
-│ • Create side-by-side JPEG (color + depth)                  │
-│ • Enables parallax effects in NowPlaying UI                 │
-│ • Output: /catalog/artwork_enriched/{track_id}.jpeg         │
-└────────┬────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│ STAGE 10: Catalog Registration (90-100%)                    │
-│ • Save metadata JSON                                        │
-│ • Add to catalog database (same table as AI tracks)         │
-│ • Add to vector index (for similarity search)               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Quality-Based Processing Decisions
-
-The `SourceQualityAnalysisService` analyzes input files and recommends processing:
-
-| Quality Tier | Criteria | Processing Applied |
-|--------------|----------|-------------------|
-| **STUDIO** | 24-bit, 48kHz+, lossless, >85% bandwidth | Mastering only (skip all enhancement) |
-| **HIGH** | 16-bit, 44.1kHz+, lossless or ≥256kbps | Light mastering, optional enhancement |
-| **MEDIUM** | ≥192kbps, 70-85% bandwidth | Apollo + mastering |
-| **LOW** | <192kbps, <70% bandwidth, artifacts | Full pipeline (Apollo + mastering) |
-
-This ensures high-quality sources aren't over-processed while low-quality sources get restoration.
-
----
-
-## Future Enhancements (TODO)
-
-### Multi-Track Upload
-
-- [ ] Batch upload UI (select multiple files)
-- [ ] Progress tracking per file
-- [ ] Parallel Gemini analysis (rate-limited)
-- [ ] Batch metadata editor after upload
-- [ ] Album grouping during upload
-
-### Metadata Editor
-
-- [ ] Full metadata editing screen (not just inline)
-- [ ] Correction workflow for AI-extracted data
-- [ ] Genre/mood picker with existing catalog values
-- [ ] Similar artists autocomplete from catalog
-- [ ] Lyrics editor with timestamp alignment
-- [ ] Re-run Gemini analysis button
-
-### Additional Fields for Human Content
-
-Human uploads may need fields that AI tracks don't have:
-
-| Field | Description |
-|-------|-------------|
-| `album` | Album name |
-| `album_artist` | Album artist (for compilations) |
-| `track_number` | Position in album |
-| `disc_number` | For multi-disc albums |
-| `release_date` | Original release date |
-| `record_label` | Label name |
-| `isrc` | International Standard Recording Code |
-| `upc` | Universal Product Code (album) |
-| `copyright` | Copyright notice |
-| `composer` | Songwriter/composer credits |
-| `producer` | Production credits |
-| `featuring` | Featured artists |
-| `remix_of` | Original track if remix |
-| `bpm` | Beats per minute (extracted) |
-| `key` | Musical key (extracted) |
-| `explicit` | Explicit content flag |
-
-**Note**: These should be added to the metadata JSON schema, NOT as separate database columns. Keep the schema flexible.
-
-### Artwork Upload
-
-Like Bandcamp/SoundCloud, users should be able to:
-
-- [x] **Extract embedded artwork** from uploaded files (MP3 ID3, FLAC, M4A, OGG) ✅ IMPLEMENTED
-- [x] **Enrich artwork with depth maps** for parallax effects ✅ IMPLEMENTED
-- [x] **Upload custom cover art after upload** ✅ IMPLEMENTED (TrackArtworkService + POST /artwork endpoint)
-- [x] **AI-generate artwork** if none provided ✅ IMPLEMENTED (SDXL Lightning - POST /artwork/generate endpoint)
-- [ ] Upload cover art during initial upload (drag-drop in UploadMusicModal)
-- [ ] Album art (shared across tracks in album)
-- [ ] Artist profile picture (separate from track art)
-
-### Album Support
-
-- [ ] Create albums from uploaded tracks
-- [ ] Album metadata (title, release date, description)
-- [ ] Album artwork
-- [ ] Track ordering within album
-- [ ] Album-level playback (play full album)
-
-### Rights & Licensing
-
-- [ ] Copyright declaration during upload
-- [ ] License selection (All Rights Reserved, CC-BY, etc.)
-- [ ] Proof of ownership for disputes
-- [ ] DMCA takedown workflow
-
-### Discovery Integration
-
-- [ ] Human uploads in radio seeding (by genre, mood, etc.)
-- [ ] "Uploaded by users" filter in catalog
-- [ ] Featured user uploads section
-- [ ] User profile with their uploaded tracks
-
-### Analytics
-
-- [ ] Play counts for uploaded tracks
-- [ ] Listener demographics
-- [ ] Export analytics (like Spotify for Artists)
-
----
-
-## Testing
-
-### Backend Test Script
-
-```bash
-cd server
-E:/AI_RADIO/.venv/Scripts/python.exe utils/test_human_upload.py
-```
-
-### Manual Testing
-
-1. Start backend: `E:/AI_RADIO/.venv/Scripts/python.exe start.py`
-2. Start frontend: `cd client && npm run dev`
-3. Log in
-4. Go to User panel → My Uploads → Upload Your Music
-5. Or use the green upload button in the catalog search bar
-
----
-
-## Configuration
-
-### Gemini API
-
-Set in environment or config:
-```
-GEMINI_API_KEY=your_gemini_api_key
-```
-
-### File Paths
-
-Catalog media lives outside the repo: `CATALOG_DIR` is set in `.env` (currently `D:/catalog`); `settings.CATALOG_DIR` defaults to `server/catalog`. Subdirectories (see `server/config/settings.py`):
-
-```python
-AUDIO_DIR = CATALOG_DIR / "mp3"
-ARTWORK_DIR = CATALOG_DIR / "artwork"
-METADATA_DIR = CATALOG_DIR / "metadata"
-USERS_DIR = CATALOG_DIR / "users"  # Per-user uploads
-```
-
----
-
-## Key Files Reference
-
-```
-server/
-├── services/
-│   ├── human_music_upload_service.py         # Upload pipeline orchestrator (10 stages)
-│   ├── human_metadata_extraction_service.py  # Gemini Pro audio analysis
-│   ├── source_quality_analysis_service.py    # Quality detection & recommendations
-│   ├── embedded_artwork_service.py           # Extract artwork from audio files
-│   ├── artwork_generation_service.py         # SDXL Lightning AI artwork generation
-│   ├── track_artwork_service.py              # Manual artwork upload for tracks
-│   ├── audio_master_service.py               # Loudness normalization (-14.0 LUFS)
-│   ├── audio_features_service.py             # Tempo, beats, sections extraction
-│   ├── suno_artwork_enrichment_service.py    # Depth map generation (shared with AI)
-│   └── catalog_database_service.py           # DB ops (shared with AI)
-├── utils/
-│   ├── test_gemini_audio.py                  # Gemini API testing
-│   └── test_human_upload.py                  # Upload service testing
-└── app.py                                    # API routes + service initialization
-
-client/src/
-├── components/
-│   ├── modals/
-│   │   └── UploadMusicModal.jsx              # Upload modal (artwork upload + AI generate)
-│   ├── MediaSearch.jsx                       # Upload button in search
-│   └── User.jsx                              # My Uploads section
-└── lib/
-    └── api.js                                # API client
-```
-
----
-
-## Known Issues & Bugs
-
-### Lyrics Not Displaying (TODO)
-
-**Status**: Bug - needs investigation
-
-**Symptom**: The upload preview shows "Lyrics detected" but the actual `transcribed_lyrics` field is not being displayed, even though:
-1. The Gemini prompt requests lyrics transcription
-2. The extraction service has `transcribed_lyrics` in the schema
-3. The API endpoint now returns `transcribed_lyrics` in the response
-4. The frontend modal has UI to display lyrics
-
-**Possible causes to investigate**:
-1. Gemini might not be returning lyrics in the response (check raw API response)
-2. The `transcribed_lyrics` field might be named differently in Gemini output
-3. Lyrics might be in a nested location we're not extracting
-4. The `has_lyrics` flag might be set based on `lyrical_interpretation` presence, not actual lyrics
-
-**Files to check**:
-- `server/services/human_metadata_extraction_service.py` - Check Gemini response parsing
-- `server/app.py:2288-2306` - Check API response construction
-- Test with console.log in `UploadMusicModal.jsx` to see what metadata actually arrives
-
-**Workaround**: Lyrics are still stored in the catalog metadata JSON and used for vector search, just not displayed in the upload preview UI.
-
----
-
-## Principles to Maintain
-
-1. **DRY**: Human tracks use the same systems as AI tracks. Don't create parallel pipelines.
-
-2. **Same Quality**: Human uploads get the same metadata richness as AI tracks (via Gemini).
-
-3. **Unified Search**: Human and AI tracks are searchable/discoverable together.
-
-4. **Consistent Playback**: No special handling needed in PlaybackContext, AudioEngine, etc.
-
-5. **Schema Flexibility**: Use JSON metadata fields for new attributes, not new DB columns.
+# Human Music Uploads
+
+PLAiR is moving from mostly AI music to mostly human music. Uploading is built around least resistance: pick a file and tap Upload; everything else is automatic and can be corrected afterwards.
+
+## Principles
+
+- **Same catalog as AI tracks.** Human tracks live in the `tracks` table with `is_ai_generated = 0` and use the same metadata schema, streaming, mastering, search and radio code.
+- **Automatic first, editable always.** Title, genre, moods, lyrics, explicit flag, artwork and mastering are decided automatically; every one of them can be edited from the upload window or later from User → My Uploads.
+- **Every click we don't need is a good thing.** The only required input is a one-time rights confirmation on a user's first upload.
+
+## Flow
+
+1. **Select** (`UploadMusicModal.jsx`): pick or drop a file. One compact row: artist (the user's artist profiles, defaults to the last one used), "Enhance audio" (remembered opt-in, Apollo restoration), and on the first upload only "I made this music or have the rights to share it".
+2. **Send**: XHR with real byte progress and Cancel. Files are refused before the body is read unless the request carries a valid token (`security_middleware.SIGNED_IN_UPLOAD_PATHS`).
+3. **Accept**: `POST /api/user/music/upload` checks format, size and rights, resolves the artist, and answers `{"status": "processing", "upload_id"}` at once.
+4. **Process** in a background job (`UPLOAD_JOBS` in `routers/user_music.py`): progress over the `upload_progress` WebSocket event, `GET /api/user/music/uploads[/{id}]` for status, `DELETE` to cancel (partial files are rolled back). The user can close the window; `UploadNotice` (AppBridges) toasts when the track is live. The final event is sent only after the job's result is stored.
+5. **Preview / edit**: the result opens in the same editor used from My Uploads.
+
+## Pipeline (`human_music_upload_service.py`)
+
+Validate → save original → probe/decode → **fingerprint + duplicate check** → source quality → **Gemini analysis** → Apollo (only when the user opted in and the source needs it) → vocal cleanup (Demucs + ClearVoice, only when Gemini asks) → SonicMaster → mastering (-14 LUFS) → audio features → lyric timing (Whisper aligns Gemini's lyrics) → Opus 128/192/256k + catalog MP3 → artwork (embedded, else SDXL) + depth map → metadata JSON → catalog DB + memory → search index. Any fatal failure rolls the track back. Measured on a 3-minute song: 2.5-8 minutes, dominated by SonicMaster, mastering, lyric timing and artwork.
+
+**Duplicates:** every human upload stores a Chromaprint `fingerprint` (ffmpeg's built-in chromaprint muxer, first 120 s, `services/audio_fingerprint.py`). Right after decoding, a match at similarity ≥ 0.8 returns the uploader's existing track, or refuses a song another listener already uploaded. Measured on real re-uploads: same song 0.94-1.0 (including original vs mastered copy), different songs ≤ 0.55. Exact re-uploads are also caught by SHA-256 before any work.
+
+## Credits and artists
+
+- **Artist profiles** (`artist_profiles`, `services/artist_profile_service.py`, `routers/artists.py`): a user defines their bands once (User → Artists & Bands: name, bio, links). Uploads are credited to the chosen profile, else the last used, else the first, else one created from the username. Renaming a profile re-credits all its tracks. Public artist page: `GET /api/artists/{slug}` (public tracks only), shown in `ArtistModal`.
+- **The credit** is `generation_params.artist_name` (mirrored in `track_info.artist`, plus `artist_profile_id` and `artist_slug`). Every view reads it. `derived_tags.inspired_artist` is only a "sounds like" comparison, never the credit. The DJ is told the track is by an independent human artist.
+- **Titles**: the uploader's title, else the embedded tag title (mutagen, stored as `embedded_tags`), else a real title in the filename, else the sung hook. Gemini receives the tags and filename as known facts.
+
+## Sharing and flags
+
+- `visibility`: public (default), unlisted (link only) or private (owner only). Unlisted and private tracks are in `CatalogDatabaseService.hidden_ids` and are left out of browsing, vector search, queue fill, top hits, charts, on-air stats and new-session seeding; they still play by id.
+- `explicit`: set by Gemini from the lyrics, editable. `ai_assisted`: the uploader's own "Made with AI help" flag (Now Playing shows "Human + AI").
+- Rights: `users.upload_rights_confirmed_at`, asked once.
+
+## Discovery
+
+- "Human Made" station (playlist mode `human`, also a DJ `play_playlist` option): human tracks only, liked ones weighted up.
+- Catalog "Human" filter (`GET /api/catalog/tracks?human=true`) and Human badges on catalog cards and queue rows (`is_human`, `artist_slug` in queue items).
+- Tapping a human track's artist (Now Playing, Queue) opens the artist page.
+
+## Analysis model
+
+`GEMINI_UPLOAD_ANALYSIS_MODEL` (default `gemini-3.5-flash`) via `human_metadata_extraction_service.py`, audio inline (≤ 20 MB; long or float sources are sent as an MP3 of the first 15 minutes), structured output (`UploadAnalysis` response schema). A/B on 10 real human songs (2026-09-29, `tests/upload_llm_ab.py`):
+
+| Model | OK | Avg time | Cost / track | Notes |
+|---|---|---|---|---|
+| gemini-3.5-flash | 10/10 | 20 s | $0.036 | specific genres, confident mix decisions |
+| gemini-3.5-flash-lite | 10/10 | 7 s | $0.005 | "Alternative Rock" for 6/10, timid mix decisions |
+| gemini-2.5-flash | 8/10 | 65 s | $0.042 | 2 runaway replies (4 min, $0.17 each) |
+
+3.5 Flash stays: genre and mix decisions shape both the sound and discovery. DeepSeek has no audio input.
+
+## Editing and deleting
+
+- `PUT /api/user/music/tracks/{id}`: title, artist_profile_id, primary_genre, secondary_genres, mood_keywords, lyrics (empty = instrumental; drops the lyric timing so the asset doctor re-aligns it), visibility, explicit, ai_assisted, description. Validated, written atomically, re-indexed.
+- `DELETE /api/user/music/tracks/{id}`: removes the catalog row, memory entry, all outputs, originals, stems, and likes/bans of that track; the search index drops it on its next rebuild.
+
+## Tools and tests
+
+- `tests/upload_credit_test.py --base URL --file <audio> [--cancel-file <other audio>]`: full pipeline end to end (credit, edits, rename, artist page, duplicate, cancel).
+- `tests/upload_llm_ab.py --models a,b --limit N`: analysis model comparison on real uploads.
+- `server/utils/backfill_upload_credits.py --user N --artist NAME [--titles] [--apply]`: fix credits and titles on old uploads (dry run by default).

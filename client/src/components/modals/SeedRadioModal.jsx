@@ -3,9 +3,12 @@ import { useViewport } from '../../contexts/ViewportContext'
 import { useAuth } from '../../contexts/AuthContext'
 import { Modal, ModalSection, ModalOptionButton, ModalTitle } from './Modal'
 
+const PLAYLIST_OPTIONS = new Set(['favorites', 'discovery', 'human'])
+
 const SEED_OPTIONS = [
   { id: 'favorites', label: 'My Favorites', description: 'Your library on shuffle' },
   { id: 'discovery', label: 'Smart Discovery', description: 'Favorites + new gems' },
+  { id: 'human', label: 'Human Made', description: 'Real artists, uploaded to PLAiR' },
   { id: 'primary_genre', label: 'Main Genre', description: 'Same primary genre' },
   { id: 'secondary_genres', label: 'Sub-Genres', description: 'Similar sub-genres' },
   { id: 'mood', label: 'Mood', description: 'Similar vibes & feelings' },
@@ -34,7 +37,7 @@ export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
     if (isInstrumental && (option.id === 'vocal' || option.id === 'lyrics')) {
       return false
     }
-    if (option.id === 'favorites' || option.id === 'discovery') {
+    if (PLAYLIST_OPTIONS.has(option.id)) {
       return true
     }
     return !(!hasArtist && (option.id === 'primary_artist' || option.id === 'similar_artists'));

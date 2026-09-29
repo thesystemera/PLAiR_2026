@@ -83,6 +83,7 @@ const CompatibilityWarningModal = lazyNamed(loadCompatibilityWarningModal, 'Comp
 const DemoModeModal = lazyNamed(loadDemoModeModal, 'DemoModeModal')
 const ShareModal = lazyNamed(loadShareModal, 'ShareModal')
 const UploadMusicModal = lazyNamed(loadUploadMusicModal, 'UploadMusicModal')
+const ArtistModal = lazyNamed(() => import('./components/modals/ArtistModal'), 'ArtistModal')
 const UsageStatsModal = lazyNamed(() => import('./components/modals/UsageStatsModal'), 'UsageStatsModal')
 const CostTicker = lazyNamed(() => import('./components/CostTicker'), 'CostTicker')
 
@@ -173,7 +174,7 @@ function App() {
     updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
     interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, reviewModalState, closeReviewModal, hasActiveJobs,
-    uploadModalOpen, uploadEditTrackId, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
+    uploadModalOpen, uploadEditTrackId, closeUploadModal, usageModalOpen, closeUsageModal, artistModalState, closeArtist, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
     tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
   } = useUISelector(state => ({
     updateShaderRegions: state.updateShaderRegions,
@@ -201,6 +202,8 @@ function App() {
     closeUploadModal: state.closeUploadModal,
     usageModalOpen: state.usageModalOpen,
     closeUsageModal: state.closeUsageModal,
+    artistModalState: state.artistModalState,
+    closeArtist: state.closeArtist,
     toggleCatalogView: state.toggleCatalogView,
     toggleRadioInput: state.toggleRadioInput,
     radioInput: state.interfaceState.radioInput,
@@ -1101,6 +1104,14 @@ function App() {
             editTrackId={uploadEditTrackId}
             onClose={closeUploadModal}
             onLogin={() => setShowLogin(true)}
+          />
+        </LazyMount>
+
+        <LazyMount when={artistModalState.isOpen}>
+          <ArtistModal
+            isOpen={artistModalState.isOpen}
+            onClose={closeArtist}
+            slug={artistModalState.slug}
           />
         </LazyMount>
 

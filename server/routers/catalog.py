@@ -18,6 +18,7 @@ async def get_catalog_tracks(
         sort_by: str = "created_at",
         order: str = "desc",
         genre: Optional[str] = None,
+        human: bool = False,
         current_user: User = Depends(get_current_user),
 ):
     banned_ids = None
@@ -32,7 +33,8 @@ async def get_catalog_tracks(
         sort_by,
         order,
         genre,
-        banned_ids
+        banned_ids,
+        human
     )
 
     for track in tracks:

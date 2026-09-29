@@ -2,7 +2,7 @@ import { ListPlus } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { useArtworkThumb } from '../contexts/UIStateContext'
-import { formatDateShort } from '../lib/utils'
+import { formatDateShort, isHumanTrack } from '../lib/utils'
 import { FALLBACK_GRADIENTS, CARD_TRANSITION } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
 import MediaActions from './MediaActions'
@@ -17,10 +17,11 @@ import { MediaSearch } from './MediaSearch'
 import { Scroller } from './Scroller'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
+import { safeStorage } from '../lib/safeStorage'
 import { retryableAPICall } from '../lib/retryUtils'
 import { useVirtualWindow } from '../hooks/useVirtualWindow'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
-import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata, useMediaGridColumns, isCardEntering } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata, useMediaGridColumns, isCardEntering, HumanBadge } from './MediaShared'
 import { useArtPop } from '../hooks/useArtPop'
 import { useViewport } from '../contexts/ViewportContext'
 import { MOTION } from '../lib/motion'
@@ -28,6 +29,7 @@ import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
 
 const CATALOG_ERROR_GRACE_MS = 4000
+const HUMAN_FILTER_KEY = 'catalogHumanOnly'
 
 function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
@@ -206,9 +208,12 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
         matchWeights={track.match_weights}
       />
 
-      <h3 className="font-semibold truncate text-xs md:text-sm transition-colors duration-theme" style={{ color: getWhite() }}>
-        {params.title || 'Untitled'}
-      </h3>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <h3 className="font-semibold truncate min-w-0 text-xs md:text-sm transition-colors duration-theme" style={{ color: getWhite() }}>
+          {params.title || 'Untitled'}
+        </h3>
+        {isHumanTrack(track) && <HumanBadge />}
+      </div>
 
       {selectedGenre && track.derived_tags?.secondary_genres ? (
         <MediaCardTags tags={track.derived_tags.secondary_genres} maxDisplay={2} />
@@ -286,6 +291,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
   const [sortMode, setSortMode] = useState('recent')
   const [genres, setGenres] = useState([])
   const [selectedGenre, setSelectedGenre] = useState(null)
+  const [humanOnly, setHumanOnly] = useState(() => safeStorage.get(HUMAN_FILTER_KEY) === 'true')
   const scrollContainerRef = useRef(null)
   const lastHandledCounterRef = useRef(0)
 
@@ -357,7 +363,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
   const catalogWindow = useVirtualWindow({
     fetchFn: useCallback(async (skip, limit, params) => {
       const sortParams = getSortParams(params.sortMode || 'recent')
-      const data = await api.getTracks(skip, limit, sortParams.sort_by, sortParams.order, params.genre)
+      const data = await api.getTracks(skip, limit, sortParams.sort_by, sortParams.order, params.genre, !!params.human)
       return {
         items: data?.tracks || [],
         total: data?.total_tracks || 0
@@ -371,10 +377,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
 
   useEffect(() => {
     const loadData = async () => {
-      logger.info(`[Catalog] loadData triggered - sortMode: ${sortMode}, isOnline: ${isOnline}, selectedGenre: ${selectedGenre}`)
+      logger.info(`[Catalog] loadData triggered - sortMode: ${sortMode}, isOnline: ${isOnline}, selectedGenre: ${selectedGenre}, humanOnly: ${humanOnly}`)
       setLoading(true)
       try {
-        if (sortMode === 'genre' && !selectedGenre) {
+        if (sortMode === 'genre' && !selectedGenre && !humanOnly) {
           const [statsData, genresData] = await Promise.all([
             retryableAPICall(() => api.getStats(), 'getStats'),
             retryableAPICall(() => api.getGenres(), 'getGenres'),
@@ -384,9 +390,9 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
         } else {
           const statsData = await retryableAPICall(() => api.getStats(selectedGenre), 'getStats')
           setStats(statsData)
-          await resetWindow({ sortMode, genre: selectedGenre })
+          await resetWindow({ sortMode, genre: selectedGenre, human: humanOnly })
 
-          if (sortMode === 'genre' && !selectedGenre) {
+          if (sortMode === 'genre' && !selectedGenre && !humanOnly) {
             const genresData = await retryableAPICall(() => api.getGenres(), 'getGenres')
             setGenres(genresData?.genres || [])
           }
@@ -403,21 +409,24 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       }
     }
     void loadData()
-  }, [sortMode, selectedGenre, isOnline, serverReachable, resetWindow, errorToast])
+  }, [sortMode, selectedGenre, humanOnly, isOnline, serverReachable, resetWindow, errorToast])
 
   const sortModeRef = useRef(sortMode)
   const selectedGenreRef = useRef(selectedGenre)
+  const humanOnlyRef = useRef(humanOnly)
   useEffect(() => {
     sortModeRef.current = sortMode
     selectedGenreRef.current = selectedGenre
-  }, [sortMode, selectedGenre])
+    humanOnlyRef.current = humanOnly
+  }, [sortMode, selectedGenre, humanOnly])
 
   const reloadCatalog = useCallback(async () => {
     try {
       const currentSortMode = sortModeRef.current
       const currentGenre = selectedGenreRef.current
+      const currentHuman = humanOnlyRef.current
 
-      if (currentSortMode === 'genre' && !currentGenre) {
+      if (currentSortMode === 'genre' && !currentGenre && !currentHuman) {
         const [statsData, genresData] = await Promise.all([
           retryableAPICall(() => api.getStats(), 'getStats (reload)'),
           retryableAPICall(() => api.getGenres(), 'getGenres (reload)'),
@@ -427,7 +436,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       } else {
         const [statsData] = await Promise.all([
           retryableAPICall(() => api.getStats(currentGenre), 'getStats (reload)'),
-          resetWindow({ sortMode: currentSortMode, genre: currentGenre })
+          resetWindow({ sortMode: currentSortMode, genre: currentGenre, human: currentHuman })
         ])
         setStats(statsData)
       }
@@ -506,6 +515,16 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     setSelectedGenre(null)
   }, [])
 
+  const handleToggleHuman = useCallback(() => {
+    triggerHaptic('light')
+    setLoading(true)
+    setHumanOnly(prev => {
+      const next = !prev
+      safeStorage.set(HUMAN_FILTER_KEY, next ? 'true' : 'false')
+      return next
+    })
+  }, [])
+
   const displayTracks = isSearchMode ? searchTracks : catalogWindow.items
   const queuedTrackSet = useMemo(() => new Set(queuedTrackIds), [queuedTrackIds])
 
@@ -541,13 +560,13 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
   }, [displayTracks, selectedGenre, sortMode])
 
   const totalSubGenreCount = useMemo(() => {
-    if (sortMode !== 'genre' || selectedGenre) return 0
+    if (sortMode !== 'genre' || selectedGenre || humanOnly) return 0
     const allSubGenres = new Set()
     genres.forEach(genreData => {
       genreData.sub_genres?.forEach(sub => allSubGenres.add(sub))
     })
     return allSubGenres.size
-  }, [genres, sortMode, selectedGenre])
+  }, [genres, sortMode, selectedGenre, humanOnly])
 
   useEffect(() => {
     if (!measurementRef.current) return
@@ -588,10 +607,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     [displayTracks, sortMode, catalogWindow.totalCount, catalogWindow.windowStart, isSearchMode, measuredRowHeight, itemsPerRow]
   )
 
-  const showingGenres = sortMode === 'genre' && !selectedGenre && genres.length > 0
+  const showingGenres = sortMode === 'genre' && !selectedGenre && !humanOnly && genres.length > 0
   const isLoadingContent = loading && catalogWindow.items.length === 0
   const contentState = isLoadingContent ? 'loading' : showingGenres ? 'genres' : displayTracks.length === 0 ? 'empty' : 'tracks'
-  const entranceKey = contentState === 'tracks' ? (isSearchMode ? searchTracks : `${sortMode}|${selectedGenre || ''}`) : null
+  const entranceKey = contentState === 'tracks' ? (isSearchMode ? searchTracks : `${sortMode}|${selectedGenre || ''}|${humanOnly}`) : null
   const cardsEntering = useEntranceWindow(entranceKey)
 
   const renderTrack = useCallback((track, absoluteIndex) => (
@@ -621,15 +640,17 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     </div>
   ), [])
 
+  const humanView = humanOnly && !isSearchMode
   const adaptiveStats = {
     ...stats,
-    displayed_tracks: sortMode === 'genre' && !selectedGenre ? genres.length : stats?.total_tracks,
+    ...(humanView ? { total_tracks: catalogWindow.totalCount, hide_duration: true } : {}),
+    displayed_tracks: showingGenres ? genres.length : humanView ? catalogWindow.totalCount : stats?.total_tracks,
     is_search_mode: isSearchMode,
     search_result_count: searchTracks.length,
     track_range: trackRange,
     current_skip: 0,
     visible_end: displayTracks.length,
-    showing_genres: sortMode === 'genre' && !selectedGenre,
+    showing_genres: sortMode === 'genre' && !selectedGenre && !humanOnly,
     genre_count: genres.length,
     selected_genre: selectedGenre,
     sub_genres: subGenres,
@@ -660,6 +681,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
                 onSortChange={setSortMode}
                 selectedGenre={selectedGenre}
                 onBackToGenres={handleBackToGenres}
+                humanOnly={humanOnly}
+                onToggleHuman={handleToggleHuman}
                 contentType="catalog"
               />
               <MediaGrid>
@@ -683,13 +706,21 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
                 onSortChange={setSortMode}
                 selectedGenre={selectedGenre}
                 onBackToGenres={handleBackToGenres}
+                humanOnly={humanOnly}
+                onToggleHuman={handleToggleHuman}
                 contentType="catalog"
               />
-              {offlineMode && !isSearchMode ? (
+              {offlineMode && !isSearchMode && !humanOnly ? (
                 <MediaEmptyState
                   icon={CatalogIcon}
                   title="No downloads yet"
                   subtitle="Tracks you like, and tracks you play to the end, are saved on this device. They'll show up here and keep playing when you're offline."
+                />
+              ) : humanOnly && !isSearchMode ? (
+                <MediaEmptyState
+                  icon={CatalogIcon}
+                  title={offlineMode ? 'No human-made downloads yet' : 'No human-made tracks yet'}
+                  subtitle={offlineMode ? 'Human-made tracks you like, or play to the end, will show up here.' : 'Real artists are on their way. Upload your own music to be one of the first.'}
                 />
               ) : (
                 <MediaEmptyState
@@ -707,6 +738,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
                 onSortChange={setSortMode}
                 selectedGenre={selectedGenre}
                 onBackToGenres={handleBackToGenres}
+                humanOnly={humanOnly}
+                onToggleHuman={handleToggleHuman}
                 contentType="catalog"
               />
               <VirtualScroller
