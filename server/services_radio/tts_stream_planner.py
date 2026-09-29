@@ -10,12 +10,12 @@ class TTSStreamPlanner:
         text = re.sub(r'\[(BROADCAST|TXT)]', '', text).strip()
 
         if text.startswith('[IMPULSE]'):
-            current_speaker = random.choice(['tara', 'leo'])
+            current_speaker = random.choice(['jess', 'leo'])
             log_service.detail(f"IMPULSE detected - randomly chose: {current_speaker}", "tts_stream_planner")
         else:
-            first_speaker_match = re.search(r'\[(LEO|TARA)]', text)
+            first_speaker_match = re.search(r'\[(LEO|JESS)]', text)
             if not first_speaker_match:
-                error_msg = f"NO SPEAKER TAG FOUND! Text must start with [LEO] or [TARA]. Text: {text[:100]}"
+                error_msg = f"NO SPEAKER TAG FOUND! Text must start with [LEO] or [JESS]. Text: {text[:100]}"
                 log_service.error(error_msg)
                 raise ValueError(error_msg)
 
@@ -23,7 +23,7 @@ class TTSStreamPlanner:
             log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
 
         parts = re.split(
-            r'(\*[^*]+\*|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[TARA]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
+            r'(\*[^*]+\*|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
             text
         )
 
@@ -61,7 +61,7 @@ class TTSStreamPlanner:
                 current_overlap = overlap
                 continue
 
-            if part in ['[TARA]', '[LEO]']:
+            if part in ['[JESS]', '[LEO]']:
                 if current_sentence:
                     ordered_content.append({
                         'type': 'sentence',

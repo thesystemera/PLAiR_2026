@@ -77,7 +77,7 @@ SEGMENT_DATA_NODES = {
     'biography': 'data_biography',
     'lyrics': 'data_lyrics',
 }
-SEGMENT_HOSTS = {'weather': ('TARA', 'LEO')}
+SEGMENT_HOSTS = {'weather': ('JESS', 'LEO')}
 SEGMENT_SUBJECTS = {
     'news': ('the news wire', 'the news'),
     'weather': ('the weather feed', 'the weather'),
@@ -514,7 +514,7 @@ class DJPromptService:
         return bool(location.address or location.city) and not needs_coordinates
 
     async def _unavailable_segment(self, gpt_type: str, user_id, session_id=None) -> UnavailableSegment:
-        host, cohost = SEGMENT_HOSTS.get(gpt_type, ('LEO', 'TARA'))
+        host, cohost = SEGMENT_HOSTS.get(gpt_type, ('LEO', 'JESS'))
         subject, label = SEGMENT_SUBJECTS.get(gpt_type, ('that', 'that'))
         location_need = LOCATION_SEGMENTS.get(gpt_type)
         if location_need and not await self._listener_has_location(user_id, location_need[1], session_id):

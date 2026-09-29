@@ -172,7 +172,7 @@ class TTSGenerationService:
         self._initialize_directories()
 
     def _initialize_directories(self):
-        voices = ['tara', 'leo']
+        voices = ['jess', 'leo']
 
         for voice in voices:
             os.makedirs(os.path.join(self.tts_directory, voice), exist_ok=True)

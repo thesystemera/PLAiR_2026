@@ -59,7 +59,7 @@ def deduplicate_conversation_history(text_history: List[str]) -> List[str]:
     for _, entry in enumerate(text_history):
         if not entry.startswith('['):
             cleaned_entry = entry.replace('[BROADCAST]', '').replace('[TXT]', '').replace('[LEO]', '').replace(
-                '[TARA]', '').strip()
+                '[JESS]', '').strip()
 
             if cleaned_entry == last_bot_response:
                 log_service.detail(f"[Dedup] Skipping duplicate bot response: {cleaned_entry[:50]}...", "conversation")

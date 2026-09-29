@@ -34,7 +34,7 @@ from config.settings import settings
 )
 async def get_core_identity(**_) -> str:
     return (
-        "You are simulating a dynamic, casual interaction between [LEO] and [TARA], the co-hosts of PLAiR.fm, "
+        "You are simulating a dynamic, casual interaction between [LEO] and [JESS], the co-hosts of PLAiR.fm, "
         "a rebellious pirate radio station broadcasting from an undisclosed location.\n\n"
     )
 
@@ -51,7 +51,7 @@ async def get_format_roles_detailed(**_) -> str:
         "- [LEO] (a man, he/him) The main host and interactive live on-air DJ. Energetic, often impulsive, and leads most "
         "interactions. Quick wit and candid style keep listeners on their toes. Expects and encourages "
         "constant reactions and commentary.\n"
-        "- [TARA] (a woman, she/her) The laid-back co-host, but HIGHLY reactive. Known for dry humor, constant commentary, "
+        "- [JESS] (a woman, she/her) The laid-back co-host, but HIGHLY reactive. Known for dry humor, constant commentary, "
         "and inability to let statements pass without reaction. Jumps in frequently with both "
         "verbal and non-verbal responses, maintaining high energy interaction."
     )
@@ -109,7 +109,7 @@ async def get_format_channels(**_) -> str:
         "Rules:\n"
         "1. NEVER start without a channel tag\n"
         "2. Channels can be mixed - switch when context shifts between public/personal\n"
-        "3. Always follow channel tags with speaker tags ([LEO] or [TARA])"
+        "3. Always follow channel tags with speaker tags ([LEO] or [JESS])"
     )
 
 @node_registry.register(
@@ -295,7 +295,7 @@ async def get_format_meta_tag_examples(dj_service=None, **_) -> str:
 )
 async def get_format_dialogue_examples(**_) -> str:
     host_1 = '[LEO]'
-    host_2 = '[TARA]'
+    host_2 = '[JESS]'
 
     return (
         "DYNAMIC DIALOGUE EXAMPLE:\n"
@@ -378,7 +378,7 @@ async def get_instruction_announcements(transition_duration_ms: Optional[int] = 
             f"- Aim for approximately {seconds:.1f} seconds ({estimated_words} words) for this announcement.\n"
             "- Only count actual spoken words - all formatting tags (marked with [], *, %, $, @, &) are excluded from the word limit.\n"
             "- Try to stay close to this time limit for smooth transitions, but a slight variation is acceptable.\n"
-            "- Adapt your pacing and content to the transition length, but maintain the authentic voices of [LEO] and [TARA].\n"
+            "- Adapt your pacing and content to the transition length, but maintain the authentic voices of [LEO] and [JESS].\n"
             "- For shorter durations, prioritize essential information. For longer ones, add more detail and personality.\n"
             f"- Target around {estimated_words} spoken words, with a small margin of flexibility.\n\n"
             f"Remember, you're crafting an experience of roughly {seconds:.1f} seconds. "
@@ -528,7 +528,7 @@ async def get_data_news_report(query: Optional[str] = None, is_topic: bool = Fal
 )
 async def get_instruction_weather(**_) -> str:
     return (
-        "You are [TARA], the friendly and knowledgeable weather expert providing live weather updates for PLAiR.fm listeners. "
+        "You are [JESS], the friendly and knowledgeable weather expert providing live weather updates for PLAiR.fm listeners. "
         "Your goal is to make weather reports engaging, relatable, and easy to understand.\n\n"
         "GUIDELINES:\n"
         "1. Use natural, conversational language to describe the weather.\n"
@@ -714,7 +714,7 @@ async def get_instruction_dj_tools(**_) -> str:
         "- A lookup that came back empty means you don't know: say so plainly and move on. Never say you're 'pulling "
         "it up' or 'checking' unless a segment tool was actually scheduled.\n"
         "- Never mention tools, function names, ids, JSON or the studio computer's mechanics on air.\n"
-        "- The reply is the same live performance script as always: [BROADCAST]/[TXT] channels, [LEO]/[TARA] "
+        "- The reply is the same live performance script as always: [BROADCAST]/[TXT] channels, [LEO]/[JESS] "
         "speaker tags, overlapping @X@ time-shifts, &X& mic-proximity on every element, *paralanguage* and %audio% tags, "
         "then an optional [INTERNAL DIALOGUE], and always close with the [TASK] sign-off.\n\n"
         "UNTRUSTED DATA:\n"

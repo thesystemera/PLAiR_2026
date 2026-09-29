@@ -391,7 +391,7 @@ Real stations fill the short gaps between songs with station IDs, sweepers, jing
 - **Musical stings**: short hits, risers, endings and a sonic-logo phrase, cut from two Suno idents.
 - **Combinations**: an ID over a riser that lands on the hit, an ID over a sound-effects sweep, or an ID over the sonic logo.
 
-All of it is voiced by a third voice, the **station computer** (Orpheus `zac`, distinct from the hosts `leo` and `tara`). It runs through a radio-band EQ with a little ring modulation, comb and bitcrush, then a short slap and a small room, then the normal voice chain. It streams through the same DJ audio path as the hosts (`tts_type` "sting"), so it gets the same processing, plays only on the active device and ducks the music the same way.
+All of it is voiced by a third voice, the **station computer** (Orpheus `zac`, distinct from the hosts `leo` and `jess`). It runs through a radio-band EQ with a little ring modulation, comb and bitcrush, then a short slap and a small room, then the normal voice chain. It streams through the same DJ audio path as the hosts (`tts_type` "sting"), so it gets the same processing, plays only on the active device and ducks the music the same way.
 
 **When it plays** (defaults, all in `.env`)
 

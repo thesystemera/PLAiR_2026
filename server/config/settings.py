@@ -147,16 +147,16 @@ class Settings:
     TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-30"))
     TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-8"))
     VOICE_PREFERENCES: dict = {
-        "tara": {"orpheus_voice": "tara", "temperature": 0.7},
+        "jess": {"orpheus_voice": "jess", "temperature": 0.7},
         "leo": {"orpheus_voice": "leo", "temperature": 0.8},
         "station": {"orpheus_voice": "zac", "temperature": 0.6},
     }
 
     GENERATION_PERMISSIONS: dict = {
-        'meta': {'tara', 'leo'},
-        'impulse': {'tara', 'leo'},
-        'sentence': {'tara', 'leo'},
-        'breath': {'tara', 'leo'},
+        'meta': {'jess', 'leo'},
+        'impulse': {'jess', 'leo'},
+        'sentence': {'jess', 'leo'},
+        'breath': {'jess', 'leo'},
         'audio': set()
     }
 

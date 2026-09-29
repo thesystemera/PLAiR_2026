@@ -132,7 +132,7 @@ class AudioProcessingService:
 
         PAN_NOISE_SCALE = 0.02
         BASE_PAN_POSITIONS = {
-            'tara': -0.1,
+            'jess': -0.1,
             'leo': 0.1,
             'computer': 0
         }

@@ -200,7 +200,7 @@ class IncrementalBlend:
             start_time = sorted_times[i]
             end_time = sorted_times[i + 1]
             active_speakers = {
-                'tara': None,
+                'jess': None,
                 'leo': None,
                 'computer': None
             }
@@ -628,7 +628,7 @@ class TTSQueueManager:
                     )
 
                 speaker_intensities = {
-                    'tara': audio_process_mix if content_voice == 'tara' else None,
+                    'jess': audio_process_mix if content_voice == 'jess' else None,
                     'leo': audio_process_mix if content_voice == 'leo' else None,
                     'computer': audio_process_mix if content_voice == 'computer' else None
                 }

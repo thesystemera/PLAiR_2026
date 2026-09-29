@@ -40,8 +40,8 @@ class DJPromptSystemService:
 
     @gpt_error_handler
     async def generate_impulse_gpt_response(self, user_input, responding_voice):
-        responding_dj = "Tara" if responding_voice == "tara" else "Leo"
-        other_dj = "Leo" if responding_dj == "Tara" else "Tara"
+        responding_dj = "Jess" if responding_voice == "jess" else "Leo"
+        other_dj = "Leo" if responding_dj == "Jess" else "Jess"
 
         system_prompt = (
             f"You are {responding_dj}, one of the quick-witted DJs at PLAiR.fm, co-hosting with {other_dj}. "

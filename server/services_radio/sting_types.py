@@ -41,7 +41,7 @@ class StingRender:
 
 
 def voice_intensities() -> Dict:
-    return {"tara": None, "leo": None, "computer": None, "station": settings.STATION_PROCESS_MIX}
+    return {"jess": None, "leo": None, "computer": None, "station": settings.STATION_PROCESS_MIX}
 
 
 def to_output(audio: AudioSegment) -> AudioSegment:

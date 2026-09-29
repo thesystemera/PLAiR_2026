@@ -24,7 +24,7 @@ WebSocket Streaming to Frontend
 - **Runtime:** Orpheus-3B finetune (GGUF, default Q4_K_M) on llama.cpp CUDA, SNAC 24kHz decoder on ONNX Runtime.
 - **Launch:** The backend starts it via `server/services_radio/tts_engine_bootstrap.py` (set `TTS_SERVER_EXTERNAL=true` to manage it yourself).
 - **GPU:** Pinned to the Quadro P6000 via `CUDA_DEVICE_ORDER=PCI_BUS_ID` + `CUDA_VISIBLE_DEVICES=0` in `.env`.
-- **Voices:** Hosts are named after their Orpheus voices and hard-wired in `settings.VOICE_PREFERENCES`: Leo = `leo`, Tara = `tara`, station = `zac`, each with its own sampling temperature. No env overrides, no fallback voices.
+- **Voices:** Hosts are named after their Orpheus voices and hard-wired in `settings.VOICE_PREFERENCES`: Leo = `leo`, Jess = `jess`, station = `zac`, each with its own sampling temperature. No env overrides, no fallback voices.
 - **Emotion tags:** Inline `<laugh>`, `<chuckle>`, `<sigh>`, `<gasp>`, `<groan>`, `<yawn>`, `<cough>`, `<sniffle>`. "Meta" segments (non-verbal reactions) are generated with these tags.
 - **Sound effects:** `audio_effect_audio` segments are cache-only (no generation).
 - **Cache:** Rebuilds from Orpheus output. It was purged on 2026-09-28 after the end-of-speech/length-cap engine fix and the host rename.
@@ -41,7 +41,7 @@ WebSocket Streaming to Frontend
 - **High shelf (5kHz):** cut scales up with mix
 - **Low shelf (100Hz):** boost scales down with mix
 - **Reverb:** wet/dry levels scale with mix
-- **Panning:** per-speaker base position (tara -0.1, leo +0.1) with slow noise drift
+- **Panning:** per-speaker base position (jess -0.1, leo +0.1) with slow noise drift
 - 100ms fade in/out; mono input is upmixed to stereo; segments normalized if they exceed full scale
 
 ### Music Audio Pipeline (For Comparison)

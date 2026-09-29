@@ -198,7 +198,7 @@ class NewsSegment(RadioSegment):
     moods = ("news", "urgent", "steady")
     instruction = (
         "THE TOP-OF-THE-HOUR NEWS BULLETIN. [LEO] reads a tight bulletin of the headlines in SEGMENT DATA, most "
-        "important first: one or two sentences per story, plain facts, names and places exactly as given. [TARA] "
+        "important first: one or two sentences per story, plain facts, names and places exactly as given. [JESS] "
         "reacts briefly between stories. Open with a quick ident (\"PLAiR news, it's {hour}\"), close by handing back "
         "to the music. Keep the jokes off serious or tragic stories. Never add facts, numbers or quotes that are not "
         "in SEGMENT DATA."
@@ -263,7 +263,7 @@ class CitySegment(RadioSegment):
     tease_next_track = True
     moods = ("weather", "chill", "bright")
     instruction = (
-        "THE HALF-HOUR CITY UPDATE for {place}. [TARA] leads: the weather right now and what the next few hours "
+        "THE HALF-HOUR CITY UPDATE for {place}. [JESS] leads: the weather right now and what the next few hours "
         "look like, in everyday words (\"grab a jacket\", \"patio weather\"), then any cues in SEGMENT DATA (sunset or "
         "sunrise, air quality, pollen, the neighbourhood), then one thing on tonight if listed. [LEO] reacts "
         "and banters. Numbers only as given. Close by handing back to the music."
@@ -325,7 +325,7 @@ class LocalSegment(RadioSegment):
     instruction = (
         "LOCAL SCENE & GIGS around {place}. [LEO] leads a proper feature on two or three things from SEGMENT "
         "DATA: gigs and events (say the day and the venue exactly as given, and why it fits this listener's taste) "
-        "and, if listed, a local spot worth checking out. [TARA] reacts, has opinions, asks the obvious question. "
+        "and, if listed, a local spot worth checking out. [JESS] reacts, has opinions, asks the obvious question. "
         "Never invent prices, times or line-ups. Close by handing back to the music."
     )
 
@@ -433,7 +433,7 @@ class TriviaSegment(RadioSegment):
     instruction = (
         "BEHIND THE MUSIC FEATURE on {artist}, the artist credited on the track coming up next ({next_title}). The "
         "hosts tell the story from SEGMENT DATA: two or three facts, in their own words, like music nerds who can't "
-        "help themselves. [LEO] tells, [TARA] reacts and adds the punchline. Only facts from SEGMENT DATA. "
+        "help themselves. [LEO] tells, [JESS] reacts and adds the punchline. Only facts from SEGMENT DATA. "
         "Finish by throwing to the track."
     )
 

@@ -11,7 +11,7 @@ import { AudioInteractionManager } from '../lib/audioInteractionManager'
 const DEFAULT_COLOR = { r: 147, g: 51, b: 234 }
 
 const SPEAKER_COLORS = {
-  tara: { r: 0, g: 128, b: 255 },
+  jess: { r: 0, g: 128, b: 255 },
   leo: { r: 255, g: 0, b: 128 },
   computer: { r: 0, g: 255, b: 0 },
   station: { r: 255, g: 176, b: 0 }
