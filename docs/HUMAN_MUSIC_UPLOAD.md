@@ -24,7 +24,7 @@ Validate → save original → probe/decode → **fingerprint + duplicate check*
 
 ## Credits and artists
 
-- **Artist profiles** (`artist_profiles`, `services/artist_profile_service.py`, `routers/artists.py`): a user defines their bands once (User → Artists & Bands: name, bio, links). Uploads are credited to the chosen profile, else the last used, else the first, else one created from the username. Renaming a profile re-credits all its tracks.
+- **Artist profiles** (`artist_profiles`, `services/artist_profile_service.py`, `routers/artists.py`): a user defines their bands once (User → Artists & Bands: name, bio, links). Uploads are credited to the chosen profile, else the last used, else the first, else one created from the username. Renaming a profile re-credits all its tracks. Now Playing shows an "About <artist>" card under the title for tracks with a profile (bio, links, more from this artist; `GET /api/artists/{id}`, public tracks only). AI tracks have no profile, so no card.
 - **The credit** is `generation_params.artist_name` (mirrored in `track_info.artist`, plus `artist_profile_id` and `artist_slug`). Every view reads it. `derived_tags.inspired_artist` is only a "sounds like" comparison, never the credit. The DJ is told the track is by an independent human artist.
 - **Titles**: the uploader's title, else the embedded tag title (mutagen, stored as `embedded_tags`), else a real title in the filename, else the sung hook. Gemini receives the tags and filename as known facts.
 

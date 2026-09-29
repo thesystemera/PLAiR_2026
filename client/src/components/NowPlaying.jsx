@@ -1,6 +1,7 @@
 import {logger} from '../lib/logger'
 import {memo, useEffect, useRef, useState} from 'react'
-import { useArtwork, useUISelector } from '../contexts/UIStateContext'
+import { useArtwork, useArtworkThumb, useUISelector } from '../contexts/UIStateContext'
+import { usePlaybackActions } from '../contexts/PlaybackContext'
 import MediaActions from './MediaActions'
 import {PanelHeader} from './Panel'
 import {useGenerationQueue} from '../contexts/GenerationQueueContext'
@@ -11,7 +12,7 @@ import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
 import {artPop, watchOffscreen} from '../lib/microMotion'
-import {MessageSquareText} from 'lucide-react'
+import {ExternalLink, MessageSquareText, Music} from 'lucide-react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
 
@@ -181,6 +182,87 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+})
+
+const artistCache = new Map()
+
+const linkLabel = (url) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
+const ArtistTrackRow = memo(function ArtistTrackRow({ item, onPlay }) {
+  const thumb = useArtworkThumb(item.id, item.has_artwork)
+  return (
+    <button
+      type="button"
+      onClick={() => onPlay(item.id)}
+      className="ui-press w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors text-left"
+    >
+      <div className="w-10 h-10 rounded bg-white/10 flex items-center justify-center overflow-hidden flex-shrink-0">
+        {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" decoding="async" loading="lazy" /> : <Music size={16} className="text-white/50" />}
+      </div>
+      <span className="text-sm truncate">{item.title || 'Untitled'}</span>
+    </button>
+  )
+})
+
+const ArtistInfo = memo(function ArtistInfo({ artistId, currentTrackId }) {
+  const { playTrack } = usePlaybackActions()
+  const [artist, setArtist] = useState(() => (artistId ? artistCache.get(artistId) || null : null))
+
+  useEffect(() => {
+    if (!artistId) return
+    let cancelled = false
+    api.getArtist(artistId)
+      .then(data => {
+        if (!data) return
+        artistCache.set(artistId, data)
+        if (!cancelled) setArtist(data)
+      })
+      .catch(error => logger.warn('Failed to load artist info:', error))
+    return () => { cancelled = true }
+  }, [artistId])
+
+  const shown = artist && artist.id === artistId ? artist : (artistId ? artistCache.get(artistId) : null)
+  if (!shown) return null
+  const others = (shown.tracks || []).filter(item => item.id !== currentTrackId).slice(0, 5)
+  const links = shown.links || []
+  if (!shown.bio && links.length === 0 && others.length === 0) return null
+
+  return (
+    <div className="bg-white/5 p-4 rounded-lg mb-6">
+      <div className="text-xs text-gray-400 mb-2">About {shown.name}</div>
+      {shown.bio && <p className="text-sm text-gray-200 whitespace-pre-line break-words mb-3">{shown.bio}</p>}
+      {links.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {links.map(url => (
+            <a
+              key={url}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ui-press inline-flex items-center gap-1 px-3 py-1 bg-white/10 hover:bg-white/15 rounded-full text-xs text-gray-200 transition-colors"
+            >
+              {linkLabel(url)}
+              <ExternalLink size={12} />
+            </a>
+          ))}
+        </div>
+      )}
+      {others.length > 0 && (
+        <>
+          <div className="text-xs text-gray-400 mb-1">More from {shown.name}</div>
+          <div>
+            {others.map(item => <ArtistTrackRow key={item.id} item={item} onPlay={playTrack} />)}
+          </div>
+        </>
+      )}
     </div>
   )
 })
@@ -466,6 +548,8 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
           )}
           <p className="text-lg text-gray-400">{params.style_canonical || params.style || 'No style'}</p>
         </div>
+
+        {track.artist_profile_id && <ArtistInfo artistId={track.artist_profile_id} currentTrackId={track.id} />}
 
         {analytics && analytics.total_plays > 0 && (
           <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4 rounded-lg mb-6">

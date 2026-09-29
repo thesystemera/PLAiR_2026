@@ -1043,6 +1043,12 @@ class API {
     )
   }
 
+  async getArtist(artistId) {
+    return this._routeRequest('getArtist', [artistId], () =>
+      this._jsonRequest(`/artists/${encodeURIComponent(artistId)}`, 'GET', undefined, 'Could not load the artist')
+    )
+  }
+
   async updateUserTrack(trackId, updates) {
     return this._routeRequest('updateUserTrack', [trackId, updates], () =>
       this._jsonRequest(`/user/music/tracks/${encodeURIComponent(trackId)}`, 'PUT', updates, 'Could not save the change')

@@ -79,3 +79,17 @@ async def delete_artist(profile_id: int, current_user: User = Depends(get_curren
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "success"}
+
+
+@router.get("/api/artists/{profile_id}")
+async def get_artist(profile_id: int):
+    profile = await artists.get(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Artist not found")
+    catalog = services.catalog_service
+    hidden = getattr(catalog, "hidden_ids", set())
+    tracks = sorted((t for t in _tracks_for_profile(profile_id) if t.get("id") not in hidden),
+                    key=lambda t: t.get("created_at", ""), reverse=True)
+    return {"id": profile["id"], "name": profile["name"], "bio": profile["bio"], "links": profile["links"],
+            "tracks": [{"id": t.get("id"), "title": (t.get("generation_params") or {}).get("title"),
+                        "has_artwork": catalog.has_artwork(t.get("id")) if catalog else False} for t in tracks]}

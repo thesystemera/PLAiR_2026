@@ -974,6 +974,10 @@ class OfflineBackend {
     throw new Error('Deleting an artist requires an internet connection')
   }
 
+  async getArtist() {
+    return null
+  }
+
   async updateUserTrack() {
     throw new Error('Editing a track requires an internet connection')
   }
