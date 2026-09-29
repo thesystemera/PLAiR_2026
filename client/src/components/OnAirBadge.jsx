@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useUISelector } from '../contexts/UIStateContext'
 import { PRESETS } from '../lib/motion'
 import { ON_AIR_LAMP, getOnAirSegment } from '../lib/themeManager'
+import { NoticeChip } from './Notice'
 
 const LAMP_GLOW = `0 0 6px 2px ${ON_AIR_LAMP}d9, 0 0 14px 4px #f59e0b59`
 
@@ -55,6 +56,24 @@ const OnAirBadgeView = memo(function OnAirBadgeView({ talkBreak, className = '',
           <span className="text-red-100 font-bold">ON AIR</span>
           <span className="font-medium truncate" style={{ color: segment.color }}>· {segment.label}</span>
         </motion.span>
+      )}
+    </AnimatePresence>
+  )
+})
+
+export const OnAirNotice = memo(function OnAirNotice() {
+  const talkBreak = useUISelector(state => state.engineState.talkBreak)
+  const segment = getOnAirSegment(talkBreak)
+  return (
+    <AnimatePresence initial={false}>
+      {talkBreak && (
+        <motion.div key={talkBreak.id} layout="position" {...PRESETS.fadeSlide}>
+          <NoticeChip borderColor={`${segment.color}80`} title={talkBreak.title || segment.label}>
+            <OnAirLamp paused={talkBreak.paused} />
+            <span className="font-bold tracking-wide text-red-100">ON AIR</span>
+            <span className="font-medium truncate" style={{ color: segment.color }}>· {segment.label}</span>
+          </NoticeChip>
+        </motion.div>
       )}
     </AnimatePresence>
   )

@@ -11,7 +11,7 @@ export const NOTICE_TONES = {
 const NOTICE_BACKGROUND = { backgroundColor: 'rgba(10, 10, 12, 0.82)' }
 const WRAP_AFTER_CHARS = 52
 
-export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', borderClass, icon: Icon, iconClass = '', text, children, onClick, title }) {
+export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', borderClass, borderColor, icon: Icon, iconClass = '', text, children, onClick, title }) {
   const palette = NOTICE_TONES[tone] || NOTICE_TONES.neutral
   const wraps = typeof text === 'string' && text.length > WRAP_AFTER_CHARS
   const Tag = onClick ? 'button' : 'span'
@@ -24,7 +24,7 @@ export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', borderCla
       className={`pointer-events-auto inline-flex items-center gap-2 border px-3 py-1 text-xs text-left backdrop-blur-sm max-w-[min(92vw,26rem)] ${
         wraps ? 'rounded-2xl py-1.5' : 'rounded-full whitespace-nowrap'
       } ${borderClass || palette.border} ${onClick ? 'ui-press cursor-pointer' : ''}`}
-      style={NOTICE_BACKGROUND}
+      style={borderColor ? { ...NOTICE_BACKGROUND, borderColor } : NOTICE_BACKGROUND}
     >
       {Icon && <Icon className={`w-3.5 h-3.5 shrink-0 ${iconClass || palette.icon}`} aria-hidden="true" />}
       {text !== undefined && <span className={`font-semibold text-white/90 ${wraps ? 'leading-snug' : 'truncate'}`}>{text}</span>}

@@ -13,7 +13,6 @@ import { Conversation } from './Conversation'
 import { DJTextComposer } from './DJTextComposer'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
-import { OnAirBadge } from './OnAirBadge'
 import { registerKeyboardRecordingCallback } from './KeyboardControls'
 import { PanelHeader, TextRadioIcon } from './Panel'
 import { Scroller } from './Scroller'
@@ -150,7 +149,7 @@ export function Radio() {
     <div className="h-full w-full relative overflow-hidden flex flex-col">
       <GestureGuide />
 
-      <PanelHeader title={<h2 className="text-lg md:text-xl font-bold flex items-center gap-2 min-w-0">Radio<OnAirBadge compact /></h2>}>
+      <PanelHeader title={<h2 className="text-lg md:text-xl font-bold">Radio</h2>}>
         <div className="flex flex-wrap justify-end gap-1 min-w-0 ml-3">
            {['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
              const hasConversations = filterCounts[filter] > 0

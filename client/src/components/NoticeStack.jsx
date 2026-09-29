@@ -6,6 +6,7 @@ import { PRESETS } from '../lib/motion'
 import { NoticeChip, setNoticeSlot } from './Notice'
 import { ActivityChip } from './DJActivity'
 import { OfflinePill } from './OfflinePill'
+import { OnAirNotice } from './OnAirBadge'
 
 const TOAST_ICONS = {
   success: CheckCircle2,
@@ -30,6 +31,7 @@ export const NoticeStack = memo(function NoticeStack() {
       role="status"
       aria-live="polite"
     >
+      {!fullscreen && <OnAirNotice />}
       <div ref={setNoticeSlot} className="contents" />
       <OfflinePill />
       <AnimatePresence initial={false}>
