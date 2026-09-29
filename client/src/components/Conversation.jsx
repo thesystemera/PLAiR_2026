@@ -264,7 +264,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
   const sayCountRef = useRef(0)
   const uiSound = useUISound(window.audioEngine)
   const { token } = useAuth()
-  const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
+  const { toastError, radioInput } = useUISelector(state => ({ toastError: state.toastError, radioInput: state.interfaceState.radioInput }))
   const { playShoutout } = usePlaybackShoutout()
 
   const formatTimestamp = (ts) => {
@@ -878,7 +878,9 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
             <div className="text-gray-400">Loading conversation...</div>
           </div>
         ) : filteredConversations.length === 0 ? (
-          <div className="w-full min-h-[60vh] flex items-end justify-center pb-24 sm:pb-32">
+          <div className={radioInput === 'text'
+            ? 'w-full min-h-[55vh] flex items-center justify-center'
+            : 'w-full flex justify-center pt-16'}>
             <div className="text-center text-gray-400 max-w-xs mx-auto px-4">
               <MessageCircle className="w-8 h-8 sm:w-10 sm:h-10 mx-auto mb-2 opacity-30" />
               {conversations.length === 0 ? (

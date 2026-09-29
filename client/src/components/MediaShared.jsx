@@ -313,7 +313,7 @@ export const MediaCardCategoryBadge = memo(function MediaCardCategoryBadge({
 
   return (
     <div
-      className={`${positionClass} px-2 py-1 text-xs rounded-full text-white font-semibold z-20 ${className}`}
+      className={`${positionClass} px-2 py-1 text-xs whitespace-nowrap rounded-full text-white font-semibold z-20 ${className}`}
       style={{ backgroundColor: color }}
     >
       {label}

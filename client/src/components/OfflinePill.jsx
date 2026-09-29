@@ -1,16 +1,30 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CloudOff } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { PRESETS } from '../lib/motion'
 
+const OFFLINE_NOTICE_MS = 4000
+
 export const OfflinePill = memo(function OfflinePill() {
   const { audioState, interfaceState } = useUISelector(state => ({ audioState: state.audioState, interfaceState: state.interfaceState }))
   const { storageInfo } = useStorage()
   const count = storageInfo?.offlineTrackCount ?? storageInfo?.trackCount ?? 0
-  const visible = !!audioState.offlineMode && !interfaceState.isFullscreenVisuals
+  const offline = !!audioState.offlineMode
+  const [announced, setAnnounced] = useState(false)
   const noNetwork = audioState.connectionMode === 'offline'
+
+  useEffect(() => {
+    if (!offline) return
+    const timer = setTimeout(() => setAnnounced(true), OFFLINE_NOTICE_MS)
+    return () => {
+      clearTimeout(timer)
+      setAnnounced(false)
+    }
+  }, [offline])
+
+  const visible = offline && !announced && !interfaceState.isFullscreenVisuals
 
   return (
     <OfflinePillView visible={visible} count={count} noNetwork={noNetwork} />
@@ -18,7 +32,7 @@ export const OfflinePill = memo(function OfflinePill() {
 })
 
 const OfflinePillView = memo(function OfflinePillView({ visible, count, noNetwork }) {
-  const label = count > 0 ? `Offline · playing your downloads (${count})` : 'Offline · no downloads yet'
+  const label = count > 0 ? `Offline · ${count} downloads` : 'Offline · no downloads'
   const title = noNetwork
     ? 'No internet connection. Your downloads keep playing, and likes sync when you are back online.'
     : 'PLAiR can\'t be reached right now. Your downloads keep playing, and likes sync when it is back.'
@@ -29,11 +43,11 @@ const OfflinePillView = memo(function OfflinePillView({ visible, count, noNetwor
         <motion.div
           key="offline-pill"
           {...PRESETS.fadeSlide}
-          className="fixed left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+          className="fixed left-1/2 -translate-x-1/2 z-[110] pointer-events-none"
           style={{ top: 'calc(var(--safe-top) + 0.5rem)' }}
         >
           <span
-            className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold whitespace-nowrap text-amber-100 pointer-events-auto"
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap text-amber-100 pointer-events-auto"
             style={{ borderColor: 'rgba(245, 158, 11, 0.5)', backgroundColor: 'rgba(10, 10, 12, 0.82)' }}
             title={title}
             role="status"

@@ -750,7 +750,7 @@ export const GLASS = {
 export const UI_FULLSCREEN = {
   autoHideDelay: 2000,
   fadeDuration: 0.5,
-  radioGlassOpacity: 0.35
+  radioGlassOpacity: 0
 }
 
 export const BUTTON = {

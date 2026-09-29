@@ -7,6 +7,8 @@ const BREAKPOINTS = { xs: 0, sm: 640, md: 768, lg: 1024, xl: 1440, '2xl': 1920, 
 
 const SHORT_VIEWPORT_MAX_HEIGHT = 500
 
+export const UI_TEXT_SCALE = 0.94
+
 const getBp = (w) => {
   if (w >= BREAKPOINTS['3xl']) return '3xl'
   if (w >= BREAKPOINTS['2xl']) return '2xl'
@@ -79,7 +81,7 @@ export function ViewportProvider({ children }) {
   useLayoutEffect(() => {
     const w = viewport.width
     const scale = w < BREAKPOINTS.lg ? 1 : w >= 3840 ? 1.0 : w >= BREAKPOINTS['3xl'] ? 0.85 : w >= BREAKPOINTS['2xl'] ? 0.7 : w >= BREAKPOINTS.xl ? 0.75 : 0.8
-    document.documentElement.style.fontSize = `${scale * 100}%`
+    document.documentElement.style.fontSize = `${scale * UI_TEXT_SCALE * 100}%`
   }, [viewport.width])
 
   const value = useMemo(() => {

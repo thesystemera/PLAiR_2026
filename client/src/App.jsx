@@ -962,14 +962,14 @@ function App() {
                         </>
                       ) : (
                         <>
-                          {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
+                          {id === PANEL_IDS.CATALOG && catalogView === 'shoutouts'
                             ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon(navIconClass)
                             : id === PANEL_IDS.RADIO && radioInput === 'text'
                               ? <TextRadioIcon className={navIconClass} />
                               : config.mobileIcon(navIconClass)
                           }
                           <span className={isPhoneLandscape ? 'text-[10px] leading-tight' : 'text-xs'}>
-                            {id === PANEL_IDS.CATALOG && isMobile && isActive && catalogView === 'tracks'
+                            {id === PANEL_IDS.CATALOG && catalogView === 'shoutouts'
                               ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileLabel
                               : id === PANEL_IDS.RADIO && radioInput === 'text'
                                 ? 'Text'

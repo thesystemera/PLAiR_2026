@@ -64,7 +64,7 @@ export const MediaSearch = memo(function MediaSearch({
   const placeholderText = compact
     ? 'Search...'
     : type === 'track'
-      ? 'Search tracks or speak...'
+      ? 'Search or speak...'
       : 'Search shoutouts or speak...'
 
   const actionButtonSize = compact ? 'w-8 h-8' : 'w-9 h-9'

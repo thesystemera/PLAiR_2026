@@ -72,11 +72,9 @@ export default function ToastContainer() {
   const {
     toasts,
     interfaceState,
-    audioState,
   } = useUISelector(state => ({
     toasts: state.toasts,
     interfaceState: state.interfaceState,
-    audioState: state.audioState,
   }))
   const { isMobile, isPhoneLandscape } = useViewport()
   const bottomOffset = interfaceState.playerHeight + (isMobile && !isPhoneLandscape ? 64 : 0) + 12
@@ -86,7 +84,7 @@ export default function ToastContainer() {
 
   return (
     <>
-      <div className="fixed left-1/2 -translate-x-1/2 z-[100] pointer-events-none" style={{ top: audioState.offlineMode && !interfaceState.isFullscreenVisuals ? 'calc(var(--safe-top) + 3rem)' : 'calc(var(--safe-top) + 1rem)' }}>
+      <div className="fixed left-1/2 -translate-x-1/2 z-[100] pointer-events-none" style={{ top: 'calc(var(--safe-top) + 1rem)' }}>
         <div className="pointer-events-auto">
           <AnimatePresence mode="popLayout">
             {topToasts.map(toast => (

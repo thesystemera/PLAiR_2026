@@ -14,7 +14,7 @@ const SILENT_FFT = new Array(32).fill(0)
 const numPoints = 32
 
 const SEARCH_SIZE_CONFIG = {
-  containerSize: 'w-10 h-10',
+  containerSize: 'w-9 h-9',
   scale: { normal: 1, hover: 1.1, recording: 1.15 },
   iconSize: 'w-5 h-5',
   baseRadius: 15,
@@ -430,7 +430,7 @@ export function InteractiveEngagementButton({
               ? `scale(${sizeConfig.scale.hover})`
               : `scale(${sizeConfig.scale.normal})`,
           transition: CSS_TRANSITION.springyPress,
-          background: buttonType === 'search' ? 'rgba(0,0,0,0.2)' : 'transparent',
+          background: buttonType === 'search' ? 'rgb(55, 65, 81)' : 'transparent',
           WebkitTapHighlightColor: 'transparent',
           touchAction: 'none'
         }}

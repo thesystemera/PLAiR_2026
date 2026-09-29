@@ -125,7 +125,7 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
             onPointerDown={interaction.onPointerDown}
             onPointerMove={interaction.onPointerMove}
             onPointerUp={(e) => handleAction(e, actionType, interaction)}
-            className={`ui-tap relative ${buttonPadding} rounded-lg ${active ? activeClassName : ''}`}
+            className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg ${active ? activeClassName : ''}`}
             style={active ? activeStyle : baseButtonStyle}
             onMouseEnter={(e) => !active && Object.assign(e.currentTarget.style, hoverStyle)}
             onMouseLeave={(e) => !active && Object.assign(e.currentTarget.style, baseButtonStyle)}
