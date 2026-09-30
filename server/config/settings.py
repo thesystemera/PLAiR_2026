@@ -434,6 +434,8 @@ class Settings:
     WEB_REST_S: int = int(os.getenv("WEB_REST_S", str(6 * 3600)))
     WEB_RATE_LIMIT_REST_S: int = int(os.getenv("WEB_RATE_LIMIT_REST_S", "900"))
     WEB_ROBOTS_TTL_S: int = int(os.getenv("WEB_ROBOTS_TTL_S", str(24 * 3600)))
+    WEB_IDENTITY_REQUESTS: int = int(os.getenv("WEB_IDENTITY_REQUESTS", "150"))
+    WEB_USER_AGENTS: tuple = tuple(a.strip() for a in os.getenv("WEB_USER_AGENTS", "").split("|") if a.strip())
     WEATHER_CACHE_S: int = int(os.getenv("WEATHER_CACHE_S", "1800"))
     WEATHER_PERSIST_ENABLED: bool = os.getenv("WEATHER_PERSIST_ENABLED", "true").lower() == "true"
     BIOGRAPHY_PERSIST_ENABLED: bool = os.getenv("BIOGRAPHY_PERSIST_ENABLED", "true").lower() == "true"

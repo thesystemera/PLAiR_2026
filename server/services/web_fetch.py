@@ -10,10 +10,23 @@ import httpx
 
 from config import settings
 from services import log_service, usage_tracking
-from services.http_client import USER_AGENT, fetch
+from services.http_client import USER_AGENT, fetch, get_http_client
 
 BROWSER_ACCEPT = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                   "Accept-Language": "en;q=0.9"}
+BROWSER_AGENTS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 "
+    "Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 "
+    "Edg/151.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:155.0) Gecko/20100101 Firefox/155.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 "
+    "Safari/605.1.15",
+)
+BROWSER_LANGUAGES = ("en-NZ,en;q=0.9", "en-US,en;q=0.9", "en-GB,en;q=0.9", "en-AU,en;q=0.9,en-US;q=0.8")
 RETRY_STATUSES = {500, 502, 503, 504}
 BLOCKED_STATUSES = {401, 403, 451}
 
@@ -38,6 +51,7 @@ class HostPolicy:
     daily_cap: int = 0
     robots: bool = False
     rest_after_failures: int = 0
+    rotate: bool = False
 
 
 @dataclass
@@ -52,18 +66,20 @@ class _Host:
     used_today: int = 0
     robots: Optional[RobotFileParser] = None
     robots_at: float = 0.0
+    identity: Optional[dict] = None
+    identity_uses: int = 0
 
 
 def page_policy() -> HostPolicy:
     return HostPolicy(gap_s=settings.WEB_PAGE_GAP_S, jitter_s=settings.WEB_PAGE_JITTER_S,
                       parallel=settings.WEB_PAGE_PARALLEL, robots=True,
-                      rest_after_failures=settings.WEB_REST_AFTER_FAILURES)
+                      rest_after_failures=settings.WEB_REST_AFTER_FAILURES, rotate=True)
 
 
 def google_news_policy() -> HostPolicy:
     return HostPolicy(gap_s=settings.WEB_GOOGLE_NEWS_GAP_S, jitter_s=settings.WEB_GOOGLE_NEWS_JITTER_S,
                       parallel=1, daily_cap=settings.WEB_GOOGLE_NEWS_DAILY_CAP,
-                      rest_after_failures=settings.WEB_REST_AFTER_FAILURES)
+                      rest_after_failures=settings.WEB_REST_AFTER_FAILURES, rotate=True)
 
 
 MUSICBRAINZ = HostPolicy(gap_s=1.1, parallel=1)
@@ -81,6 +97,33 @@ def _host(name: str, policy: HostPolicy) -> _Host:
 def resting(url: str) -> bool:
     state = _hosts.get(urlsplit(url).netloc.lower())
     return state is not None and time.monotonic() < state.resting_until
+
+
+def _forget_cookies(name: str) -> None:
+    jar = get_http_client().cookies.jar
+    for domain in {cookie.domain for cookie in jar if name.endswith(cookie.domain.lstrip("."))}:
+        try:
+            jar.clear(domain)
+        except KeyError:
+            pass
+
+
+def _new_identity(name: str, state: _Host) -> None:
+    agents = settings.WEB_USER_AGENTS or BROWSER_AGENTS
+    current = (state.identity or {}).get("User-Agent")
+    state.identity = {"User-Agent": random.choice([a for a in agents if a != current] or list(agents)),
+                      "Accept-Language": random.choice(BROWSER_LANGUAGES), "Upgrade-Insecure-Requests": "1"}
+    state.identity_uses = 0
+    _forget_cookies(name)
+
+
+def _identity(name: str, state: _Host, policy: HostPolicy) -> dict:
+    if not policy.rotate:
+        return {}
+    if state.identity is None or state.identity_uses >= settings.WEB_IDENTITY_REQUESTS:
+        _new_identity(name, state)
+    state.identity_uses += 1
+    return state.identity
 
 
 def _rest(name: str, state: _Host, seconds: float, why: str) -> None:
@@ -147,7 +190,7 @@ async def request(method: str, url: str, policy: HostPolicy, usage: Optional[tup
         raise HostResting(f"{name} is resting")
     if policy.daily_cap and state.used_today >= policy.daily_cap:
         raise HostResting(f"{name} reached its daily cap of {policy.daily_cap}")
-    headers = {**BROWSER_ACCEPT, **kwargs.pop("headers", {})}
+    extra = kwargs.pop("headers", {})
     async with state.gate:
         if policy.robots and not await _allowed(url, name, state):
             raise Disallowed(f"{name} robots.txt disallows this page")
@@ -155,6 +198,7 @@ async def request(method: str, url: str, policy: HostPolicy, usage: Optional[tup
         for attempt in range(retries + 1):
             await _paced(state, policy)
             state.used_today += 1
+            headers = {**BROWSER_ACCEPT, **_identity(name, state, policy), **extra}
             try:
                 response = await fetch(method, url, retries=0, headers=headers, **kwargs)
             except (httpx.HTTPError, OSError):
@@ -168,6 +212,8 @@ async def request(method: str, url: str, policy: HostPolicy, usage: Optional[tup
                     _record(usage, True)
                     _rest(name, state, _retry_after(response) or
                           settings.WEB_RATE_LIMIT_REST_S * 2 ** min(state.limited - 1, 3), "rate limited")
+                    if policy.rotate:
+                        _new_identity(name, state)
                     raise RateLimited(f"{name} is rate limiting")
                 if response.status_code not in RETRY_STATUSES or attempt == retries:
                     ok = response.status_code < 400

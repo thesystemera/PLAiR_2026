@@ -495,10 +495,10 @@ City charts belong to the same layer: what a region played, liked and banned thi
 Every collector that scrapes or reads pages goes through one layer, `services/web_fetch.py`, taken from what worked in Market Wizard. APIs with keys (Ticketmaster, Google Places, OpenWeatherMap) keep their own quotas and budgets.
 
 - **Store first.** Check what we already have before any request: remembered links, the same headline, a stored page. Most repeats cost nothing.
-- **One polite client per site.** Requests are spaced (a gap plus random jitter), with a small parallel cap per site. Network errors and 5xx retry with exponential back-off and jitter. One cookie session, an honest user agent, no disguises.
+- **One polite client per site.** Requests are spaced (a gap plus random jitter), with a small parallel cap per site. Network errors and 5xx retry with exponential back-off and jitter. Scraped sites each see one consistent browser visitor (user agent + language, kept with that site's cookies), rotated every `WEB_IDENTITY_REQUESTS` requests and after a 429, as Market Wizard did; one visitor hammering a site is what gets blocked. APIs with terms (MusicBrainz) keep PLAiR's own user agent.
 - **Back off centrally.** A 429 or Google's "sorry" page rests that site for Retry-After, else `WEB_RATE_LIMIT_REST_S`, doubling on repeats. Repeated failures (including pages that yield nothing) rest it for `WEB_REST_S`. Every caller sees the rest at once, so no job keeps hammering a site that said stop.
 - **Budgets.** Each site policy can carry a daily cap (Google News lookups: `WEB_GOOGLE_NEWS_DAILY_CAP`). Every request is reported to usage tracking.
-- **robots.txt** is honoured for page reads (cached a day). Sites that refuse us stay refused: no stealth browsers or rotating fake identities.
+- **robots.txt** is honoured for page reads (cached a day). A site that answers 403 is recorded as blocked and rested.
 - **Extract little, keep it useful.** Keep the publisher's description and the opening sentences, never whole articles. Vectorise what listeners ask about (title, tags, summary, place, outlet).
 - **LLM work is DeepSeek.** Enrichment that isn't answering a listener right now (ranking, tagging, placing stories) runs on the `LLM_BACKGROUND` chain (DeepSeek, Gemini only as fallback). Open: Radio Mode's For You agent still runs on Gemini, because the tool loop is Gemini-only.
 
