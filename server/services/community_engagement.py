@@ -124,9 +124,12 @@ class CommunityEngagement:
         history.append((now, shoutout_id))
         self._aired[session_id] = history[-20:]
 
-    def last_aired(self, session_id: Optional[str]) -> List[str]:
+    def aired_log(self, session_id: Optional[str]) -> List[Tuple[float, str]]:
         now = time.time()
-        return [sid for t, sid in reversed(self._aired.get(session_id or "", [])) if now - t < AIRED_TTL_S]
+        return [(now - t, sid) for t, sid in reversed(self._aired.get(session_id or "", [])) if now - t < AIRED_TTL_S]
+
+    def last_aired(self, session_id: Optional[str]) -> List[str]:
+        return [sid for _, sid in self.aired_log(session_id)]
 
     async def record_on_air_play(self, shoutout_id: str, session_id: Optional[str], user_id: Optional[int]):
         if session_id:

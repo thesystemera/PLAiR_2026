@@ -35,6 +35,11 @@ Added:
   go through `preferences_service.apply_radio_settings` (now also what `PUT /api/radio-mode` calls); guests get a
   `radio_mode_updated` patch that the client merges and stores (`PreferencesContext`).
 
+Which post: every DJ turn carries the `community_recently_aired` live node, the last `DJ_AIRED_POSTS_SHOWN` (5)
+shoutouts, replies and reviews that played for this listener (id, kind, who, song, minutes ago, first words), from
+`community_engagement.aired_log`. The hosts match the listener's words to one and pass its id to `rate_track` or
+`save_shoutout_reply`; with no id the tools act only when a single post has played, otherwise they say so.
+
 Tested live on port 8011 (test account and a guest): restart, seek, remove next, like a track, radio settings
 change and read, device list, move to a device that isn't online, reviews of the current track, own posts, seed
 from the previous track, play shoutouts then like the one that aired, guest refusals. Not tested: a real move

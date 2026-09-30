@@ -158,6 +158,7 @@ class DJPromptService:
                     'instruction_dj_tools',
                     'tool_guidance',
                     'station_recent_airings',
+                    'community_recently_aired',
                     'studio_clock',
                     'city_pulse'
                 ],
