@@ -6,6 +6,7 @@ from services_radio.conversation_service import save_conversation_to_database
 from services_radio import listener_location as location_resolver
 from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
+from services_radio.tts_stream_planner import spoken_text
 from services.task_utils import spawn
 from database.models import User
 from services import log_service
@@ -538,6 +539,13 @@ class CommandExecutorService:
             await self.sio.emit('conversation_update', {feedback_key: feedback_msg, 'message_type': message_type},
                                 room=session_id)
 
+        if not spoken_text(script):
+            async with self.async_session_maker() as db:
+                await save_conversation_to_database(user_id, db, bot_response=script, message_type=message_type)
+            if session_id:
+                await self.sio.emit('conversation_update', {'bot_response': script, 'message_type': message_type},
+                                    room=session_id)
+            return
         await self.tts_queue_manager.add_tts_request(script, user_id, message_type, is_broadcast=True,
                                                      is_temp_user=not user_id, session_id=session_id)
         if not isinstance(gpt_response, UnavailableSegment):

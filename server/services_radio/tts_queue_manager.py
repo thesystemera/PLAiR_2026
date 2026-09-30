@@ -11,6 +11,7 @@ from typing import List, Dict, Optional, Tuple
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
+from services import listener_timeline
 from services.task_utils import spawn
 from services_radio.tts_broadcast_service import TimelineMixer, limit_peaks, CLIP_CHUNK_MS
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GENERATED_TYPES
@@ -28,6 +29,20 @@ SPOKEN_CHARS_PER_S = 16.0
 FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 PACE_KIND = {'announcer': 'announcer', 'interactive': 'chat', 'sting': None, 'shoutouts': None}
+
+RADIO_BREAK_TYPE = 'radio_segment'
+
+
+def plain_script(spoken: List[Dict]) -> str:
+    parts, last = [], None
+    for segment in spoken:
+        speaker = (segment.get('speaker') or '').upper()
+        if speaker and speaker != last:
+            parts.append(f"[{speaker}]")
+            last = speaker
+        parts.append((segment.get('content') or '').strip())
+    return " ".join(part for part in parts if part)
+
 
 TTS_TYPE_LABELS = {
     'interactive': 'chat reply',
@@ -470,6 +485,10 @@ class TTSQueueManager:
                 else:
                     await encoder.cancel()
 
+            if completed and spoken and tts_type != RADIO_BREAK_TYPE and not text.startswith("[IMPULSE]"):
+                spawn(listener_timeline.record_talk(
+                    int(owner) if owner.isdigit() else None, owner, tts_type, plain_script(spoken),
+                    seconds=encoder.fed_seconds), name=f"aired_talk:{owner}")
             if completed:
                 talk_clock.meter.note(
                     PACE_KIND.get(tts_type, 'segment'),

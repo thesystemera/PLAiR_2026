@@ -1,6 +1,6 @@
 # Listener timeline: what aired for this listener
 
-Written 30 Sep 2026. Status: phase 1 built and tested on a private backend (1 Oct). Phases 2-4 are open; the "recently heard" view in the app (phase 4) is on the to-do list once the rest is in place: the owner wants it as the at-a-glance check that the timeline is accurate.
+Written 30 Sep 2026. Status: phases 1 and 2 built and tested on a private backend (1 Oct). Phases 3-4 are open; the "recently heard" view in the app (phase 4) is on the to-do list once the rest is in place: the owner wants it as the at-a-glance check that the timeline is accurate.
 
 ## The problem
 
@@ -74,6 +74,26 @@ guessing.
 - Seen in testing: for "two songs ago" the hosts picked the track one back and said its title on air. The
   timeline was right; the counting is the model's.
 
+## Phase 2 as built (1 Oct)
+
+- New table `aired_talk` (`database/models.AiredTalk`: user_id, session_id, kind, label, text, seconds,
+  aired_at), kept `DJ_TIMELINE_KEEP_DAYS` (30). `play_events` is untouched, so charts and top hits see nothing new.
+- Everything the hosts voice is written there as plain text with speaker names, at the one place a voice stream
+  finishes airing (`TTSQueueManager._generate_tts_stream` -> `listener_timeline.record_talk`): produced segments
+  (news, weather, events, places, biography, lyrics, shoutouts), chat replies and between-track talk. Radio Mode
+  talk breaks are rendered ahead, so they are recorded when they go on air (`radio_mode_service`,
+  `talk_break_start`). Cancelled streams, fillers and stings are not recorded.
+- Timeline kinds `segment` (produced segments and talk breaks) and `talk` (chat replies, between-track lines).
+  `what_aired` lists segments by default and talk only when asked for; an entry shows how it opened, and
+  `what_aired(id=...)` returns everything that was said (`talk_detail`, the listener's own entries only).
+- Tested live as a guest: a news bulletin and a weather forecast aired and were recorded; "run me through
+  everything I've heard" listed them with the chat replies; the full text of a segment reads back; another
+  listener can't read it. For questions about the last few minutes the hosts answered from the conversation
+  already in their context, without the tool. Not tested: Radio Mode talk breaks in the timeline, and the hosts
+  calling `what_aired(id=...)` themselves in a turn.
+- This table is the base for phase 3's "what were you talking about five hours ago": a semantic source over
+  `aired_talk` (the LifeSpan conversation-vector pattern) would let the hosts search it by meaning.
+
 ## Phases
 
 1. **Timeline read + `what_aired`, tracks and listener posts.** Closes the shoutout hole and gives "the song
@@ -82,8 +102,10 @@ guessing.
 2. **Segments.** Record each aired segment (kind, one-line label, the ids it used) as a timeline entry for
    guests and users. This needs a small new write, since `conversations` only covers signed-in listeners and
    holds a full script, not a label. Gives "what was that gig", "say that headline again".
-3. **Fold the other ledgers in, one at a time:** the 30-minute aired list, the hosts' recent-airings memory,
-   and possibly the news and pulse "already aired" ledgers read from the same place.
+3. **Search what the hosts said by meaning** (owner keen, 1 Oct): a semantic source over `aired_talk`, so
+   "what were you on about this morning" finds it without paging through the list. Then fold the other ledgers
+   in, one at a time: the 30-minute aired list, the hosts' recent-airings memory (`content_bank._airings`), and
+   possibly the news and pulse "already aired" ledgers read from the same place.
 4. **Optional: a "recently heard" view in the app** on the same read.
 
 ## Decisions for the owner

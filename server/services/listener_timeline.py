@@ -1,21 +1,44 @@
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
+from config.settings import settings
 from database import AsyncSessionLocal, PlayEvent
+from database.models import AiredTalk
 from services import log_service
 from services.analytics_service import analytics_service
 from services.user_content_database_service import kind_of, KINDS
 
 KIND_TRACK = "track"
-TIMELINE_KINDS = (KIND_TRACK,) + tuple(KINDS)
+KIND_SEGMENT = "segment"
+KIND_TALK = "talk"
+PLAYED_KINDS = (KIND_TRACK,) + tuple(KINDS)
+TIMELINE_KINDS = PLAYED_KINDS + (KIND_SEGMENT, KIND_TALK)
+DEFAULT_KINDS = PLAYED_KINDS + (KIND_SEGMENT,)
 START_EVENT = "play"
 OUTCOMES = {"complete": "played through", "skip": "skipped"}
 ROWS_PER_ENTRY = 3
 MAX_ROWS = 2000
 POST_TEXT_CHARS = 120
+TALK_TEXT_CHARS = 160
+TALK_ID_PREFIX = "aired:"
+PRUNE_EVERY_S = 3600.0
+TALK_STREAMS = {"interactive": "chat reply", "announcer": "between-track talk"}
+SEGMENT_STREAMS = {
+    "news": "news bulletin",
+    "weather": "weather forecast",
+    "events": "gig guide",
+    "location_search": "places rundown",
+    "biography": "artist story",
+    "lyrics": "lyrics breakdown",
+    "shoutouts": "listener shoutouts segment",
+    "radio_segment": "talk break",
+}
+
+_last_prune = 0.0
 
 
 @dataclass
@@ -34,8 +57,8 @@ class TimelineEntry:
         return entry
 
 
-def _mine(user_id: Optional[int], session_id: Optional[str]):
-    return PlayEvent.user_id == int(user_id) if user_id else PlayEvent.session_id == session_id
+def _mine(model, user_id: Optional[int], session_id: Optional[str]):
+    return model.user_id == int(user_id) if user_id else model.session_id == session_id
 
 
 def _buffered(user_id: Optional[int], session_id: Optional[str], since: datetime) -> List[Dict[str, Any]]:
@@ -53,7 +76,7 @@ async def _stored(user_id: Optional[int], session_id: Optional[str], since: date
     async with AsyncSessionLocal() as db:
         found = (await db.execute(
             select(PlayEvent.started_at, PlayEvent.track_id, PlayEvent.event_type)
-            .where(_mine(user_id, session_id), PlayEvent.started_at >= since)
+            .where(_mine(PlayEvent, user_id, session_id), PlayEvent.started_at >= since)
             .order_by(PlayEvent.started_at.desc()).limit(rows))).all()
     return [{"at": at, "id": item_id, "event": event} for at, item_id, event in found]
 
@@ -92,20 +115,50 @@ def _entries(events: Iterable[Dict[str, Any]]) -> List[TimelineEntry]:
     return entries
 
 
+async def _played(user_id: Optional[int], session_id: Optional[str], since: datetime, wanted: set,
+                  limit: int) -> List[TimelineEntry]:
+    recent = _buffered(user_id, session_id, since)
+    rows = limit * ROWS_PER_ENTRY
+    while True:
+        stored = await _stored(user_id, session_id, since, rows)
+        entries = [entry for entry in _entries(stored + recent) if entry.kind in wanted]
+        if len(entries) >= limit or len(stored) < rows or rows >= MAX_ROWS:
+            return entries
+        rows *= 4
+
+
+def _talk_kind(stream: str) -> str:
+    return KIND_TALK if stream in TALK_STREAMS else KIND_SEGMENT
+
+
+def _talk_label(row) -> str:
+    name = row.label or SEGMENT_STREAMS.get(row.kind) or TALK_STREAMS.get(row.kind) or row.kind
+    return f"{name}: \"{row.text[:TALK_TEXT_CHARS]}{'...' if len(row.text) > TALK_TEXT_CHARS else ''}\""
+
+
+async def _talked(user_id: Optional[int], session_id: Optional[str], since: datetime, wanted: set,
+                  limit: int) -> List[TimelineEntry]:
+    streams = [stream for stream in list(SEGMENT_STREAMS) + list(TALK_STREAMS) if _talk_kind(stream) in wanted]
+    if not streams:
+        return []
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(AiredTalk).where(_mine(AiredTalk, user_id, session_id), AiredTalk.aired_at >= since,
+                                    AiredTalk.kind.in_(streams))
+            .order_by(AiredTalk.aired_at.desc()).limit(limit))).scalars().all()
+    return [TimelineEntry(row.aired_at, _talk_kind(row.kind), f"{TALK_ID_PREFIX}{row.id}", _talk_label(row))
+            for row in rows]
+
+
 async def timeline(user_id: Optional[int], session_id: Optional[str], kinds: Optional[Iterable[str]] = None,
                    minutes: float = 120, limit: int = 10) -> List[TimelineEntry]:
     if not user_id and not session_id:
         return []
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    wanted = set(kinds or ())
-    recent = _buffered(user_id, session_id, since)
-    rows = limit * ROWS_PER_ENTRY
-    while True:
-        stored = await _stored(user_id, session_id, since, rows)
-        entries = [entry for entry in _entries(stored + recent) if not wanted or entry.kind in wanted]
-        if len(entries) >= limit or len(stored) < rows or rows >= MAX_ROWS:
-            break
-        rows *= 4
+    wanted = set(kinds or DEFAULT_KINDS)
+    entries = await _talked(user_id, session_id, since, wanted, limit)
+    if wanted & set(PLAYED_KINDS):
+        entries += await _played(user_id, session_id, since, wanted, limit)
     from service_registry import services
     playback = services.playback_service
     state = playback.get_state(session_id) if playback is not None and session_id else None
@@ -116,3 +169,38 @@ async def timeline(user_id: Optional[int], session_id: Optional[str], kinds: Opt
             entry.outcome = "on air now"
             break
     return newest_first
+
+
+async def talk_detail(user_id: Optional[int], session_id: Optional[str], entry_id: str) -> Optional[Dict[str, Any]]:
+    key = entry_id.removeprefix(TALK_ID_PREFIX)
+    if not key.isdigit() or (not user_id and not session_id):
+        return None
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(select(AiredTalk).where(AiredTalk.id == int(key),
+                                                        _mine(AiredTalk, user_id, session_id)))).scalar_one_or_none()
+    if row is None:
+        return None
+    return {"id": entry_id, "kind": _talk_kind(row.kind),
+            "what": row.label or SEGMENT_STREAMS.get(row.kind) or TALK_STREAMS.get(row.kind) or row.kind,
+            "min_ago": max(0, round((datetime.now(timezone.utc) - row.aired_at).total_seconds() / 60)),
+            "said": row.text}
+
+
+async def record_talk(user_id: Optional[int], session_id: Optional[str], stream: str, text: str,
+                      label: str = "", seconds: float = 0.0) -> None:
+    global _last_prune
+    text = (text or "").strip()
+    if not text or not (user_id or session_id) or (stream not in SEGMENT_STREAMS and stream not in TALK_STREAMS):
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(AiredTalk(user_id=int(user_id) if user_id else None, session_id=session_id, kind=stream,
+                             label=label or "", text=text, seconds=float(seconds or 0.0)))
+            if time.monotonic() - _last_prune > PRUNE_EVERY_S:
+                _last_prune = time.monotonic()
+                await db.execute(delete(AiredTalk).where(
+                    AiredTalk.aired_at < datetime.now(timezone.utc) - timedelta(days=settings.DJ_TIMELINE_KEEP_DAYS)))
+            await db.commit()
+    except Exception as e:
+        log_service.warning(f"[Timeline] couldn't record {stream} for {log_service.who(session_id, user_id=user_id)}: "
+                            f"{type(e).__name__}: {e}")

@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Optional
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
+from services import listener_timeline
 from services.task_utils import spawn
 from services_radio import radio_schedule as schedule
 from services_radio import radio_segments
@@ -648,6 +649,9 @@ class RadioModeService:
             sess.aired = {k: at for k, at in sess.aired.items() if now - at < settings.RADIO_AIRED_MEMORY_S}
             content_bank.record_airing(session_id, plan.script)
             content_bank.mark_offered(session_id, plan.keys)
+            spawn(listener_timeline.record_talk(sess.user_id, session_id, TTS_TYPE, spoken_text(plan.script),
+                                                label=f"{plan.label} break", seconds=plan.duration_s),
+                  name=f"aired_talk:{session_id}")
             for hook in plan.on_air_hooks:
                 try:
                     hook()

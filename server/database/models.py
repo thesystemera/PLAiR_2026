@@ -450,6 +450,19 @@ class NewsPull(Base):
     __table_args__ = (Index("ix_news_pulls_lookup", "country", "kind", "query_norm", "fetched_at"),)
 
 
+class AiredTalk(Base):
+    __tablename__ = "aired_talk"
+
+    id = Column(BigInteger, Identity(), primary_key=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    session_id = Column(String, nullable=True, index=True)
+    kind = Column(String, nullable=False)
+    label = Column(String, nullable=False, default="")
+    text = Column(Text, nullable=False)
+    seconds = Column(Float, nullable=False, default=0.0)
+    aired_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False, index=True)
+
+
 class NewsAired(Base):
     __tablename__ = "news_aired"
 
