@@ -32,6 +32,7 @@ RANK_FEATURE = "NewsService.get_top_news"
 PRUNE_INTERVAL_S = 600
 PREFETCH_GAP_S = 1.0
 LOCAL_ITEMS = 15
+UPKEEP_READ_PASSES = 10
 
 _TOPIC_ALIASES = {
     "world": "WORLD", "international": "WORLD", "national": "NATION", "nation": "NATION",
@@ -435,7 +436,10 @@ class NewsService:
 
     async def upkeep(self) -> None:
         await self.resolve_pending()
-        await self.read_pending()
+        for _ in range(UPKEEP_READ_PASSES):
+            if not self.store_enabled or not await self.store.unread(1):
+                break
+            await self.read_pending()
         await self.analyse_pending()
 
     async def _maybe_prune(self) -> None:

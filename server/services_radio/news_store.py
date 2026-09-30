@@ -440,8 +440,10 @@ class NewsStore:
             return
         async with self._sessions()() as db:
             for item_id, (summary, status) in results.items():
-                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(
-                    summary=summary, read_status=status))
+                values = {"summary": summary, "read_status": status}
+                if summary:
+                    values["analysed_at"] = None
+                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(**values))
             await db.commit()
         if any(summary for summary, _ in results.values()):
             self._mark_dirty()
