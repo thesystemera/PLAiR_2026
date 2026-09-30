@@ -11,13 +11,13 @@ echo ========================================
 echo.
 
 echo [1/5] Stopping any running PLAiR backend...
-taskkill /F /FI "WINDOWTITLE eq Plair Backend*" /T >nul 2>&1
-for %%P in (8000 8090) do (
-    for /f "tokens=5" %%a in ('netstat -aon ^| findstr /R /C:"127.0.0.1:%%P .*LISTENING" /C:"0.0.0.0:%%P .*LISTENING"') do (
-        taskkill /F /PID %%a /T >nul 2>&1
-    )
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\external_components\plair_stop.ps1"
+if errorlevel 1 (
+    echo.
+    echo An older PLAiR backend is still open - not starting a second one.
+    pause
+    exit /b 1
 )
-timeout /t 2 /nobreak >nul
 
 echo [2/5] Building frontend...
 cd /d "%ROOT%\client"
