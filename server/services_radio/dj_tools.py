@@ -196,12 +196,20 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                                      "for here. Left out: everything except talk."},
             "id": _string("The id of one segment or talk entry from an earlier what_aired, to read everything "
                           "that was said in it."),
-            "minutes": {"type": "number",
-                        "description": f"How far back to look: {settings.DJ_TIMELINE_DEFAULT_MINUTES} by default, "
-                                       f"up to {settings.DJ_TIMELINE_MAX_MINUTES}."},
-            "skip_minutes": {"type": "number",
-                             "description": "Leave out the most recent N minutes, to look at an earlier stretch: "
-                                            "for 'about two hours ago' use minutes 150 and skip_minutes 90."},
+            "around_minutes_ago": {"type": "number",
+                                   "description": "For a rough moment (\"about 20 minutes ago\", \"a couple of "
+                                                  "hours back\"): the number of minutes. The studio looks either "
+                                                  "side of it (20 -> 30 to 10 minutes ago) and returns what was on "
+                                                  "closest to that moment. Use this instead of a range when the "
+                                                  "listener names one point in time."},
+            "from_minutes_ago": {"type": "number",
+                                 "description": "For a stretch of time: its older edge, in minutes ago. "
+                                                f"{settings.DJ_TIMELINE_DEFAULT_MINUTES} by default, up to "
+                                                f"{settings.DJ_TIMELINE_MAX_MINUTES}. Keep it as tight as what the "
+                                                "listener asked about."},
+            "to_minutes_ago": {"type": "number",
+                               "description": "The newer edge of the stretch, in minutes ago. 0 (now) by default. "
+                                              "\"Between half an hour and an hour ago\" is from 60 to 30."},
             "how_many": {"type": "number", "description": f"How many entries: 10 by default, up to "
                                                           f"{settings.DJ_TIMELINE_MAX_ENTRIES}."},
         }),
@@ -637,8 +645,15 @@ def _target(target: Optional[str]) -> str:
 
 def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "what_aired":
-        return _brace("what_aired", *(args.get("kinds") or []), value=args.get("id") or (f"{args['minutes']:g} to {args['skip_minutes']:g} min ago" if args.get("skip_minutes")
-                                               else f"{args['minutes']:g} min"))
+        if args.get("id"):
+            span = args["id"]
+        elif args.get("around_minutes_ago") is not None:
+            span = f"around {args['around_minutes_ago']:g} min ago"
+        elif args.get("to_minutes_ago"):
+            span = f"{args['from_minutes_ago']:g} to {args['to_minutes_ago']:g} min ago"
+        else:
+            span = f"last {args['from_minutes_ago']:g} min"
+        return _brace("what_aired", *(args.get("kinds") or []), value=span)
     if name == "request_tools":
         return _brace("request_tools", *(args.get("names") or []), value=args.get("reason"))
     if name == "pulse_search":
@@ -774,23 +789,25 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return track_id
         return choice("target", allowed, default)
 
-    def number(key: str, default: float, top: float) -> float:
+    def number(key: str, default: float, top: float, low: float = 1.0) -> float:
         try:
             value = float(args[key]) if args.get(key) not in (None, "") else default
         except (TypeError, ValueError):
             raise ValueError(f"'{key}' must be a number")
-        return max(1.0, min(value, top))
+        return max(low, min(value, top))
 
     if name == "what_aired":
         kinds = args.get("kinds") or []
         kinds = [str(k).strip().lower() for k in ([kinds] if isinstance(kinds, str) else kinds) if str(k).strip()]
         if any(k not in AIRED_KINDS for k in kinds):
             raise ValueError(f"'kinds' must be from {', '.join(AIRED_KINDS)}")
+        top = settings.DJ_TIMELINE_MAX_MINUTES
         return {"kinds": kinds, "id": text("id"),
-                "minutes": number("minutes", settings.DJ_TIMELINE_DEFAULT_MINUTES, settings.DJ_TIMELINE_MAX_MINUTES),
-                "how_many": int(number("how_many", 10, settings.DJ_TIMELINE_MAX_ENTRIES)),
-                "skip_minutes": number("skip_minutes", 0, settings.DJ_TIMELINE_MAX_MINUTES)
-                if args.get("skip_minutes") not in (None, "") else 0}
+                "around_minutes_ago": number("around_minutes_ago", 0, top, low=0.0)
+                if args.get("around_minutes_ago") not in (None, "") else None,
+                "from_minutes_ago": number("from_minutes_ago", settings.DJ_TIMELINE_DEFAULT_MINUTES, top),
+                "to_minutes_ago": number("to_minutes_ago", 0, top, low=0.0),
+                "how_many": int(number("how_many", 10, settings.DJ_TIMELINE_MAX_ENTRIES))}
     if name == "pulse_search":
         kinds = args.get("kinds") or []
         if isinstance(kinds, str):
@@ -1134,13 +1151,23 @@ class DJToolRuntime:
             if said is None:
                 return {"status": "empty", "note": "No segment or talk with that id for this listener."}
             return {"status": "ok", "note": AIRED_SAID_NOTE, "item": said}
-        entries = await listener_timeline.timeline(self.ctx.user_id, self.session_dict.get("session_id"),
-                                                   kinds=args["kinds"], minutes=args["minutes"],
-                                                   limit=args["how_many"], skip_minutes=args["skip_minutes"])
-        if not entries:
-            return {"status": "empty", "note": "Nothing like that has played for this listener in that time."}
         now = datetime.now(timezone.utc)
-        return {"status": "ok", "note": AIRED_NOTE, "items": [entry.brief(now) for entry in entries]}
+        span = listener_timeline.window(now, args["from_minutes_ago"], args["to_minutes_ago"],
+                                        args.get("around_minutes_ago"))
+        entries, more = await listener_timeline.timeline(self.ctx.user_id, self.session_dict.get("session_id"),
+                                                         kinds=args["kinds"], span=span, limit=args["how_many"])
+        looked_at = span.describe(now)
+        if not entries:
+            return {"status": "empty", "looked_at": looked_at,
+                    "note": "Nothing like that aired for this listener in that stretch. Widen the range only if the "
+                            "listener's words allow it."}
+        _, listener = await self._pulse_listener()
+        result = {"status": "ok", "note": AIRED_NOTE, "looked_at": looked_at,
+                  "items": [entry.brief(now, getattr(listener, "tz_name", None)) for entry in entries]}
+        if more:
+            result["not_shown"] = (f"{more} more in that stretch, the ones closest to the moment are shown"
+                                   if span.around else f"{more} older ones in that stretch: narrow the range to see them")
+        return result
 
     async def _request_tools(self, args):
         self.ctx.granted.update(args["names"])

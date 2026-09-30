@@ -87,9 +87,18 @@ guessing.
 - Timeline kinds `segment` (produced segments and talk breaks) and `talk` (chat replies, between-track lines).
   `what_aired` lists segments by default and talk only when asked for; an entry shows how it opened, and
   `what_aired(id=...)` returns everything that was said (`talk_detail`, the listener's own entries only).
+- Time is always a window, chosen by the hosts from the listener's words (`listener_timeline.window`):
+  `around_minutes_ago` for one rough moment (the studio looks either side: half the distance, at least 10 and at
+  most 60 minutes, so 20 -> 30 to 10 minutes ago) and returns the entries closest to that moment;
+  `from_minutes_ago` / `to_minutes_ago` for a stretch (default the last 120 minutes, at most 24 hours). A track
+  counts if it was on air at any point in the window, not only if it started in it. The result says what stretch
+  was looked at (`looked_at`) and how many entries were left out (`not_shown`).
 - Size of a result: a list is capped at `how_many` entries (10, at most 25), each with only its first 160
-  characters; 7 entries measured about 2,200 characters. `skip_minutes` leaves out the most recent stretch, so
-  "about two hours ago" is `minutes` 150 with `skip_minutes` 90 and returns that window, not the newest entries.
+  characters (7 entries measured about 2,200 characters); one full entry is capped at 3,000 characters. Entries
+  carry `min_ago` and, when the listener's timezone is known, the local clock time (`at`).
+- Tested live (1 Oct): "about 45 minutes ago" -> around 45 (68 to 22 min ago), "between an hour and an hour and a
+  half ago" -> 90 to 60, "the last ten minutes" -> last 10. Not covered: asking by clock time ("around nine
+  o'clock"); the hosts would have to work out the minutes themselves.
 - Tested live as a guest: a news bulletin and a weather forecast aired and were recorded; "run me through
   everything I've heard" listed them with the chat replies; the full text of a segment reads back; another
   listener can't read it. For questions about the last few minutes the hosts answered from the conversation
