@@ -297,6 +297,10 @@ class Settings:
     DJ_TOOL_THINKING_BUDGET: Optional[int] = (int(os.getenv("DJ_TOOL_THINKING_BUDGET", "-1"))
                                               if os.getenv("DJ_TOOL_THINKING_BUDGET", "-1").strip() else None)
     DJ_TOOL_FOLLOWUP_THINKING_BUDGET: int = int(os.getenv("DJ_TOOL_FOLLOWUP_THINKING_BUDGET", "0"))
+    GEMINI_THINKING_BUDGET_FLOOR: dict = {
+        model.strip(): int(floor) for model, floor in (
+            entry.rsplit(":", 1) for entry in os.getenv(
+                "GEMINI_THINKING_BUDGET_FLOOR", "gemini-3.5-flash-lite:1").split(",") if ":" in entry)}
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))
     DJ_TIMELINE_DEFAULT_MINUTES: int = int(os.getenv("DJ_TIMELINE_DEFAULT_MINUTES", "120"))

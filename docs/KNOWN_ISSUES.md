@@ -18,12 +18,18 @@ anything else is carried over as written.
 
 ## 2. DJ turn: bugs and things to watch
 
-- **The DJ's fallback model fails the follow-up round** (seen 1 Oct 01:56): after a 429 on gemini-2.5-flash the
-  turn moved to gemini-3.5-flash-lite, which answered the next round with 400 INVALID_ARGUMENT; the turn only
-  finished because 2.5-flash was back. Not investigated. Lead: LifeSpan rebuilds thought signatures when it
-  changes model mid-turn (`chat_tool_loop.py:226-227,440-464`; audit item L13).
-- **Hosts speak a second hand-off line after scheduling a segment** (11 of 12 replays) although the tool result
-  says one line in total. The closed wording below let some go straight to the notes (15 of 142).
+- **Fixed 1 Oct, not yet live: the DJ's fallback model failed every follow-up round.** gemini-3.5-flash-lite
+  answers 400 INVALID_ARGUMENT to a thinking budget of 0 (even on a plain prompt) and accepts 1, which uses no
+  thinking tokens; 2.5-flash and 3.5-flash accept 0. It had nothing to do with history or thought signatures.
+  `llm_router.fit_thinking` now raises the budget to the model's floor (`GEMINI_THINKING_BUDGET_FLOOR`). Checked
+  through the real router: tool round then follow-up on the fallback model, both fine. Watch the next 429 in
+  `radio.log`: the `dj: … failed (… 400 …)` line should not follow it.
+- **Fixed 1 Oct, not yet live: second hand-off line after scheduling a segment.** Cause: the segment result said
+  "your line was the hand-off, go to your notes" and the studio message right after it said "reply on air now".
+  After a line plus a scheduled segment the studio message is now `ai_service.HANDED_OFF_NOTE`. Replays of the
+  four recorded turns (`tests/dj_followup_replay.py`): second line in 11 of 12 before, 0 of 12 after, no stray
+  text. Not changed: when the hosts call the segment tool without a line, the hand-off they then speak can run
+  long (33 to 79 words in three recorded turns).
 - **Repeated DJ script after `[TASK]`.** Gemini sometimes writes the whole script twice in one reply (4 of 45
   turns, about +45% cost on that round). It no longer reaches the notes or history, but it is still generated.
   Cause unproven. Lead: history rows show content after `[TASK]` (the `[STUDIO TOOLS]` log), which teaches the

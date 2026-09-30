@@ -1,9 +1,10 @@
 """Replay the follow-up round of recorded DJ turns against Gemini with different studio messages.
 
 After a tool call the hosts get the tool results plus a [STUDIO] message, with thinking off. This replays that
-exact moment from data/logs/dj_turns.jsonl* and counts how the reply opens: on a channel tag (spoke), straight
-to the notes (notes only), or with stray text before any tag (PREFACE); ECHO repeats the line that already
-aired and RECALL calls the same tool again.
+exact moment from data/logs/dj_turns.jsonl* with the plain "reply on air" message and, where it differs, the one
+in use for that turn (the hand-off message after a scheduled segment). It counts how the reply opens: on a
+channel tag (spoke), straight to the notes (notes only), or with stray text before any tag (PREFACE); ECHO
+repeats the line that already aired and RECALL calls the same tool again.
 
 Usage: python tests/dj_followup_replay.py <runs per arm> <turn_id> [<turn_id> ...]
 Needs no backend and changes nothing, but it uses the station's Gemini quota: keep runs small while the
@@ -26,7 +27,8 @@ from config.settings import settings  # noqa: E402
 from services_radio import context_nodes  # noqa: E402,F401
 from services_radio.context_node_registry import node_registry  # noqa: E402
 from services_radio.dj_prompt_helper_service import assemble_prompt  # noqa: E402
-from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS  # noqa: E402
+from services.ai_service import HANDED_OFF_NOTE, LINE_AIRED_NOTE  # noqa: E402
+from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS, SEGMENT_TOOLS  # noqa: E402
 
 SYSTEM_NODES = ['core_dj_identity', 'station_capabilities', 'format_channels', 'format_tone',
                 'format_meta_tags_guide', 'format_meta_tag_examples', 'format_roles_detailed',
@@ -34,13 +36,17 @@ SYSTEM_NODES = ['core_dj_identity', 'station_capabilities', 'format_channels', '
                 'guidelines_critical', 'guidelines_internal_dialogue', 'instruction_dj_tools', 'tool_guidance',
                 'station_recent_airings', 'studio_clock', 'city_pulse']
 
-HEAD = "[STUDIO] Your line above has aired and these calls have run. "
 ARMS = {
-    "open conditional last": (HEAD + "Reply on air now; call a tool only if you need something you don't have "
-                                     "yet.", 0),
-    "closed (in use)": (HEAD + "Call a tool only if you need something you don't have yet; otherwise reply on air "
-                               "now.", 0),
+    "reply on air": (LINE_AIRED_NOTE, 0),
+    "in use": (None, 0),
 }
+
+
+def note_in_use(turn) -> str:
+    first = turn["rounds"][0]
+    scheduled = all(call["name"] in SEGMENT_TOOLS for call in first["calls"]) and all(
+        json.loads(result["result"]).get("status") == "scheduled" for result in first["results"])
+    return HANDED_OFF_NOTE if scheduled else LINE_AIRED_NOTE
 CHANNEL = re.compile(r"\[(BROADCAST|TXT)\]")
 
 
@@ -126,6 +132,10 @@ async def main():
     for turn in turns:
         print(f"\n== {turn['turn_id']} | {turn['listener'][:70]} | tools {[c['name'] for c in turn['rounds'][0]['calls']]}")
         for name, (marker, budget) in ARMS.items():
+            if marker is None:
+                marker = note_in_use(turn)
+                if marker == LINE_AIRED_NOTE:
+                    continue
             results = await asyncio.gather(*(one(turn, marker, budget) for _ in range(runs)))
             counts = {}
             for label, _ in results:

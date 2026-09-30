@@ -860,6 +860,7 @@ class DJPromptService:
         from services_radio.dj_tools import (
             DJ_FUNCTION_DECLARATIONS,
             READ_TOOLS,
+            SEGMENT_TOOLS,
             TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
         )
@@ -929,6 +930,7 @@ class DJPromptService:
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             on_preamble=handle_preamble,
             followup_tools=READ_TOOLS,
+            handoff_tools=SEGMENT_TOOLS,
             repeatable_tools={"playback_control"}
         )
 

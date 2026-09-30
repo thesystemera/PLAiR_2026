@@ -28,6 +28,10 @@ def build_gemini_http_options(timeout_ms: int = GEMINI_HTTP_TIMEOUT_MS,
 
 RESULTS_NUDGE = ("[STUDIO] The results are in above. Now perform the on-air reply to the listener using them, in the "
                  "usual performance format. Don't repeat the line you already said while looking.")
+LINE_AIRED_NOTE = ("[STUDIO] Your line above has aired and these calls have run. Call a tool only if you need "
+                   "something you don't have yet; otherwise reply on air now.")
+HANDED_OFF_NOTE = ("[STUDIO] Your line above has aired as the hand-off, and what you scheduled follows it on air. "
+                   "Nothing more goes on air in this reply: write your [INTERNAL DIALOGUE] notes and [TASK] now.")
 
 class _GeminiMessage:
     def __init__(self, content):
@@ -409,6 +413,7 @@ class AIService(SingletonService):
             on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
             followup_tools: Optional[set] = None,
             repeatable_tools: Optional[set] = None,
+            handoff_tools: Optional[set] = None,
             review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
             thinking_budget: Optional[int] = None,
@@ -587,9 +592,11 @@ class AIService(SingletonService):
                     response=self._cap_tool_result(result, settings.LLM_TOOL_RESULT_MAX_CHARS)
                 )))
             if text.strip():
-                response_parts.append(types.Part.from_text(
-                    text="[STUDIO] Your line above has aired and these calls have run. Call a tool only if you "
-                         "need something you don't have yet; otherwise reply on air now."))
+                handed_off = all(fc.name in (handoff_tools or set()) and isinstance(result, dict)
+                                 and result.get("status") == "scheduled"
+                                 for fc, result in zip(function_calls, results))
+                trace[-1]["studio"] = HANDED_OFF_NOTE if handed_off else LINE_AIRED_NOTE
+                response_parts.append(types.Part.from_text(text=trace[-1]["studio"]))
             contents.append(types.Content(role="user", parts=response_parts))
 
             if refresh_tools is not None:

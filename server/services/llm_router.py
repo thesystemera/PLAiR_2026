@@ -236,6 +236,14 @@ async def _gemini_generate_cached(*, spec: str, client, model: str, contents, co
         return await gemini_generate(spec=spec, client=client, model=model, contents=contents, config=config)
 
 
+def fit_thinking(config: types.GenerateContentConfig, model: str) -> types.GenerateContentConfig:
+    floor = settings.GEMINI_THINKING_BUDGET_FLOOR.get(model)
+    thinking = config.thinking_config
+    if not floor or thinking is None or thinking.thinking_budget is None or not 0 <= thinking.thinking_budget < floor:
+        return config
+    return config.model_copy(update={"thinking_config": thinking.model_copy(update={"thinking_budget": floor})})
+
+
 async def gemini_generate_chain(
     *,
     spec: str,
@@ -257,7 +265,8 @@ async def gemini_generate_chain(
         key = _circuit_key(spec, "gemini", model)
         try:
             response, usage, ms = await _gemini_generate_cached(spec=spec, client=client, model=model,
-                                                                contents=contents, config=config,
+                                                                contents=contents,
+                                                                config=fit_thinking(config, model),
                                                                 cache_label=cache_label)
         except LLM_ERRORS as err:
             _record_failure(key, err)
