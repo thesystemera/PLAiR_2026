@@ -375,7 +375,7 @@ async def get_guidelines_internal_dialogue(**_) -> str:
 async def get_instruction_announcements(transition_duration_ms: Optional[int] = None, **_) -> str:
     if transition_duration_ms:
         seconds = transition_duration_ms / 1000.0
-        estimated_words = talk_clock.words_for(seconds)
+        estimated_words = talk_clock.words_for(seconds, "announcer")
         time_constraint_section = (
             "TIME CONSTRAINT:\n"
             f"- Aim for approximately {seconds:.1f} seconds ({estimated_words} words) for this announcement.\n"

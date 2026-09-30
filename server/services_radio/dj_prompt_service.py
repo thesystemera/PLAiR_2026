@@ -32,9 +32,6 @@ RADIO_SEGMENT_MARKUP_NOTE = (
     "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
 )
 SCRIPT_PROVIDER_NOTES = {"deepseek": RADIO_SEGMENT_MARKUP_NOTE}
-ANNOUNCER_PROVIDER_NOTES = {"deepseek": RADIO_SEGMENT_MARKUP_NOTE + (
-    "\n\nLENGTH: This is a link between two songs - keep it tight. Use at most 90 spoken words in total across all "
-    "hosts (tags and cues don't count), fewer when the TIME CONSTRAINT says so. Never pad.")}
 
 PERSONAL_NODE_NEUTRAL_PREFIXES = {
     'user_persona': ("LISTENER PERSONA: Guest",),
@@ -1101,8 +1098,7 @@ class DJPromptService:
             messages=[{"role": "system", "content": system_prompt}],
             clean_role='dj_announcements',
             role=LLM_ANNOUNCE,
-            validate_script=True,
-            provider_notes=ANNOUNCER_PROVIDER_NOTES
+            validate_script=True
         )
 
         log_service.api(f"Announcer: Announcements Raw Response: {response_text}")

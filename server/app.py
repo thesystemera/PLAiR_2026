@@ -62,6 +62,7 @@ from services.listener_request_service import ListenerRequestPromptCache, Listen
 from services.semantic_source import SemanticSearch
 from services_radio import local_knowledge
 from services_radio import area_signals
+from services_radio import talk_clock
 from services_radio.area_geocode import ReverseGeocodeSignal
 from services_radio.area_air_quality import AirQualitySignal
 from services_radio.area_pollen import PollenSignal
@@ -452,6 +453,7 @@ async def lifespan(_app: FastAPI):
     def text_embedder(text):
         return models_global.run_on_gpu_executor(catalog_vector_db_service._generate_embedding, text)
 
+    await talk_clock.meter.load(AsyncSessionLocal)
     area_store = area_signals.AreaCacheStore(AsyncSessionLocal)
     services.web_service = web_service = WebService(area_store=area_store, session_maker=AsyncSessionLocal)
     services.news_service = news_service = NewsService(ai_service, store=NewsStore(AsyncSessionLocal),
@@ -620,6 +622,7 @@ async def lifespan(_app: FastAPI):
     if tts_generation_service is not None:
         await tts_generation_service.close()
     await tts_engine_bootstrap.stop()
+    await talk_clock.meter.save()
     await close_http_client()
     close_all_pools()
 

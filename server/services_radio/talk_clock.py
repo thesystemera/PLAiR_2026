@@ -1,8 +1,15 @@
+import time
 from contextvars import ContextVar
 from typing import Optional
 
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from config import settings
+from database.models import TalkPace
 from service_registry import services
+from services import log_service
+from services.task_utils import spawn
 
 DEPTHS = tuple(settings.SEGMENT_DEPTHS) or ("standard",)
 DEFAULT_DEPTH = "standard" if "standard" in DEPTHS else DEPTHS[0]
@@ -15,12 +22,80 @@ DEPTH_PARAMETER = {
 segment_depth: ContextVar[Optional[str]] = ContextVar("segment_depth", default=None)
 
 
-def pace() -> float:
-    return settings.TALK_WORDS_PER_SECOND
+PACE_KINDS = ("announcer", "segment")
+PACE_BOUNDS = (1.0, 3.5)
+PACE_MIN_WORDS = 25
+PACE_MIN_SECONDS = 5.0
 
 
-def words_for(seconds: float) -> int:
-    return int(seconds * pace())
+class PaceMeter:
+    def __init__(self):
+        self.pace: dict[str, float] = {}
+        self.samples: dict[str, int] = {}
+        self._session_maker = None
+        self._saved_at = time.monotonic()
+
+    def value(self, kind: str) -> float:
+        if settings.TALK_PACE_ADAPTIVE and self.samples.get(kind, 0) >= settings.TALK_PACE_MIN_SAMPLES:
+            return self.pace[kind]
+        return settings.TALK_WORDS_PER_SECOND
+
+    def note(self, kind: str, words: int, seconds: float) -> None:
+        if not settings.TALK_PACE_ADAPTIVE or kind not in PACE_KINDS:
+            return
+        if words < PACE_MIN_WORDS or seconds < PACE_MIN_SECONDS:
+            return
+        sample = min(PACE_BOUNDS[1], max(PACE_BOUNDS[0], words / seconds))
+        count = self.samples.get(kind, 0)
+        weight = max(settings.TALK_PACE_SMOOTHING, 1.0 / (count + 1))
+        self.pace[kind] = self.pace.get(kind, sample) + weight * (sample - self.pace.get(kind, sample))
+        self.samples[kind] = count + 1
+        if self._session_maker is not None and time.monotonic() - self._saved_at >= settings.TALK_PACE_SAVE_S:
+            self._saved_at = time.monotonic()
+            spawn(self.save(), name="talk_pace_save")
+
+    async def load(self, session_maker) -> None:
+        self._session_maker = session_maker
+        async with session_maker() as db:
+            rows = (await db.execute(select(TalkPace))).scalars().all()
+        for row in rows:
+            if row.kind in PACE_KINDS:
+                self.pace[row.kind], self.samples[row.kind] = row.words_per_second, row.samples
+        if rows:
+            log_service.system("Talk pace: " + self.summary())
+
+    async def save(self) -> None:
+        if self._session_maker is None or not self.pace:
+            return
+        stmt = pg_insert(TalkPace).values([{"kind": kind, "words_per_second": value,
+                                            "samples": self.samples.get(kind, 0)}
+                                           for kind, value in self.pace.items()])
+        stmt = stmt.on_conflict_do_update(index_elements=["kind"], set_={
+            "words_per_second": stmt.excluded.words_per_second, "samples": stmt.excluded.samples,
+            "updated_at": stmt.excluded.updated_at})
+        try:
+            async with self._session_maker() as db:
+                await db.execute(stmt)
+                await db.commit()
+        except Exception as e:
+            log_service.warning(f"Talk pace: could not save ({type(e).__name__}: {e})")
+            return
+        log_service.system("Talk pace: " + self.summary())
+
+    def summary(self) -> str:
+        return ", ".join(f"{kind} {self.pace[kind]:.2f} words/s ({self.samples.get(kind, 0)} streams)"
+                         for kind in PACE_KINDS if kind in self.pace) or "no measurements yet"
+
+
+meter = PaceMeter()
+
+
+def pace(kind: str = "segment") -> float:
+    return meter.value(kind)
+
+
+def words_for(seconds: float, kind: str = "segment") -> int:
+    return int(seconds * pace(kind))
 
 
 def depth() -> str:

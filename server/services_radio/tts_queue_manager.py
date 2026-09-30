@@ -17,6 +17,7 @@ from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GE
 from services_radio.tts_live_stream import LiveStreamEncoder
 from services_radio.tts_processing_service import decode_mp3
 from services_radio.tts_voice_threads import voice_thread
+from services_radio import talk_clock
 
 SHOUTOUT_AUDIO_URL = re.compile(r'/api/user_content/shoutouts/audio/(\d+)/([A-Za-z0-9_-]+)\.mp3$')
 SHOUTOUT_AUDIO_ID = re.compile(r'^(\d+)_([A-Za-z0-9_-]+)$')
@@ -26,6 +27,8 @@ NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
 FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
+PACE_KIND = {'announcer': 'announcer', 'interactive': None, 'sting': None, 'shoutouts': None}
+
 TTS_TYPE_LABELS = {
     'interactive': 'chat reply',
     'announcer': 'track announcement',
@@ -467,6 +470,11 @@ class TTSQueueManager:
                 else:
                     await encoder.cancel()
 
+            if completed:
+                talk_clock.meter.note(
+                    PACE_KIND.get(tts_type, 'segment'),
+                    sum(len((segment.get('content') or '').split()) for segment in spoken),
+                    encoder.fed_seconds - (len(lead_in.audio) / 1000.0 if lead_in is not None else 0.0))
             first_audio = (encoder.first_emit_at - started_at) if encoder.first_emit_at else None
             outcome = 'done' if completed else 'failed' if encoder.failed else 'cancelled'
             log_service.tts_queue_manager(

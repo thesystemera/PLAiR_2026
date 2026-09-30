@@ -410,6 +410,15 @@ class NewsItem(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
 
+class TalkPace(Base):
+    __tablename__ = "talk_pace"
+
+    kind = Column(String, primary_key=True)
+    words_per_second = Column(Float, nullable=False)
+    samples = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
+
+
 class NewsLink(Base):
     __tablename__ = "news_links"
 

@@ -428,6 +428,10 @@ class Settings:
             entry.split(":") for entry in os.getenv(
                 "SEGMENT_DEPTHS", "brief:20,standard:45,detailed:100").split(",") if entry.count(":") == 1)}
     TALK_WORDS_PER_SECOND: float = float(os.getenv("TALK_WORDS_PER_SECOND", "2.0"))
+    TALK_PACE_ADAPTIVE: bool = os.getenv("TALK_PACE_ADAPTIVE", "true").lower() == "true"
+    TALK_PACE_MIN_SAMPLES: int = int(os.getenv("TALK_PACE_MIN_SAMPLES", "8"))
+    TALK_PACE_SMOOTHING: float = float(os.getenv("TALK_PACE_SMOOTHING", "0.1"))
+    TALK_PACE_SAVE_S: int = int(os.getenv("TALK_PACE_SAVE_S", "300"))
     TALK_INTRO_MIN_S: float = float(os.getenv("TALK_INTRO_MIN_S", "4"))
     TALK_ALIGNMENT_MIN: float = float(os.getenv("TALK_ALIGNMENT_MIN", "0.5"))
     NEWS_REPORT_DEPTHS: dict = {

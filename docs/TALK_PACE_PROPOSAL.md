@@ -1,6 +1,9 @@
-# Proposal: adaptive talk pace
+# Adaptive talk pace
 
-Status: proposal, not built. Written 30 Sep 2026.
+Status: built 30 Sep 2026 (`talk_clock.PaceMeter`, table `talk_pace`, sampled in `TTSQueueManager`). Two kinds are
+measured, `announcer` and `segment` (chat replies carry no word targets, so they aren't tracked). Stings, shoutout
+segments (they contain listener audio) and chat replies are skipped; a station-ID lead-in is subtracted. The rest
+of this note is the original proposal.
 
 ## What exists today
 
