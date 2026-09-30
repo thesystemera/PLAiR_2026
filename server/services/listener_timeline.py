@@ -61,22 +61,25 @@ def _mine(model, user_id: Optional[int], session_id: Optional[str]):
     return model.user_id == int(user_id) if user_id else model.session_id == session_id
 
 
-def _buffered(user_id: Optional[int], session_id: Optional[str], since: datetime) -> List[Dict[str, Any]]:
+def _buffered(user_id: Optional[int], session_id: Optional[str], since: datetime,
+              until: datetime) -> List[Dict[str, Any]]:
     events = []
     for event in list(analytics_service.event_buffer):
         if (event.get("user_id") != int(user_id)) if user_id else (event.get("session_id") != session_id):
             continue
         at = datetime.fromisoformat(event["started_at"])
-        if at >= since:
+        if since <= at <= until:
             events.append({"at": at, "id": event["track_id"], "event": event["event_type"]})
     return events
 
 
-async def _stored(user_id: Optional[int], session_id: Optional[str], since: datetime, rows: int) -> List[Dict[str, Any]]:
+async def _stored(user_id: Optional[int], session_id: Optional[str], since: datetime, until: datetime,
+                  rows: int) -> List[Dict[str, Any]]:
     async with AsyncSessionLocal() as db:
         found = (await db.execute(
             select(PlayEvent.started_at, PlayEvent.track_id, PlayEvent.event_type)
-            .where(_mine(PlayEvent, user_id, session_id), PlayEvent.started_at >= since)
+            .where(_mine(PlayEvent, user_id, session_id), PlayEvent.started_at >= since,
+                   PlayEvent.started_at <= until)
             .order_by(PlayEvent.started_at.desc()).limit(rows))).all()
     return [{"at": at, "id": item_id, "event": event} for at, item_id, event in found]
 
@@ -115,12 +118,12 @@ def _entries(events: Iterable[Dict[str, Any]]) -> List[TimelineEntry]:
     return entries
 
 
-async def _played(user_id: Optional[int], session_id: Optional[str], since: datetime, wanted: set,
-                  limit: int) -> List[TimelineEntry]:
-    recent = _buffered(user_id, session_id, since)
+async def _played(user_id: Optional[int], session_id: Optional[str], since: datetime, until: datetime,
+                  wanted: set, limit: int) -> List[TimelineEntry]:
+    recent = _buffered(user_id, session_id, since, until)
     rows = limit * ROWS_PER_ENTRY
     while True:
-        stored = await _stored(user_id, session_id, since, rows)
+        stored = await _stored(user_id, session_id, since, until, rows)
         entries = [entry for entry in _entries(stored + recent) if entry.kind in wanted]
         if len(entries) >= limit or len(stored) < rows or rows >= MAX_ROWS:
             return entries
@@ -136,14 +139,15 @@ def _talk_label(row) -> str:
     return f"{name}: \"{row.text[:TALK_TEXT_CHARS]}{'...' if len(row.text) > TALK_TEXT_CHARS else ''}\""
 
 
-async def _talked(user_id: Optional[int], session_id: Optional[str], since: datetime, wanted: set,
-                  limit: int) -> List[TimelineEntry]:
+async def _talked(user_id: Optional[int], session_id: Optional[str], since: datetime, until: datetime,
+                  wanted: set, limit: int) -> List[TimelineEntry]:
     streams = [stream for stream in list(SEGMENT_STREAMS) + list(TALK_STREAMS) if _talk_kind(stream) in wanted]
     if not streams:
         return []
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
             select(AiredTalk).where(_mine(AiredTalk, user_id, session_id), AiredTalk.aired_at >= since,
+                                    AiredTalk.aired_at <= until,
                                     AiredTalk.kind.in_(streams))
             .order_by(AiredTalk.aired_at.desc()).limit(limit))).scalars().all()
     return [TimelineEntry(row.aired_at, _talk_kind(row.kind), f"{TALK_ID_PREFIX}{row.id}", _talk_label(row))
@@ -151,14 +155,15 @@ async def _talked(user_id: Optional[int], session_id: Optional[str], since: date
 
 
 async def timeline(user_id: Optional[int], session_id: Optional[str], kinds: Optional[Iterable[str]] = None,
-                   minutes: float = 120, limit: int = 10) -> List[TimelineEntry]:
+                   minutes: float = 120, limit: int = 10, skip_minutes: float = 0) -> List[TimelineEntry]:
     if not user_id and not session_id:
         return []
-    since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    now = datetime.now(timezone.utc)
+    since, until = now - timedelta(minutes=minutes), now - timedelta(minutes=skip_minutes)
     wanted = set(kinds or DEFAULT_KINDS)
-    entries = await _talked(user_id, session_id, since, wanted, limit)
+    entries = await _talked(user_id, session_id, since, until, wanted, limit)
     if wanted & set(PLAYED_KINDS):
-        entries += await _played(user_id, session_id, since, wanted, limit)
+        entries += await _played(user_id, session_id, since, until, wanted, limit)
     from service_registry import services
     playback = services.playback_service
     state = playback.get_state(session_id) if playback is not None and session_id else None

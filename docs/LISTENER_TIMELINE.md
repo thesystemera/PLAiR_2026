@@ -87,6 +87,9 @@ guessing.
 - Timeline kinds `segment` (produced segments and talk breaks) and `talk` (chat replies, between-track lines).
   `what_aired` lists segments by default and talk only when asked for; an entry shows how it opened, and
   `what_aired(id=...)` returns everything that was said (`talk_detail`, the listener's own entries only).
+- Size of a result: a list is capped at `how_many` entries (10, at most 25), each with only its first 160
+  characters; 7 entries measured about 2,200 characters. `skip_minutes` leaves out the most recent stretch, so
+  "about two hours ago" is `minutes` 150 with `skip_minutes` 90 and returns that window, not the newest entries.
 - Tested live as a guest: a news bulletin and a weather forecast aired and were recorded; "run me through
   everything I've heard" listed them with the chat replies; the full text of a segment reads back; another
   listener can't read it. For questions about the last few minutes the hosts answered from the conversation

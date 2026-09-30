@@ -199,6 +199,9 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "minutes": {"type": "number",
                         "description": f"How far back to look: {settings.DJ_TIMELINE_DEFAULT_MINUTES} by default, "
                                        f"up to {settings.DJ_TIMELINE_MAX_MINUTES}."},
+            "skip_minutes": {"type": "number",
+                             "description": "Leave out the most recent N minutes, to look at an earlier stretch: "
+                                            "for 'about two hours ago' use minutes 150 and skip_minutes 90."},
             "how_many": {"type": "number", "description": f"How many entries: 10 by default, up to "
                                                           f"{settings.DJ_TIMELINE_MAX_ENTRIES}."},
         }),
@@ -634,7 +637,8 @@ def _target(target: Optional[str]) -> str:
 
 def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "what_aired":
-        return _brace("what_aired", *(args.get("kinds") or []), value=args.get("id") or f"{args['minutes']:g} min")
+        return _brace("what_aired", *(args.get("kinds") or []), value=args.get("id") or (f"{args['minutes']:g} to {args['skip_minutes']:g} min ago" if args.get("skip_minutes")
+                                               else f"{args['minutes']:g} min"))
     if name == "request_tools":
         return _brace("request_tools", *(args.get("names") or []), value=args.get("reason"))
     if name == "pulse_search":
@@ -784,7 +788,9 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"'kinds' must be from {', '.join(AIRED_KINDS)}")
         return {"kinds": kinds, "id": text("id"),
                 "minutes": number("minutes", settings.DJ_TIMELINE_DEFAULT_MINUTES, settings.DJ_TIMELINE_MAX_MINUTES),
-                "how_many": int(number("how_many", 10, settings.DJ_TIMELINE_MAX_ENTRIES))}
+                "how_many": int(number("how_many", 10, settings.DJ_TIMELINE_MAX_ENTRIES)),
+                "skip_minutes": number("skip_minutes", 0, settings.DJ_TIMELINE_MAX_MINUTES)
+                if args.get("skip_minutes") not in (None, "") else 0}
     if name == "pulse_search":
         kinds = args.get("kinds") or []
         if isinstance(kinds, str):
@@ -1130,7 +1136,7 @@ class DJToolRuntime:
             return {"status": "ok", "note": AIRED_SAID_NOTE, "item": said}
         entries = await listener_timeline.timeline(self.ctx.user_id, self.session_dict.get("session_id"),
                                                    kinds=args["kinds"], minutes=args["minutes"],
-                                                   limit=args["how_many"])
+                                                   limit=args["how_many"], skip_minutes=args["skip_minutes"])
         if not entries:
             return {"status": "empty", "note": "Nothing like that has played for this listener in that time."}
         now = datetime.now(timezone.utc)
