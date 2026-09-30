@@ -17,6 +17,8 @@ from services_radio.dj_prompt_helper_service import (
 from services_radio.context_node_registry import node_registry
 from services_radio.context_service import gather_raw_dependencies
 from services_radio import listener_location as location_resolver
+from services_radio import talk_clock
+from services_radio.dj_content_bank import spoken_text
 from services_radio.context_router_service import context_router_service
 from services import log_service
 from services.llm_router import LLM_LIVE, LLM_DJ, LLM_ANNOUNCE, LLM_INTERPRET
@@ -914,7 +916,8 @@ class DJPromptService:
             cache_label="dj_interactive",
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             on_preamble=handle_preamble,
-            followup_tools=READ_TOOLS
+            followup_tools=READ_TOOLS,
+            repeatable_tools={"playback_control"}
         )
 
         raw_response = result.get("text") or ""
@@ -1107,6 +1110,10 @@ class DJPromptService:
             log_service.api("Announcer: Announcements response is not applicable ([N/A])")
             return None
         response_text = response_text.strip().strip('"')
+        log_service.commands(
+            f"{log_service.who(session_dict.get('session_id'), user_id=session_dict.get('user_id'))}: announcement | "
+            f"window {time_remaining:.1f}s = {talk_clock.words_for(time_remaining, 'announcer')} words at "
+            f"{talk_clock.pace('announcer'):.2f} words/s | wrote {len(spoken_text(response_text).split())} words")
         return response_text
 
     @gpt_error_handler

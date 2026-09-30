@@ -408,6 +408,7 @@ class AIService(SingletonService):
             call_timeout_s: float = 8.0,
             on_preamble: Optional[Callable[[str, list], Awaitable[None]]] = None,
             followup_tools: Optional[set] = None,
+            repeatable_tools: Optional[set] = None,
             review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
             thinking_budget: Optional[int] = None,
@@ -476,15 +477,18 @@ class AIService(SingletonService):
             content = candidate.content if candidate else None
             parts = list(content.parts) if content and content.parts else []
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
-            repeats = [fc for fc in function_calls if fc.name in (followup_tools or set())
-                       and self._call_key(fc.name, fc.args) in made]
-            if repeats:
-                log_service.commands(f"DJ tool turn: dropped a repeat of {', '.join(fc.name for fc in repeats)} "
-                                     "(same arguments as an earlier call this turn)")
+            aired = {self._echo_key(line) for line in preambles} - {""}
+            echoed = [p for p in parts if p.text and not getattr(p, "thought", False)
+                      and self._echo_key(p.text) in aired]
+            repeats = [fc for fc in function_calls if self._call_key(fc.name, fc.args) in made
+                       and (echoed or fc.name not in (repeatable_tools or set()))]
+            if repeats or echoed:
+                log_service.commands(
+                    "DJ tool turn: the model echoed its earlier turn - dropped "
+                    + (f"a repeat of {', '.join(fc.name for fc in repeats)}" if repeats else "the repeated line"))
                 function_calls = [fc for fc in function_calls if fc not in repeats]
-                aired = {line.strip() for line in preambles}
                 parts = [p for p in parts if p.function_call not in repeats
-                         and not (p.text and p.text.strip() in aired)]
+                         and not any(p is part for part in echoed)]
                 content = types.Content(role=content.role, parts=parts)
             made.update(self._call_key(fc.name, fc.args) for fc in function_calls)
             text = self._visible_text(parts)
@@ -588,6 +592,11 @@ class AIService(SingletonService):
                     declared = {declaration.name for declaration in refreshed}
                     tool_config, final_config = build_configs(refreshed)
                     log_service.detail(f"DJ tools now: {', '.join(sorted(declared))}", "ai")
+
+    @staticmethod
+    def _echo_key(text: str) -> str:
+        key = " ".join(re.sub(r"\(\d+ chars\)", "", text or "").split())[:80]
+        return key if len(key) >= 20 else ""
 
     @staticmethod
     def _call_key(name: str, args) -> tuple:
