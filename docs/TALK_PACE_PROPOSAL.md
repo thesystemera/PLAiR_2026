@@ -1,8 +1,9 @@
 # Adaptive talk pace
 
-Status: built 30 Sep 2026 (`talk_clock.PaceMeter`, table `talk_pace`, sampled in `TTSQueueManager`). Two kinds are
-measured, `announcer` and `segment` (chat replies carry no word targets, so they aren't tracked). Stings, shoutout
-segments (they contain listener audio) and chat replies are skipped; a station-ID lead-in is subtracted. The rest
+Status: built 30 Sep 2026 (`talk_clock.PaceMeter`, table `talk_pace`, sampled in `TTSQueueManager`). Three kinds are
+measured: `chat`, `announcer` and `segment`. Chat was added the same day: a reply over a song that has just started
+has a real time window (the intro before the vocals), and the hosts can only respect it when it is given in words
+at their pace. Stings and shoutout segments (they contain listener audio) are skipped; a station-ID lead-in is subtracted. The rest
 of this note is the original proposal.
 
 ## What exists today

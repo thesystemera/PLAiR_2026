@@ -22,7 +22,7 @@ DEPTH_PARAMETER = {
 segment_depth: ContextVar[Optional[str]] = ContextVar("segment_depth", default=None)
 
 
-PACE_KINDS = ("announcer", "segment")
+PACE_KINDS = ("chat", "announcer", "segment")
 PACE_BOUNDS = (1.0, 3.5)
 PACE_MIN_WORDS = 25
 PACE_MIN_SECONDS = 5.0
@@ -127,6 +127,10 @@ def clock(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def room(seconds: float) -> str:
+    return f"At the pace you talk, that is room for about {words_for(seconds, 'chat')} spoken words in total."
+
+
 async def vocals_at_s(track_id: Optional[str]) -> Optional[float]:
     orchestrator = services.orchestrator
     if not track_id or track_id == "N/A" or orchestrator is None:
@@ -148,5 +152,6 @@ async def started_note(track_id: Optional[str]) -> dict:
                 "on_air": "The song has just started and its vocals come in almost at once: a line at most, or let "
                           "it play."}
     return {"vocals_start_s": round(vocals, 1),
-            "on_air": f"The song has just started; its vocals come in about {int(vocals)} seconds in. Anything you "
-                      "say now goes out over its intro, so land it before the vocals."}
+            "on_air": f"The song has just started; its vocals come in about {int(vocals)} seconds in. {room(vocals)} "
+                      "That counts the line you already said with this call: say only what still fits, or stop "
+                      "there and let the song play."}

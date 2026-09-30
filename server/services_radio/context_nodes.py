@@ -538,12 +538,14 @@ async def get_studio_clock(current_track: Optional[Dict] = None, next_track: Opt
         line = f"- On air: {named(current_track)}, {talk_clock.clock(left)} left."
         vocals = await talk_clock.vocals_at_s(current_track.get("id"))
         if vocals is not None and progress < vocals:
-            line += f" Still in its intro: vocals come in in about {int(vocals - progress)} seconds."
+            line += (f" Still in its intro: vocals come in in about {int(vocals - progress)} seconds. "
+                     f"{talk_clock.room(vocals - progress)}")
         lines.append(line)
     if next_track and next_track.get("name") not in (None, "N/A"):
         vocals = await talk_clock.vocals_at_s(next_track.get("id"))
         lines.append(f"- Next: {named(next_track)}" + (
-            f", vocals come in {int(vocals)} seconds after it starts." if vocals is not None else "."))
+            f", vocals come in {int(vocals)} seconds after it starts (about "
+            f"{talk_clock.words_for(vocals, 'chat')} spoken words at your pace)." if vocals is not None else "."))
     from service_registry import services
     radio = services.radio_mode_service.status(session_id) if services.radio_mode_service and session_id else None
     plan = (radio or {}).get("plan")

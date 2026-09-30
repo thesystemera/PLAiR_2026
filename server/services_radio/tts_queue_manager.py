@@ -27,7 +27,7 @@ NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
 FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
-PACE_KIND = {'announcer': 'announcer', 'interactive': None, 'sting': None, 'shoutouts': None}
+PACE_KIND = {'announcer': 'announcer', 'interactive': 'chat', 'sting': None, 'shoutouts': None}
 
 TTS_TYPE_LABELS = {
     'interactive': 'chat reply',
