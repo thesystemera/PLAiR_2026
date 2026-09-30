@@ -160,7 +160,7 @@ class CommandExecutorService:
             results = await self.vector_search_service.search(
                 query=query,
                 n_results=5,
-                use_ai_analysis=": " not in query and bool(user_id),
+                use_ai_analysis=": " not in query,
                 banned_ids=banned_ids if banned_ids else None,
                 only_ids=only_ids
             )

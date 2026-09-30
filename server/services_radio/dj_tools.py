@@ -163,24 +163,25 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "search_and_play",
         "cost": "memory",
-        "summary": "find tracks in the catalog and play or queue them",
-        "description": "Find tracks in the catalog by one field and play the best match now, or queue matches after "
-                       "the current track. Artist and song searches say plainly when the catalog doesn't have that "
-                       "name and what the closest match was. Use it whenever the listener wants to hear something "
-                       "specific. Typical pattern: mode 'play' for the main request, mode 'queue' for extras.",
+        "summary": "find tracks with the station's smart search and play or queue them",
+        "description": "Find tracks and play the best match now, or queue matches after the current track. By "
+                       "default it is the station's smart search, the same one the app's search box uses: give it "
+                       "the listener's words and it works out which aspects they mean (genre, mood, style, vocals, "
+                       "theme, lyrics, artist) and weighs them. Name a category only to pin the search to one "
+                       "field: primary_artist or song_title for an exact name, which also says plainly when the "
+                       "catalog doesn't have it and what the closest match was. Use it whenever the listener wants "
+                       "to hear something. Typical pattern: mode 'play' for the main request, 'queue' for extras.",
         "parameters": _schema({
-            "category": _enum(SEARCH_CATEGORIES, "Which catalog field to search: song_title, primary_artist, "
-                                                 "similar_artists, primary_genre, secondary_genres (sub-genres/tags), "
-                                                 "mood, style (production), theme (lyrical subject), vocal "
-                                                 "(delivery), lyrics (lyric content), or description: a track "
-                                                 "described in the listener's own words across several of these "
-                                                 "('90s rock duet with a male and a female singer'), for when "
-                                                 "they can't name it."),
-            "query": _string("What to search for, e.g. 'Nine Inch Nails', 'melancholic', 'TR-808 drums'."),
+            "query": _string("What to search for, in the listener's own words: 'Nine Inch Nails', 'melancholic', "
+                             "'90s rock with a male and a female singer', 'something dreamy with TR-808 drums'."),
             "mode": _enum(["play", "queue"], "play = start the first match now; queue = add matches after the "
                                              "current track."),
+            "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search. Or pin one field: "
+                                                 "song_title, primary_artist, similar_artists, primary_genre, "
+                                                 "secondary_genres (sub-genres/tags), mood, style (production), "
+                                                 "theme (lyrical subject), vocal (delivery), lyrics."),
             "within": WITHIN,
-        }, ["category", "query", "mode"]),
+        }, ["query", "mode"]),
     },
     {
         "name": "playback_control",
@@ -666,7 +667,7 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "city_trends":
         return {"topic": text("topic") or ""}
     if name == "search_and_play":
-        return {"category": choice("category", SEARCH_CATEGORIES), "query": text("query", True),
+        return {"category": choice("category", SEARCH_CATEGORIES, "description"), "query": text("query", True),
                 "mode": choice("mode", ["play", "queue"], "play"),
                 "within": choice("within", SEARCH_SCOPES, "catalog")}
     if name == "playback_control":
@@ -873,7 +874,7 @@ class DJToolRuntime:
         query = PulseQuery(listener=listener, text=args["query"], kinds=set(args["kinds"]) or None,
                            kind_order=list(args["kinds"]), when=args.get("when"),
                            limit=args["how_many"] * 4, per_kind=args["how_many"], within=args.get("within"),
-                           use_ai=args.get("within") in ("favourites", "super_likes"),
+                           use_ai=bool(args["query"]) and args["kinds"] == ["track"],
                            allow_fetch=allow_fetch, near_me=args.get("near_me", False),
                            record_demand=self.ctx.origin in ("voice", "text"),
                            max_age_days=args.get("max_age_days"), sort=args.get("sort") or "relevance")
