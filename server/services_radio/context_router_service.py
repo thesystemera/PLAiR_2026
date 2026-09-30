@@ -483,6 +483,8 @@ Set needs_tools=true when the hosts must find something out or make something ha
   air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what listeners said about a song, the
   listener's own posts, what the city is playing or asking about (pulse_search, pulse_detail, city_trends,
   listener_context);
+- the listener pointing back at something that already played for them and isn't simply the current, previous or
+  next track: an earlier song, a shoutout, reply or review they heard (what_aired, then the action tool);
 - a music request or a question about what the catalog has (search_and_play, pulse_search);
 - saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_review);
 - any command: skip, go back, pause, resume, restart or jump within the song, drop a queued track

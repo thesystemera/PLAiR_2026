@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, MonitorSmartphone, Music,
+  Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, History, Loader2, MapPin, Megaphone, MonitorSmartphone, Music,
   Newspaper, Radio, Save, Search, SlidersHorizontal, SkipForward, Ticket, TrendingUp, User, Wrench, X
 } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
@@ -35,6 +35,7 @@ const TOOL_ICONS = {
   save_shoutout_reply: Save,
   save_review: Save,
   listener_context: User,
+  what_aired: History,
   city_trends: TrendingUp,
   pulse_detail: FileText,
   hal11000: Cpu,

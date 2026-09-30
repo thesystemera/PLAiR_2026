@@ -35,6 +35,8 @@ Added:
   go through `preferences_service.apply_radio_settings` (now also what `PUT /api/radio-mode` calls); guests get a
   `radio_mode_updated` patch that the client merges and stores (`PreferencesContext`).
 
+Which post or earlier track: see `docs/LISTENER_TIMELINE.md` (`what_aired`, built 1 Oct).
+
 Tested live on port 8011 (test account and a guest): restart, seek, remove next, like a track, radio settings
 change and read, device list, move to a device that isn't online, reviews of the current track, own posts, seed
 from the previous track, play shoutouts then like the one that aired, guest refusals. Not tested: a real move

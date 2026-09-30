@@ -96,6 +96,8 @@ class CommandExecutorService:
             queue = state.get('queue') or []
             next_index = (state.get('current_index') or 0) + 1 if state.get('current_track') else 0
             return self._track_id_of(queue[next_index]) if next_index < len(queue) else None
+        if target and self.catalog_service is not None and self.catalog_service.get_track(target):
+            return target
         return None
 
     def _track_label(self, track_id):
@@ -398,11 +400,14 @@ class CommandExecutorService:
 
         own = f"{user_id}_"
         if not shoutout_id:
-            shoutout_id = next((sid for sid in community_engagement.last_aired(session_id) if not sid.startswith(own)),
-                               None)
-            if not shoutout_id:
+            aired = [sid for sid in community_engagement.last_aired(session_id) if not sid.startswith(own)]
+            if len(aired) != 1:
                 return {"status": "not_found",
-                        "reason": "No shoutout has played for this listener recently; ask which one they mean"}
+                        "reason": "Several listener posts have played recently: call what_aired to see them and pass "
+                                  "the shoutout_id of the one they mean" if aired
+                        else "No listener post has played recently: call what_aired to look further back, or ask "
+                             "which one they mean"}
+            shoutout_id = aired[0]
         post = self.user_content_service.get_shoutout(shoutout_id)
         if not post:
             return {"status": "not_found", "reason": "No shoutout, reply or review with that id"}
@@ -550,7 +555,7 @@ class CommandExecutorService:
         if target:
             track_id = self._resolve_track_id(session_id, target)
             if track_id:
-                return self.catalog_service.get_track(track_id), TRACK_TARGET_LABELS[target]
+                return self.catalog_service.get_track(track_id), TRACK_TARGET_LABELS.get(target, "earlier track")
             return None, None
 
         if query:

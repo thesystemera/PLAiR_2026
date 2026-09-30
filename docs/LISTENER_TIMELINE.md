@@ -1,6 +1,6 @@
 # Listener timeline: what aired for this listener
 
-Written 30 Sep 2026. Status: design for the owner to react to. Nothing is built.
+Written 30 Sep 2026. Status: phase 1 built and tested on a private backend (1 Oct). Phases 2-4 are open; the "recently heard" view in the app (phase 4) is on the to-do list once the rest is in place: the owner wants it as the at-a-glance check that the timeline is accurate.
 
 ## The problem
 
@@ -53,6 +53,26 @@ stay as shortcuts for the common case. With no id and more than one candidate, a
 guessing.
 
 **No new table in phase 1.** `play_events` is the store. No new writes for tracks or posts.
+
+## Phase 1 as built (1 Oct)
+
+- `server/services/listener_timeline.py`: `timeline(user_id, session_id, kinds, minutes, limit)` reads
+  `play_events` for the listener (by `user_id`, guests by `session_id`) plus the unwritten
+  `analytics_service.event_buffer`, pairs each track's start with its end (`played through` / `skipped` /
+  `on air now`), and labels tracks from the catalog and posts from the community store.
+- Tool `what_aired` (read, memory): `kinds` (track / shoutout / reply / review), `minutes`
+  (`DJ_TIMELINE_DEFAULT_MINUTES` 120, up to `DJ_TIMELINE_MAX_MINUTES` 1440), `how_many` (10, up to
+  `DJ_TIMELINE_MAX_ENTRIES` 25). Not a core tool: the Producer plans it, or the hosts request it.
+- `rate_track`, `seed_radio`, `save_review` and `explain_lyrics` take `track_id` (any catalog track id, resolved in
+  `_resolve_track_id`); `rate_track` `shoutout_id` and `save_shoutout_reply` `parent_id` take a post id.
+  `pulse_search about_track` still takes only current / previous / next.
+- No more guessing: with no id, a shoutout like or reply acts only when a single post played in the last 30
+  minutes; otherwise the tool tells the hosts to call `what_aired` or ask.
+- Tested live (test account and a guest): like a named shoutout after several played, like an earlier track by
+  id, "what have I been listening to", "what was that first song". Not tested: a reply to an earlier shoutout by
+  id, and reviews in the timeline.
+- Seen in testing: for "two songs ago" the hosts picked the track one back and said its title on air. The
+  timeline was right; the counting is the model's.
 
 ## Phases
 
