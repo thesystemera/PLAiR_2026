@@ -40,6 +40,19 @@ const releaseStream = (stream) => {
   })
 }
 
+const isBluetoothLabel = (label) => /bluetooth/i.test(label || '')
+
+const usesBluetoothMicrophone = async (deviceId) => {
+  if (!navigator.mediaDevices?.enumerateDevices) return false
+  try {
+    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput')
+    const chosen = deviceId && inputs.find(device => device.deviceId === deviceId)
+    return chosen ? isBluetoothLabel(chosen.label) : inputs.some(device => isBluetoothLabel(device.label))
+  } catch {
+    return false
+  }
+}
+
 export const useVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false)
   const [analyser, setAnalyser] = useState(null)
@@ -130,6 +143,7 @@ export const useVoiceRecorder = () => {
       if (preferredMicrophoneId) {
         audioConstraints.deviceId = { exact: preferredMicrophoneId }
       }
+      audioConstraints.echoCancellation = await usesBluetoothMicrophone(preferredMicrophoneId)
 
       if (!audioContext.current || audioContext.current.state === 'closed') {
         audioContext.current = new (window.AudioContext || window.webkitAudioContext)()
@@ -149,6 +163,8 @@ export const useVoiceRecorder = () => {
         delete audioConstraints.deviceId
         stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
       }
+
+      logger.info('[VoiceRecorder] Mic:', stream.getAudioTracks()[0]?.label, audioConstraints.echoCancellation ? '(voice path)' : '(raw)')
 
       if (!isStarting.current || audioContext.current !== analysisContext) {
         releaseStream(stream)
