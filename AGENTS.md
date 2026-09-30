@@ -10,4 +10,5 @@ Non-negotiables, in brief:
 - **GPU:** everything runs on the Quadro P6000 via `CUDA_VISIBLE_DEVICES`; never hard-code GPU indexes; no float16 for Whisper.
 - **Machine safety:** port 8000 is public (nginx → plair.live); test on `HOST=127.0.0.1 PORT=8011`. Start PLAiR only with `external_components/plair_start.bat` (it closes any older PLAiR backend first); never kill python/node/nginx/java by image name.
 - **Style:** no explanatory code comments; use relative paths when editing on Windows.
+- **Go easy on paid LLM calls:** Gemini calls cost the owner money and share one quota with the live station. Don't bulk-test against it: keep replays and live test runs to the few calls needed to answer the question (tens, not hundreds), run them one or two at a time, say what you are about to run and roughly how many calls before you start, and never while the owner is testing the app. On 2026-10-01 a 960-call replay caused a 429 on a live DJ turn.
 - **Root causes, not band-aids:** when something misbehaves, read the logs and the raw model input/output, reproduce it and fix the cause. Don't add guards, filters or retries that hide symptoms.

@@ -14,6 +14,10 @@ AI Radio (PLAiR.fm) is a full-stack music streaming application with an AI DJ th
 
 When something misbehaves, find out why it happened before changing code: read the logs and the raw model input/output for that turn, reproduce it, and fix the cause. Don't add guards, filters or retries that hide the symptom. If the cause can't be found yet, say so and add the logging needed to find it.
 
+## Working Rule: Go Easy on Paid LLM Calls
+
+Gemini calls cost the owner money and share one quota with the live station. Don't bulk-test against it: keep replays and live test runs to the few calls needed to answer the question (tens, not hundreds), run them one or two at a time, say what you are about to run and roughly how many calls before you start, and never while the owner is testing the app. On 2026-10-01 a 960-call replay caused a 429 on a live DJ turn.
+
 ## Environment & Infrastructure
 
 All configuration lives in the repo-root `.env` (template: `.env.example`), loaded by `server/config/settings.py`.
