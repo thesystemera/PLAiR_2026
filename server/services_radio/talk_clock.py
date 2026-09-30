@@ -15,6 +15,14 @@ DEPTH_PARAMETER = {
 segment_depth: ContextVar[Optional[str]] = ContextVar("segment_depth", default=None)
 
 
+def pace() -> float:
+    return settings.TALK_WORDS_PER_SECOND
+
+
+def words_for(seconds: float) -> int:
+    return int(seconds * pace())
+
+
 def depth() -> str:
     chosen = segment_depth.get()
     return chosen if chosen in DEPTHS else DEFAULT_DEPTH
@@ -31,7 +39,7 @@ DEPTH_STYLE = {
 def length_line() -> str:
     chosen = depth()
     seconds = settings.SEGMENT_DEPTHS[chosen]
-    words = int(seconds * settings.TALK_WORDS_PER_SECOND)
+    words = words_for(seconds)
     return (f"LENGTH: the listener asked for the {chosen} version: {seconds} seconds on air. HARD LIMIT: no more "
             f"than {words} spoken words in total across both hosts (tags and cues don't count) - about "
             f"{max(2, round(words / LINE_WORDS))} short host lines of around {LINE_WORDS} words each. Count as you "

@@ -12,6 +12,7 @@ from services import usage_tracking
 from services.task_utils import spawn
 from services_radio import radio_schedule as schedule
 from services_radio import radio_segments
+from services_radio import talk_clock
 from services_radio import regional_knowledge as regional_kb
 from services_radio import listener_location as location_resolver
 from services_radio.dj_content_bank import content_bank, spoken_text
@@ -483,7 +484,7 @@ class RadioModeService:
             log_service.warning(f"[RADIO] Station-wide script budget reached "
                                 f"({settings.RADIO_MAX_SCRIPTS_PER_HOUR}/h) - skipping {segment.kind}")
             return None, False
-        spec = radio_segments.segment_prompt(segment, content, ctx, settings.RADIO_WORDS_PER_SECOND)
+        spec = radio_segments.segment_prompt(segment, content, ctx, talk_clock.pace())
         if shared_key:
             spec["next_track"] = ""
         session_dict = {"session_id": ctx.session_id, "user_id": ctx.user_id}

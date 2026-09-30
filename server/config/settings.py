@@ -616,7 +616,6 @@ class Settings:
     RADIO_MAX_RENDER_ATTEMPTS: int = int(os.getenv("RADIO_MAX_RENDER_ATTEMPTS", "2"))
     RADIO_ON_AIR_MAX_S: float = float(os.getenv("RADIO_ON_AIR_MAX_S", "180"))
     RADIO_WRITE_TIMEOUT_S: float = float(os.getenv("RADIO_WRITE_TIMEOUT_S", "60"))
-    RADIO_WORDS_PER_SECOND: float = float(os.getenv("RADIO_WORDS_PER_SECOND", "3.0"))
     RADIO_SEGMENT_MAX_TOKENS: int = int(os.getenv("RADIO_SEGMENT_MAX_TOKENS", "8192"))
     RADIO_MAX_SCRIPTS_PER_HOUR: int = int(os.getenv("RADIO_MAX_SCRIPTS_PER_HOUR", "300"))
     RADIO_SHARED_SCRIPT_TTL_S: float = float(os.getenv("RADIO_SHARED_SCRIPT_TTL_S", "1500"))
