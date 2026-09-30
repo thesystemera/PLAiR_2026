@@ -14,7 +14,7 @@ from config import settings
 from services_radio import area_geocode, area_signals, dj_bank_sources, pulse_agent
 from services_radio import regional_knowledge as regional_kb
 from services_radio.dj_content_bank import artist_key, clip, fact_sentences
-from services_radio.external_news_service import resolve_country
+from services_radio.external_news_service import brief, detailed, resolve_country
 from services_radio.radio_schedule import ClockRule
 
 BUILD_TIMEOUT_S = 20.0
@@ -223,6 +223,7 @@ class NewsSegment(RadioSegment):
                 articles = []
             stories.extend(articles or [])
         facts, keys, seen, picked = [], [], set(), []
+        deep = detailed([a for a in stories if not a.get("aired")])
         for article in stories:
             title = (article.get("title") or "").strip()
             if not title or article.get("aired"):
@@ -235,10 +236,9 @@ class NewsSegment(RadioSegment):
             picked.append(article)
             seen.add(key)
             source = ((article.get("source") or {}).get("name") or "").strip()
-            summary = clip((article.get("description") or "").strip(), 220)
             line = title + (f" ({source})" if source else "")
-            if summary and summary.lower() not in title.lower():
-                line += f": {summary}"
+            if article.get("id") in deep:
+                line += f": {brief(article['summary'], settings.NEWS_REPORT_SUMMARY_CHARS)}"
             facts.append(line)
             keys.append(key)
             if len(facts) >= NEWS_ITEMS:

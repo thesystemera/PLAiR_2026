@@ -422,6 +422,8 @@ class Settings:
     NEWS_READ_PARALLEL: int = int(os.getenv("NEWS_READ_PARALLEL", "3"))
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
+    NEWS_REPORT_SUMMARIES: int = int(os.getenv("NEWS_REPORT_SUMMARIES", "3"))
+    NEWS_REPORT_SUMMARY_CHARS: int = int(os.getenv("NEWS_REPORT_SUMMARY_CHARS", "320"))
     NEWS_ANALYSE_BATCH: int = int(os.getenv("NEWS_ANALYSE_BATCH", "12"))
     NEWS_ANALYSE_PER_RUN: int = int(os.getenv("NEWS_ANALYSE_PER_RUN", "120"))
     NEWS_ANALYSE_WAIT_S: int = int(os.getenv("NEWS_ANALYSE_WAIT_S", "900"))

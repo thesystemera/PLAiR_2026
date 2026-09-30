@@ -50,6 +50,16 @@ _TERRITORIES = dict(Locale("en").territories)
 _COUNTRY_BY_NAME = {name.lower(): code for code, name in _TERRITORIES.items() if code.isalpha()}
 
 
+def detailed(articles: list[dict]) -> set:
+    ranked = sorted((a for a in articles if a.get("summary")), key=lambda a: -(a.get("worth") or 0.0))
+    return {a.get("id") for a in ranked[:settings.NEWS_REPORT_SUMMARIES]}
+
+
+def brief(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "..."
+
+
 def resolve_country(location: Optional[str]) -> Optional[str]:
     if not location:
         return None
@@ -225,13 +235,12 @@ class NewsService:
     def generate_final_report(articles: list[dict]) -> str:
         if not articles:
             return "No news articles found."
-        lines = []
+        lines, deep = [], detailed(articles)
         for i, article in enumerate(articles, 1):
             lines.append(f"{i}. {article['title']}")
             lines.append(f"   Source: {article['source']['name']} | Published: {article['publishedAt']}")
-            summary = article.get("summary") or article["description"]
-            if summary:
-                lines.append(f"   Summary: {summary[:settings.NEWS_SUMMARY_CHARS]}")
+            if article.get("id") in deep:
+                lines.append(f"   Summary: {brief(article['summary'], settings.NEWS_REPORT_SUMMARY_CHARS)}")
             if article.get("aired"):
                 lines.append("   (Already covered for this listener earlier: only mention it as a quick follow-up)")
         return "\n".join(lines)
