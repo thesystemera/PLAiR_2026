@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import numpy as np
-from sqlalchemy import and_, bindparam, case, delete, func, or_, select, update
+from sqlalchemy import and_, bindparam, case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.orm import defer
 
@@ -156,10 +156,15 @@ class StoredItem:
     embedding: Optional[np.ndarray] = None
     where: Optional[dict] = None
     summary: str = ""
+    people: list = field(default_factory=list)
+    category: str = ""
+    tone: str = ""
+    worth: Optional[float] = None
 
     @property
     def token_set(self) -> set:
-        return set(tokens(" ".join([self.title, self.description, self.summary, " ".join(self.tags)])))
+        return set(tokens(" ".join([self.title, self.description, self.summary, " ".join(self.tags),
+                                    " ".join(self.people)])))
 
     @property
     def embed_text(self) -> str:
@@ -175,6 +180,10 @@ class StoredItem:
             "url": self.url,
             "publishedAt": _iso(self.published_at),
             "tags": list(self.tags),
+            "people": list(self.people),
+            "category": self.category,
+            "tone": self.tone,
+            "worth": self.worth,
             "where": self.where,
             "aired": aired,
         }
@@ -216,7 +225,8 @@ def _item(row: NewsItem, with_embedding: bool) -> StoredItem:
         id=row.id, item_key=row.item_key, title=row.title, source=row.source or "", url=row.url or "",
         description=row.description or "", published_at=row.published_at, tags=json.loads(row.tags or "[]"),
         first_seen_at=row.first_seen_at, embedding=unpack(row.embedding) if with_embedding else None,
-        where=_where(row), summary=row.summary or "",
+        where=_where(row), summary=row.summary or "", people=json.loads(row.entities or "[]"),
+        category=row.category or "", tone=row.tone or "", worth=row.worth,
     )
 
 
@@ -373,7 +383,9 @@ class NewsStore:
                        or_(NewsLink.link_id.is_(None), NewsLink.url.is_not(None),
                            and_(NewsLink.attempts < settings.NEWS_LINK_MAX_ATTEMPTS,
                                 NewsLink.checked_at < now - timedelta(seconds=settings.NEWS_LINK_RETRY_S))))
-                .order_by(NewsItem.first_seen_at.desc()).limit(limit))).all()
+                .order_by(exists().where(NewsPull.ranked_ids.cast(JSONB).contains(
+                    func.jsonb_build_array(NewsItem.id))).desc(), NewsItem.first_seen_at.desc())
+                .limit(limit))).all()
         return [tuple(row) for row in rows]
 
     async def settle(self, item_id: int, publisher_url: str) -> Optional[int]:
@@ -474,26 +486,37 @@ class NewsStore:
             rows = (await db.execute(query)).scalars().all()
         return {row.id: _item(row, with_embeddings) for row in rows}
 
-    async def unlocated(self, limit: int) -> list[tuple]:
+    async def unanalysed(self, limit: int) -> list[dict]:
+        now = datetime.now(timezone.utc)
         async with self._sessions()() as db:
             rows = (await db.execute(
-                select(NewsItem.id, NewsItem.title, NewsItem.description, NewsItem.country)
-                .where(NewsItem.geo_checked.is_(False), NewsItem.expires_at > datetime.now(timezone.utc))
-                .order_by(NewsItem.published_at.desc().nullslast()).limit(limit))).all()
-        return [tuple(row) for row in rows]
+                select(NewsItem.id, NewsItem.title, NewsItem.source, NewsItem.summary, NewsItem.description,
+                       NewsItem.country)
+                .where(NewsItem.analysed_at.is_(None), NewsItem.expires_at > now,
+                       or_(NewsItem.read_status.is_not(None),
+                           NewsItem.first_seen_at < now - timedelta(seconds=settings.NEWS_ANALYSE_WAIT_S)))
+                .order_by(NewsItem.first_seen_at.desc()).limit(limit))).all()
+        return [{"id": item_id, "title": title, "source": source, "text": summary or description or "",
+                 "country": country} for item_id, title, source, summary, description, country in rows]
 
-    async def set_where(self, located: dict) -> None:
-        if not located:
+    async def set_analysis(self, cards: dict, wheres: dict) -> None:
+        if not cards:
             return
+        now = datetime.now(timezone.utc)
         async with self._sessions()() as db:
-            for item_id, where in located.items():
+            current = dict((await db.execute(select(NewsItem.id, NewsItem.tags).where(
+                NewsItem.id.in_(list(cards))))).all())
+            for item_id, card in cards.items():
+                where = wheres.get(item_id)
                 await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(
-                    geo_checked=True, latitude=where.lat if where else None, longitude=where.lon if where else None,
+                    tags=json.dumps(list(dict.fromkeys(json.loads(current.get(item_id) or "[]") + card["tags"]))[:24]),
+                    entities=json.dumps(card["people"]), category=card["category"], tone=card["tone"],
+                    worth=card["worth"], analysed_at=now,
+                    latitude=where.lat if where else None, longitude=where.lon if where else None,
                     geo_radius_m=where.radius_m if where else None, geo_scope=where.scope if where else None,
                     geo_label=where.label if where else None))
             await db.commit()
-        if any(located.values()):
-            self._mark_dirty()
+        self._mark_dirty()
 
     async def missing_embeddings(self, ids: Iterable[int]) -> list[tuple]:
         ids = list(ids)

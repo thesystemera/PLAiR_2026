@@ -404,6 +404,14 @@ class PlacesNode(KnowledgeNode):
         return items
 
 
+def _news_text(source: str, tone: Optional[str]) -> str:
+    return " · ".join(part for part in (source, tone if tone and tone != "neutral" else "") if part)
+
+
+def _news_score(score: float, worth: Optional[float]) -> float:
+    return score * (0.9 + 0.2 * (worth if worth is not None else 0.5))
+
+
 class NewsNode(KnowledgeNode):
     name = "news"
     kinds = (KIND_NEWS,)
@@ -415,8 +423,10 @@ class NewsNode(KnowledgeNode):
             published = _parse_time(article.get("publishedAt"))
             items.append(PulseItem(
                 id=f"news:{article.get('id')}", kind=KIND_NEWS, title=article.get("title") or "",
-                text=(article.get("source") or {}).get("name", ""), when=published, source="Google News",
-                url=article.get("url") or "", score=max(0.1, score - rank * 0.04), aired=bool(article.get("aired")),
+                text=_news_text((article.get("source") or {}).get("name", ""), article.get("tone")),
+                when=published, source="Google News", url=article.get("url") or "",
+                score=_news_score(max(0.1, score - rank * 0.04), article.get("worth")),
+                aired=bool(article.get("aired")),
                 payload={"article_id": article.get("id")}, published=published,
                 where=geo.Where.from_dict(article.get("where"))))
         return items
@@ -448,9 +458,11 @@ class NewsNode(KnowledgeNode):
             meta = match.meta
             published = _parse_time(meta.get("published_at"))
             items.append(PulseItem(
-                id=meta["id"], kind=KIND_NEWS, title=meta.get("title") or "", text=meta.get("source") or "",
+                id=meta["id"], kind=KIND_NEWS, title=meta.get("title") or "",
+                text=_news_text(meta.get("source") or "", meta.get("tone")),
                 when=published, source="Google News", url=meta.get("url") or "",
-                score=match.score, published=published, where=geo.Where.from_dict(meta.get("where")),
+                score=_news_score(match.score, meta.get("worth")), published=published,
+                where=geo.Where.from_dict(meta.get("where")),
                 payload={"article_id": meta.get("article_id")}))
         return items
 
@@ -1346,6 +1358,8 @@ class Pulse:
                          "details": article.get("summary") or article.get("description") or "",
                          "source": (article.get("source") or {}).get("name"),
                          "published": article.get("publishedAt"), "tags": article.get("tags"),
+                         "people": article.get("people"), "category": article.get("category"),
+                         "tone": article.get("tone"),
                          **_where_entry(listener, article.get("where"))}
         if entry is None and kind == KIND_ARTIST:
             found = await self.node("artists").search(PulseQuery(listener=listener, text=key, kinds={KIND_ARTIST}))

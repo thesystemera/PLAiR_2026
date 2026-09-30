@@ -159,7 +159,7 @@ class BackgroundTasksService:
             try:
                 await asyncio.sleep(settings.PULSE_REQUEST_REBUILD_S)
                 if services.news_service is not None:
-                    await services.news_service.locate_pending()
+                    await services.news_service.analyse_pending()
                 await place_shoutouts()
                 await rebuild_if_dirty(local_knowledge.local_vector_db)
                 await rebuild_if_dirty(local_knowledge.news_vector_db)

@@ -33,7 +33,8 @@ SELECT id AS rowid,
            'id', 'news:' || id, 'kind', 'news', 'article_id', id, 'title', title,
            'text', COALESCE(NULLIF(summary, ''), description),
            'source', source, 'url', url, 'published_at', published_at, 'country', country,
-           'region_key', region_key, 'tags', tags::json,
+           'region_key', region_key, 'tags', tags::json, 'entities', entities::json, 'category', category,
+           'tone', tone, 'worth', worth,
            'where', CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN json_build_object(
                'label', geo_label, 'lat', latitude, 'lon', longitude, 'radius_m', geo_radius_m, 'scope', geo_scope) END
        )::text AS metadata_json
@@ -123,11 +124,14 @@ class LocalKnowledgeVectorDatabaseService(SemanticVectorDatabaseService):
 
 class NewsVectorDatabaseService(SemanticVectorDatabaseService):
     category_specs = (
-        Category("news_title", 0.40, field_text("title"), "The headline"),
-        Category("news_tags", 0.22, field_text("tags"), "Topics of the story (rugby, election, music, weather)"),
-        Category("news_details", 0.18, field_text("text"), "The story's summary"),
-        Category("news_place", 0.12, where_label, "Where the story happens: street, suburb, city or country"),
-        Category("news_outlet", 0.08, field_text("source"), "The publisher"),
+        Category("news_title", 0.28, field_text("title"), "The headline"),
+        Category("news_tags", 0.20, field_text("tags"), "Topics of the story (rugby, election, music, weather)"),
+        Category("news_people", 0.14, field_text("entities"), "People, bands, teams and organisations in the story"),
+        Category("news_details", 0.14, field_text("text", 900), "The story's summary"),
+        Category("news_place", 0.10, where_label, "Where the story happens: street, suburb, city or country"),
+        Category("news_kind", 0.08, lambda item: ", ".join(p for p in (item.get("category"), item.get("tone")) if p),
+                 "What sort of story it is and its tone (sport, crime; good news, funny, sad)"),
+        Category("news_outlet", 0.06, field_text("source"), "The publisher"),
     )
     log_channel = "system"
     service_label = "News"
@@ -208,8 +212,10 @@ LocalKnowledgePromptCache = make_prompt_cache(
 
 NewsPromptCache = make_prompt_cache(
     NewsVectorDatabaseService, "news_query_intent_cache", "news stories",
-    "- 'Radiohead': news_title and news_tags high.\n"
+    "- 'Radiohead': news_people and news_title high.\n"
     "- 'rugby': news_tags high, news_title some.\n"
+    "- 'some good news': news_kind high.\n"
+    "- 'what's Luxon been up to': news_people high, news_title some.\n"
     "- 'what's RNZ saying about the election': news_outlet and news_tags high.\n"
     "- 'what happened on K Road': news_place high, news_title some.")
 

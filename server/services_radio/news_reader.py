@@ -3,6 +3,7 @@ import re
 from typing import Optional
 
 import httpx
+import nltk
 import trafilatura
 
 from config import settings
@@ -15,6 +16,8 @@ READ_FAILED = "failed"
 
 SENTENCE_END = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"'”’]))\s+(?=[\"'“‘]?[A-Z0-9])")
 MIN_SUMMARY_CHARS = 40
+MIN_BODY_CHARS = 250
+MIN_SENTENCES = 3
 USAGE = ("news", "article_read")
 
 
@@ -22,22 +25,38 @@ def _fold(text: str) -> str:
     return " ".join(re.sub(r"[^\w ]", " ", (text or "").lower()).split())
 
 
+_sentence_model_ready = False
+
+
+def _ensure_sentence_model() -> None:
+    global _sentence_model_ready
+    if _sentence_model_ready:
+        return
+    try:
+        nltk.data.find("tokenizers/punkt_tab")
+    except LookupError:
+        nltk.download("punkt_tab", quiet=True)
+    _sentence_model_ready = True
+
+
+def _sentences(text: str) -> list[str]:
+    try:
+        return [s for s in nltk.sent_tokenize(text) if s.strip()]
+    except LookupError:
+        return [s for s in SENTENCE_END.split(text) if s.strip()]
+
+
 def summarize(title: str, description: str, text: str, limit: int) -> str:
     title_key = _fold(title)
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip() and _fold(line) != title_key]
-    body = " ".join(lines)
-    description = (description or "").strip().rstrip(".").strip()
-    parts = []
-    if description and _fold(description)[:60] not in _fold(body)[:len(description) + 40]:
-        parts.append(description + ".")
-    for sentence in SENTENCE_END.split(body):
-        if sum(len(p) + 1 for p in parts) + len(sentence) > limit:
-            break
-        parts.append(sentence)
-    summary = " ".join(parts).strip()
-    if not summary and body:
-        summary = body[:limit].rsplit(" ", 1)[0]
-    return summary
+    body = " ".join(line.strip() for line in (text or "").splitlines()
+                    if line.strip() and _fold(line) != title_key)
+    sentences = _sentences(body) if body else []
+    if len(body) >= MIN_BODY_CHARS and len(sentences) >= MIN_SENTENCES:
+        picked = sentences if len(sentences) <= 5 else sentences[:3] + sentences[-2:]
+        summary = " ".join(picked)
+        return summary if len(summary) <= limit else summary[:limit].rsplit(" ", 1)[0] + "..."
+    description = " ".join((description or "").split())
+    return description if len(description) >= MIN_SUMMARY_CHARS else ""
 
 
 def _extract(page: str, url: str) -> tuple[str, str]:
@@ -69,7 +88,8 @@ class NewsReader:
         if response.status_code >= 400 or "html" not in response.headers.get("content-type", "html"):
             return None, READ_FAILED
         description, text = await asyncio.to_thread(_extract, response.text, str(response.url))
-        summary = summarize(title, description, text, settings.NEWS_SUMMARY_CHARS)
+        await asyncio.to_thread(_ensure_sentence_model)
+        summary = await asyncio.to_thread(summarize, title, description, text, settings.NEWS_SUMMARY_CHARS)
         if len(summary) < MIN_SUMMARY_CHARS:
             web_fetch.report(url, False, policy)
             return None, READ_EMPTY

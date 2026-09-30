@@ -291,8 +291,6 @@ class Settings:
     PULSE_CITY_RADIUS_KM: float = float(os.getenv("PULSE_CITY_RADIUS_KM", "60"))
     GEO_ENABLED: bool = os.getenv("GEO_ENABLED", "true").lower() == "true"
     GEO_MISS_RETRY_DAYS: int = int(os.getenv("GEO_MISS_RETRY_DAYS", "30"))
-    GEO_LOCATE_BATCH: int = int(os.getenv("GEO_LOCATE_BATCH", "40"))
-    GEO_LOCATE_PER_RUN: int = int(os.getenv("GEO_LOCATE_PER_RUN", "200"))
     DJ_TOOL_MAX_ROUNDS: int = int(os.getenv("DJ_TOOL_MAX_ROUNDS", "4"))
     DJ_TURN_TRACE_ENABLED: bool = os.getenv("DJ_TURN_TRACE_ENABLED", "true").lower() == "true"
     DJ_TURN_TRACE_HOURS: int = int(os.getenv("DJ_TURN_TRACE_HOURS", "48"))
@@ -424,6 +422,9 @@ class Settings:
     NEWS_READ_PARALLEL: int = int(os.getenv("NEWS_READ_PARALLEL", "3"))
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
+    NEWS_ANALYSE_BATCH: int = int(os.getenv("NEWS_ANALYSE_BATCH", "12"))
+    NEWS_ANALYSE_PER_RUN: int = int(os.getenv("NEWS_ANALYSE_PER_RUN", "120"))
+    NEWS_ANALYSE_WAIT_S: int = int(os.getenv("NEWS_ANALYSE_WAIT_S", "900"))
     WEB_PAGE_GAP_S: float = float(os.getenv("WEB_PAGE_GAP_S", "1.0"))
     WEB_PAGE_JITTER_S: float = float(os.getenv("WEB_PAGE_JITTER_S", "1.0"))
     WEB_PAGE_PARALLEL: int = int(os.getenv("WEB_PAGE_PARALLEL", "2"))

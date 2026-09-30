@@ -18,7 +18,7 @@ from services.http_client import fetch
 from services import usage_tracking, web_fetch
 from services.llm_router import LLM_BACKGROUND
 from services.task_utils import spawn
-from services_radio import news_links
+from services_radio import news_analysis, news_links
 from services_radio.news_reader import READ_OK, NewsReader
 from services_radio.news_store import (KIND_GEO, KIND_SEARCH, KIND_TOP, KIND_TOPIC, NewsStore, StoredPull, cosine,
                                        covers, lexical_similarity, normalize_query, search_terms, title_key)
@@ -84,9 +84,9 @@ class NewsService:
         self._embedding: set[int] = set()
         self._last_prune = 0.0
         self._embed_failed_at = 0.0
-        self._locating = asyncio.Lock()
         self._reading = asyncio.Lock()
         self._resolving = asyncio.Lock()
+        self._analysing = asyncio.Lock()
         self.reader = NewsReader()
         log_service.external("News Service initialized (Google News RSS"
                              + (", persistent semantic store)" if self.store_enabled else ")"))
@@ -323,32 +323,36 @@ class NewsService:
         finally:
             self._embedding.difference_update(todo)
 
-    async def locate_pending(self, limit: Optional[int] = None) -> int:
+    async def analyse_pending(self) -> int:
         from services_radio import geo
-        if not self.store_enabled or self._locating.locked() or not geo.resolver.available():
+        if not self.store_enabled or self._analysing.locked():
             return 0
-        located = 0
-        async with self._locating:
-            pending = await self.store.unlocated(limit or settings.GEO_LOCATE_PER_RUN)
+        analysed = placed = 0
+        async with self._analysing:
+            pending = await self.store.unanalysed(settings.NEWS_ANALYSE_PER_RUN)
             by_country: dict[str, list] = {}
-            for row in pending:
-                by_country.setdefault((row[3] or settings.NEWS_DEFAULT_COUNTRY).upper(), []).append(row)
-            for country, rows in by_country.items():
-                for start in range(0, len(rows), settings.GEO_LOCATE_BATCH):
-                    batch = rows[start:start + settings.GEO_LOCATE_BATCH]
-                    texts = [f"{title} | {(description or '')[:160]}" for _, title, description, _ in batch]
+            for story in pending:
+                by_country.setdefault((story["country"] or settings.NEWS_DEFAULT_COUNTRY).upper(), []).append(story)
+            for country, stories in by_country.items():
+                for start in range(0, len(stories), settings.NEWS_ANALYSE_BATCH):
+                    batch = stories[start:start + settings.NEWS_ANALYSE_BATCH]
                     try:
                         with usage_tracking.system_scope("news"):
-                            phrases = await geo.locate_texts(self.ai_service, texts, country_name(country))
+                            cards = await news_analysis.analyse(self.ai_service, batch, country_name(country))
                     except Exception as e:
-                        log_service.warning(f"News: locating stories failed: {type(e).__name__}: {e}")
-                        return located
-                    wheres = await geo.resolver.resolve_many(phrases, country)
-                    await self.store.set_where({row[0]: where for row, where in zip(batch, wheres)})
-                    located += sum(1 for where in wheres if where)
-        if pending:
-            log_service.detail(f"News: placed {located} of {len(pending)} stories on the map", "pulse")
-        return located
+                        log_service.warning(f"News: story analysis failed: {type(e).__name__}: {e}")
+                        break
+                    wheres = {}
+                    if geo.resolver.available():
+                        ids = [item_id for item_id, card in cards.items() if card["place"]]
+                        resolved = await geo.resolver.resolve_many([cards[i]["place"] for i in ids], country)
+                        wheres = {item_id: where for item_id, where in zip(ids, resolved) if where}
+                    await self.store.set_analysis(cards, wheres)
+                    analysed += len(cards)
+                    placed += len(wheres)
+        if analysed:
+            log_service.external(f"News: analysed {analysed} stories ({placed} placed on the map)")
+        return analysed
 
     async def _identify(self, articles: list[dict], country: str) -> None:
         links = await self.store.links({i for i in (news_links.google_id(a["url"]) for a in articles) if i})
@@ -408,6 +412,7 @@ class NewsService:
             counts[status] = counts.get(status, 0) + 1
         log_service.external(f"News: read {len(pending)} stories ("
                              + ", ".join(f"{n} {status}" for status, n in sorted(counts.items())) + ")")
+        spawn(self.analyse_pending(), name="news_analyse")
         return counts.get(READ_OK, 0)
 
     async def _maybe_prune(self) -> None:
@@ -433,7 +438,6 @@ class NewsService:
                                          ask_vector, "ok" if ids else "empty")
         pull_text = "" if ask_vector is not None or kind == KIND_TOP else fetch_query
         spawn(self._embed_pending(ids, pull.id, pull_text), name="news_embed")
-        spawn(self.locate_pending(), name="news_locate")
         spawn(self.resolve_pending(), name="news_resolve")
         spawn(self._maybe_prune(), name="news_prune")
         return pull
