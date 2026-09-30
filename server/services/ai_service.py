@@ -412,6 +412,7 @@ class AIService(SingletonService):
             review: Optional[Callable[[str, list], Optional[str]]] = None,
             refresh_tools: Optional[Callable[[], list]] = None,
             thinking_budget: Optional[int] = None,
+            followup_thinking_budget: Optional[int] = None,
             cache_label: Optional[str] = None,
             spec: str = llm_router.LLM_LIVE
     ) -> Dict[str, Any]:
@@ -420,11 +421,10 @@ class AIService(SingletonService):
         if max_tokens is None:
             max_tokens = 8192
 
-        base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
-        if thinking_budget is not None:
-            base["thinking_config"] = types.ThinkingConfig(thinking_budget=thinking_budget)
-
-        def build_configs(declarations):
+        def build_configs(declarations, budget=thinking_budget):
+            base = dict(temperature=temperature, max_output_tokens=max_tokens, system_instruction=system_instruction)
+            if budget is not None:
+                base["thinking_config"] = types.ThinkingConfig(thinking_budget=budget)
             if not declarations:
                 plain = types.GenerateContentConfig(**base)
                 return plain, plain
@@ -439,7 +439,9 @@ class AIService(SingletonService):
                     function_calling_config=types.FunctionCallingConfig(mode=value))})
             return with_tools, mode(types.FunctionCallingConfigMode.NONE)
 
+        followup_budget = thinking_budget if followup_thinking_budget is None else followup_thinking_budget
         tool_config, final_config = build_configs(function_declarations)
+        followup_tool_config, followup_final_config = build_configs(function_declarations, followup_budget)
         declared = {declaration.name for declaration in function_declarations or []}
 
         contents: list = [types.Content(role="user", parts=[types.Part.from_text(text=user_message)])]
@@ -467,7 +469,8 @@ class AIService(SingletonService):
                 spec=spec,
                 client=self.client,
                 contents=contents,
-                config=final_config if is_last else tool_config,
+                config=((followup_final_config if is_last else followup_tool_config) if tool_rounds
+                        else (final_config if is_last else tool_config)),
                 prefer=model,
                 cache_label=cache_label
             )
@@ -583,6 +586,10 @@ class AIService(SingletonService):
                     name=fc.name,
                     response=self._cap_tool_result(result, settings.LLM_TOOL_RESULT_MAX_CHARS)
                 )))
+            if text.strip():
+                response_parts.append(types.Part.from_text(
+                    text="[STUDIO] Your line above has aired and these calls have run. Reply on air now; call a "
+                         "tool only if you need something you don't have yet."))
             contents.append(types.Content(role="user", parts=response_parts))
 
             if refresh_tools is not None:
@@ -591,6 +598,7 @@ class AIService(SingletonService):
                     function_declarations = refreshed
                     declared = {declaration.name for declaration in refreshed}
                     tool_config, final_config = build_configs(refreshed)
+                    followup_tool_config, followup_final_config = build_configs(refreshed, followup_budget)
                     log_service.detail(f"DJ tools now: {', '.join(sorted(declared))}", "ai")
 
     @staticmethod

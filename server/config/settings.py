@@ -296,6 +296,7 @@ class Settings:
     DJ_TURN_TRACE_HOURS: int = int(os.getenv("DJ_TURN_TRACE_HOURS", "48"))
     DJ_TOOL_THINKING_BUDGET: Optional[int] = (int(os.getenv("DJ_TOOL_THINKING_BUDGET", "-1"))
                                               if os.getenv("DJ_TOOL_THINKING_BUDGET", "-1").strip() else None)
+    DJ_TOOL_FOLLOWUP_THINKING_BUDGET: int = int(os.getenv("DJ_TOOL_FOLLOWUP_THINKING_BUDGET", "0"))
     DJ_TOOL_CALL_TIMEOUT_S: float = float(os.getenv("DJ_TOOL_CALL_TIMEOUT_S", "8"))
     DJ_TOOL_MAX_CALLS_PER_TURN: int = int(os.getenv("DJ_TOOL_MAX_CALLS_PER_TURN", "10"))
     DJ_MICRO_MAX_TOKENS: int = int(os.getenv("DJ_MICRO_MAX_TOKENS", "2048"))

@@ -913,6 +913,7 @@ class DJPromptService:
             max_rounds=settings.DJ_TOOL_MAX_ROUNDS,
             spec=LLM_DJ,
             thinking_budget=settings.DJ_TOOL_THINKING_BUDGET,
+            followup_thinking_budget=settings.DJ_TOOL_FOLLOWUP_THINKING_BUDGET,
             cache_label="dj_interactive",
             call_timeout_s=settings.DJ_TOOL_CALL_TIMEOUT_S,
             on_preamble=handle_preamble,
