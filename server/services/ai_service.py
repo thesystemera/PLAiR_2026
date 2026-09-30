@@ -588,8 +588,8 @@ class AIService(SingletonService):
                 )))
             if text.strip():
                 response_parts.append(types.Part.from_text(
-                    text="[STUDIO] Your line above has aired and these calls have run. Reply on air now; call a "
-                         "tool only if you need something you don't have yet."))
+                    text="[STUDIO] Your line above has aired and these calls have run. Call a tool only if you "
+                         "need something you don't have yet; otherwise reply on air now."))
             contents.append(types.Content(role="user", parts=response_parts))
 
             if refresh_tools is not None:

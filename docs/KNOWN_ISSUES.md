@@ -7,6 +7,22 @@ Critical bugs and architectural issues that need to be addressed.
 Details and plans are in `docs/HANDOVER_2026-09-30.md` ("Open"), and the full list in `docs/AUDIT_2026-09-30_DJ_VOICE.md`.
 
 - **Repeated DJ script after `[TASK]`.** Gemini sometimes writes the whole script twice in one reply (4 of 45 turns). It no longer reaches the notes or history, but it is still generated and paid for. The cause is unproven; the likely lead is the history format. The turn trace now records every returned part.
+- **Stray text before the on-air reply after a tool call** (found 1 Oct, 2 of 62 live turns; cause found, wording
+  fixed, watch for recurrence). With thinking off in the follow-up round, Gemini sometimes continues the studio's
+  `[STUDIO]` message as if it were its own text ("Then close with [INTERNAL DIALOGUE] and [TASK].", "Otherwise,
+  just write the reply.") or rewrites the STUDIO CLOCK block before `[BROADCAST]`. When the stray text contains
+  `[INTERNAL DIALOGUE]`, the real reply lands in the notes and the fragment fails in the voice queue ("NO SPEAKER TAG
+  FOUND"). Replays of recorded turns (`tests/dj_followup_replay.py`): a studio message ending on the open
+  conditional alone gave stray text in about 40% of replies; the old wording ("Reply on air now; call a tool only
+  if...") 3 of 160; the same words with the sentence closed ("...; otherwise reply on air now.", now in
+  `ai_service.run_gemini_tool_turn`) 0 of 142. A thinking budget in the follow-up round is not the answer: 256 or
+  1024 tokens made the hosts call the same tool again in 1-3 of 12 replies. Not done: a parser rule that keeps
+  text outside any channel off air (owner's call; it would hide a recurrence rather than prevent it).
+- **The DJ's fallback model fails the follow-up round** (seen 1 Oct 01:56): after a 429 on gemini-2.5-flash the
+  turn moved to gemini-3.5-flash-lite, which answered the next round with 400 INVALID_ARGUMENT; the turn only
+  finished because 2.5-flash was back. Not investigated.
+- **Hosts speak a second hand-off line after scheduling a segment** (11 of 12 replays) although the tool result
+  says one line in total. The closed wording above let some go straight to the notes (15 of 142).
 - **Clip-match thresholds not re-tuned for mpnet.** Sound effects are cache-only, so a missed `%sfx%` is silently dropped. Measure hit rates first.
 - **`search_and_play` plays the closest match straight away** when nothing matches, before the DJs can ask.
 - **Hosts name the listener's street on air.** The listener context allows it; privacy decision pending.
