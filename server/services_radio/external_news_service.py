@@ -433,6 +433,11 @@ class NewsService:
         spawn(self.analyse_pending(), name="news_analyse")
         return counts.get(READ_OK, 0)
 
+    async def upkeep(self) -> None:
+        await self.resolve_pending()
+        await self.read_pending()
+        await self.analyse_pending()
+
     async def _maybe_prune(self) -> None:
         if time.monotonic() - self._last_prune < PRUNE_INTERVAL_S:
             return
