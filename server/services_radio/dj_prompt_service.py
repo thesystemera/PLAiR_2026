@@ -27,14 +27,14 @@ PARTIAL_SIGN_OFF = re.compile(r"\b(partial|partly|incomplete|not done)\b", re.IG
 
 BROADCAST_CUE = "Write the script for this segment now, following the instructions above."
 
-SCRIPT_PROVIDER_NOTES = {
-    "deepseek": (
-        "\n\nMARKUP DISCIPLINE: Tildes are reserved for ~paralanguage~ sound cues. Never write asterisks; use "
-        "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
-        "\n\nLENGTH: This is live radio - keep it tight. Use at most 90 spoken words in total across all hosts "
-        "(tags and cues don't count). Cover only the most interesting points; never pad."
-    )
-}
+RADIO_SEGMENT_MARKUP_NOTE = (
+    "\n\nMARKUP DISCIPLINE: Tildes are reserved for ~paralanguage~ sound cues. Never write asterisks; use "
+    "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
+)
+SCRIPT_PROVIDER_NOTES = {"deepseek": RADIO_SEGMENT_MARKUP_NOTE}
+ANNOUNCER_PROVIDER_NOTES = {"deepseek": RADIO_SEGMENT_MARKUP_NOTE + (
+    "\n\nLENGTH: This is a link between two songs - keep it tight. Use at most 90 spoken words in total across all "
+    "hosts (tags and cues don't count), fewer when the TIME CONSTRAINT says so. Never pad.")}
 
 PERSONAL_NODE_NEUTRAL_PREFIXES = {
     'user_persona': ("LISTENER PERSONA: Guest",),
@@ -43,11 +43,12 @@ PERSONAL_NODE_NEUTRAL_PREFIXES = {
 }
 
 INTERPRETATION_CACHE_NODES = {
-    'news': ('instruction_news', 'data_news_report', 'user_basic'),
-    'weather': ('instruction_weather', 'data_weather_report'),
-    'biography': ('instruction_biography', 'data_biography'),
-    'lyrics': ('instruction_lyrics', 'data_lyrics'),
+    'news': ('instruction_news', 'data_news_report', 'user_basic', 'segment_length'),
+    'weather': ('instruction_weather', 'data_weather_report', 'segment_length'),
+    'biography': ('instruction_biography', 'data_biography', 'segment_length'),
+    'lyrics': ('instruction_lyrics', 'data_lyrics', 'segment_length'),
 }
+INTERPRETATION_TYPES = ('biography', 'lyrics', 'news', 'weather', 'location_search', 'events', 'shoutouts')
 HOURLY_INTERPRETATIONS = {'weather'}
 
 NA_MARKER = "[N/A]"
@@ -65,10 +66,6 @@ RADIO_SEGMENT_BASE_NODES = [
     'data_radio_segment',
     'user_local_time'
 ]
-RADIO_SEGMENT_MARKUP_NOTE = (
-    "\n\nMARKUP DISCIPLINE: Tildes are reserved for ~paralanguage~ sound cues. Never write asterisks; use "
-    "CAPITALS for emphasis. Every ~, %, @, & and $ must belong to a complete tag."
-)
 
 SEGMENT_DATA_NODES = {
     'news': 'data_news_report',
@@ -163,6 +160,7 @@ class DJPromptService:
                     'instruction_dj_tools',
                     'tool_guidance',
                     'station_recent_airings',
+                    'studio_clock',
                     'city_pulse'
                 ],
                 'use_ai_picker': True
@@ -408,6 +406,8 @@ class DJPromptService:
                 'use_ai_picker': False
             },
         }
+        for kind in INTERPRETATION_TYPES:
+            self.node_configs[kind]['required_nodes'].append('segment_length')
 
     def _select_time_preset(self, time_presets: dict, time_remaining: float) -> dict:
         sorted_presets = sorted(
@@ -722,7 +722,7 @@ class DJPromptService:
                                                  session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
-    async def gpt_news_interpretation(self, query, is_topic, categories, location, session_dict, depth=None):
+    async def gpt_news_interpretation(self, query, is_topic, categories, location, session_dict):
         context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='news',
             user_id=session_dict.get('user_id'),
@@ -730,8 +730,7 @@ class DJPromptService:
             query=query,
             is_topic=is_topic,
             categories=categories,
-            location=location,
-            depth=depth
+            location=location
         )
 
         system_prompt = assemble_prompt(context_data, final_nodes)
@@ -1102,7 +1101,8 @@ class DJPromptService:
             messages=[{"role": "system", "content": system_prompt}],
             clean_role='dj_announcements',
             role=LLM_ANNOUNCE,
-            validate_script=True
+            validate_script=True,
+            provider_notes=ANNOUNCER_PROVIDER_NOTES
         )
 
         log_service.api(f"Announcer: Announcements Raw Response: {response_text}")

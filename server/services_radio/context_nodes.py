@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 
 from services_radio.conversation_service import get_conversation_history
 from services_radio.context_node_registry import node_registry
-from services_radio import context_service
+from services_radio import context_service, talk_clock
 from services_radio.dj_content_bank import content_bank, TalkingPoint, menu_for_window
 
 
@@ -339,15 +339,16 @@ async def get_guidelines_critical(**_) -> str:
 async def get_guidelines_general(**_) -> str:
     return (
         "GUIDELINES:\n"
-        "1. For music and podcast requests, provide quick, immediate responses and concise recommendations.\n"
+        "1. LENGTH is yours to judge, every reply: the STUDIO CLOCK block sets out how. For a segment tool, pass "
+        "the depth the listener's words call for.\n"
         "2. Integrate LISTENER PROFILE, LISTENER PERSONA, and LISTENER'S FAVOURITE ARTISTS to personalize interactions.\n"
-        "3. Touch on brief tangents if relevant, but swiftly circle back to the main topic.\n"
-        "4. Express strong opinions or use edgy humor concisely, dialing back appropriately for sensitive topics.\n"
+        "3. Tangents are welcome when they fit the length; circle back to the main topic.\n"
+        "4. Express strong opinions or use edgy humor, dialing back appropriately for sensitive topics.\n"
         "5. Review the CONVERSATION HISTORY to avoid repetition and acknowledge prior interactions.\n"
         "6. [HAL11000] and [STUDIO TOOLS] entries are actions and lookups the studio already carried out for that "
         "message; use them for continuity, never repeat them.\n"
         "7. When appropriate, reference past interactions to create a more cohesive dialogue.\n"
-        "8. Gauge conversation depth from CONVERSATION HISTORY - if topic is already covered, keep responses brief and end dialogue naturally."
+        "8. Gauge conversation depth from CONVERSATION HISTORY - if a topic is already covered, don't go over it again."
     )
 
 @node_registry.register(
@@ -501,7 +502,7 @@ async def get_instruction_news(**_) -> str:
         "You are [LEO], the expert who keeps our listeners informed about what's happening in their world, "
         "breaking down news stories with the perfect mix of insight and street-wise perspective.\n\n"
         "GUIDELINES:\n"
-        "1. Summarize the key points from the news report concisely.\n"
+        "1. Cover the stories in the news report; the ones with a summary carry the detail.\n"
         "2. Provide context and relevance to the listeners.\n"
         "3. Keep the update engaging and informative.\n"
         "4. If a specific query was provided, focus on news related to that query.\n"
@@ -510,16 +511,67 @@ async def get_instruction_news(**_) -> str:
     )
 
 @node_registry.register(
+    "segment_length",
+    "How long the listener wants this segment, from the depth the hosts chose",
+    cost="low",
+    visible=False
+)
+async def get_segment_length(**_) -> str:
+    return talk_clock.length_line()
+
+
+@node_registry.register(
+    "studio_clock",
+    "What's on air, how long is left, when vocals come in and what's lined up",
+    cost="low",
+    visible=False
+)
+async def get_studio_clock(current_track: Optional[Dict] = None, next_track: Optional[Dict] = None,
+                           session_id: Optional[str] = None, **_) -> str:
+    def named(track: Dict) -> str:
+        return f"'{track.get('name')}' by {track.get('artists')}"
+
+    lines = []
+    if current_track and current_track.get("name") not in (None, "N/A"):
+        progress = current_track.get("progress_seconds") or 0
+        left = max(0, (current_track.get("duration_seconds") or 0) - progress)
+        line = f"- On air: {named(current_track)}, {talk_clock.clock(left)} left."
+        vocals = await talk_clock.vocals_at_s(current_track.get("id"))
+        if vocals is not None and progress < vocals:
+            line += f" Still in its intro: vocals come in in about {int(vocals - progress)} seconds."
+        lines.append(line)
+    if next_track and next_track.get("name") not in (None, "N/A"):
+        vocals = await talk_clock.vocals_at_s(next_track.get("id"))
+        lines.append(f"- Next: {named(next_track)}" + (
+            f", vocals come in {int(vocals)} seconds after it starts." if vocals is not None else "."))
+    from service_registry import services
+    radio = services.radio_mode_service.status(session_id) if services.radio_mode_service and session_id else None
+    plan = (radio or {}).get("plan")
+    if plan:
+        lines.append(f"- Lined up: a {plan.get('label') or 'talk'} break when this song ends.")
+    return (
+        "STUDIO CLOCK (yours to read, never to read out):\n" + "\n".join(lines or ["- Nothing is playing."]) + "\n"
+        "YOUR CALL ON LENGTH for this reply - size it to what the listener actually said and to the clock:\n"
+        "- A thanks, a hello, a mic test or a passing remark: one short line, maybe a word back. Then stop.\n"
+        "- A request you handle with a tool: the line you say with the call is most of it; after the result add "
+        "only what's new (what's playing, what was found).\n"
+        "- A segment you schedule: one hand-off line in total. The segment carries the detail.\n"
+        "- A real question you answer yourselves: as long as the answer needs, no longer.\n"
+        "- A song that has just started: be done before its vocals come in."
+    )
+
+
+@node_registry.register(
     "data_news_report",
     "Formats news report data",
     cost="medium",
     visible=False
 )
-async def get_data_news_report(query: Optional[str] = None, is_topic: bool = False, categories: Optional[List[str]] = None, location: Optional[str] = None, user=None, dj_service=None, session_id: Optional[str] = None, listener_location=None, depth: Optional[str] = None, **_) -> str:
+async def get_data_news_report(query: Optional[str] = None, is_topic: bool = False, categories: Optional[List[str]] = None, location: Optional[str] = None, user=None, dj_service=None, session_id: Optional[str] = None, listener_location=None, **_) -> str:
     if query is None and location is None:
         return ""
     return await context_service.get_news_data(dj_service, user, query, is_topic, categories, location,
-                                               session_id=session_id, listener=listener_location, depth=depth)
+                                               session_id=session_id, listener=listener_location)
 
 @node_registry.register(
     "instruction_weather",

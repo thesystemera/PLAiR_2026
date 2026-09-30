@@ -164,11 +164,16 @@ class CommandExecutorService:
                            if self._name_matches(value, track_id, NAME_SEARCH_FIELDS[prefix])]
                 entry["exact"] = bool(matches)
                 if matches:
-                    track_ids = matches + [track_id for track_id in track_ids if track_id not in matches]
+                    track_ids = matches
                 else:
                     missing.append(value)
                     entry["closest"] = self._track_label(track_ids[0])
-            tracks_to_add.extend(track_ids)
+            labels = {self._track_label(track_id) for track_id in tracks_to_add}
+            for track_id in track_ids:
+                label = self._track_label(track_id)
+                if label is None or label not in labels:
+                    labels.add(label)
+                    tracks_to_add.append(track_id)
             per_query.append(entry)
             if play and not play_first:
                 play_first = True
@@ -457,7 +462,7 @@ class CommandExecutorService:
                 user = result.scalar_one_or_none()
         return user, await location_resolver.resolve(user, session_dict.get('session_id'))
 
-    async def execute_news(self, session_dict, scope, categories, query, depth=None, gate=None):
+    async def execute_news(self, session_dict, scope, categories, query, gate=None):
         location = 'WORLD'
         if scope == "national":
             location = 'NATIONAL'
@@ -468,7 +473,7 @@ class CommandExecutorService:
         if not query and categories:
             query = categories[0].upper()
         await self._trigger_news_interpretation(query or "general news", is_topic, [c.lower() for c in categories],
-                                                location, session_dict, depth=depth, gate=gate)
+                                                location, session_dict, gate=gate)
 
     async def execute_events(self, session_dict, when, query, gate=None):
         _, listener = await self._listener_location(session_dict)
@@ -586,14 +591,13 @@ class CommandExecutorService:
             return
         await self._await_gate(gate)
 
-        forecast_display = forecast_type if forecast_type != "current" else "current conditions"
+        periods = [forecast_type] if isinstance(forecast_type, str) else list(forecast_type)
+        forecast_display = " and ".join("current conditions" if period == "current" else period for period in periods)
         await self._air_segment(gpt_response, 'weather', f"Retrieved {forecast_display} forecast",
                                 session_dict.get('user_id'), session_dict.get('session_id'))
 
-    async def _trigger_news_interpretation(self, query, is_topic, categories, location, session_dict, depth=None,
-                                           gate=None):
-        gpt_response = await self.dj_prompt_service.gpt_news_interpretation(query, is_topic, categories, location,
-                                                                            session_dict, depth=depth)
+    async def _trigger_news_interpretation(self, query, is_topic, categories, location, session_dict, gate=None):
+        gpt_response = await self.dj_prompt_service.gpt_news_interpretation(query, is_topic, categories, location, session_dict)
         if not gpt_response:
             return
         await self._await_gate(gate)

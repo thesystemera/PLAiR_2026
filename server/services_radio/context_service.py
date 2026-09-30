@@ -9,6 +9,7 @@ from services import log_service
 from services_radio.external_news_service import resolve_country, resolve_city
 from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver
+from services_radio import talk_clock
 from services_radio.listener_location import ListenerLocation
 
 AUDIO_FEATURES_CACHE_TTL_S = 3600
@@ -469,14 +470,13 @@ async def get_news_data(
     categories: Optional[List] = None,
     location: Optional[str] = None,
     session_id: Optional[str] = None,
-    listener: Optional[ListenerLocation] = None,
-    depth: Optional[str] = None
+    listener: Optional[ListenerLocation] = None
 ) -> str:
 
     if not dj_service or not dj_service.news_service:
         return ""
-    from services_radio.external_news_service import DEFAULT_DEPTH, depth_plan
-    stories, summaries = depth_plan(depth)
+    from services_radio.external_news_service import depth_plan
+    stories, summaries = depth_plan(talk_clock.depth())
 
     news_service = dj_service.news_service
     scope = (location or "WORLD").upper()
@@ -519,8 +519,7 @@ async def get_news_data(
             await note_request(user, getattr(user, "id", None), session_id, "news", asked,
                                [(f"news:{a.get('id')}", a.get("title")) for a in articles[:5]])
         cat_str = ', '.join(categories) if categories else 'N/A'
-        return (f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\n"
-                f"LOCATION: {location}\nDEPTH ASKED FOR: {depth or DEFAULT_DEPTH}")
+        return f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\nLOCATION: {location}"
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch news: {e}")
         return ""
@@ -535,11 +534,14 @@ async def get_weather_data(dj_service, user, forecast_type: str = "current", ses
     if not coords:
         return ""
 
+    periods = [forecast_type] if isinstance(forecast_type, str) else list(forecast_type)
     try:
-        weather_data = await dj_service.web_service.retrieve_weather_data(coords[0], coords[1], forecast_type)
-        if not weather_data:
-            return ""
-        return f"WEATHER REPORT ({forecast_type.upper()}):\n{weather_data}"
+        reports = []
+        for period in periods:
+            weather_data = await dj_service.web_service.retrieve_weather_data(coords[0], coords[1], period)
+            if weather_data:
+                reports.append(f"WEATHER REPORT ({period.upper()}):\n{weather_data}")
+        return "\n\n".join(reports)
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch weather: {e}")
         return ""

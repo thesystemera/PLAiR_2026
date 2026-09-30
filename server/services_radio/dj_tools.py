@@ -10,7 +10,8 @@ from config.settings import settings
 from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
-from services_radio.external_news_service import DEFAULT_DEPTH, NEWS_DEPTHS
+from services_radio import talk_clock
+from services_radio.talk_clock import DEFAULT_DEPTH
 from services_radio.dj_command_executor import (
     SEARCH_CATEGORY_PREFIXES,
     SEED_MODE_DISPLAY,
@@ -62,8 +63,11 @@ UNTRUSTED_NODE_KEYS = {
 FAILED_STATUSES = {"refused", "error", "no_results", "not_found", "no_lyrics", "scrapped"}
 FAILED_ACTION_NOTE = "This did NOT happen. Don't pretend it did - tell the listener honestly, in character."
 
-SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. "
-                "Acknowledge it briefly and hand off - do not invent the details.")
+WEATHER_PERIODS = ["current", "today", "tomorrow", "week"]
+PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
+SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. It needs one hand-off line "
+                "in total: if you already said a line with this call, that was it - go straight to your notes and "
+                "[TASK]. Do not invent the details.")
 
 _PARENT_ID = re.compile(r"^\d+_\d+$")
 
@@ -209,15 +213,11 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "cost": "segment",
         "summary": "a full produced news bulletin",
         "description": "A full produced news bulletin that airs right after your reply: world, national or local, "
-                       "optionally one category or topic. You choose how much: depth sets how many stories are "
-                       "covered and how many come with details. For a quick headline, pulse_search is enough.",
+                       "optionally one category or topic. For a quick headline, pulse_search is enough.",
         "parameters": _schema({
             "scope": _enum(["world", "national", "local"], "Geographic scope."),
             "category": _enum(NEWS_CATEGORIES, "Optional news category."),
             "query": _string("Optional specific topic."),
-            "depth": _enum(list(NEWS_DEPTHS), "How much the listener wants: " + ", ".join(
-                f"{name} ({stories} stories, {summaries} with details)"
-                for name, (stories, summaries) in settings.NEWS_REPORT_DEPTHS.items()) + f". Default {DEFAULT_DEPTH}."),
         }, ["scope"]),
     },
     {
@@ -227,8 +227,10 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "summary": "a full produced weather forecast",
         "description": "A full produced weather forecast for the listener's location that airs right after your "
                        "reply.",
-        "parameters": _schema({"when": _enum(["current", "today", "tomorrow", "week"], "Forecast period.")},
-                              ["when"]),
+        "parameters": _schema({"when": {
+            "type": "array", "items": _enum(WEATHER_PERIODS, "A forecast period."),
+            "description": "The period or periods the listener asked about, e.g. ['today', 'tomorrow']. One segment "
+                           "covers them all."}}, ["when"]),
     },
     {
         "name": "get_events",
@@ -326,7 +328,8 @@ def _tool_notes(tool: Dict[str, Any]) -> str:
 
 
 def _declaration(tool: Dict[str, Any]) -> types.FunctionDeclaration:
-    parameters = {**tool["parameters"], "properties": {**tool["parameters"].get("properties", {}),
+    extra = {"depth": talk_clock.DEPTH_PARAMETER} if tool["name"] in SEGMENT_TOOLS else {}
+    parameters = {**tool["parameters"], "properties": {**tool["parameters"].get("properties", {}), **extra,
                                                        "_done_with": DONE_WITH}}
     return types.FunctionDeclaration(name=tool["name"], description=f"{tool['description']}\n\n{_tool_notes(tool)}",
                                      parameters_json_schema=parameters)
@@ -522,7 +525,8 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         depth = args.get("depth") if args.get("depth") != DEFAULT_DEPTH else ""
         return _brace("news", scope, args.get("category") or "", depth or "", value=args.get("query"))
     if name == "get_weather":
-        return _brace("weather", {"today": "today", "tomorrow": "tomorrow", "week": "this_week"}.get(args["when"], ""))
+        return _brace("weather", *({"week": "this_week"}.get(period, period) for period in args["when"]
+                                   if period != "current"))
     if name == "get_events":
         return _brace("events", {"today": "today", "tomorrow": "tomorrow", "week": "this_week"}.get(args["when"], ""),
                       value=args.get("query"))
@@ -583,6 +587,16 @@ class DJTurnContext:
 
 
 def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_tool_args(name, args)
+    if name in SEGMENT_TOOLS:
+        depth = str(args.get("depth") or DEFAULT_DEPTH).strip().lower()
+        if depth not in talk_clock.DEPTHS:
+            raise ValueError(f"'depth' must be one of {', '.join(talk_clock.DEPTHS)}")
+        normalized["depth"] = depth
+    return normalized
+
+
+def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     def text(key: str, required: bool = False) -> Optional[str]:
         value = args.get(key)
         value = str(value).strip()[:MAX_TEXT_ARG_CHARS] if value is not None else ""
@@ -652,10 +666,14 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         category = args.get("category")
         return {"scope": choice("scope", ["world", "national", "local"], "world"),
                 "category": choice("category", NEWS_CATEGORIES) if category else None,
-                "query": text("query"),
-                "depth": choice("depth", list(NEWS_DEPTHS), DEFAULT_DEPTH)}
+                "query": text("query")}
     if name == "get_weather":
-        return {"when": choice("when", ["current", "today", "tomorrow", "week"], "current")}
+        when = args.get("when") or ["current"]
+        when = [when] if isinstance(when, str) else list(when)
+        periods = list(dict.fromkeys(str(period).strip().lower() for period in when if str(period).strip()))
+        if not periods or any(period not in WEATHER_PERIODS for period in periods):
+            raise ValueError(f"'when' must be one or more of {', '.join(WEATHER_PERIODS)}")
+        return {"when": periods}
     if name == "get_events":
         when = choice("when", ["today", "tonight", "tomorrow", "weekend", "week", "month"], "month")
         return {"when": {"tonight": "today", "weekend": "week"}.get(when, when), "query": text("query")}
@@ -681,14 +699,12 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
-    if name in READ_TOOLS and ctx.calls_made < settings.DJ_TOOL_MAX_CALLS_PER_TURN:
+    if ctx.calls_made >= settings.DJ_TOOL_MAX_CALLS_PER_TURN:
+        return "That's the limit of tool calls for one turn: work with what you already have."
+    if name in READ_TOOLS:
         return None
     if ctx.origin not in ("voice", "text"):
         return "Actions can only be taken in direct response to the listener's own message."
-    if ctx.calls_made >= settings.DJ_TOOL_MAX_CALLS_PER_TURN:
-        return "Too many actions in one turn."
-    if name in READ_TOOLS:
-        return None
 
     if name in SAVE_TOOLS:
         if not ctx.user_id:
@@ -773,13 +789,18 @@ class DJToolRuntime:
                                 kinds=list(args.get("kinds") or []), cost=TOOL_COSTS.get(name, "memory"))
         log_service.detail(f"[DJ TOOLS] {record['command']} for session {self.session_dict.get('session_id')}",
                            "commands")
+        depth = talk_clock.segment_depth.set(args.get("depth"))
         try:
             result = await handler(args)
+            if name in PLAY_TOOLS and isinstance(result, dict) and result.get("now_playing"):
+                result = {**result, **await talk_clock.started_note(self._current_track_id())}
         except Exception:
             record["outcome"] = "failed"
             await self.ctx.activity("result", call_id=call_id, tool=name, source="tool", outcome="failed",
                                     summary="couldn't")
             raise
+        finally:
+            talk_clock.segment_depth.reset(depth)
         record["result"] = result
         outcome, summary = activity_summary(name, result)
         record["outcome"], record["summary"] = outcome, summary
@@ -882,6 +903,12 @@ class DJToolRuntime:
         return {"status": "ok", "note": READ_NOTE, "city": listener.region.name if listener.region else None,
                 "items": [item.brief(listener.tz_name) for item in items]}
 
+    def _current_track_id(self) -> Optional[str]:
+        playback = self.executor.playback_service if self.executor is not None else None
+        state = playback.get_state(self.session_dict.get("session_id")) if playback is not None else None
+        queue, index = (state or {}).get("queue") or [], (state or {}).get("current_index") or 0
+        return (queue[index] or {}).get("id") if 0 <= index < len(queue) else None
+
     def _schedule(self, coro, name: str) -> Dict[str, Any]:
         self.executor.spawn_segment(coro, self.session_dict, f"dj_tool_{name}")
         return {"status": "scheduled", "note": SEGMENT_NOTE}
@@ -910,7 +937,7 @@ class DJToolRuntime:
         categories = [args["category"]] if args.get("category") else []
         return self._schedule(
             self.executor.execute_news(self.session_dict, args["scope"], categories, args.get("query") or "",
-                                       depth=args["depth"], gate=self.ctx.gate), "get_news")
+                                       gate=self.ctx.gate), "get_news")
 
     async def _get_weather(self, args):
         return self._schedule(

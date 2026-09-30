@@ -18,7 +18,7 @@ from services.http_client import fetch
 from services import usage_tracking, web_fetch
 from services.llm_router import LLM_BACKGROUND
 from services.task_utils import spawn
-from services_radio import news_analysis, news_links
+from services_radio import news_analysis, news_links, talk_clock
 from services_radio.news_reader import READ_OK, NewsReader
 from services_radio.news_store import (KIND_GEO, KIND_SEARCH, KIND_TOP, KIND_TOPIC, NewsStore, StoredPull, cosine,
                                        covers, lexical_similarity, normalize_query, search_terms, title_key)
@@ -51,13 +51,9 @@ _TERRITORIES = dict(Locale("en").territories)
 _COUNTRY_BY_NAME = {name.lower(): code for code, name in _TERRITORIES.items() if code.isalpha()}
 
 
-NEWS_DEPTHS = tuple(settings.NEWS_REPORT_DEPTHS) or ("standard",)
-DEFAULT_DEPTH = "standard" if "standard" in NEWS_DEPTHS else NEWS_DEPTHS[0]
-
-
 def depth_plan(depth: Optional[str]) -> tuple[int, int]:
-    return settings.NEWS_REPORT_DEPTHS.get(depth or DEFAULT_DEPTH) or settings.NEWS_REPORT_DEPTHS.get(
-        DEFAULT_DEPTH, (8, 3))
+    return settings.NEWS_REPORT_DEPTHS.get(depth or talk_clock.DEFAULT_DEPTH) or settings.NEWS_REPORT_DEPTHS.get(
+        talk_clock.DEFAULT_DEPTH, (8, 3))
 
 
 def detailed(articles: list[dict], count: Optional[int] = None) -> set:

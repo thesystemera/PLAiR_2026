@@ -423,6 +423,13 @@ class Settings:
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
     NEWS_SUMMARY_SENTENCES: int = int(os.getenv("NEWS_SUMMARY_SENTENCES", "5"))
+    SEGMENT_DEPTHS: dict = {
+        name.strip(): int(seconds) for name, seconds in (
+            entry.split(":") for entry in os.getenv(
+                "SEGMENT_DEPTHS", "brief:20,standard:45,detailed:100").split(",") if entry.count(":") == 1)}
+    TALK_WORDS_PER_SECOND: float = float(os.getenv("TALK_WORDS_PER_SECOND", "2.0"))
+    TALK_INTRO_MIN_S: float = float(os.getenv("TALK_INTRO_MIN_S", "4"))
+    TALK_ALIGNMENT_MIN: float = float(os.getenv("TALK_ALIGNMENT_MIN", "0.5"))
     NEWS_REPORT_DEPTHS: dict = {
         name.strip(): (int(stories), int(summaries)) for name, stories, summaries in (
             entry.split(":") for entry in os.getenv(
