@@ -2,7 +2,7 @@ import re
 import time
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict
 from functools import lru_cache
@@ -18,7 +18,6 @@ from services_radio.context_node_registry import node_registry
 from services_radio.context_service import gather_raw_dependencies
 from services_radio import listener_location as location_resolver
 from services_radio import talk_clock
-from services_radio.dj_content_bank import spoken_text
 from services_radio.context_router_service import context_router_service
 from services import log_service
 from services.llm_router import LLM_LIVE, LLM_DJ, LLM_ANNOUNCE, LLM_INTERPRET
@@ -610,6 +609,14 @@ class DJPromptService:
 
         response = NA_MARKER if NA_MARKER in response else clean_gpt_output(response, role=clean_role)
 
+        if validate_script:
+            from services_radio.conversation_service import write_turn_trace
+            write_turn_trace({
+                "at": datetime.now(timezone.utc).isoformat(), "kind": "script", "script": gpt_type,
+                "prompt": "\n\n".join(str(m.get("content") or "") for m in messages),
+                "response": response, "words": talk_clock.spoken_words(response),
+            })
+
         if settings.PROMPT_DEBUG_ENABLED and debug_timestamp:
             import asyncio
             asyncio.create_task(self._async_save_response_debug(gpt_type, debug_timestamp, response))
@@ -685,6 +692,10 @@ class DJPromptService:
         if NA_MARKER in response_text:
             return ""
         final_text = response_text.strip().strip('"')
+        seconds = settings.SEGMENT_DEPTHS[talk_clock.depth()]
+        log_service.commands(
+            f"segment {gpt_type} | {talk_clock.depth()}: {seconds}s = {talk_clock.words_for(seconds)} words at "
+            f"{talk_clock.pace():.2f} words/s | wrote {talk_clock.spoken_words(final_text)} words")
         if result_key and result_cache and is_valid_dj_script(final_text, clean_role):
             result_cache.set(result_key, final_text)
         return final_text
@@ -1114,7 +1125,7 @@ class DJPromptService:
         log_service.commands(
             f"{log_service.who(session_dict.get('session_id'), user_id=session_dict.get('user_id'))}: announcement | "
             f"window {time_remaining:.1f}s = {talk_clock.words_for(time_remaining, 'announcer')} words at "
-            f"{talk_clock.pace('announcer'):.2f} words/s | wrote {len(spoken_text(response_text).split())} words")
+            f"{talk_clock.pace('announcer'):.2f} words/s | wrote {talk_clock.spoken_words(response_text)} words")
         return response_text
 
     @gpt_error_handler
@@ -1150,4 +1161,8 @@ class DJPromptService:
 
         if not response_text or NA_MARKER in response_text:
             return None
+        log_service.commands(
+            f"talk break {segment_spec.get('label')} | {int(segment_spec.get('seconds') or 0)}s = "
+            f"{segment_spec.get('target_words')} words at {talk_clock.pace():.2f} words/s | wrote "
+            f"{talk_clock.spoken_words(response_text)} words")
         return response_text.strip().strip('"')

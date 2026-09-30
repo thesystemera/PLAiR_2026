@@ -13,6 +13,7 @@ from database import AsyncSessionLocal
 from database.models import Conversation, User
 from services import log_service
 from services_radio.tts_stream_planner import spoken_text
+from services_radio import talk_clock
 from services import usage_tracking
 from services.task_utils import spawn
 from config.settings import settings
@@ -629,6 +630,7 @@ class ConversationService:
             log_service.commands(
                 f"{log_service.who(session_id)}: DJ turn | {trace['route']}"
                 f" | tools: {runtime.summary() or 'none'} | {(result or {}).get('rounds') or 0} round(s)"
+                f" | said {sum(talk_clock.spoken_words(part) for part in [*spoken, main_response or ''])} words"
                 f" | [TASK] {notes.rsplit('[TASK]', 1)[1].strip()[:160] if '[TASK]' in notes else 'none'}")
             write_turn_trace({
                 "at": datetime.now(timezone.utc).isoformat(), "turn_id": ctx.turn_id,

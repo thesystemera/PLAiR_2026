@@ -1,3 +1,4 @@
+import re
 import time
 from contextvars import ContextVar
 from typing import Optional
@@ -22,6 +23,7 @@ DEPTH_PARAMETER = {
 segment_depth: ContextVar[Optional[str]] = ContextVar("segment_depth", default=None)
 
 
+_TAG = re.compile(r"\[[^\]]*\]")
 PACE_KINDS = ("chat", "announcer", "segment")
 PACE_BOUNDS = (1.0, 3.5)
 PACE_MIN_WORDS = 25
@@ -96,6 +98,11 @@ def pace(kind: str = "segment") -> float:
 
 def words_for(seconds: float, kind: str = "segment") -> int:
     return int(seconds * pace(kind))
+
+
+def spoken_words(script: str) -> int:
+    from services_radio.dj_content_bank import spoken_text
+    return len(_TAG.sub(" ", spoken_text(script or "")).split())
 
 
 def depth() -> str:
