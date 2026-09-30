@@ -457,7 +457,7 @@ class CommandExecutorService:
                 user = result.scalar_one_or_none()
         return user, await location_resolver.resolve(user, session_dict.get('session_id'))
 
-    async def execute_news(self, session_dict, scope, categories, query, gate=None):
+    async def execute_news(self, session_dict, scope, categories, query, depth=None, gate=None):
         location = 'WORLD'
         if scope == "national":
             location = 'NATIONAL'
@@ -468,7 +468,7 @@ class CommandExecutorService:
         if not query and categories:
             query = categories[0].upper()
         await self._trigger_news_interpretation(query or "general news", is_topic, [c.lower() for c in categories],
-                                                location, session_dict, gate=gate)
+                                                location, session_dict, depth=depth, gate=gate)
 
     async def execute_events(self, session_dict, when, query, gate=None):
         _, listener = await self._listener_location(session_dict)
@@ -590,8 +590,10 @@ class CommandExecutorService:
         await self._air_segment(gpt_response, 'weather', f"Retrieved {forecast_display} forecast",
                                 session_dict.get('user_id'), session_dict.get('session_id'))
 
-    async def _trigger_news_interpretation(self, query, is_topic, categories, location, session_dict, gate=None):
-        gpt_response = await self.dj_prompt_service.gpt_news_interpretation(query, is_topic, categories, location, session_dict)
+    async def _trigger_news_interpretation(self, query, is_topic, categories, location, session_dict, depth=None,
+                                           gate=None):
+        gpt_response = await self.dj_prompt_service.gpt_news_interpretation(query, is_topic, categories, location,
+                                                                            session_dict, depth=depth)
         if not gpt_response:
             return
         await self._await_gate(gate)

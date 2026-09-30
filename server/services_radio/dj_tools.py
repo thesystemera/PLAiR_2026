@@ -10,6 +10,7 @@ from config.settings import settings
 from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
+from services_radio.external_news_service import DEFAULT_DEPTH, NEWS_DEPTHS
 from services_radio.dj_command_executor import (
     SEARCH_CATEGORY_PREFIXES,
     SEED_MODE_DISPLAY,
@@ -114,6 +115,10 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "max_age_days": {"type": "number", "description": "Only shoutouts and news from the last N days."},
             "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), "
                                       "nearest."),
+            "how_many": {"type": "number",
+                         "description": f"How many results you want per kind: {settings.PULSE_TOOL_PER_KIND} by "
+                                        f"default, up to {settings.PULSE_TOOL_MAX_PER_KIND}. Ask for more when the "
+                                        "listener wants a rundown, fewer for a quick fact."},
         }),
     },
     {
@@ -204,11 +209,15 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "cost": "segment",
         "summary": "a full produced news bulletin",
         "description": "A full produced news bulletin that airs right after your reply: world, national or local, "
-                       "optionally one category or topic. For a quick headline, pulse_search is enough.",
+                       "optionally one category or topic. You choose how much: depth sets how many stories are "
+                       "covered and how many come with details. For a quick headline, pulse_search is enough.",
         "parameters": _schema({
             "scope": _enum(["world", "national", "local"], "Geographic scope."),
             "category": _enum(NEWS_CATEGORIES, "Optional news category."),
             "query": _string("Optional specific topic."),
+            "depth": _enum(list(NEWS_DEPTHS), "How much the listener wants: " + ", ".join(
+                f"{name} ({stories} stories, {summaries} with details)"
+                for name, (stories, summaries) in settings.NEWS_REPORT_DEPTHS.items()) + f". Default {DEFAULT_DEPTH}."),
         }, ["scope"]),
     },
     {
@@ -510,7 +519,8 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         return _brace(args["rating"], BRACE_TARGETS[args["target"]])
     if name == "get_news":
         scope = {"national": "national", "local": "local"}.get(args["scope"], "")
-        return _brace("news", scope, args.get("category") or "", value=args.get("query"))
+        depth = args.get("depth") if args.get("depth") != DEFAULT_DEPTH else ""
+        return _brace("news", scope, args.get("category") or "", depth or "", value=args.get("query"))
     if name == "get_weather":
         return _brace("weather", {"today": "today", "tomorrow": "tomorrow", "week": "this_week"}.get(args["when"], ""))
     if name == "get_events":
@@ -603,10 +613,15 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             max_age = float(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None
         except (TypeError, ValueError):
             raise ValueError("'max_age_days' must be a number")
+        try:
+            how_many = int(float(args["how_many"])) if args.get("how_many") not in (None, "") else None
+        except (TypeError, ValueError):
+            raise ValueError("'how_many' must be a number")
+        how_many = max(1, min(how_many or settings.PULSE_TOOL_PER_KIND, settings.PULSE_TOOL_MAX_PER_KIND))
         return {"query": text("query") or "", "kinds": kinds,
                 "when": choice("when", PULSE_WHEN) if when else None,
                 "near_me": bool(args.get("near_me")), "max_age_days": max_age,
-                "sort": choice("sort", PULSE_SORT, "relevance")}
+                "sort": choice("sort", PULSE_SORT, "relevance"), "how_many": how_many}
     if name == "pulse_detail":
         return {"item_id": text("item_id", True)}
     if name == "listener_context":
@@ -637,7 +652,8 @@ def normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         category = args.get("category")
         return {"scope": choice("scope", ["world", "national", "local"], "world"),
                 "category": choice("category", NEWS_CATEGORIES) if category else None,
-                "query": text("query")}
+                "query": text("query"),
+                "depth": choice("depth", list(NEWS_DEPTHS), DEFAULT_DEPTH)}
     if name == "get_weather":
         return {"when": choice("when", ["current", "today", "tomorrow", "week"], "current")}
     if name == "get_events":
@@ -816,7 +832,8 @@ class DJToolRuntime:
             return {"status": "empty", "note": EMPTY_NOTE}
         allow_fetch = bool(args["query"]) and self.ctx.live_fetches < settings.DJ_TOOL_MAX_LIVE_FETCHES
         query = PulseQuery(listener=listener, text=args["query"], kinds=set(args["kinds"]) or None,
-                           kind_order=list(args["kinds"]), when=args.get("when"), limit=12, per_kind=3,
+                           kind_order=list(args["kinds"]), when=args.get("when"),
+                           limit=args["how_many"] * 4, per_kind=args["how_many"],
                            allow_fetch=allow_fetch, near_me=args.get("near_me", False),
                            record_demand=self.ctx.origin in ("voice", "text"),
                            max_age_days=args.get("max_age_days"), sort=args.get("sort") or "relevance")
@@ -893,7 +910,7 @@ class DJToolRuntime:
         categories = [args["category"]] if args.get("category") else []
         return self._schedule(
             self.executor.execute_news(self.session_dict, args["scope"], categories, args.get("query") or "",
-                                       gate=self.ctx.gate), "get_news")
+                                       depth=args["depth"], gate=self.ctx.gate), "get_news")
 
     async def _get_weather(self, args):
         return self._schedule(

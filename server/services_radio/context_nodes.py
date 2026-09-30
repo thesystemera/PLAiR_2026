@@ -515,11 +515,11 @@ async def get_instruction_news(**_) -> str:
     cost="medium",
     visible=False
 )
-async def get_data_news_report(query: Optional[str] = None, is_topic: bool = False, categories: Optional[List[str]] = None, location: Optional[str] = None, user=None, dj_service=None, session_id: Optional[str] = None, listener_location=None, **_) -> str:
+async def get_data_news_report(query: Optional[str] = None, is_topic: bool = False, categories: Optional[List[str]] = None, location: Optional[str] = None, user=None, dj_service=None, session_id: Optional[str] = None, listener_location=None, depth: Optional[str] = None, **_) -> str:
     if query is None and location is None:
         return ""
     return await context_service.get_news_data(dj_service, user, query, is_topic, categories, location,
-                                               session_id=session_id, listener=listener_location)
+                                               session_id=session_id, listener=listener_location, depth=depth)
 
 @node_registry.register(
     "instruction_weather",

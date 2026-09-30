@@ -469,11 +469,14 @@ async def get_news_data(
     categories: Optional[List] = None,
     location: Optional[str] = None,
     session_id: Optional[str] = None,
-    listener: Optional[ListenerLocation] = None
+    listener: Optional[ListenerLocation] = None,
+    depth: Optional[str] = None
 ) -> str:
 
     if not dj_service or not dj_service.news_service:
         return ""
+    from services_radio.external_news_service import DEFAULT_DEPTH, depth_plan
+    stories, summaries = depth_plan(depth)
 
     news_service = dj_service.news_service
     scope = (location or "WORLD").upper()
@@ -501,10 +504,12 @@ async def get_news_data(
                     query = f"{query} {city}"
                 is_topic = False
         if local_city and hasattr(news_service, "get_local_news"):
-            articles, news_report = await news_service.get_local_news(local_city, country=country, subject=session_id)
+            articles, news_report = await news_service.get_local_news(local_city, country=country, subject=session_id,
+                                                                      top_n=stories, summaries=summaries)
         else:
             articles, news_report = await news_service.get_top_news(query=query, is_topic=is_topic, country=country,
-                                                                    subject=session_id)
+                                                                    subject=session_id, top_n=stories,
+                                                                    summaries=summaries)
         if not articles or not news_report:
             return ""
         if session_id and hasattr(news_service, "mark_aired"):
@@ -514,7 +519,8 @@ async def get_news_data(
             await note_request(user, getattr(user, "id", None), session_id, "news", asked,
                                [(f"news:{a.get('id')}", a.get("title")) for a in articles[:5]])
         cat_str = ', '.join(categories) if categories else 'N/A'
-        return f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\nLOCATION: {location}"
+        return (f"NEWS REPORT:\n{news_report}\n\nQUERY: {query}\nIS TOPIC: {is_topic}\nCATEGORIES: {cat_str}\n"
+                f"LOCATION: {location}\nDEPTH ASKED FOR: {depth or DEFAULT_DEPTH}")
     except Exception as e:
         log_service.warning(f"[Context] Failed to fetch news: {e}")
         return ""

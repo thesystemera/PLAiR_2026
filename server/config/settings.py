@@ -422,7 +422,12 @@ class Settings:
     NEWS_READ_PARALLEL: int = int(os.getenv("NEWS_READ_PARALLEL", "3"))
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
-    NEWS_REPORT_SUMMARIES: int = int(os.getenv("NEWS_REPORT_SUMMARIES", "3"))
+    NEWS_REPORT_DEPTHS: dict = {
+        name.strip(): (int(stories), int(summaries)) for name, stories, summaries in (
+            entry.split(":") for entry in os.getenv(
+                "NEWS_REPORT_DEPTHS", "brief:4:1,standard:8:3,detailed:12:6").split(",") if entry.count(":") == 2)}
+    PULSE_TOOL_PER_KIND: int = int(os.getenv("PULSE_TOOL_PER_KIND", "3"))
+    PULSE_TOOL_MAX_PER_KIND: int = int(os.getenv("PULSE_TOOL_MAX_PER_KIND", "8"))
     NEWS_REPORT_SUMMARY_CHARS: int = int(os.getenv("NEWS_REPORT_SUMMARY_CHARS", "320"))
     NEWS_ANALYSE_BATCH: int = int(os.getenv("NEWS_ANALYSE_BATCH", "12"))
     NEWS_ANALYSE_PER_RUN: int = int(os.getenv("NEWS_ANALYSE_PER_RUN", "120"))

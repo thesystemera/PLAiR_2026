@@ -722,7 +722,7 @@ class DJPromptService:
                                                  session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
-    async def gpt_news_interpretation(self, query, is_topic, categories, location, session_dict):
+    async def gpt_news_interpretation(self, query, is_topic, categories, location, session_dict, depth=None):
         context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
             gpt_type='news',
             user_id=session_dict.get('user_id'),
@@ -730,7 +730,8 @@ class DJPromptService:
             query=query,
             is_topic=is_topic,
             categories=categories,
-            location=location
+            location=location,
+            depth=depth
         )
 
         system_prompt = assemble_prompt(context_data, final_nodes)

@@ -50,9 +50,18 @@ _TERRITORIES = dict(Locale("en").territories)
 _COUNTRY_BY_NAME = {name.lower(): code for code, name in _TERRITORIES.items() if code.isalpha()}
 
 
-def detailed(articles: list[dict]) -> set:
+NEWS_DEPTHS = tuple(settings.NEWS_REPORT_DEPTHS) or ("standard",)
+DEFAULT_DEPTH = "standard" if "standard" in NEWS_DEPTHS else NEWS_DEPTHS[0]
+
+
+def depth_plan(depth: Optional[str]) -> tuple[int, int]:
+    return settings.NEWS_REPORT_DEPTHS.get(depth or DEFAULT_DEPTH) or settings.NEWS_REPORT_DEPTHS.get(
+        DEFAULT_DEPTH, (8, 3))
+
+
+def detailed(articles: list[dict], count: Optional[int] = None) -> set:
     ranked = sorted((a for a in articles if a.get("summary")), key=lambda a: -(a.get("worth") or 0.0))
-    return {a.get("id") for a in ranked[:settings.NEWS_REPORT_SUMMARIES]}
+    return {a.get("id") for a in ranked[:depth_plan(None)[1] if count is None else count]}
 
 
 def brief(text: str, limit: int) -> str:
@@ -232,10 +241,10 @@ class NewsService:
         return articles[:top_n]
 
     @staticmethod
-    def generate_final_report(articles: list[dict]) -> str:
+    def generate_final_report(articles: list[dict], summaries: Optional[int] = None) -> str:
         if not articles:
             return "No news articles found."
-        lines, deep = [], detailed(articles)
+        lines, deep = [], detailed(articles, summaries)
         for i, article in enumerate(articles, 1):
             lines.append(f"{i}. {article['title']}")
             lines.append(f"   Source: {article['source']['name']} | Published: {article['publishedAt']}")
@@ -596,6 +605,7 @@ class NewsService:
 
     async def get_top_news(self, query: str, is_topic: bool = False, country: Optional[str] = None,
                            period: str = "7d", top_n: int = 8, subject: Optional[str] = None,
+                           summaries: Optional[int] = None,
                            geo: Optional[str] = None, region_key: Optional[str] = None) -> tuple[list[dict], str]:
         country = (country or settings.NEWS_DEFAULT_COUNTRY).upper()
         if not self.store_enabled:
@@ -612,13 +622,16 @@ class NewsService:
         articles = articles[:top_n]
         if not articles:
             return [], ""
-        return articles, self.generate_final_report(articles)
+        return articles, self.generate_final_report(articles, summaries)
 
     async def get_local_news(self, place: str, country: Optional[str] = None, top_n: int = 8,
+                             summaries: Optional[int] = None,
                              subject: Optional[str] = None, region_key: Optional[str] = None) -> tuple[list[dict], str]:
         if not settings.NEWS_GEO_ENABLED:
-            return await self.get_top_news(place, country=country, top_n=top_n, subject=subject)
-        return await self.get_top_news("", country=country, top_n=top_n, subject=subject, geo=place,
+            return await self.get_top_news(place, country=country, top_n=top_n, subject=subject,
+                                           summaries=summaries)
+        return await self.get_top_news("", country=country, top_n=top_n, subject=subject, summaries=summaries,
+                                       geo=place,
                                        region_key=region_key)
 
     async def stored_articles(self, query: Optional[str], country: Optional[str], subject: Optional[str] = None,
