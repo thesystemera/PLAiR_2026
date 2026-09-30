@@ -8,6 +8,6 @@ Non-negotiables, in brief:
 - **Frontend state:** engines report to `UIStateContext` via `reportEngineStatus()`; components read state and never prop-drill it. Use `api.js` for backend calls, `safeStorage` for localStorage, `useWebSocketSubscribe()` for socket events, `useViewport()` for responsive state.
 - **Playback:** backend `playback_state.py` is the source of truth; never auto-advance when `active_device_id` is set; devices default to inactive and activate only on an exact `active_device_id === deviceId` match.
 - **GPU:** everything runs on the Quadro P6000 via `CUDA_VISIBLE_DEVICES`; never hard-code GPU indexes; no float16 for Whisper.
-- **Machine safety:** port 8000 is public (nginx → plair.live); test on `HOST=127.0.0.1 PORT=8011`. Never run `external_components/restart_all.bat` casually — it kills every python/node/nginx/java process on a shared host.
+- **Machine safety:** port 8000 is public (nginx → plair.live); test on `HOST=127.0.0.1 PORT=8011`. Start PLAiR only with `external_components/plair_start.bat` (it closes any older PLAiR backend first); never kill python/node/nginx/java by image name.
 - **Style:** no explanatory code comments; use relative paths when editing on Windows.
 - **Root causes, not band-aids:** when something misbehaves, read the logs and the raw model input/output, reproduce it and fix the cause. Don't add guards, filters or retries that hide symptoms.
