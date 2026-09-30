@@ -4,7 +4,7 @@
 **Development Timeline:** < 3 months
 **Project Type:** Full-stack AI-powered music streaming platform with real-time voice interaction
 **Live:** https://plair.live ("PLAiR.fm" is the on-air brand name the DJs use)
-**Latest status (28 Sep 2026):** see `docs/HANDOVER_2026-09-28.md`. New systems (Radio Mode, stings and talking clock, City Pulse regional knowledge, listener location, news store, cost tracking, offline auto-switch) are summarised in `CLAUDE.md` section 15 and `docs/CITY_PULSE.md`.
+**Open work:** see `docs/KNOWN_ISSUES.md`. New systems (Radio Mode, stings and talking clock, City Pulse regional knowledge, listener location, news store, cost tracking, offline auto-switch) are summarised in `CLAUDE.md` section 15 and `docs/CITY_PULSE.md`.
 
 ---
 

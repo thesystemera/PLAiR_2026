@@ -21,7 +21,7 @@ Rules and architecture notes are in CLAUDE.md ("iOS Safari Compatibility", secti
 | **Crash after a deploy** | A phone left open across a deploy got a black screen when opening a lazy-loaded modal. | Reloads once on a stale chunk; a "Reload PLAiR" screen for any other crash. |
 | **Motion pop-up on first tap** | iOS asked for "Motion & Orientation" when you pressed Play. | Only asked from Settings → **Tilt Effects**. |
 | **Server audio streaming** | gzip was applied to audio range responses (wasted CPU; gzip on a 206 range response can break Safari). The range parser mishandled "last N bytes" requests and never sent 416. | gzip skips `/api/stream`, `/api/artwork`, beds and stings. Correct suffix ranges and 416 responses. |
-| **Install / PWA** | The maskable icon was identical to the regular one; the apple-touch-icon was the wrong size; the manifest screenshot sizes were wrong (so browsers ignored them); no manifest `id`. | Padded maskable icons (192/512), a 180 px apple-touch-icon, `apple-mobile-web-app-capable`, manifest `id` and correct screenshot entry. New artwork brief: `docs/BRAND_ASSETS_BRIEF.md`. |
+| **Install / PWA** | The maskable icon was identical to the regular one; the apple-touch-icon was the wrong size; the manifest screenshot sizes were wrong (so browsers ignored them); no manifest `id`. | Padded maskable icons (192/512), a 180 px apple-touch-icon, `apple-mobile-web-app-capable`, manifest `id` and correct screenshot entry. The refreshed artwork is in `brand/2026-refresh/`. |
 | Smaller items | | iPhones start one visual-quality tier lower (they don't report memory); the mic retries without a stale saved device; health checks slow to once a minute in the background; the modal blur cache is capped. |
 
 ## Still open
@@ -74,7 +74,7 @@ Headless Chrome is not iOS. It proves the logic, not WebKit's exact rules.
 
 ## Testing on a real iPhone without owning one
 The code must be deployed first (PLAiR Start), because the phone tests the live site.
-- **Cheapest: borrow any iPhone for 15 minutes** and run the checklist below plus the airplane-mode checklist in `docs/HANDOVER_2026-09-28.md`.
+- **Cheapest: borrow any iPhone for 15 minutes** and run the checklist below plus the airplane-mode checklist at the end of this document.
 - **Cloud real-device services** (BrowserStack Live, LambdaTest, Sauce Labs) rent real iPhones in a browser tab. All have free trials with a limited number of minutes; check their current plans.
   - You create the account and sign in yourself.
   - Claude can then drive the remote iPhone through Claude in Chrome / computer use and read Safari's console.
@@ -91,3 +91,17 @@ The code must be deployed first (PLAiR Start), because the phone tests the live 
 4. **Zombie socket.** Unlock after 5 minutes and press Next (it should respond at once).
 5. **Claim-on-open.** With the laptop playing, open the phone app: the laptop keeps playing until you tap the phone.
 6. **Error reports.** Check `data/logs/client.jsonl` for anything reported from the phone.
+
+**Airplane-mode checklist (offline mode on a phone):**
+
+Before you start: open plair.live once while online, play 3-4 songs to the end (or like a few while signed in and wait a minute) so there are downloads. Then reload once so the new service worker is active.
+1. Play a song, then switch on **airplane mode**. Within about 5 s you should see **"Offline · playing your downloads (N)"** at the top. The song should keep playing with no gap.
+2. Let it reach the end, or press **next**. The next song should come from your downloads. **Previous**, **pause/play** and **seek** should all work.
+3. Open the catalog. It should list only your downloads, with no "Failed to load tracks" message.
+4. Try voice search, talking to the DJ and shoutouts. Each should show a short friendly "needs a connection" message, not an error.
+5. Like a song while offline.
+6. **Close the app completely and reopen it while still in airplane mode.** It should open (not a browser error page), show the notice, and play a download when you press play. If you were signed in, you should still be signed in.
+7. Switch airplane mode **off** while a song plays. Within about 10 s the notice should go away and the **same song should carry on without a jump or restart**. Then check that the like from step 5 shows on another device or after a reload.
+8. Two devices: play on the laptop, go offline on the phone and play there, then reconnect. One device keeps playing. The other finishes its song and then shows "Playing on another device".
+9. Server down (the owner can stop the backend window instead of using airplane mode): same as steps 1-3 and 7, but the phone still has internet.
+10. iPhone only: repeat steps 1-2 in a private tab. It should say "Offline · no downloads yet" and pause cleanly when the buffer runs out.

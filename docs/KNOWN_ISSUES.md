@@ -1,214 +1,184 @@
-# Known Issues & Architectural Gaps
+# Open work and known issues
 
-Critical bugs and architectural issues that need to be addressed.
+The one list of what is still open. Consolidated on 1 Oct 2026 from the September handovers, audits and to-do
+docs (now deleted; they are in git history before this commit). Add new items here instead of writing a new
+handover. Reference docs that carry their own detail are linked from each item.
 
-## Open as of 2026-09-30 (DJ voice)
+Grouped by effort, easiest first. "Checked" means it was confirmed against the code or the machine on 1 Oct;
+anything else is carried over as written.
 
-Details and plans are in `docs/HANDOVER_2026-09-30.md` ("Open"), and the full list in `docs/AUDIT_2026-09-30_DJ_VOICE.md`.
+## 1. Quick wins
 
-- **Repeated DJ script after `[TASK]`.** Gemini sometimes writes the whole script twice in one reply (4 of 45 turns). It no longer reaches the notes or history, but it is still generated and paid for. The cause is unproven; the likely lead is the history format. The turn trace now records every returned part.
-- **Stray text before the on-air reply after a tool call** (found 1 Oct, 2 of 62 live turns; cause found, wording
-  fixed, watch for recurrence). With thinking off in the follow-up round, Gemini sometimes continues the studio's
-  `[STUDIO]` message as if it were its own text ("Then close with [INTERNAL DIALOGUE] and [TASK].", "Otherwise,
-  just write the reply.") or rewrites the STUDIO CLOCK block before `[BROADCAST]`. When the stray text contains
-  `[INTERNAL DIALOGUE]`, the real reply lands in the notes and the fragment fails in the voice queue ("NO SPEAKER TAG
-  FOUND"). Replays of recorded turns (`tests/dj_followup_replay.py`): a studio message ending on the open
-  conditional alone gave stray text in about 40% of replies; the old wording ("Reply on air now; call a tool only
-  if...") 3 of 160; the same words with the sentence closed ("...; otherwise reply on air now.", now in
-  `ai_service.run_gemini_tool_turn`) 0 of 142. A thinking budget in the follow-up round is not the answer: 256 or
-  1024 tokens made the hosts call the same tool again in 1-3 of 12 replies. Not done: a parser rule that keeps
-  text outside any channel off air (owner's call; it would hide a recurrence rather than prevent it).
+- **Press PLAiR Start, then run the smoke test**, so the 30 Sep / 1 Oct work is live. The studio-message wording
+  fix (section 3) has only been measured by replay.
+- **Generated songs are never added to the queue** (checked). `client/src/App.jsx` `handleGenerationBatchCompleted`
+  maps `t.id || t.track_id` over a list of plain id strings (`suno_generation_queue_service` sends
+  `batch["tracks"]`), so `addToQueue` never runs while the notice says "added to queue".
+- **The demo pop-up text is out of date** (checked). `client/src/content/DEMO_MODE_INFO.md` is shown to signed-out
+  visitors (`DemoModeModal.jsx`) and still says ElevenLabs, "artist uploads coming soon", offline mode as future
+  work and "January 2026".
+- **Old index files** (checked): `catalog_1.ann`, `catalog_2.ann`, `user_content_1.ann`, `user_content_2.ann` in
+  `data/embeddings` are from the flan-T5 build and nothing reads them. The old unslugged `*_embeddings` tables
+  (non-TTS) in the embeddings database can go too. Never touch the TTS tables.
+- **Unused images** (checked): `client/public/images/screenshot1.png` and `screenshot2.png` are referenced nowhere.
+- **Editor feedback wording in the app.** The community editor writes its feedback for the DJs ("the listener
+  would need to…") and the app's notice shows it as is (checked: `community_judge.py` has one wording). Have it
+  address "you" when the post comes from the app.
+- **Docs that mislead agents** (checked):
+  - `docs/ARCHITECTURE_SSOT.md` (CLAUDE.md says read it first) still teaches the removed `useUIState()`, a
+    `Radio({playback})` bridge and "a connecting device becomes active".
+  - `docs/PLAYBACK_ARCHITECTURE.md` shows `!data.active_device_id || …` as the pattern (forbidden), relies on the
+    removed `device_inactive` / `device_activated` events and cites `app.py` line numbers that no longer exist.
+    Rewrite or delete.
+  - `docs/NODE_SYSTEM.md` describes HAL11000 nodes and says tools are "planned".
+  - `docs/OFFLINE_MODE.md` lines ~104-520 are the old design; the "Current state" part at the top is right.
+  - `docs/VECTOR_DB_ARCHITECTURE_TTS_PATTERN.md` uses the old table and index names.
+  - `docs/NGINX_HTTPS_SETUP.md` gives the old certificate expiry date.
+  - `PROJECT_OVERVIEW.md` still names flan-T5, Orpheus and HAL11000.
+  - `client/src/contexts/UIStateContext.jsx` header comment still lists `useUIState()`.
+- **Install screenshots** need recapturing after UI changes (they have no WebGL background); optional iOS splash
+  images were never made. Masters and the rebuild script are in `brand/2026-refresh/`.
+
+## 2. DJ turn: bugs and things to watch
+
 - **The DJ's fallback model fails the follow-up round** (seen 1 Oct 01:56): after a 429 on gemini-2.5-flash the
   turn moved to gemini-3.5-flash-lite, which answered the next round with 400 INVALID_ARGUMENT; the turn only
-  finished because 2.5-flash was back. Not investigated.
+  finished because 2.5-flash was back. Not investigated. Lead: LifeSpan rebuilds thought signatures when it
+  changes model mid-turn (`chat_tool_loop.py:226-227,440-464`; audit item L13).
 - **Hosts speak a second hand-off line after scheduling a segment** (11 of 12 replays) although the tool result
-  says one line in total. The closed wording above let some go straight to the notes (15 of 142).
-- **Clip-match thresholds not re-tuned for mpnet.** Sound effects are cache-only, so a missed `%sfx%` is silently dropped. Measure hit rates first.
+  says one line in total. The closed wording below let some go straight to the notes (15 of 142).
+- **Repeated DJ script after `[TASK]`.** Gemini sometimes writes the whole script twice in one reply (4 of 45
+  turns, about +45% cost on that round). It no longer reaches the notes or history, but it is still generated.
+  Cause unproven. Lead: history rows show content after `[TASK]` (the `[STUDIO TOOLS]` log), which teaches the
+  model to keep writing. Plan: replay the four turns (`data/logs/dj_turns.jsonl*`, `rounds[].text` with two
+  `[BROADCAST]`), count repeats, move `[STUDIO TOOLS]` before the script in the history, replay again. The `parts`
+  field in the trace shows whether the repeat arrives as its own part.
+- **Stray text before the on-air reply after a tool call** (found 1 Oct, 2 of 62 live turns; cause found, wording
+  fixed, watch for recurrence). With thinking off in the follow-up round, Gemini sometimes continues the studio's
+  `[STUDIO]` message as if it were its own text or rewrites the STUDIO CLOCK block before `[BROADCAST]`. When the
+  stray text contains `[INTERNAL DIALOGUE]`, the real reply lands in the notes and the fragment fails in the voice
+  queue ("NO SPEAKER TAG FOUND"). Replays (`tests/dj_followup_replay.py`): a studio message ending on the open
+  conditional gave stray text in about 40% of replies; the old wording 3 of 160; the same words with the sentence
+  closed (now in `ai_service.run_gemini_tool_turn`) 0 of 142. A thinking budget in the follow-up round is not the
+  answer: 256 or 1024 tokens made the hosts call the same tool again in 1-3 of 12 replies. Not done: a parser rule
+  that keeps text outside any channel off air (owner's call; it would hide a recurrence, not prevent it).
+- **Thinking is off after the first tool round.** Known risk: narrated tool calls ("I will call …") in multi-step
+  turns. Setting to revert: `DJ_TOOL_FOLLOWUP_THINKING_BUDGET`.
+- **The announcer's length.** One announcement ran 32 s in a ~9 s gap. The log line `announcement | window … |
+  wrote N words` and the saved prompt in `dj_turns.jsonl` will show what happened; nothing has been read yet.
+  Suspect: the time constraint sits mid-prompt, before the talking-points menu.
 - **`search_and_play` plays the closest match straight away** when nothing matches, before the DJs can ask.
-- **Hosts name the listener's street on air.** The listener context allows it; privacy decision pending.
-- **Segment scripts cached word for word** (bio and lyrics for 7 days), and DeepSeek segments are capped at 90 words.
+- **Not yet tried in the real app:** a real move between two devices, the guest Radio Mode change in a browser, a
+  reply to an earlier shoutout by id, Radio Mode breaks and reviews in `what_aired`, asking by clock time, the
+  exact-title queue change, the "tool call limit" refusal message, favourites search against a large like list,
+  Radio Mode breaks and the announcer at the measured pace (2.0 words/s).
+- **Older, not investigated:** replies that answer the conversation history instead of the question ("Still not
+  Tom, mate." to a comedy question, 29 Sep, before the tools-only DJ); `Queen Street` without a city geocodes to
+  the wrong one (harmless while prompts ask for full place names).
 
----
+## 3. Requested on 30 Sep, not done
 
-## 🔴 CRITICAL: Session State Resyncing on Reconnect
+- **Offline unit tests for every DJ tool** (checked: only `tests/dj_tool_loop_test.py` exists). No backend, no
+  LLM: `dj_tools.normalize_tool_args` for every tool, `authorize_tool_call` limits, `command_string`, the tool
+  loop (empty replies and recovery, the review step, MAX_TOKENS, the last round, `_done_with`, parallel calls),
+  `talk_clock` length maths and the pace meter, news identity (`news_links`, `news_store.title_key` / `item_key`,
+  `news_reader.summarize`). Next step up: each `DJToolRuntime` handler against fake services, one test per row of
+  `TOOL_REGISTRY`. Add the run to `scripts/check-quality.ps1`.
+- **Audit of the 30 Sep changes** from the latest logs: leftovers (`NEWS_REPORT_DEPTHS` and `SEGMENT_DEPTHS` share
+  labels; confirm they can't drift), prompt weight before and after (studio clock, pulse ids, new tool
+  parameters), each new log line appears, docs match code.
+- **Token cost pass.** A DJ call is ~7,900 input tokens, 87% cached, about $0.0012. Count rounds per turn over a
+  day and find third rounds that added nothing (the `[TASK]` review step); the `(75 chars)` notes in the example
+  dialogue are copied into replies (owner's call, they may teach overlap timing); guest padding ("Unknown
+  Location", "None (Guest)"); City Pulse noise (weather and area items carry unrelated "linked" news, two takes of
+  one song list as identical lines); whether the ~3 s filler before every reply is still wanted.
 
-**Status**: Not Implemented
-**Priority**: HIGH
-**Affects**: All users, especially mobile with unstable connections
+## 4. Owner decisions
 
-### The Problem
+Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
-When **server restarts** OR **client reconnects** (network interruption), session state becomes desynchronized:
+- **Streets on air.** The listener context lets the hosts name the listener's street. Privacy.
+- **Segment scripts cached word for word** (bio and lyrics for 7 days; news 20 min; weather 1 h).
+- **Clip-match thresholds** (meta and impulse 0.75, sound effects 0.5, breaths 0.65) were tuned for flan-T5 and
+  not re-tuned for mpnet. Sound effects are cache-only, so a missed `%sfx%` is silently dropped. Measure hit rates
+  first.
+- **Sound-effect beds** were −80 dB (silent) in the old player and are audible now.
+- **Proximity effect is about half as strong** as the old player (`&N&` lines go through the effects chain once,
+  not twice).
+- **Stings outside Radio Mode** replace some host links, and every link gets a talking-points menu.
+- **Stutter** was toned down for Orpheus; Chatterbox may handle it.
+- **Notes on every reply:** keep `[INTERNAL DIALOGUE]` and `[TASK]` on every reply or not.
+- **The Producer sees only the latest sentence**, not the conversation ("yes do that" is routed blind).
+- **Perth watermark is off** in Chatterbox; not confirmed by the owner.
+- **Geolocation prompt** (checked: `useGeolocation.js` still asks for high accuracy and reverse-geocodes in the
+  browser with a public LocationIQ key). Suggested: ask after a "local news & weather?" opt-in, low accuracy,
+  geocode on the server (`area_geocode`).
+- **Listener timeline and City Pulse** have their own decision lists: `docs/LISTENER_TIMELINE.md` ("Decisions for
+  the owner"), `docs/CITY_PULSE.md` section 13.
+- **"In the style of"** framing for artist trivia; a traffic segment for Radio Mode; non-English Google News
+  editions; the numbers/dates override for cached-line similarity.
 
-**Scenario 1: Server Restart (Client Still Connected)**
-1. Client has state in localStorage: current track, queue position, radio mode, playback progress
-2. Server restarts → loses ALL session state
-3. Client reconnects via WebSocket
-4. Server creates NEW `PlaybackState` with defaults:
-   - `radio_mode = 'top_hits_week'`
-   - `queue = []`
-   - `history = []`
-   - `current_track_id = None`
-5. **Mismatch**: Client thinks it's playing track 5, server thinks queue is empty
-6. **Result**: Queue filling fails, playback breaks, user confused
+## 5. Owner to-dos (not for an agent)
 
-**Scenario 2: Client Network Interruption (Mobile)**
-1. Client loses internet briefly (tunnel, airplane mode, dropped signal)
-2. Client WebSocket disconnects
-3. Server session state still exists
-4. Client reconnects with stale localStorage state
-5. **Mismatch**: Client and server have different queue/position
-6. **Result**: UI shows wrong track, controls don't work correctly
+- **Rotate the API keys and the JWT secret.** The whole `.env` was visible in a screenshot on 28 Sep, and old
+  nginx access logs contain login tokens. Rotating the JWT secret logs everyone out once; the old log can then
+  be deleted.
+- **Test on a real iPhone:** device checklist and airplane-mode checklist in `docs/MOBILE_LAUNCH_READINESS.md`.
+  Open there: DJ voice on iPhone, screen-locked playback, crossfades.
+- **Stripe live mode** when ready (test mode today).
+- **Listen and decide:** the music beds, the stings and the "Play Air" pronunciation, and whether to run the
+  catalog re-master (`server/utils/reprocess_catalog_audio.py`, not yet run; A/B set first). "Park Bench
+  Philosophy" (e86b6267…) needs a re-master from intermediates. FlashSR has no licence: keep Apollo.
+- Done since they were listed (checked): nginx gzip and `/ws` without an access log are applied; DeepSeek is
+  topped up (no errors on 30 Sep); everything is committed and pushed.
 
-**Scenario 3: Server Down But Internet Up**
-1. Server is down for maintenance/crash
-2. Client still has internet connection
-3. **No visual indicator** that server is down
-4. User thinks app is broken, tries controls
-5. **Result**: Silent failures, confusing UX
+## 6. Medium jobs
 
-### Current Workaround
+- **Listener timeline roadmap** (`docs/LISTENER_TIMELINE.md`): search what the hosts said by meaning, fold the
+  other "already aired" lists in, then a "recently heard" view in the app.
+- **After a server restart the queue and station are lost** (checked: the server keeps playback state in memory
+  only, and the client does not send its station back). Offline mode covers the rest of the old "session resync"
+  issue: the song and position are handed back, a server that is down shows the offline notice, and a reconnect
+  follows the server's snapshot.
+- **Responsiveness on track changes** (reported 28 Sep, no record of it being resolved). Profile before changing
+  anything. Candidates: optimistic next/prev and the latest-wins transport in `PlaybackContext.jsx`, the hold
+  logic in `audioEngine.js`, the document-level listener in `microMotion.js`, the queue refill before advancing
+  in `playback_state.py`, artwork prefetch competing with audio fetches.
+- **Generation progress messages** (`plans/unified_ws_protocol.md`, not started): seven message types and dead
+  `*_stage` fields to fold into one `task_progress`.
+- **UIState holds business logic** (`docs/UISTATE_CLEANUP_TODO.md`, not started): tilt loop, music ducking,
+  settings and download persistence, video-clip loading. Artwork preloading there is now the intended design.
+- **LifeSpan ideas not ported** (audit section 3): text normalisation before TTS (units, URLs, "feat."), filler
+  lines shown in chat and told to the model, richer clip metadata, a stateful limiter and reverb (A/B first),
+  prelude and interlude fillers, per-round timing and cost in the turn log, history hygiene.
+- **City Pulse:** the places city sweep was never seen running after deploy (`regional_knowledge_refresher`);
+  `local_nuggets` view went missing once on a running backend (30 Sep, cause not found); RNZ blocks page reads
+  (no summaries); watch `[WEB] … rate limited` for Google link lookups.
+- **Music location:** an artist hometown or scene `where` on catalog tracks, and the uploader's location on
+  human uploads.
+- **Catalog list re-renders** (low): `Catalog.jsx` `renderTrack` changes with `currentTrackId` and
+  `queuedTrackSet`, and `VirtualScroller` compares `renderItem` by reference.
+- **Small caches never added** (low): device lookups and conversation history hit the database each time.
+- **After launch** (`docs/MOBILE_LAUNCH_READINESS.md`): iOS install guide, `user-scalable=no`, an "update ready"
+  prompt, three.js tree-shaking in `offlineVideoRenderer.js`, iOS mic uploads named `.webm`.
+- **Data Saver** should prefer downloaded tracks in queue fill (`docs/PLAYBACK_ARCHITECTURE.md` TODO; not
+  checked).
 
-Refresh the page (F5) - forces client to restart and sync with server state. Not user-friendly.
+## 7. Large jobs
 
-### What's Needed
+- **Depth-map upscaling** (owner, 1 Oct). No written plan yet.
+- **Chatterbox headroom.** S3Gen re-reads each voice's 10 s reference on every call. Options: a CUDA graph for
+  the flow estimator (~28%), overlapping the vocoder with token generation, a shorter reference (changes the
+  voice; owner's call).
+- **DJ voice on iPhone**, if the device test fails: a second output from the live encoder (fragmented MP4/AAC).
+- **Streaming mic input** (LifeSpan: VAD and a live draft transcript while the listener speaks).
+- **Voiced speech at higher quality:** cached host lines are MP3 and the live stream is fixed at 128 kbps Opus;
+  lossless storage and a bitrate that follows the listener's music quality were proposed.
+- **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
 
-#### 1. Client → Server State Sync on Reconnect
+## Where things are kept
 
-When client reconnects to server, send current state:
-
-```javascript
-// WebSocket reconnect handler
-socket.on('connect', () => {
-  const clientState = {
-    currentTrack: getCurrentTrack(),
-    queuePosition: getCurrentIndex(),
-    radioMode: getRadioMode(),
-    progressMs: getCurrentProgress(),
-    queue: getQueue(),  // Or just track IDs
-  };
-
-  socket.emit('client_state_sync', clientState);
-});
-```
-
-#### 2. Server State Recovery Logic
-
-Server should:
-- Check if session still exists in memory (Scenario 2)
-  - If YES: Send server state to client, client updates
-  - If NO: Accept client state, recreate session (Scenario 1)
-- Validate client state (tracks still exist in catalog, etc.)
-- Merge intelligently (preserve user's listening position)
-
-#### 3. Visual Connection Status Indicators
-
-**Client needs to detect and show:**
-
-| Condition | Visual Indicator | User Action |
-|-----------|------------------|-------------|
-| WebSocket disconnected | 🔴 "Reconnecting..." banner | Wait for auto-reconnect |
-| WebSocket connected, server down | 🟡 "Server unavailable" banner | Wait or refresh |
-| Internet offline | 🔴 "No internet connection" | Check network |
-| All connected | 🟢 Normal UI | Continue listening |
-
-**Implementation:**
-- Use `navigator.onLine` API for internet detection
-- Use WebSocket `connect`/`disconnect` events for server detection
-- Ping/pong heartbeat to detect server health (already have this?)
-- Show banner at top of UI with reconnection countdown
-
-#### 4. Graceful Degradation
-
-When offline/disconnected:
-- **Disable controls** that require server (play, next, search)
-- **Keep controls** that work locally (pause, volume, seek on current track)
-- **Show cached queue** (read-only) so user knows what was playing
-- **Auto-resume** on reconnect (if still on same track)
-
-### Why This Is Critical
-
-1. **Mobile users**: Constantly go through tunnels, switch networks, drop signal
-2. **Server maintenance**: Every deployment causes reconnects
-3. **Development**: Server restarts frequently during dev
-4. **User trust**: Silent failures make app feel broken/buggy
-5. **Data loss**: Lose listening history, queue position, preferences
-
-### Implementation Plan (TODO)
-
-- [x] Add `NetworkContext` to detect internet + server status (exists: `client/src/contexts/NetworkContext.jsx`, see `docs/OFFLINE_MODE.md`)
-- [ ] Add connection status banner component
-- [ ] Implement `client_state_sync` WebSocket message
-- [ ] Add server-side session recovery logic in `PlaybackState`
-- [ ] Add visual indicators for all connection states
-- [ ] Test with forced disconnects (airplane mode, server restart)
-- [ ] Add auto-resume on reconnect
-- [ ] Document new WebSocket protocol in `docs/ARCHITECTURE_SSOT.md`
-
-### Related Code
-
-**Frontend:**
-- `client/src/contexts/WebSocketContext.jsx` - Connection management
-- `client/src/contexts/PlaybackContext.jsx` - Client playback state
-- `client/src/lib/session.js` - localStorage persistence
-- `client/src/contexts/NetworkContext.jsx` - Online/offline + server status detection (`useNetwork()`)
-
-**Backend:**
-- `server/services/playback_state.py` - Server session state
-- `server/app.py` - WebSocket connection handler
-- `server/services/websocket_service.py` - WebSocket broadcast
-
-### Notes
-
-This explains many "random" bugs:
-- "Queue disappeared after server restart"
-- "Controls stopped working on mobile"
-- "UI shows wrong track"
-- "Can't play anything after reconnect"
-
-All symptoms of state desync between client/server.
-
----
-
-## Template for New Issues
-
-**Copy/paste this template when adding new issues:**
-
-```markdown
-## 🔴/🟡/🟢 Issue Title
-
-**Status**: Not Implemented / In Progress / Needs Design
-**Priority**: HIGH / MEDIUM / LOW
-**Affects**: Who/what is impacted
-
-### The Problem
-Describe the issue...
-
-### Current Workaround
-How users can work around it now (if any)
-
-### What's Needed
-What needs to be built/fixed
-
-### Why This Is Critical
-Why it matters
-
-### Implementation Plan (TODO)
-- [ ] Task 1
-- [ ] Task 2
-
-### Related Code
-Where to look
-
-### Notes
-Additional context
-```
-
----
-
-## Issue Priority Levels
-
-- 🔴 **CRITICAL**: Blocks core functionality, affects all users
-- 🟡 **HIGH**: Major feature broken, affects many users
-- 🟢 **MEDIUM**: Minor feature broken, affects some users
-- ⚪ **LOW**: Nice-to-have, cosmetic, edge case
+- Old Orpheus voice caches: `D:\tts_candidates\orpheus_clip_backup`. Engine candidates, bake-off WAVs and purged
+  conversations: `D:\tts_candidates`.
+- WSL crash dumps moved off C: on 30 Sep (another project filled the disk): `D:\wsl-crash-dumps`.
+- Private test backend: port 8011 with a copy of `data/embeddings` and `TTS_SERVER_EXTERNAL=true` (CLAUDE.md).

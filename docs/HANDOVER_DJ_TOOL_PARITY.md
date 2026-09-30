@@ -2,17 +2,7 @@
 
 Written 30 Sep 2026. Status: built and tested on a private backend (30 Sep, late). See "What was built".
 
-## Next up (as of 1 Oct)
-
-1. Press PLAiR Start so the 30 Sep / 1 Oct work is live, then run the smoke test. The studio-message wording fix
-   (`docs/KNOWN_ISSUES.md`) has only been measured by replay.
-2. The DJ's fallback model (gemini-3.5-flash-lite) answers the follow-up round with 400 after a 429 on the main
-   model. Not investigated.
-3. Try in the real app what the private backend couldn't cover: a real device move, the guest Radio Mode change
-   in a browser, a reply to an earlier shoutout by id, Radio Mode breaks and reviews in `what_aired`.
-4. The hosts speak a second hand-off line after scheduling a segment.
-5. Timeline roadmap (`docs/LISTENER_TIMELINE.md`): search what the hosts said by meaning, fold the other
-   "already aired" lists in, then the "recently heard" view in the app.
+What is still open (untested cases, next steps) is in `docs/KNOWN_ISSUES.md`.
 
 ## The goal
 

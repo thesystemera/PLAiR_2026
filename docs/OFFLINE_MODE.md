@@ -85,7 +85,7 @@
   - signed-in, with a liked track auto-downloaded, a seamless swap to it, offline likes synced and still signed in;
   - two devices (one takes over, the other finishes its song and steps aside);
   - no IndexedDB (iOS private mode): "no downloads yet", a clean pause, no exceptions.
-- **On a phone:** see the airplane-mode checklist in `docs/HANDOVER_2026-09-28.md`.
+- **On a phone:** see the airplane-mode checklist in `docs/MOBILE_LAUNCH_READINESS.md`.
 
 ---
 

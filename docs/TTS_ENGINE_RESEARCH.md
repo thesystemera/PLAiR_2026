@@ -1,6 +1,8 @@
 # TTS engine research (2026-09-29)
 
-Web research only (three passes: full landscape, speed on Pascal, community reports on expressiveness/reliability). Nothing here was measured on our card yet. Follows `docs/HANDOVER_TTS_ENGINE_SEARCH.md`.
+Web research only (three passes: full landscape, speed on Pascal, community reports on expressiveness/reliability). Nothing here was measured on our card when it was written.
+
+**Outcome (30 Sep 2026):** Chatterbox-Turbo was chosen after a bake-off on the P6000 and is live (`tts_chatterbox/`, CLAUDE.md section 12); Leo and the station voice were designed with Qwen3 VoiceDesign. This file is kept as the record of why, and for the candidates worth another look if the RTX 6000 frees up (VoxCPM2, Step-Audio-EditX).
 
 ## What we need
 

@@ -15,4 +15,6 @@ Run `E:/AI_RADIO/.venv/Scripts/python.exe brand/2026-refresh/build_assets.py` fr
 - `auth-background-desktop.png`: 1536×1024 login/registration background master
 - `auth-background-mobile.png`: 1024×1536 mobile background master
 
-Generated app assets are in `client/public/images/`, including the optimized `auth-bg-desktop.webp` and `auth-bg-mobile.webp`. The screenshot frame is a blank layout asset; the existing manifest screenshot remains in place until a real app capture is added.
+Generated app assets are in `client/public/images/`, including the optimized `auth-bg-desktop.webp` and `auth-bg-mobile.webp`. The install screenshots (`screenshot-narrow-1..3.png`, `screenshot-wide-1.png`) are real app captures placed in the screenshot frame and are wired into `manifest.json`; recapture them after big UI changes.
+
+The icon keeps **PLAiR** in it, with the amber broadcast signal rising from the lower-case **i** (the owner's choice). Avoid navy or corporate-looking blue.

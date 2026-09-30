@@ -8,7 +8,7 @@ Read-only audit, no code changed. Three comparisons:
 
 Nine agent reports went into this. Items already fixed today are not repeated: the phonetic paralanguage prompt, the filler caps, breaths, the tildes, the paralanguage examples, and the Chatterbox switch. Paths are `server/services_radio/` unless given in full.
 
-**Fixed on 2026-09-30:** B1–B10 and O1 (see the commit after this report). The rest is open.
+**Fixed on 2026-09-30:** B1–B10 and O1 (see the commit after this report). Also done since: L1 (paralanguage emojis, section 4), the 90-word DeepSeek cap in O4 (removed), and the fixed word target in O4 (length now comes from `talk_clock`). The rest is open and is summarised in `docs/KNOWN_ISSUES.md` (sections 4 and 6); this file keeps the detail.
 
 ## 1. Clear bugs (fix)
 
