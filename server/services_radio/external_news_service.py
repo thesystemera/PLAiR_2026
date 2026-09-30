@@ -646,7 +646,11 @@ class NewsService:
                 articles = await self._semantic_match(query_norm, country, "7d", await self._embed(query_norm)) or []
             else:
                 pull = await self.store.latest_pull(kind, country, query_norm, "", since)
-                articles = await self._serve(pull, cached=True) if pull is not None else []
+                if pull is not None:
+                    articles = await self._serve(pull, cached=True)
+                else:
+                    articles = [item.as_article() for item in await self.store.browse(
+                        country, limit * 2, [] if kind == KIND_TOP else self._pull_tags(kind, query_norm, "", country))]
             if subject and articles:
                 articles = await self._flag_aired(str(subject), articles)
         except Exception as e:

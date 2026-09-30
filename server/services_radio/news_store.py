@@ -486,6 +486,19 @@ class NewsStore:
             rows = (await db.execute(query)).scalars().all()
         return {row.id: _item(row, with_embeddings) for row in rows}
 
+    async def browse(self, country: str, limit: int, tags: Iterable[str] = ()) -> list[StoredItem]:
+        query = select(NewsItem).where(NewsItem.country == country,
+                                       NewsItem.expires_at > datetime.now(timezone.utc))
+        tags = [tag for tag in tags if tag]
+        if tags:
+            query = query.where(or_(NewsItem.category.in_(tags),
+                                    *(NewsItem.tags.cast(JSONB).contains([tag]) for tag in tags)))
+        query = query.options(defer(NewsItem.embedding, raiseload=True)).order_by(
+            NewsItem.worth.desc().nullslast(), NewsItem.published_at.desc().nullslast()).limit(limit)
+        async with self._sessions()() as db:
+            rows = (await db.execute(query)).scalars().all()
+        return [_item(row, False) for row in rows]
+
     async def unanalysed(self, limit: int) -> list[dict]:
         now = datetime.now(timezone.utc)
         async with self._sessions()() as db:
