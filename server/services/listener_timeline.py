@@ -75,7 +75,8 @@ def _entries(events: Iterable[Dict[str, Any]]) -> List[TimelineEntry]:
         item_id = str(event["id"])
         post = posts.get_shoutout(item_id) if posts is not None else None
         if post is not None:
-            entries.append(TimelineEntry(event["at"], kind_of(post), item_id, _post_label(post)))
+            if event["event"] == START_EVENT:
+                entries.append(TimelineEntry(event["at"], kind_of(post), item_id, _post_label(post)))
             continue
         if event["event"] != START_EVENT:
             entry = open_tracks.pop(item_id, None)
