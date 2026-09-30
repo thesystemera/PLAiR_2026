@@ -42,7 +42,7 @@ PROBES = [
 
 async def setup(ai: bool):
     import models_global
-    await models_global.initialize_tts_models()
+    await models_global.initialize_semantic_encoder()
     services.ai_service = AIService()
     await services.ai_service.initialize()
     from services.catalog_database_service import CatalogDatabaseService

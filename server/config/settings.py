@@ -422,6 +422,7 @@ class Settings:
     NEWS_READ_PARALLEL: int = int(os.getenv("NEWS_READ_PARALLEL", "3"))
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
+    NEWS_SUMMARY_SENTENCES: int = int(os.getenv("NEWS_SUMMARY_SENTENCES", "5"))
     NEWS_REPORT_DEPTHS: dict = {
         name.strip(): (int(stories), int(summaries)) for name, stories, summaries in (
             entry.split(":") for entry in os.getenv(

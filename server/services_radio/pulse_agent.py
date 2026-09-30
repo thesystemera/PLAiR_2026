@@ -111,7 +111,7 @@ async def gather_facts(brief: str, user_id: Optional[int], session_id: Optional[
     runtime.ctx.pulse_listener = listener
     pulse.mark_offered(listener, [_Aired(key.split(":", 1)[1]) for key in aired if key.startswith("pulse:")])
     try:
-        result = await asyncio.wait_for(ai.run_gemini_tool_turn(
+        result = await asyncio.wait_for(ai.run_tool_turn(
             system_instruction=SYSTEM,
             user_message=f"[FEATURE BRIEF] {brief}",
             function_declarations=AGENT_DECLARATIONS,

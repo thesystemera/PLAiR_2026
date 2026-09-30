@@ -317,6 +317,84 @@ class AIService(SingletonService):
             return {"status": "error", "error": str(e)[:200]}
         return result if isinstance(result, dict) else {"result": result}
 
+    async def run_tool_turn(
+            self,
+            system_instruction: str,
+            user_message: str,
+            function_declarations: list,
+            dispatch: Callable[[str, dict], Awaitable[dict]],
+            temperature: float = 0.4,
+            max_tokens: int = 8192,
+            max_rounds: int = 4,
+            call_timeout_s: float = 8.0,
+            spec: str = llm_router.LLM_BACKGROUND
+    ) -> Dict[str, Any]:
+        gemini = dict(system_instruction=system_instruction, user_message=user_message,
+                      function_declarations=function_declarations, dispatch=dispatch, temperature=temperature,
+                      max_tokens=max_tokens, max_rounds=max_rounds, call_timeout_s=call_timeout_s, spec=spec)
+        provider, model = llm_router.candidates_for(spec)[0]
+        if provider != "deepseek":
+            return await self.run_gemini_tool_turn(**gemini)
+        key = llm_router._circuit_key(spec, provider, model)
+        try:
+            result = await self._run_deepseek_tool_turn(
+                model, system_instruction, user_message, function_declarations, dispatch, temperature, max_tokens,
+                max_rounds, call_timeout_s, spec)
+            llm_router._record_success(key)
+            return result
+        except llm_router.LLM_ERRORS as err:
+            llm_router._record_failure(key, err)
+            llm_router.record_fallback(llm_router.role_label(spec), f"{provider}:{model}", "gemini tool loop",
+                                       llm_router._err_line(err))
+            return await self.run_gemini_tool_turn(**gemini)
+
+    async def _run_deepseek_tool_turn(self, model: str, system_instruction: str, user_message: str,
+                                      function_declarations: list, dispatch, temperature: float, max_tokens: int,
+                                      max_rounds: int, call_timeout_s: float, spec: str) -> Dict[str, Any]:
+        tools = [{"type": "function", "function": {
+            "name": d.name, "description": d.description,
+            "parameters": d.parameters_json_schema or {"type": "object", "properties": {}}}}
+            for d in function_declarations]
+        messages: list = [{"role": "system", "content": system_instruction},
+                          {"role": "user", "content": user_message}]
+        calls_log: list = []
+        made: set = set()
+        for round_no in range(1, max_rounds + 1):
+            is_last = round_no == max_rounds
+            reply = await llm_router.deepseek_chat(spec=spec, model=model, messages=messages, temperature=temperature,
+                                                   max_tokens=max_tokens, tools=None if is_last else tools)
+            message = reply["message"]
+            tool_calls = [] if is_last else (message.get("tool_calls") or [])
+            if not tool_calls:
+                return {"text": reply["text"], "preambles": [], "tool_calls": calls_log, "rounds": round_no,
+                        "usage": [], "trace": []}
+            messages.append(message)
+            fresh = []
+            for call in tool_calls:
+                name = (call.get("function") or {}).get("name") or ""
+                try:
+                    args = json.loads((call.get("function") or {}).get("arguments") or "{}")
+                except ValueError:
+                    args = None
+                fresh.append((call, name, args if isinstance(args, dict) else None))
+
+            async def run(name: str, args: Optional[dict]) -> dict:
+                if args is None:
+                    return {"status": "error", "error": "The arguments were not valid JSON."}
+                if self._call_key(name, args) in made:
+                    return {"status": "repeat", "note": "You already made this exact call this turn; use that result."}
+                made.add(self._call_key(name, args))
+                log_service.ai(f"🔧 Agent tool call: {name}({args})")
+                return await self._run_tool_call(types.FunctionCall(name=name, args=args), dispatch, call_timeout_s)
+
+            results = await asyncio.gather(*(run(name, args) for _, name, args in fresh))
+            for (call, name, args), result in zip(fresh, results):
+                calls_log.append({"name": name, "args": args or {}, "result": result})
+                messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(
+                    self._cap_tool_result(result, settings.LLM_TOOL_RESULT_MAX_CHARS), default=str,
+                    ensure_ascii=False)})
+        raise RuntimeError("unreachable")
+
     async def run_gemini_tool_turn(
             self,
             system_instruction: str,
@@ -369,6 +447,7 @@ class AIService(SingletonService):
         round_usage: list = []
         strikes = 0
         reviewed = False
+        made: set = set()
         trace: list = []
         tool_rounds = 0
         rounds = 0
@@ -397,6 +476,17 @@ class AIService(SingletonService):
             content = candidate.content if candidate else None
             parts = list(content.parts) if content and content.parts else []
             function_calls = [p.function_call for p in parts if p.function_call] if not is_last else []
+            repeats = [fc for fc in function_calls if fc.name in (followup_tools or set())
+                       and self._call_key(fc.name, fc.args) in made]
+            if repeats:
+                log_service.commands(f"DJ tool turn: dropped a repeat of {', '.join(fc.name for fc in repeats)} "
+                                     "(same arguments as an earlier call this turn)")
+                function_calls = [fc for fc in function_calls if fc not in repeats]
+                aired = {line.strip() for line in preambles}
+                parts = [p for p in parts if p.function_call not in repeats
+                         and not (p.text and p.text.strip() in aired)]
+                content = types.Content(role=content.role, parts=parts)
+            made.update(self._call_key(fc.name, fc.args) for fc in function_calls)
             text = self._visible_text(parts)
             finish = str(getattr(candidate, "finish_reason", "") or "NO_CANDIDATE").rsplit(".", 1)[-1].upper()
             trace.append({"round": rounds, "model": model, "finish": finish, "text": text,
@@ -498,6 +588,11 @@ class AIService(SingletonService):
                     declared = {declaration.name for declaration in refreshed}
                     tool_config, final_config = build_configs(refreshed)
                     log_service.detail(f"DJ tools now: {', '.join(sorted(declared))}", "ai")
+
+    @staticmethod
+    def _call_key(name: str, args) -> tuple:
+        return name, json.dumps({k: v for k, v in dict(args or {}).items() if k != "_done_with"},
+                                sort_keys=True, default=str)
 
     @staticmethod
     def _recovery_message(finish: str, used_tools: bool) -> Optional[str]:

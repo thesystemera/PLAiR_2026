@@ -18,6 +18,7 @@ SENTENCE_END = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"'”’]))\s+(?=[\"'“‘
 MIN_SUMMARY_CHARS = 40
 MIN_BODY_CHARS = 250
 MIN_SENTENCES = 3
+PHOTO_CREDIT = re.compile(r"\b(Photos?|Image|Picture|Video|Graphic)\s*(/|:|by\b|credit\b)", re.IGNORECASE)
 USAGE = ("news", "article_read")
 
 
@@ -49,11 +50,10 @@ def _sentences(text: str) -> list[str]:
 def summarize(title: str, description: str, text: str, limit: int) -> str:
     title_key = _fold(title)
     body = " ".join(line.strip() for line in (text or "").splitlines()
-                    if line.strip() and _fold(line) != title_key)
+                    if line.strip() and _fold(line) != title_key and not PHOTO_CREDIT.search(line))
     sentences = _sentences(body) if body else []
     if len(body) >= MIN_BODY_CHARS and len(sentences) >= MIN_SENTENCES:
-        picked = sentences if len(sentences) <= 5 else sentences[:3] + sentences[-2:]
-        summary = " ".join(picked)
+        summary = " ".join(sentences[:settings.NEWS_SUMMARY_SENTENCES])
         return summary if len(summary) <= limit else summary[:limit].rsplit(" ", 1)[0] + "..."
     description = " ".join((description or "").split())
     return description if len(description) >= MIN_SUMMARY_CHARS else ""

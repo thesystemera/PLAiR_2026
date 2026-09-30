@@ -146,6 +146,7 @@ async def deepseek_chat(
     max_tokens: int,
     json_mode: bool = False,
     timeout: Optional[float] = None,
+    tools: Optional[list] = None,
 ) -> dict:
     body: dict[str, Any] = {
         "model": model,
@@ -157,6 +158,8 @@ async def deepseek_chat(
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    if tools:
+        body["tools"] = tools
     t0 = time.perf_counter()
     try:
         response = await fetch(
@@ -182,6 +185,7 @@ async def deepseek_chat(
     message = choice.get("message") or {}
     return {
         "text": (message.get("content") or "").strip(),
+        "message": message,
         "finish_reason": choice.get("finish_reason"),
         "usage": usage,
         "ms": ms,
