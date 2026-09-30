@@ -10,32 +10,9 @@ anything else is carried over as written.
 ## 1. Quick wins
 
 - **Press PLAiR Start, then run the smoke test**, so the 30 Sep / 1 Oct work is live. The studio-message wording
-  fix (section 3) has only been measured by replay.
-- **Generated songs are never added to the queue** (checked). `client/src/App.jsx` `handleGenerationBatchCompleted`
-  maps `t.id || t.track_id` over a list of plain id strings (`suno_generation_queue_service` sends
-  `batch["tracks"]`), so `addToQueue` never runs while the notice says "added to queue".
-- **The demo pop-up text is out of date** (checked). `client/src/content/DEMO_MODE_INFO.md` is shown to signed-out
-  visitors (`DemoModeModal.jsx`) and still says ElevenLabs, "artist uploads coming soon", offline mode as future
-  work and "January 2026".
-- **Old index files** (checked): `catalog_1.ann`, `catalog_2.ann`, `user_content_1.ann`, `user_content_2.ann` in
-  `data/embeddings` are from the flan-T5 build and nothing reads them. The old unslugged `*_embeddings` tables
-  (non-TTS) in the embeddings database can go too. Never touch the TTS tables.
-- **Unused images** (checked): `client/public/images/screenshot1.png` and `screenshot2.png` are referenced nowhere.
-- **Editor feedback wording in the app.** The community editor writes its feedback for the DJs ("the listener
-  would need to…") and the app's notice shows it as is (checked: `community_judge.py` has one wording). Have it
-  address "you" when the post comes from the app.
-- **Docs that mislead agents** (checked):
-  - `docs/ARCHITECTURE_SSOT.md` (CLAUDE.md says read it first) still teaches the removed `useUIState()`, a
-    `Radio({playback})` bridge and "a connecting device becomes active".
-  - `docs/PLAYBACK_ARCHITECTURE.md` shows `!data.active_device_id || …` as the pattern (forbidden), relies on the
-    removed `device_inactive` / `device_activated` events and cites `app.py` line numbers that no longer exist.
-    Rewrite or delete.
-  - `docs/NODE_SYSTEM.md` describes HAL11000 nodes and says tools are "planned".
-  - `docs/OFFLINE_MODE.md` lines ~104-520 are the old design; the "Current state" part at the top is right.
-  - `docs/VECTOR_DB_ARCHITECTURE_TTS_PATTERN.md` uses the old table and index names.
-  - `docs/NGINX_HTTPS_SETUP.md` gives the old certificate expiry date.
-  - `PROJECT_OVERVIEW.md` still names flan-T5, Orpheus and HAL11000.
-  - `client/src/contexts/UIStateContext.jsx` header comment still lists `useUIState()`.
+  fix (section 2) has only been measured by replay.
+- **`PROJECT_OVERVIEW.md`** had its engine, encoder and DJ facts corrected on 1 Oct, but its statistics and
+  feature lists were not re-counted.
 - **Install screenshots** need recapturing after UI changes (they have no WebGL background); optional iOS splash
   images were never made. Masters and the rebuild script are in `brand/2026-refresh/`.
 
@@ -161,8 +138,7 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 - **Small caches never added** (low): device lookups and conversation history hit the database each time.
 - **After launch** (`docs/MOBILE_LAUNCH_READINESS.md`): iOS install guide, `user-scalable=no`, an "update ready"
   prompt, three.js tree-shaking in `offlineVideoRenderer.js`, iOS mic uploads named `.webm`.
-- **Data Saver** should prefer downloaded tracks in queue fill (`docs/PLAYBACK_ARCHITECTURE.md` TODO; not
-  checked).
+- **Data Saver** should prefer downloaded tracks in queue fill (a TODO from the old playback doc; not checked).
 
 ## 7. Large jobs
 
@@ -175,6 +151,19 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 - **Voiced speech at higher quality:** cached host lines are MP3 and the live stream is fixed at 128 kbps Opus;
   lossless storage and a bitrate that follows the listener's music quality were proposed.
 - **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
+
+## Done on 1 Oct 2026 (cleanup)
+
+- The demo pop-up text (`client/src/content/DEMO_MODE_INFO.md`) was brought up to date.
+- The four old flan-T5 index files and the 20 old unslugged `*_embeddings` tables (each had an `_mpnet_` twin) were
+  removed; the TTS tables were not touched. Two unused screenshots were removed.
+- `App.jsx` no longer tries to add generated tracks to the queue itself: the server already adds them
+  (`suno_generation_queue_service` calls `playback_service.add_to_queue` before it sends
+  `generation_batch_completed`), and the client call never ran because it read `.id` from plain id strings.
+- Docs corrected against the code: `ARCHITECTURE_SSOT.md`, `NODE_SYSTEM.md`, `VECTOR_DB_ARCHITECTURE_TTS_PATTERN.md`,
+  `NGINX_HTTPS_SETUP.md`, `OFFLINE_MODE.md` (old design notes cut). `PLAYBACK_ARCHITECTURE.md` was deleted: it
+  taught removed events and a forbidden pattern, and `CLAUDE.md` sections 2, 3, 6 and 16 cover the subject.
+- Decided: the community editor's feedback wording stays as it is (written for the DJs, shown as is in the app).
 
 ## Where things are kept
 

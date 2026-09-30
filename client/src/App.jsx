@@ -167,7 +167,7 @@ function App() {
     user: true
   })
 
-  const { playTrack, seek, seedRadio, addToQueue, reloadCurrentTrackQuality, audio } = usePlaybackActions()
+  const { playTrack, seek, seedRadio, reloadCurrentTrackQuality, audio } = usePlaybackActions()
   const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
   const {
     updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
@@ -559,18 +559,11 @@ function App() {
     success(`Seeded ${modeLabel} playlist from track`)
   }, [seedRadio, success])
 
-  const handleGenerationBatchCompleted = useCallback(async (data) => {
+  const handleGenerationBatchCompleted = useCallback((data) => {
     const trackCount = (data?.tracks) ? data.tracks.length : 0
 
-    if (data?.tracks && data.tracks.length > 0) {
-      const trackIds = data.tracks.map(t => t.id || t.track_id).filter(Boolean)
-      if (trackIds.length > 0) {
-        await addToQueue(trackIds)
-      }
-    }
-
     success(`${trackCount} new track${trackCount > 1 ? 's' : ''} added to queue!`, 4000, 'top')
-  }, [success, addToQueue])
+  }, [success])
 
   const handleGenerationRetrying = useCallback((data) => {
     const maxAttempts = data?.max_attempts ?? '??'

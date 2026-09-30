@@ -50,8 +50,8 @@
  *
  * SUBSCRIBERS (How to read state):
  * - useUISelector(state => slice) - Subscribe to ONE slice; re-renders only when that slice changes
- *   (shallow compare). Prefer this in anything that renders often or renders a big subtree.
- * - useUIState() - Access full context (both fast and slow lane); re-renders on ANY UIState change
+ *   (shallow compare). There is no whole-state hook.
+ * - useUIStateGetter() - Read the latest state inside a handler without subscribing
  * - useRadioUI() - Convenience hook for radio-specific state
  * - useArtwork() - Artwork URL management
  *
@@ -59,7 +59,7 @@
  *
  * NO MIDDLEMEN. NO PROP DRILLING. Just clean pub/sub.
  *
- * See: docs/ARCHITECTURE_SSOT_PATTERN.md for detailed documentation
+ * See: docs/ARCHITECTURE_SSOT.md for detailed documentation
  */
 
 import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react'

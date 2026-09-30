@@ -14,8 +14,7 @@ PLAiR.live uses nginx on Windows with Let's Encrypt SSL certificates managed thr
 ## Current Certificate
 
 - **Domains:** plair.live, www.plair.live
-- **Renewed:** January 3, 2026
-- **Expires:** April 3, 2026 (3 months validity)
+- **Validity:** 90 days per certificate, renewed automatically. Check the current dates with `openssl x509 -noout -dates -in /c/Certbot/live/plair.live/fullchain.pem` (Git Bash)
 - **Authenticator:** webroot (automatic renewal capable)
 
 ## Auto-Renewal Setup

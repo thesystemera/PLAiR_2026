@@ -47,9 +47,9 @@ PLAiR.fm is a next-generation music streaming platform designed for **user-uploa
 - **Vector Search:** Annoy (Approximate Nearest Neighbors)
 - **WebSocket:** Native WebSocket (asyncio-based)
 - **Audio Processing:** FFmpeg, Demucs, Whisper (faster-whisper), ClearVoice, pedalboard
-- **Embeddings:** Local `google/flan-t5-large` encoder (1024-dim)
-- **AI/LLM:** Google Gemini via the `google-genai` SDK (`gemini-2.5-flash-lite` for DJ, command extraction and node routing; `gemini-2.5-pro` default)
-- **TTS:** Local Orpheus-3B engine (`tts_server/`, llama.cpp CUDA + SNAC ONNX decoder, separate process on 127.0.0.1:8090)
+- **Embeddings:** Local `all-mpnet-base-v2` encoder (768-dim), one encoder for every searchable source and the voice cache
+- **AI/LLM:** Google Gemini via the `google-genai` SDK (role chains: `gemini-2.5-flash` for the DJ's tool turns, `gemini-3.5-flash-lite` for routing), with DeepSeek for segments and background work
+- **TTS:** Local Chatterbox-Turbo engine (`tts_chatterbox/`, our own batched CUDA-graph decoder and vocoder, separate process on 127.0.0.1:8090)
 - **Music Generation:** Suno API
 - **Payment Processing:** Stripe
 
@@ -173,9 +173,9 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 
 **AI DJ System (25 services in `server/services_radio/`):**
 - **DJPromptService** - Personality prompts (character, tone, knowledge base)
-- **DJCommandExecutor** - Parses and executes brace commands emitted by a second LLM pass (the "HAL11000" command extractor) after the DJ's spoken reply
+- **DJCommandExecutor** - Executes the actions behind the DJ's tool calls (search, playback, stations, ratings, segments, saves); the DJ acts through tools only (`dj_tools.py`)
 - **ConversationService** - User-DJ conversation history and context
-- **TTSGenerationService** - Client for the local Orpheus-3B TTS engine (built-in voices per host, inline emotion tags), PCM→MP3, semantic clip cache
+- **TTSGenerationService** - Client for the local Chatterbox-Turbo TTS engine (one voice per host, cloned from short reference recordings), PCM→MP3, semantic cache of spoken lines
 - **TTSBroadcastService** - Real-time audio streaming to frontend
 - **TTSStreamPlanner** - Chunk timing and coordination
 - **ContextService** - Dynamic context injection (track info, weather, news, events)
@@ -247,7 +247,7 @@ Backend Services → WebSocket → Playback Engine → UIState SSOT → Componen
 
 **1. AI DJ with Voice Interaction**
 - Natural language processing via Google Gemini
-- Real-time text-to-speech streaming (local Orpheus-3B engine, inline emotion tags like `<laugh>`, `<sigh>`)
+- Real-time text-to-speech streaming (local Chatterbox-Turbo engine; reactions such as laughs are spelled out phonetically and rendered as their own takes)
 - Personality system with customizable traits
 - Context-aware responses (weather, news, events, track metadata)
 - Command execution ({play}, {seed}, {pause}, etc.) via a second LLM pass that extracts brace commands from the spoken reply
@@ -396,7 +396,7 @@ Vector-based caching for text-to-speech generation:
 
 **Documentation:**
 - Comprehensive CLAUDE.md (project instructions for AI assistant)
-- Architecture documentation in `docs/` (SSOT pattern, playback architecture, vector DB pattern, node system, offline mode)
+- Architecture documentation in `docs/` (SSOT pattern, vector DB pattern, node system, offline mode, City Pulse)
 - Inline comments for complex logic
 - Service-oriented architecture (single responsibility principle)
 
@@ -446,7 +446,7 @@ Vector-based caching for text-to-speech generation:
 - Documentation: ~18 files
 - Total: ~220 files
 
-**Technologies Used:** 15+ (React, FastAPI, WebSocket, GLSL, Python, JavaScript, PostgreSQL, SQLAlchemy, Annoy, FFmpeg, Whisper, Demucs, Gemini, Orpheus TTS / llama.cpp, Suno, Stripe)
+**Technologies Used:** 15+ (React, FastAPI, WebSocket, GLSL, Python, JavaScript, PostgreSQL, SQLAlchemy, Annoy, FFmpeg, Whisper, Demucs, Gemini, Chatterbox-Turbo TTS, Suno, Stripe)
 
 **External APIs Integrated:** 6 (Gemini, Suno, Stripe, News API, Events API, Geolocation)
 
@@ -476,7 +476,7 @@ Vector-based caching for text-to-speech generation:
 
 3. **Advanced architecture** - Publisher/Subscriber, SSOT pattern, multi-device orchestration, state machines
 
-4. **AI integration** - LLM (Gemini), TTS (self-hosted Orpheus-3B on llama.cpp), STT (Whisper), Music Generation (Suno), Source Separation (Demucs)
+4. **AI integration** - LLM (Gemini), TTS (self-hosted Chatterbox-Turbo), STT (Whisper), Music Generation (Suno), Source Separation (Demucs)
 
 5. **Real-time systems** - WebSocket state sync, audio streaming, TTS broadcasting
 
@@ -542,7 +542,7 @@ PLAiR.fm demonstrates mastery of modern web development, real-time systems, AI i
 **Technical Breadth:**
 - **Frontend:** React, GLSL shaders, WebGL, dual-buffer audio, A/B crossfading, 3D parallax effects
 - **Backend:** Python/FastAPI, 75+ services, PostgreSQL, vector databases, semantic search, real-time context gathering
-- **AI/ML:** Gemini LLM, self-hosted Orpheus-3B TTS, Whisper STT, Suno music generation, Demucs source separation, depth map generation
+- **AI/ML:** Gemini LLM, self-hosted Chatterbox-Turbo TTS, Whisper STT, Suno music generation, Demucs source separation, depth map generation
 - **Real-time:** WebSocket state sync, TTS streaming, multi-device orchestration, context injection
 - **Cost Engineering:** Semantic TTS caching, prompt caching, multi-layer artwork cache (60-70% cost reduction)
 - **Graphics:** GLSL shader programming, FFT audio analysis, parallax depth rendering, zero-allocation processing

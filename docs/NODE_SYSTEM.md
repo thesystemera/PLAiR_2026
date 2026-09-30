@@ -9,7 +9,9 @@ The Node System is PLAiR.fm's dynamic context assembly for DJ AI prompts. Instea
 
 **Result:** ~80% token reduction (10,000 → 2,000 tokens per request)
 
-**LLM provider:** Google Gemini via the `google-genai` SDK (`gemini-2.5-flash-lite` for the DJ, command extraction and the Producer AI node router; `gemini-2.5-pro` default; see `server/config/settings.py`). "GPT function" and the `gpt_*` method names are legacy naming only - no OpenAI models are used.
+**LLM provider:** role chains in `server/config/settings.py` (`services/llm_router.py`): the DJ's tool turn runs on `LLM_DJ` (gemini-2.5-flash, then 3.5-flash-lite), the Producer on `LLM_LIVE` (3.5-flash-lite), segments and the announcer on DeepSeek with Gemini as fallback. "GPT function" and the `gpt_*` method names are legacy naming only - no OpenAI models are used.
+
+**Checked against the code on 1 Oct 2026.** The second "HAL11000" command-extraction prompt was retired on 29 Sep 2026: the DJ acts through tool calls only (`server/services_radio/dj_tools.py`, `CLAUDE.md` section 5), and the Producer also returns a tool plan alongside the nodes it picks.
 
 ---
 
@@ -23,15 +25,18 @@ Individual async functions that format data into prompt strings. Each registered
     "track_title_artist",
     "Current track title and artist",
     cost="low",
-    visible=True  # Visible to Producer AI
+    visible=True,  # Visible to Producer AI
+    role="live"    # "system" = fixed, cacheable prefix; "live" (default) = goes in the user message
 )
 async def get_track_title_artist(current_track: Dict = None, **_) -> str:
     return f"CURRENT TRACK: {current_track['name']} by {current_track['artists']}"
 ```
 
-**70 total nodes** across categories:
+**Roles:** the DJ's system prompt is only the `system` nodes of its config, in config order, plus the tool declarations, so it is identical for every listener and turn and is held in a Gemini cache. Every `live` node (track, queue, pulse, weather, profile, conversation, studio clock) goes in the user message.
+
+**75 nodes** (count of `node_registry.register` calls) across categories:
 - **Formatting** (identity, channels, tone, meta-tags, guidelines)
-- **Instruction** (biography, lyrics, news, weather, HAL11000 commands)
+- **Instruction** (biography, lyrics, news, weather, DJ tools)
 - **Data** (biography text, lyrics text, news report, weather data)
 - **Track** (title, style, audio features, lyrics preview)
 - **User** (persona, profile, favorites, banned tracks)
@@ -52,7 +57,7 @@ async def fetch_nodes(self, node_keys: List[str], **kwargs) -> Dict[str, str]:
 **Performance:** Executes 10-15 nodes in ~100-300ms
 
 ### 3. Producer AI (`context_router_service.py`)
-Uses Gemini Flash Lite (`settings.GEMINI_NODE_PRODUCER_MODEL`) to select nodes based on user input (Interactive mode only):
+Uses Gemini Flash-Lite (the `LLM_LIVE` chain) to select nodes based on user input (Interactive mode only). `determine_route` also returns `needs_tools`, a `tool_plan` and the City Pulse topic/kinds for the turn:
 
 **Flow:**
 1. User: "Tell me about this song"
@@ -75,15 +80,16 @@ All GPT functions share the same flow but with different configurations:
 
 ```python
 self.node_configs = {
-    'interactive': {
-        'required_nodes': [/* 7 formatting nodes */],
+    'interactive_tools': {
+        'required_nodes': [/* formatting + guidelines + instruction_dj_tools, tool_guidance, studio_clock, city_pulse ... */],
         'use_ai_picker': True  # Producer AI selects content nodes dynamically
     },
     'biography': {
         'required_nodes': [/* formatting + instruction_biography + data_biography */],
         'use_ai_picker': False  # Static node list
     },
-    # ... 8 more GPT configs
+    # ... lyrics, news, weather, location_search, events, shoutouts,
+    #     announcements (with time_presets), radio_segment, radio_segment_shared
 }
 ```
 
@@ -106,12 +112,11 @@ async def _get_nodes_unified(gpt_type, user_id, session_id, user_input=None, **e
 
 Nodes have a `visible` parameter controlling whether Producer AI can select them:
 
-**Visible = False (27 nodes):** Function-specific, hidden from Producer AI
-- 7 Interactive hardcoded formatting nodes (always included)
-- 14 Instruction/Data nodes (biography, lyrics, news, weather, events, location, shoutouts)
-- 6 HAL11000 command extraction nodes
+**Visible = False:** Function-specific, hidden from Producer AI
+- The interactive turn's hardcoded formatting and guideline nodes (always included)
+- Instruction/Data nodes (biography, lyrics, news, weather, events, location, shoutouts)
 
-**Visible = True (43 nodes):** Content nodes Producer AI can select
+**Visible = True:** Content nodes Producer AI can select
 - Track nodes (title, style, audio features, lyrics, etc.)
 - User nodes (persona, profile, favorites, banned)
 - Queue/History nodes
@@ -124,10 +129,10 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 
 ## GPT Functions
 
-### 1. Interactive (Dynamic)
-**Required nodes:** 7 formatting nodes (identity, channels, tone, meta-tags, guidelines)
-**AI Picker:** YES - selects 8-15 content nodes based on user input
-**Flow:** Required + Dynamic → ~15 nodes total
+### 1. Interactive (`interactive_tools`, Dynamic)
+**Required nodes:** formatting and guideline nodes, `instruction_dj_tools`, `tool_guidance`, `station_recent_airings`, `studio_clock`, `city_pulse`
+**AI Picker:** YES - the Producer selects content nodes based on user input and plans the tools
+**Flow:** Required + Dynamic, then the tool loop (`ai_service.run_gemini_tool_turn`)
 
 ### 2. Biography
 **Required nodes:** Formatting + `instruction_biography` + `data_biography` + user/conversation
@@ -166,13 +171,13 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 
 ### 9. Announcements
 **Required nodes:** Core identity + comprehensive track/queue/user/show nodes (no instruction nodes)
-**AI Picker:** NO *(future: could be YES for time-based dynamic selection)*
-**Flow:** Static comprehensive list → ~23 nodes
-
-### 10. Command Extraction (HAL11000)
-**Required nodes:** 6 HAL instruction nodes + track/user/conversation
 **AI Picker:** NO
-**Flow:** Static list → ~12 nodes
+**Flow:** A node list chosen by the length of the music window (`time_presets`), plus a talking-points menu from the City Pulse
+
+### 10. Radio Mode segments (`radio_segment`, `radio_segment_shared`)
+**Required nodes:** the segment's instruction and data plus `segment_length`
+**AI Picker:** NO
+**Flow:** Static list. The shared variant is written once per city and half hour.
 
 ---
 
@@ -199,46 +204,13 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 
 ## Future Enhancements
 
-### 1. Streaming Tools (High Priority - Replaces Separate GPTs)
-**Current:** Separate GPT functions (weather, news, biography) triggered by command executor
-**Future:** Convert data nodes to LLM tools callable mid-response with streaming
-
-**Why this is better:**
-- Single streaming response instead of 2 separate GPT calls
-- TTS buffer hides tool latency (DJ talks while external API loads)
-- Eliminates code duplication (weather GPT, weather command executor, etc.)
-- More natural conversation flow
-- Cheaper (1 LLM call vs 2)
-
-**Implementation:**
-```python
-# DJ streaming response with tool calls
-"Let me check the extended forecast for you..."  # TTS starts playing
-  ↓ [calls get_detailed_weather(days=7) tool while TTS plays buffered audio]
-"...looks like Saturday will be sunny, but Sunday's bringing rain..."
-```
-
-**Tools to implement:**
-- `get_detailed_weather(location, days)` - Replace weather GPT
-- `search_artist_bio(artist_name)` - Replace biography GPT
-- `search_news(topic, location)` - Replace news GPT
-- `search_events(location, genre, dates)` - Replace events GPT
-- `search_shoutouts(query, filters)` - Enhance shoutouts beyond generic
-- `search_tracks(query, mood, genre)` - Dynamic music search
-
-**Key requirement:** Gemini 2.5 Flash supports streaming + function calling ✓
-
-**Status:** Planned, not implemented. The DJ reply is still spoken first, then a second LLM pass (HAL11000, `gpt_command_extraction`) emits brace commands parsed by `dj_command_executor.py`.
-
-**Prime candidate:** Weather - simple, external API, perfect for testing
+### 1. Tools (built September 2026)
+The DJ's actions and lookups are tool calls in one turn: 22 tools in `server/services_radio/dj_tools.py` (`TOOL_REGISTRY`), run by `ai_service.run_gemini_tool_turn`. Segment tools (news, weather, events, places, biography, lyrics, shoutouts) schedule the produced segment, which still uses the static node configs above. Streaming the reply sentence by sentence was tried and rejected (it conflicts with the performance planner). Details: `CLAUDE.md` section 5.
 
 ---
 
-### 2. Dynamic Announcer
-**Current:** Announcements use a static comprehensive node list (~23 nodes)
-**Future:** Enable `use_ai_picker: True` with time-based selection
-- Short transition (5 sec): Select minimal nodes (track title + next track)
-- Long transition (30 sec): Select comprehensive nodes (full track details + lyrics + weather)
+### 2. Dynamic Announcer (built)
+Announcements pick a node list by the length of the music window (`time_presets`: minimal, quick, standard, full, extended, everything) and get a talking-points menu sized to it.
 
 ### 3. Array-Based Visibility
 **Current:** `visible=True` or `visible=False`
@@ -251,23 +223,6 @@ Nodes have a `visible` parameter controlling whether Producer AI can select them
 **Future:** Define node groups that are conditionally included
 - Example: "If user asks about weather, include weather_extended_forecast"
 - Allows more sophisticated node selection logic
-
----
-
-### 5. Hybrid Architecture: Nodes + Tools
-**Vision:** Nodes for baseline context (fast), Tools for dynamic actions (flexible)
-
-**Nodes (pre-loaded, fast):**
-- Track metadata, user profile, queue state
-- Simple current weather, recent shoutouts
-- Always-needed context
-
-**Tools (on-demand, flexible):**
-- Detailed weather forecasts, specific artist lookups
-- Targeted searches (shoutouts, news, events, tracks)
-- Unpredictable requests
-
-**Best of both worlds:** Fast for common cases, flexible for edge cases
 
 ---
 
@@ -289,16 +244,16 @@ All GPT functions save debug prompts to `data/prompt_debug/`:
 
 **The node system provides:**
 - ✅ 80% token reduction via selective context inclusion
-- ✅ Unified architecture across all 10 GPT functions
+- ✅ Unified architecture across all prompt configs
 - ✅ Per-GPT control (required nodes + AI picker flag)
 - ✅ Dynamic selection for Interactive via Producer AI
 - ✅ Static optimization for specialized functions
 - ✅ Parallel node execution for performance
 - ✅ Comprehensive debug logging
-- ✅ Future-ready (dynamic announcer, array visibility)
+- ✅ System/live roles so the fixed prefix can be cached
 
 **Files:**
-- `context_nodes.py` - Node definitions (70 nodes)
+- `context_nodes.py` - Node definitions (75 nodes)
 - `context_node_registry.py` - Registry & execution
 - `context_router_service.py` - Producer AI (node selection)
 - `context_service.py` - Data fetching

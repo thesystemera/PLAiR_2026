@@ -1,7 +1,9 @@
 # Vector Database Architecture - The TTS Pattern
 
-**Date:** 2026-01-02 (updated 2026-09-26 for PostgreSQL)
+**Date:** 2026-01-02 (updated 2026-09-26 for PostgreSQL, 2026-10-01 for the mpnet encoder and semantic sources)
 **Status:** Production Architecture
+
+**What changed in September 2026:** every searchable source (tracks, shoutouts, local knowledge, news, places, listener requests) shares `BaseVectorDatabaseService` and one encoder, `SEMANTIC_ENCODER` (all-mpnet-base-v2, 768-dim). Embedding tables and index files carry the encoder slug (`<category>_mpnet_embeddings`, `<prefix>_mpnet_1.ann`), so a new encoder rebuilds cleanly. Search ranks every item with per-query category weights (`services/semantic_source.py` `SemanticSearch`); the Annoy indexes are still built with the rowid mapping below and are used for seed radio. `CLAUDE.md` section 15 ("Semantic sources") is the maintained summary.
 
 This document describes the rowid-based vector database pattern used across the system. This pattern has been proven stable in TTS services for months and is now used by both catalog and user_content vector databases.
 
@@ -72,9 +74,9 @@ TTS tables use `id SERIAL` in the same role (`add_item(id - 1, ...)`, `WHERE id 
 
 ### Category Embedding Caches (`ai_radio_embeddings`)
 ```sql
-CREATE TABLE IF NOT EXISTS mood_embeddings (text TEXT PRIMARY KEY, embedding BYTEA NOT NULL)
+CREATE TABLE IF NOT EXISTS mood_mpnet_embeddings (text TEXT PRIMARY KEY, embedding BYTEA NOT NULL)
 ```
-One table per category (`settings.CATALOG_EMBEDDING_TABLES`, `settings.USER_CONTENT_EMBEDDING_TABLES`); created on startup if missing.
+One table per category, named by `base_vector_database_service.embeddings_table(category)` (`<category>_<encoder slug>_embeddings`); created on startup if missing.
 
 **Pattern:** Use TEXT UNIQUE NOT NULL for the string identifier and a separate integer identity column (`rowid` / `id`) for the Annoy mapping.
 
@@ -104,7 +106,7 @@ def rebuild_indexes(self, catalog_service=None):
         new_index.add_item(rowid - 1, combined_embedding)
 
     new_index.build(50)
-    new_index.save("catalog_1.ann")
+    new_index.save("catalog_mpnet_1.ann")  # base_vector_database_service.index_paths
 ```
 
 **Key Points:**
@@ -137,40 +139,11 @@ def rebuild_indexes(self, shoutouts_data: List[Dict[str, Any]] = None):
 
 ---
 
-## Search Flow (Vector Similarity)
+## Search Flow
 
-### Catalog Vector Search Service
-**File:** `server/services/catalog_vector_search_service.py`
+Text search no longer walks the Annoy index. `catalog_vector_search_service.search()` and the shoutout search hand the query to `SemanticSearch` (`services/semantic_source.py`), which works out category weights for the query (regex presets or the query-intent prompt cache), scores every item's per-category embeddings and ranks them all. The same class serves news, places, local knowledge and listener requests.
 
-```python
-def search_catalog_by_string(query: str, ...) -> List[Dict]:
-    # Get nearest neighbors from Annoy (returns indexes: [0, 5, 12, ...])
-    nearest_ids = annoy.get_nns_by_vector(query_embedding, top_n * 10)
-
-    results = []
-    for annoy_idx in nearest_ids:
-        # TTS Pattern: rowid = annoy_index + 1
-        rowid = annoy_idx + 1
-
-        # Fast path: in-memory cache populated during rebuild
-        if rowid in self.vector_db._track_rowid_cache:
-            track_id = self.vector_db._track_rowid_cache[rowid]
-            track = self.vector_db._track_metadata_cache.get(rowid, {}).copy()
-        else:
-            # Fallback: query ai_radio_catalog by rowid
-            c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
-            ...
-
-        # Continue with re-ranking logic...
-        results.append({'track_id': track_id, 'similarity': similarity, ...})
-
-    return results
-```
-
-### User Content Vector Search Service
-**File:** `server/services/user_content_vector_search_service.py`
-
-Same pattern: `rowid = annoy_idx + 1`, check `_content_rowid_cache`, fall back to `SELECT content_id, metadata_json FROM shoutouts WHERE rowid = %s`.
+The Annoy indexes serve "more like this track" (seed radio): Annoy returns item ids, and `rowid = annoy_index + 1` maps each back to its row, first through the in-memory `_track_rowid_cache` / `_content_rowid_cache`, then `SELECT ... WHERE rowid = %s` as the fallback.
 
 ---
 
@@ -213,9 +186,10 @@ Same pattern: `rowid = annoy_idx + 1`, check `_content_rowid_cache`, fall back t
 
 ### Annoy Indexes (`data/embeddings/`)
 ```
-data/embeddings/catalog_1.ann, catalog_2.ann             # Catalog (A/B double buffer)
-data/embeddings/user_content_1.ann, user_content_2.ann   # User content
-data/embeddings/tts_embeddings_1.ann, ...                # TTS (tts/meta/impulse/audio)
+data/embeddings/catalog_mpnet_1.ann, catalog_mpnet_2.ann             # Catalog (A/B double buffer)
+data/embeddings/user_content_mpnet_1.ann, user_content_mpnet_2.ann   # User content
+data/embeddings/news_mpnet_*.ann, places_mpnet_*.ann, local_knowledge_mpnet_*.ann, listener_requests_mpnet_*.ann
+data/embeddings/tts_embeddings_1.ann, ...                            # TTS (tts/meta/impulse/breath/audio)
 ```
 
 ### Source Files (Persist)
@@ -235,12 +209,12 @@ CATALOG_DIR/users/<user_id>/        # User shoutout JSON + audio
 ### Catalog Services
 1. **catalog_database_service.py** - Schema: `rowid INTEGER GENERATED BY DEFAULT AS IDENTITY UNIQUE`, `track_id TEXT UNIQUE NOT NULL`
 2. **catalog_vector_database_service.py** - Builds: `annoy.add_item(rowid - 1, embedding)`; validates index vs `MAX(rowid)`
-3. **catalog_vector_search_service.py** - Searches: `WHERE rowid = %s`, (annoy_idx + 1,)
+3. **catalog_vector_search_service.py** - `search()` through `SemanticSearch`; seed radio maps Annoy ids with `annoy_idx + 1`
 
 ### User Content Services
 4. **user_content_database_service.py** - Schema: `rowid ... IDENTITY UNIQUE`, `content_id TEXT UNIQUE NOT NULL`
 5. **user_content_vector_database_service.py** - Builds: `annoy.add_item(rowid - 1, embedding)`
-6. **user_content_vector_search_service.py** - Searches: `WHERE rowid = %s`, (annoy_idx + 1,)
+6. **user_content_vector_search_service.py** - same pattern as the catalog search
 
 ### TTS Services (Reference Implementation)
 - **server/services_radio/tts_vector_db_service.py** - Original stable implementation using this pattern (`id SERIAL`)

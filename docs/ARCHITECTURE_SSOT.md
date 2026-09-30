@@ -10,6 +10,8 @@ This document explains the **Publisher/Subscriber** architecture using **UIState
 
 **STOP IMMEDIATELY** and read this document. The architecture is intentionally simple and should not be complicated.
 
+**Hook names (checked 1 Oct 2026).** Components read UIState with slice subscriptions: `useUISelector(state => ({ ... }))` (shallow-compared), `useUIStateGetter()` for a read inside a handler, and `useRadioUI()` for the radio button and shader. There is no whole-state hook; `useUIState()` was removed. High-frequency data (FFT bars, the speaking DJ's colour, progress) lives in refs (`djFftDataRef`, `micFftDataRef`, `speakerColorRef`), not React state. The code blocks below are simplified sketches of the pattern; `CLAUDE.md` section 1 is the maintained reference.
+
 ---
 
 ## The Problem We Solved
@@ -89,34 +91,26 @@ Reports:
 - `progressPercent` (0-100)
 
 #### **useDJAudioStream.js** - DJ Audio Engine
-```javascript
-useEffect(() => {
-  reportEngineStatus({
-    isDJSpeaking,
-    djFftData: fftData, // Array[32]
-    speakerColor: getSpeakerColor() // { r, g, b }
-  })
-}, [isDJSpeaking, fftData])
 
-// Polls CSS for dynamic color every 100ms when DJ is speaking
-useEffect(() => {
-  if (!isDJSpeaking) return
-  const colorInterval = setInterval(() => {
-    reportEngineStatus({ speakerColor: getSpeakerColor() })
-  }, 100)
-  return () => clearInterval(colorInterval)
-}, [isDJSpeaking])
+Mounted once at the App root as `<DJVoiceEngine />` (never inside a panel), with its own audio element.
+
+```javascript
+useEffect(() => { reportEngineStatus({ isDJSpeaking }) }, [isDJSpeaking])
+
+// While the DJ speaks, a requestAnimationFrame loop blends the hosts' colours from the
+// stream's speaker intensities and writes the result to a ref (no React state, no polling)
+speakerColorRef.current = calculateBlendedColor(player.getIntensitiesAt(player.getCurrentTime()))
 ```
 
 Reports:
 - `isDJSpeaking` (boolean)
-- `djFftData` (Array[32] of frequency data)
-- `speakerColor` ({ r, g, b } from CSS variables)
+- `djFftData` (through the shared `useFFTProcessor` hook)
+- the speaking hosts' colour, in `speakerColorRef`
 
 Performance optimizations:
-- Throttled FFT updates (20fps instead of 60fps)
 - Zero-allocation processing with for loops
-- Uses refs for internal RAF loop, setState only every 3 frames
+- Refs for everything that changes per frame; React state only for the speaking flag
+- It only plays on the active device (`engineState.isActiveDevice`) and when the DJ voice isn't muted
 
 #### **VoiceRecordingContext.jsx** - Microphone Engine
 ```javascript
@@ -224,23 +218,18 @@ Views are "pixel renderers" - they read from UIState and render based on the dat
 
 #### **Radio.jsx** - Just a Panel Container
 ```javascript
-export function Radio({ playback, isFullscreen, isMobileView, mobilePanel }) {
-  const { visualState, engineState, updateButtonOpacity } = useRadioUI()
+export function Radio() {
+  const { engineState, buttonInteraction } = useRadioUI()
+  const { interfaceState } = useUISelector(state => ({ interfaceState: state.interfaceState }))
 
-  // ONLY manages audio element for DJ stream
-  useDJAudioStream(audioElementRef)
-
-  // NO engine state reporting
-  // NO data transformation
+  // NO props, NO engine state reporting, NO data transformation
   // Just layout and interaction handlers
 
   return (
     <div>
-      <audio ref={audioElementRef} />
       <Conversation />
       <InteractiveEngagementButton
         onRecordingComplete={sendToDJ}
-        audioElementRef={audioElementRef}
         onSwipeLeft={...}
         onSwipeRight={...}
       />
@@ -249,7 +238,7 @@ export function Radio({ playback, isFullscreen, isMobileView, mobilePanel }) {
 }
 ```
 
-**Key Point:** Radio.jsx does NOT call `useVoiceRecording()` or manage recording state. That's the button's job.
+**Key Points:** Radio.jsx takes no props and does NOT call `useVoiceRecording()` or manage recording state (that's the button's job). It does not own the DJ's audio either: the DJ stream is `<DJVoiceEngine />` at the App root, so collapsing or remounting the panel can't cut the DJ off.
 
 #### **InteractiveEngagementButton.jsx** - Self-Contained Recording
 ```javascript
@@ -317,8 +306,8 @@ const { visualState, progressData, engineState } = useRadioUI()
 3. **useDJAudioStream** calls `reportEngineStatus({ isDJSpeaking: true, djFftData: [...] })`
 4. **UIStateContext** updates `engineState.isDJSpeaking = true`
 5. **UIStateContext** recomputes `visualState` → becomes 3 (DJ SPEAKING, overrides music state 2)
-6. **UIStateContext** recomputes color → Dynamic DJ color from CSS
-7. **useDJAudioStream** starts 100ms color polling interval
+6. **UIStateContext** resolves the colour from `speakerColorRef`
+7. **useDJAudioStream** updates `speakerColorRef` each frame from the stream's speaker intensities
 8. **All views** re-render with DJ visual state and dynamic color
 9. **Button blob** reacts to DJ FFT data instead of music
 
@@ -352,7 +341,7 @@ const { visualState, progressData, engineState } = useRadioUI()
 
 1. **Engines report directly to UIState** via `reportEngineStatus()`
 2. **UIState derives visual state** from engine flags (priority order matters)
-3. **Views read from UIState** via `useRadioUI()` or `useUIState()`
+3. **Views read from UIState** via `useUISelector(state => slice)` (select the narrowest values you need) or `useRadioUI()`
 4. **Keep components dumb** - Just render based on state
 5. **Use refs for RAF loops** - Only setState when needed for React updates
 6. **Throttle high-frequency updates** - FFT at 20fps, not 60fps
@@ -416,9 +405,9 @@ if (!trackChanged && !playingChanged && !indexChanged && !queueChanged && !isSee
 - Check if multiple engines are active (priority determines winner)
 
 ### "Colors not updating"
-- Check DJ color polling interval is running (only when isDJSpeaking)
-- Verify CSS variable `--dj-speaking-glow` is being set by DJColorManager
-- Check `speakerColor` is being reported to UIState
+- Check the colour loop in `useDJAudioStream` is running (only while `isDJSpeaking`)
+- Check the stream carries speaker intensities (`player.getIntensitiesAt`)
+- Check `speakerColorRef.current` is changing
 
 ### "Performance issues"
 - Check for setState in RAF loops (should use refs)
@@ -559,13 +548,14 @@ play() {
 #### 3. Visual Layer (UIState → Components)
 ```javascript
 // DevicePicker
-const { engineState } = useUIState()
-showInactive = !engineState.isActiveDevice
+const { isActiveDevice, activeDeviceId } = useUISelector(state => ({
+  isActiveDevice: state.engineState.isActiveDevice,
+  activeDeviceId: state.engineState.activeDeviceId
+}))
+showInactive = !isActiveDevice && !!activeDeviceId
 
 // useDJAudioStream
-const { engineState } = useUIState()
-const isActiveDevice = engineState.isActiveDevice
-if (!isActiveDevice || !data?.unique_id) return  // Block DJ stream
+player.setEnabled(isActiveDevice && !ttsMuted)  // DJ stream only on the active device
 ```
 
 **What it shows:**
@@ -601,9 +591,11 @@ UIStateContext.engineState.isActiveDevice = false
 
 **User opens Device B while Device A is playing:**
 
+A (re)connect never moves playback. The backend only activates a connecting device when the session has no active device yet (`PlaybackState.device_connected`). Device B takes over through an explicit action: "Play here instead", a transfer from the device picker, or claim-on-open (a genuine user open of a visible page, after a tap; see `CLAUDE.md` section 3).
+
 1. Device B loads → `isActiveDevice = false` (default)
-2. Device B connects to WebSocket
-3. **Backend** receives connection, sets `active_device_id = Device B`
+2. Device B connects to WebSocket and receives `playback_state` with `active_device_id = Device A`: it shows the queue as a remote
+3. Device B sends `playback_command {command: 'claim'}` (claim-on-open) or the user taps "Play here instead"; the **backend** sets `active_device_id = Device B` (`claim_on_open` / `_apply_transfer`)
 4. **Backend** broadcasts `playback_state` with `active_device_id = Device B` to ALL devices
 5. **Device A** receives state:
    ```javascript
@@ -649,8 +641,7 @@ const weAreActive = data.active_device_id === deviceId
 const [isActiveDevice, setIsActiveDevice] = useState(true)
 
 // ✅ GOOD - Read from UIState
-const { engineState } = useUIState()
-const isActiveDevice = engineState.isActiveDevice
+const isActiveDevice = useUISelector(state => state.engineState.isActiveDevice)
 ```
 
 ❌ **Don't manage playback state in multiple places:**
