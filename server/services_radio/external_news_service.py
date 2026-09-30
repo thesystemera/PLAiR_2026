@@ -18,8 +18,10 @@ from services.http_client import fetch
 from services import usage_tracking
 from services.llm_router import LLM_BACKGROUND
 from services.task_utils import spawn
+from services_radio import news_links
+from services_radio.news_reader import READ_OK, NewsReader
 from services_radio.news_store import (KIND_GEO, KIND_SEARCH, KIND_TOP, KIND_TOPIC, NewsStore, StoredPull, cosine,
-                                       covers, lexical_similarity, normalize_query, search_terms)
+                                       covers, lexical_similarity, normalize_query, search_terms, title_key)
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss"
 TOPICS = ["WORLD", "NATION", "BUSINESS", "TECHNOLOGY", "ENTERTAINMENT", "SPORTS", "SCIENCE", "HEALTH"]
@@ -83,6 +85,10 @@ class NewsService:
         self._last_prune = 0.0
         self._embed_failed_at = 0.0
         self._locating = asyncio.Lock()
+        self._reading = asyncio.Lock()
+        self._resolving = asyncio.Lock()
+        self._decode_rest_until = 0.0
+        self.reader = NewsReader()
         log_service.external("News Service initialized (Google News RSS"
                              + (", persistent semantic store)" if self.store_enabled else ")"))
 
@@ -224,8 +230,9 @@ class NewsService:
         for i, article in enumerate(articles, 1):
             lines.append(f"{i}. {article['title']}")
             lines.append(f"   Source: {article['source']['name']} | Published: {article['publishedAt']}")
-            if article["description"]:
-                lines.append(f"   Summary: {article['description'][:400]}")
+            summary = article.get("summary") or article["description"]
+            if summary:
+                lines.append(f"   Summary: {summary[:settings.NEWS_SUMMARY_CHARS]}")
             if article.get("aired"):
                 lines.append("   (Already covered for this listener earlier: only mention it as a quick follow-up)")
         return "\n".join(lines)
@@ -344,6 +351,68 @@ class NewsService:
             log_service.detail(f"News: placed {located} of {len(pending)} stories on the map", "pulse")
         return located
 
+    async def _identify(self, articles: list[dict], country: str) -> None:
+        links = await self.store.links({i for i in (news_links.google_id(a["url"]) for a in articles) if i})
+        titles = await self.store.match_titles(country, [a["title"] for a in articles])
+        for article in articles:
+            link = links.get(news_links.google_id(article["url"]))
+            if link is not None and link.url:
+                article["publisher_url"] = link.url
+            elif not news_links.is_google(article["url"]):
+                article["publisher_url"] = news_links.clean(article["url"])
+            elif titles.get(title_key(article["title"])):
+                article["item_key"] = titles[title_key(article["title"])]
+
+    async def resolve_pending(self) -> int:
+        if not self.store_enabled or self._resolving.locked() or time.monotonic() < self._decode_rest_until:
+            return 0
+        resolved = merged = failed = 0
+        async with self._resolving:
+            while time.monotonic() >= self._decode_rest_until:
+                pending = await self.store.unresolved(settings.NEWS_LINK_PER_RUN)
+                if not pending:
+                    break
+                for item_id, link_id, known in pending:
+                    url = known
+                    if url is None:
+                        try:
+                            url = await news_links.decode(link_id)
+                        except news_links.RateLimited:
+                            self._decode_rest_until = time.monotonic() + settings.NEWS_LINK_REST_S
+                            log_service.warning(f"News: Google is rate-limiting link lookups, resting "
+                                                f"{settings.NEWS_LINK_REST_S // 60} min")
+                            break
+                        await self.store.remember_links({link_id: url})
+                        await asyncio.sleep(settings.NEWS_LINK_DECODE_GAP_S)
+                    if url is None:
+                        failed += 1
+                        continue
+                    kept = await self.store.settle(item_id, url)
+                    resolved += 1
+                    merged += kept is not None and kept != item_id
+        if resolved or failed:
+            log_service.external(f"News: linked {resolved} stories to their publishers"
+                                 + (f" ({merged} were duplicates, merged)" if merged else "")
+                                 + (f", {failed} failed" if failed else ""))
+            spawn(self.read_pending(), name="news_read")
+        return resolved
+
+    async def read_pending(self) -> int:
+        if not self.store_enabled or not settings.NEWS_READ_ENABLED or self._reading.locked():
+            return 0
+        async with self._reading:
+            pending = await self.store.unread(settings.NEWS_READ_PER_RUN)
+            if not pending:
+                return 0
+            results = await asyncio.gather(*(self.reader.read(url, title) for _, url, title in pending))
+            await self.store.set_summaries({row[0]: result for row, result in zip(pending, results)})
+        counts: dict[str, int] = {}
+        for _, status in results:
+            counts[status] = counts.get(status, 0) + 1
+        log_service.external(f"News: read {len(pending)} stories ("
+                             + ", ".join(f"{n} {status}" for status, n in sorted(counts.items())) + ")")
+        return counts.get(READ_OK, 0)
+
     async def _maybe_prune(self) -> None:
         if time.monotonic() - self._last_prune < PRUNE_INTERVAL_S:
             return
@@ -360,6 +429,7 @@ class NewsService:
         else:
             url = self._feed_url(fetch_query, kind == KIND_TOPIC, country, period or "7d")
         articles = await self._fetch_url(url, self._label(kind, fetch_query, country))
+        await self._identify(articles, country)
         ids = await self.store.save_items(articles, country, region_key,
                                           self._pull_tags(kind, query_norm, fetch_query, country))
         pull = await self.store.add_pull(kind, country, region_key, fetch_query, query_norm, period, ids,
@@ -367,6 +437,7 @@ class NewsService:
         pull_text = "" if ask_vector is not None or kind == KIND_TOP else fetch_query
         spawn(self._embed_pending(ids, pull.id, pull_text), name="news_embed")
         spawn(self.locate_pending(), name="news_locate")
+        spawn(self.resolve_pending(), name="news_resolve")
         spawn(self._maybe_prune(), name="news_prune")
         return pull
 

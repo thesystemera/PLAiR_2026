@@ -1343,7 +1343,7 @@ class Pulse:
             if item is not None:
                 article = item.as_article()
                 entry = {"id": item_id, "kind": kind, "title": article.get("title"),
-                         "details": article.get("description") or "",
+                         "details": article.get("summary") or article.get("description") or "",
                          "source": (article.get("source") or {}).get("name"),
                          "published": article.get("publishedAt"), "tags": article.get("tags"),
                          **_where_entry(listener, article.get("where"))}

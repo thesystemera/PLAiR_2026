@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 import numpy as np
-from sqlalchemy import and_, bindparam, delete, func, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import and_, bindparam, case, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.orm import defer
 
 from config import settings
-from database.models import NewsAired, NewsItem, NewsPull
+from database.models import NewsAired, NewsItem, NewsLink, NewsPull
+from services_radio import news_links
 
 KIND_TOP = "top"
 KIND_TOPIC = "topic"
@@ -83,8 +84,23 @@ def covers(ask: set, text_tokens: set) -> bool:
     return len(ask & text_tokens) >= need
 
 
-def item_key(title: str, source: str) -> str:
-    raw = " ".join(tokens(title)) + "|" + " ".join(tokens(source))
+TITLE_MATCH_MIN_WORDS = 4
+_CUT = re.compile(r"(\.\.\.|\u2026)\s*$")
+
+
+def title_key(title: Optional[str]) -> str:
+    return " ".join(tokens(_CUT.sub("", title or "")))
+
+
+def item_key(article: dict) -> str:
+    publisher = article.get("publisher_url")
+    link = news_links.google_id(article.get("url"))
+    if publisher:
+        raw = "url|" + news_links.identity(publisher)
+    elif link:
+        raw = "link|" + link
+    else:
+        raw = "title|" + title_key(article.get("title"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -139,10 +155,11 @@ class StoredItem:
     first_seen_at: Optional[datetime] = None
     embedding: Optional[np.ndarray] = None
     where: Optional[dict] = None
+    summary: str = ""
 
     @property
     def token_set(self) -> set:
-        return set(tokens(" ".join([self.title, self.description, " ".join(self.tags)])))
+        return set(tokens(" ".join([self.title, self.description, self.summary, " ".join(self.tags)])))
 
     @property
     def embed_text(self) -> str:
@@ -154,6 +171,7 @@ class StoredItem:
             "source": {"id": None, "name": self.source},
             "title": self.title,
             "description": self.description,
+            "summary": self.summary,
             "url": self.url,
             "publishedAt": _iso(self.published_at),
             "tags": list(self.tags),
@@ -198,7 +216,7 @@ def _item(row: NewsItem, with_embedding: bool) -> StoredItem:
         id=row.id, item_key=row.item_key, title=row.title, source=row.source or "", url=row.url or "",
         description=row.description or "", published_at=row.published_at, tags=json.loads(row.tags or "[]"),
         first_seen_at=row.first_seen_at, embedding=unpack(row.embedding) if with_embedding else None,
-        where=_where(row),
+        where=_where(row), summary=row.summary or "",
     )
 
 
@@ -271,21 +289,20 @@ class NewsStore:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=settings.NEWS_RETENTION_S)
         pull_tags = [t for t in dict.fromkeys(tags) if t]
-        rows, seen_keys, seen_urls = [], set(), set()
+        rows, seen_keys = [], set()
         for article in articles:
             title = (article.get("title") or "").strip()
             if not title:
                 continue
             source = ((article.get("source") or {}).get("name") or "").strip()
-            url = (article.get("url") or "").strip()
-            key = item_key(title, source)
-            if key in seen_keys or (url and url in seen_urls):
+            url = (article.get("publisher_url") or article.get("url") or "").strip()
+            key = article.get("item_key") or item_key(article)
+            if key in seen_keys:
                 continue
             seen_keys.add(key)
-            if url:
-                seen_urls.add(url)
             rows.append({
-                "item_key": key, "title": title[:500], "source": source[:200], "url": url[:2000],
+                "item_key": key, "title_key": title_key(title), "link_id": news_links.google_id(article.get("url")),
+                "title": title[:500], "source": source[:200], "url": url[:2000],
                 "description": (article.get("description") or "")[:2000],
                 "published_at": parse_published(article.get("publishedAt")), "country": country,
                 "region_key": region_key, "tags": pull_tags, "first_seen_at": now, "last_seen_at": now,
@@ -302,14 +319,120 @@ class NewsStore:
                 merged = list(dict.fromkeys((json.loads(prior.tags or "[]") if prior else []) + row["tags"]))
                 row["tags"] = json.dumps(merged[:24])
             stmt = pg_insert(NewsItem).values(rows)
+            longer = func.length(stmt.excluded.title) > func.length(NewsItem.title)
             stmt = stmt.on_conflict_do_update(index_elements=["item_key"], set_={
                 "last_seen_at": stmt.excluded.last_seen_at, "expires_at": stmt.excluded.expires_at,
-                "tags": stmt.excluded.tags, "url": stmt.excluded.url, "published_at": stmt.excluded.published_at,
+                "tags": stmt.excluded.tags, "published_at": stmt.excluded.published_at,
+                "title": case((longer, stmt.excluded.title), else_=NewsItem.title),
+                "title_key": case((longer, stmt.excluded.title_key), else_=NewsItem.title_key),
+                "url": case((NewsItem.url.like("https://news.google.com/%"), stmt.excluded.url), else_=NewsItem.url),
             }).returning(NewsItem.id, NewsItem.item_key)
             ids = {key: item_id for item_id, key in (await db.execute(stmt)).all()}
             await db.commit()
         self._mark_dirty()
         return [ids[r["item_key"]] for r in rows if r["item_key"] in ids]
+
+    async def match_titles(self, country: str, titles: Iterable[str]) -> dict:
+        keys = {key for key in map(title_key, titles) if len(key.split()) >= TITLE_MATCH_MIN_WORDS}
+        if not keys:
+            return {}
+        async with self._sessions()() as db:
+            rows = (await db.execute(select(NewsItem.title_key, NewsItem.item_key).where(
+                NewsItem.country == country, NewsItem.title_key.in_(keys),
+                NewsItem.expires_at > datetime.now(timezone.utc)))).all()
+        return {key: item for key, item in rows}
+
+    async def links(self, link_ids: Iterable[str]) -> dict:
+        link_ids = list(link_ids)
+        if not link_ids:
+            return {}
+        async with self._sessions()() as db:
+            rows = (await db.execute(select(NewsLink).where(NewsLink.link_id.in_(link_ids)))).scalars().all()
+        return {row.link_id: row for row in rows}
+
+    async def remember_links(self, resolved: dict) -> None:
+        if not resolved:
+            return
+        now = datetime.now(timezone.utc)
+        stmt = pg_insert(NewsLink).values([{"link_id": link_id, "url": url, "attempts": 1, "checked_at": now}
+                                           for link_id, url in resolved.items()])
+        stmt = stmt.on_conflict_do_update(index_elements=["link_id"], set_={
+            "url": stmt.excluded.url, "attempts": NewsLink.attempts + 1, "checked_at": stmt.excluded.checked_at})
+        async with self._sessions()() as db:
+            await db.execute(stmt)
+            await db.commit()
+
+    async def unresolved(self, limit: int) -> list[tuple]:
+        now = datetime.now(timezone.utc)
+        async with self._sessions()() as db:
+            rows = (await db.execute(
+                select(NewsItem.id, NewsItem.link_id, NewsLink.url)
+                .join(NewsLink, NewsLink.link_id == NewsItem.link_id, isouter=True)
+                .where(NewsItem.link_id.is_not(None), NewsItem.url.like("https://news.google.com/%"),
+                       NewsItem.expires_at > now,
+                       or_(NewsLink.link_id.is_(None), NewsLink.url.is_not(None),
+                           and_(NewsLink.attempts < settings.NEWS_LINK_MAX_ATTEMPTS,
+                                NewsLink.checked_at < now - timedelta(seconds=settings.NEWS_LINK_RETRY_S))))
+                .order_by(NewsItem.first_seen_at.desc()).limit(limit))).all()
+        return [tuple(row) for row in rows]
+
+    async def settle(self, item_id: int, publisher_url: str) -> Optional[int]:
+        key = item_key({"publisher_url": publisher_url})
+        async with self._sessions()() as db:
+            row = await db.get(NewsItem, item_id)
+            if row is None:
+                return None
+            target = (await db.execute(select(NewsItem).where(NewsItem.item_key == key))).scalar_one_or_none()
+            if target is None or target.id == row.id:
+                row.item_key, row.url, kept = key, publisher_url, row.id
+                await db.commit()
+                return kept
+            target.tags = json.dumps(list(dict.fromkeys(
+                json.loads(target.tags or "[]") + json.loads(row.tags or "[]")))[:24])
+            if len(row.title) > len(target.title):
+                target.title, target.title_key = row.title, row.title_key
+            target.last_seen_at = max(target.last_seen_at, row.last_seen_at)
+            target.expires_at = max(target.expires_at, row.expires_at)
+            pulls = (await db.execute(select(NewsPull).where(or_(
+                NewsPull.item_ids.cast(JSONB).contains([row.id]),
+                NewsPull.ranked_ids.cast(JSONB).contains([row.id]))))).scalars().all()
+            for pull in pulls:
+                for column in ("item_ids", "ranked_ids"):
+                    ids = json.loads(getattr(pull, column) or "null")
+                    if ids is not None:
+                        setattr(pull, column, json.dumps(list(dict.fromkeys(
+                            target.id if i == row.id else i for i in ids))))
+            aired = (await db.execute(select(NewsAired).where(NewsAired.item_id == row.id))).scalars().all()
+            for entry in aired:
+                await db.execute(pg_insert(NewsAired).values(
+                    subject=entry.subject, item_id=target.id, aired_at=entry.aired_at).on_conflict_do_nothing())
+                await db.delete(entry)
+            merged = target.id
+            await db.delete(row)
+            await db.commit()
+        self._mark_dirty()
+        return merged
+
+    async def unread(self, limit: int) -> list[tuple]:
+        async with self._sessions()() as db:
+            rows = (await db.execute(
+                select(NewsItem.id, NewsItem.url, NewsItem.title)
+                .where(NewsItem.read_status.is_(None), NewsItem.url != "",
+                       NewsItem.url.not_like("https://news.google.com/%"),
+                       NewsItem.expires_at > datetime.now(timezone.utc))
+                .order_by(NewsItem.first_seen_at.desc()).limit(limit))).all()
+        return [tuple(row) for row in rows]
+
+    async def set_summaries(self, results: dict) -> None:
+        if not results:
+            return
+        async with self._sessions()() as db:
+            for item_id, (summary, status) in results.items():
+                await db.execute(update(NewsItem).where(NewsItem.id == item_id).values(
+                    summary=summary, read_status=status))
+            await db.commit()
+        if any(summary for summary, _ in results.values()):
+            self._mark_dirty()
 
     async def add_pull(self, kind: str, country: str, region_key: Optional[str], query: str, query_norm: str,
                        period: str, item_ids: list, embedding=None, status: str = "ok") -> StoredPull:
@@ -419,6 +542,8 @@ class NewsStore:
         async with self._sessions()() as db:
             await db.execute(delete(NewsPull).where(NewsPull.expires_at < now))
             await db.execute(delete(NewsItem).where(NewsItem.expires_at < now))
+            await db.execute(delete(NewsLink).where(
+                NewsLink.checked_at < now - timedelta(seconds=settings.NEWS_RETENTION_S * 2)))
             await db.execute(delete(NewsAired).where(
                 NewsAired.aired_at < now - timedelta(seconds=settings.NEWS_AIRED_TTL_S)))
             await db.commit()

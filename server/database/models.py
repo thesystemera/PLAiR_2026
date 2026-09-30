@@ -382,10 +382,14 @@ class NewsItem(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     item_key = Column(String, nullable=False, unique=True)
+    title_key = Column(String, nullable=False, default="", index=True)
+    link_id = Column(String, nullable=True)
     title = Column(String, nullable=False)
     source = Column(String, nullable=False, default="")
     url = Column(String, nullable=False, default="")
     description = Column(Text, nullable=False, default="")
+    summary = Column(Text, nullable=True)
+    read_status = Column(String, nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     country = Column(String, nullable=True, index=True)
     region_key = Column(String, nullable=True)
@@ -400,6 +404,15 @@ class NewsItem(Base):
     first_seen_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     last_seen_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class NewsLink(Base):
+    __tablename__ = "news_links"
+
+    link_id = Column(String, primary_key=True)
+    url = Column(String, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    checked_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False, index=True)
 
 
 class NewsPull(Base):

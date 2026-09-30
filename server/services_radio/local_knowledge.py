@@ -30,7 +30,8 @@ CREATE OR REPLACE VIEW news_nuggets AS
 SELECT id AS rowid,
        'news:' || id AS nugget_id,
        json_build_object(
-           'id', 'news:' || id, 'kind', 'news', 'article_id', id, 'title', title, 'text', description,
+           'id', 'news:' || id, 'kind', 'news', 'article_id', id, 'title', title,
+           'text', COALESCE(NULLIF(summary, ''), description),
            'source', source, 'url', url, 'published_at', published_at, 'country', country,
            'region_key', region_key, 'tags', tags::json,
            'where', CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN json_build_object(
