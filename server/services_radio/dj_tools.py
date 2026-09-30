@@ -10,6 +10,7 @@ from config.settings import settings
 from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
+from services import listener_filters
 from services_radio import talk_clock
 from services_radio.talk_clock import DEFAULT_DEPTH
 from services_radio.dj_command_executor import (
@@ -64,6 +65,12 @@ FAILED_STATUSES = {"refused", "error", "no_results", "not_found", "no_lyrics", "
 FAILED_ACTION_NOTE = "This did NOT happen. Don't pretend it did - tell the listener honestly, in character."
 
 WEATHER_PERIODS = ["current", "today", "tomorrow", "week"]
+SEARCH_SCOPES = list(listener_filters.SEARCH_SCOPES)
+WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
+          "description": "Where to look for tracks: catalog (everything, the default), favourites (only tracks this "
+                         "listener has liked or super-liked) or super_likes (only their super-likes). Use "
+                         "favourites when they ask for something of their own: 'one of my favourites', 'that song "
+                         "I liked', or a description of a track they know they have liked."}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
 SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. It needs one hand-off line "
                 "in total: if you already said a line with this call, that was it - go straight to your notes and "
@@ -119,6 +126,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "max_age_days": {"type": "number", "description": "Only shoutouts and news from the last N days."},
             "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), "
                                       "nearest."),
+            "within": WITHIN,
             "how_many": {"type": "number",
                          "description": f"How many results you want per kind: {settings.PULSE_TOOL_PER_KIND} by "
                                         f"default, up to {settings.PULSE_TOOL_MAX_PER_KIND}. Ask for more when the "
@@ -164,10 +172,14 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "category": _enum(SEARCH_CATEGORIES, "Which catalog field to search: song_title, primary_artist, "
                                                  "similar_artists, primary_genre, secondary_genres (sub-genres/tags), "
                                                  "mood, style (production), theme (lyrical subject), vocal "
-                                                 "(delivery), lyrics (lyric content)."),
+                                                 "(delivery), lyrics (lyric content), or description: a track "
+                                                 "described in the listener's own words across several of these "
+                                                 "('90s rock duet with a male and a female singer'), for when "
+                                                 "they can't name it."),
             "query": _string("What to search for, e.g. 'Nine Inch Nails', 'melancholic', 'TR-808 drums'."),
             "mode": _enum(["play", "queue"], "play = start the first match now; queue = add matches after the "
                                              "current track."),
+            "within": WITHIN,
         }, ["category", "query", "mode"]),
     },
     {
@@ -505,13 +517,15 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "request_tools":
         return _brace("request_tools", *(args.get("names") or []), value=args.get("reason"))
     if name == "pulse_search":
-        return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "", value=args.get("query"))
+        return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "",
+                      args["within"] if args.get("within") not in (None, "catalog") else "", value=args.get("query"))
     if name == "pulse_detail":
         return _brace("pulse_detail", value=args["item_id"])
     if name in ("listener_context", "city_trends"):
         return _brace(name, value=args.get("topic"))
     if name == "search_and_play":
-        return _brace("play" if args["mode"] == "play" else "cue", args["category"], value=args["query"])
+        return _brace("play" if args["mode"] == "play" else "cue", args["category"],
+                      args["within"] if args.get("within") != "catalog" else "", value=args["query"])
     if name == "playback_control":
         return _brace({"next": "next", "previous": "previous", "pause": "mute", "resume": "activate"}[args["action"]])
     if name == "seed_radio":
@@ -635,7 +649,8 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"query": text("query") or "", "kinds": kinds,
                 "when": choice("when", PULSE_WHEN) if when else None,
                 "near_me": bool(args.get("near_me")), "max_age_days": max_age,
-                "sort": choice("sort", PULSE_SORT, "relevance"), "how_many": how_many}
+                "sort": choice("sort", PULSE_SORT, "relevance"), "how_many": how_many,
+                "within": choice("within", SEARCH_SCOPES, "catalog")}
     if name == "pulse_detail":
         return {"item_id": text("item_id", True)}
     if name == "listener_context":
@@ -652,7 +667,8 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"topic": text("topic") or ""}
     if name == "search_and_play":
         return {"category": choice("category", SEARCH_CATEGORIES), "query": text("query", True),
-                "mode": choice("mode", ["play", "queue"], "play")}
+                "mode": choice("mode", ["play", "queue"], "play"),
+                "within": choice("within", SEARCH_SCOPES, "catalog")}
     if name == "playback_control":
         return {"action": choice("action", ["next", "previous", "pause", "resume"])}
     if name == "seed_radio":
@@ -701,6 +717,8 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
     if ctx.calls_made >= settings.DJ_TOOL_MAX_CALLS_PER_TURN:
         return "That's the limit of tool calls for one turn: work with what you already have."
+    if args.get("within") in ("favourites", "super_likes") and not ctx.user_id:
+        return "Only signed-in listeners have liked tracks to search; search the whole catalog instead."
     if name in READ_TOOLS:
         return None
     if ctx.origin not in ("voice", "text"):
@@ -854,7 +872,8 @@ class DJToolRuntime:
         allow_fetch = bool(args["query"]) and self.ctx.live_fetches < settings.DJ_TOOL_MAX_LIVE_FETCHES
         query = PulseQuery(listener=listener, text=args["query"], kinds=set(args["kinds"]) or None,
                            kind_order=list(args["kinds"]), when=args.get("when"),
-                           limit=args["how_many"] * 4, per_kind=args["how_many"],
+                           limit=args["how_many"] * 4, per_kind=args["how_many"], within=args.get("within"),
+                           use_ai=args.get("within") in ("favourites", "super_likes"),
                            allow_fetch=allow_fetch, near_me=args.get("near_me", False),
                            record_demand=self.ctx.origin in ("voice", "text"),
                            max_age_days=args.get("max_age_days"), sort=args.get("sort") or "relevance")
@@ -914,9 +933,11 @@ class DJToolRuntime:
         return {"status": "scheduled", "note": SEGMENT_NOTE}
 
     async def _search_and_play(self, args):
-        query = f"{SEARCH_CATEGORY_PREFIXES[args['category']]}: {args['query']}"
+        prefix = SEARCH_CATEGORY_PREFIXES[args["category"]]
+        query = f"{prefix}: {args['query']}" if prefix else args["query"].replace(": ", " ")
         async with self.ctx.playback_lock:
-            return await self.executor.execute_searches(self.session_dict, [(query, args["mode"] == "play")])
+            return await self.executor.execute_searches(self.session_dict, [(query, args["mode"] == "play")],
+                                                        within=args.get("within"))
 
     async def _playback_control(self, args):
         async with self.ctx.playback_lock:

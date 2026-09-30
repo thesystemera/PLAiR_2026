@@ -21,7 +21,8 @@ class CatalogVectorSearchService:
             instrumental: Optional[bool] = None,
             vocal_gender: Optional[str] = None,
             use_ai_analysis: bool = False,
-            banned_ids: Optional[set] = None
+            banned_ids: Optional[set] = None,
+            only_ids: Optional[set] = None
     ) -> List[Dict[str, Any]]:
 
         if not self.catalog or not self.catalog.tracks:
@@ -50,6 +51,8 @@ class CatalogVectorSearchService:
 
             def keep(track: Dict[str, Any]) -> bool:
                 if banned_ids and track.get("id") in banned_ids:
+                    return False
+                if only_ids is not None and track.get("id") not in only_ids:
                     return False
                 if track.get("id") in hidden:
                     return False

@@ -3,6 +3,7 @@ from typing import Optional, Set
 from services.user_data_cache_service import user_data_cache
 
 MUSIC_SOURCES = ("both", "human", "ai")
+SEARCH_SCOPES = ("catalog", "favourites", "super_likes")
 
 
 def music_source(session_id: Optional[str]) -> str:
@@ -19,6 +20,14 @@ def source_excluded_ids(source: str) -> Set[str]:
     if source == "human":
         return set(catalog.tracks) - catalog.human_ids
     return set(catalog.human_ids)
+
+
+async def scope_ids(user_id: Optional[int], within: Optional[str]) -> Optional[Set[str]]:
+    if within not in ("favourites", "super_likes"):
+        return None
+    prefs = await user_data_cache.get_preferences(user_id)
+    liked = set(prefs.get("super_likes") or ())
+    return liked if within == "super_likes" else liked | set(prefs.get("likes") or ())
 
 
 async def excluded_ids(user_id: Optional[int], session_id: Optional[str]) -> Set[str]:

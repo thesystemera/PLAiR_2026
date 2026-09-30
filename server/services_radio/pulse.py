@@ -191,6 +191,7 @@ class PulseQuery:
     use_ai: bool = False
     per_kind: int = 3
     kind_order: list = field(default_factory=list)
+    within: Optional[str] = None
 
     def wants(self, kind: str) -> bool:
         return self.kinds is None or kind in self.kinds
@@ -488,10 +489,11 @@ class MusicNode(KnowledgeNode):
         search = services.vector_search_service
         if not q.text or search is None:
             return []
-        from services.listener_filters import excluded_ids
+        from services.listener_filters import excluded_ids, scope_ids
         banned = await excluded_ids(q.listener.user_id, q.listener.session_id)
+        only = await scope_ids(q.listener.user_id, q.within)
         tracks = await search.search(q.text, n_results=q.per_kind, use_ai_analysis=q.use_ai,
-                                     banned_ids=banned)
+                                     banned_ids=banned, only_ids=only)
         items = []
         for track in tracks:
             score = float(track.get("similarity_score") or 0.0)
@@ -502,9 +504,12 @@ class MusicNode(KnowledgeNode):
             details = [tags.get("primary_genre") or ""]
             if tags.get("inspired_artist"):
                 details.append(f"in the style of {tags['inspired_artist']}")
+            if only is not None and tags.get("vocal_style_keywords"):
+                details.append("vocals: " + ", ".join(tags["vocal_style_keywords"][:5]))
             items.append(PulseItem(
                 id=f"track:{track.get('id')}", kind=KIND_TRACK, title=f"{title} by {artist}" if artist else title,
-                text=", ".join(d for d in details if d), source="PLAiR catalog", score=score,
+                text=", ".join(d for d in details if d),
+                source="the listener's liked tracks" if only is not None else "PLAiR catalog", score=score,
                 payload={"track_id": track.get("id"), "play_hint": "search_and_play with its title to play it"}))
         return items
 

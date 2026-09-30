@@ -22,6 +22,7 @@ SEARCH_CATEGORY_PREFIXES = {
     "theme": "Theme",
     "vocal": "Vocal",
     "lyrics": "Lyrics",
+    "description": "",
 }
 NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
 
@@ -135,12 +136,17 @@ class CommandExecutorService:
             task.add_done_callback(turn_tasks.discard)
         return task
 
-    async def execute_searches(self, session_dict, searches):
+    async def execute_searches(self, session_dict, searches, within=None):
         session_id = session_dict.get('session_id')
         user_id = session_dict.get('user_id')
 
-        from services.listener_filters import excluded_ids
+        from services.listener_filters import excluded_ids, scope_ids
         banned_ids = await excluded_ids(user_id, session_id)
+        only_ids = await scope_ids(user_id, within)
+        if only_ids is not None and not only_ids:
+            return {"status": "no_results", "within": within,
+                    "note": "This listener hasn't liked any tracks yet, so there is nothing to search there. Say so, "
+                            "and offer to search the whole catalog."}
 
         tracks_to_add = []
         play_first = False
@@ -154,7 +160,9 @@ class CommandExecutorService:
             results = await self.vector_search_service.search(
                 query=query,
                 n_results=5,
-                banned_ids=banned_ids if banned_ids else None
+                use_ai_analysis=": " not in query and bool(user_id),
+                banned_ids=banned_ids if banned_ids else None,
+                only_ids=only_ids
             )
             track_ids = [track["id"] for track in results]
             prefix, _, value = query.partition(": ")
@@ -248,6 +256,11 @@ class CommandExecutorService:
             "queued": queued,
             "now_playing": now_playing
         }
+        if only_ids is not None:
+            result["within"] = within
+            if not tracks_to_add:
+                result["note"] = ("Nothing in the listener's own liked tracks matches that. Say so, and offer to "
+                                  "search the whole catalog.")
         if missing:
             result["not_in_catalog"] = missing
             result["note"] = (f"The catalog has nothing by or called {', '.join(missing)}. What was found are only the "
