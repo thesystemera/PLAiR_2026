@@ -256,9 +256,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "rating": _enum(["like", "superstar", "dislike", "ban"], "Rating to record."),
             "target": _enum(RATING_TARGETS, "What to rate: the track playing now, the previous one, the next one, "
                                             "or shoutout (a listener's post)."),
-            "shoutout_id": _string("For target shoutout: the id of the post, '<userId>_<timestamp>', from the "
-                                   "list of listener posts that just played or from pulse_search. Leave out only "
-                                   "when a single post has played recently."),
+            "shoutout_id": _string("For target shoutout: optional id of the post, '<userId>_<timestamp>' or its "
+                                   "pulse id. Leave out for the one that just played for this listener."),
         }, ["rating", "target"]),
     },
     {
@@ -378,10 +377,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "shoutout. Leave parent_id out to answer the shoutout that just played for this listener "
                        "(\"reply to that\", \"tell her congrats\"). Top replies play on air after their shoutout. An editor judges the listener's words first: if they're scrapped nothing is saved, and either way you get the editor's feedback to pass on in your own words.",
         "parameters": _schema({
-            "parent_id": _string("ID of the shoutout being answered, '<userId>_<timestamp>', from the list of "
-                                 "listener posts that just played, its audio path "
-                                 "/shoutouts/audio/<userId>/<timestamp>.mp3 or its pulse id. Leave out only when a "
-                                 "single shoutout has played recently."),
+            "parent_id": _string("Optional ID of a different shoutout, '<userId>_<timestamp>' as seen in its audio "
+                                 "path /shoutouts/audio/<userId>/<timestamp>.mp3 or its pulse id."),
         }),
     },
     {
@@ -1180,17 +1177,12 @@ class DJToolRuntime:
         content_service = self.executor.user_content_service
         parent_id = args.get("parent_id")
         if not parent_id and content_service is not None:
-            candidates = []
             for aired_id in community_engagement.last_aired(self.session_dict.get("session_id")):
                 aired = content_service.get_shoutout(aired_id) or {}
                 candidate = aired.get("parent_id") or aired_id
-                if candidate not in candidates and content_service.parent_problem(candidate) is None:
-                    candidates.append(candidate)
-            if len(candidates) > 1:
-                return {"status": "error",
-                        "reason": "Several shoutouts have played recently: pass the parent_id of the one they mean "
-                                  "(see the list of posts that just played), or ask which one"}
-            parent_id = candidates[0] if candidates else None
+                if content_service.parent_problem(candidate) is None:
+                    parent_id = candidate
+                    break
         if not parent_id:
             return {"status": "error", "reason": "No shoutout has played for this listener recently; ask which one they mean"}
         problem = content_service.parent_problem(parent_id) if content_service is not None else "unavailable"

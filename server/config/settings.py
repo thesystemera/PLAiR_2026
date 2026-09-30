@@ -564,7 +564,6 @@ class Settings:
 
     DJ_AIRED_MEMORY_ENABLED: bool = os.getenv("DJ_AIRED_MEMORY_ENABLED", "false").lower() == "true"
     DJ_AIRED_MEMORY_ITEMS: int = int(os.getenv("DJ_AIRED_MEMORY_ITEMS", "4"))
-    DJ_AIRED_POSTS_SHOWN: int = int(os.getenv("DJ_AIRED_POSTS_SHOWN", "5"))
     DJ_AIRED_MEMORY_TTL_S: int = int(os.getenv("DJ_AIRED_MEMORY_TTL_S", str(3 * 3600)))
     DJ_TRIVIA_PREFETCH_ENABLED: bool = os.getenv("DJ_TRIVIA_PREFETCH_ENABLED", "false").lower() == "true"
     DJ_TRIVIA_MAX_CHARS: int = int(os.getenv("DJ_TRIVIA_MAX_CHARS", "180"))

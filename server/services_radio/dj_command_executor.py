@@ -398,13 +398,11 @@ class CommandExecutorService:
 
         own = f"{user_id}_"
         if not shoutout_id:
-            aired = [sid for sid in community_engagement.last_aired(session_id) if not sid.startswith(own)]
-            if len(aired) != 1:
+            shoutout_id = next((sid for sid in community_engagement.last_aired(session_id) if not sid.startswith(own)),
+                               None)
+            if not shoutout_id:
                 return {"status": "not_found",
-                        "reason": "Several listener posts have played recently: pass the shoutout_id of the one they "
-                                  "mean (see the list of posts that just played), or ask which one" if aired
-                        else "No shoutout has played for this listener recently; ask which one they mean"}
-            shoutout_id = aired[0]
+                        "reason": "No shoutout has played for this listener recently; ask which one they mean"}
         post = self.user_content_service.get_shoutout(shoutout_id)
         if not post:
             return {"status": "not_found", "reason": "No shoutout, reply or review with that id"}
