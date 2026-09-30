@@ -206,7 +206,7 @@ Refresh intervals are starting points; the scheduler only refreshes regions with
 |---|---|---|---|---|---|
 | Events | Ticketmaster Discovery | 6–12 h | free tier | building | Link back to Ticketmaster for tickets. |
 | Places | Google Places API (New) | weekly | ~$0.032 / search | needs key | Place IDs can be kept; most other fields have caching limits, so details are refreshed within Google's window. |
-| News | Google News RSS only: country edition, NATION/WORLD sections, the city's geo feed | hourly per active region, no LLM | ~$0.0015 / ranking, once per pull, on first use | built | Headlines only, with attribution. International by construction; no outlet-specific feeds. |
+| News | Google News RSS (country edition, NATION/WORLD sections, the city's geo feed), each story linked to its publisher and read once for a short summary | hourly per active region; links and summaries in the background, no LLM | ~$0.0015 / ranking, once per pull, on first use | built | Headlines plus a short summary (publisher description + opening sentences), with attribution. International by construction. Sites that block us (RNZ) get no summary. |
 | Weather | OpenWeatherMap + local sun maths | hourly | free tier | persisted | Sunrise, sunset and moon computed locally. |
 | Community | PLAiR shoutouts, play events | 15 min | $0 | planned | Public shoutouts only; opt-out respected. |
 | Music trivia | MusicBrainz, Wikidata, Wikipedia | daily | $0 | partly on | MusicBrainz CC0; Wikipedia CC BY-SA, paraphrase on air. |
@@ -249,7 +249,9 @@ Postgres is the source of truth: one `pulse_items` table, plus an aired ledger a
 
 `services_radio/news_store.py` (tables `news_items`, `news_pulls`, `news_aired`) behind the unchanged `NewsService.get_top_news(...)` API. Settings: the `NEWS_*` block in `.env.example`.
 
-- **Items**: one row per story (key = normalised title + source, so the same article in several pulls or countries is stored once), with URL, publish time, topic tags and a T5 embedding of the title (computed in the background on the GPU executor). Kept 48 h after last seen.
+- **Items**: one row per story, with URL, publish time, topic tags, a summary and an embedding of the title (computed in the background on the GPU executor). Kept 48 h after last seen.
+- **Identity (30 Sep 2026)**: a story is its publisher address. Google News varies the outlet name ("Stuff" / "stuff.co.nz"), cuts headlines short and sometimes changes the link, so the old title + source key stored ~20% of stories twice. Feeds are saved at once, keyed by the Google link, or matched to a stored story through a remembered link or the same headline (no network call). `resolve_pending` then decodes each new Google link to the publisher address (`news_links.py`, Google's own article-page + `batchexecute` lookup, as Market Wizard did), remembers it in `news_links` and settles the story on it (`NewsStore.settle`): a story that turns out to share an address with a stored one is merged into it, pulls and aired ledger included. Measured: 88 feed items -> 78 stories; a second fetch of the same feeds needs 0 lookups.
+- **Summaries**: `read_pending` reads each linked story once (`news_reader.py`, trafilatura) into `summary`: the publisher's own description plus the opening sentences, up to `NEWS_SUMMARY_CHARS` (900). No LLM and no full text. Summaries feed the `news_details` search category, bulletins and `pulse_detail`, so a listener can ask a follow-up about one story. JavaScript-built pages (Stuff) still give their description; sites that refuse us (RNZ 403) are recorded as `blocked` and never retried.
 - **Pulls**: every Google News request is stored with its kind (`top`, `topic`, `geo`, `search`), country, region, normalised query, query embedding, item ids and the LLM ranking. The ranking call also returns 2–5 topic tags per picked headline ("all blacks", "rugby", "sport"), which is what makes later asks match by meaning.
 - **Reuse**: an ask first looks for a pull of the same kind, country and normalised query inside its freshness window (top stories 45 min, city geo 60 min, topics and searches 3 h). Free-text asks ("what's going on with the All Blacks") then look at every fresh pull for that country: a pull is reused when its query is similar (`NEWS_REUSE_SIMILARITY`, 0.85, words or T5) and at least `NEWS_REUSE_MIN_ITEMS` (3) of its stories cover the ask through their titles or tags; otherwise any 3+ stored stories that cover it are served directly. Only then is Google fetched, and the result is stored for everyone in that country.
 - **Why coverage, not a raw cosine**: mean-pooled flan-T5 embeddings of short topics are not reliable on their own ("rugby" vs "weather" scores 0.80, "rugby" vs "rugby news" 0.49), so reuse always has to be backed by stories that actually match. T5 is still used for query similarity and to spot the same story from another outlet (same-story headlines ≥ 0.89, different stories ≤ 0.71; `NEWS_SAME_STORY_SIMILARITY` 0.85).
@@ -265,7 +267,7 @@ Because gathering is per city, cost grows with the number of cities, not listene
 |---|---|---|
 | Events sweep (Ticketmaster, 4 per day) | $0 | $0 |
 | Places (e.g. 10 categories, weekly refresh) | ~$1.40 | shared |
-| News ranking (Gemini flash-lite while DeepSeek returns 402; ~$0.0015 per ranking with tags; bulletin topics ranked at most hourly per country, reused when unchanged) | ~$0.50–1.50 per country | shared |
+| News ranking (DeepSeek, Gemini only as fallback; ~$0.0015 per ranking with tags; bulletin topics ranked at most hourly per country, reused when unchanged). Links and summaries: no LLM | ~$0.50–1.50 per country | shared |
 | Community and charts (SQL) | $0 | $0 |
 | Area signals, per active cell, list price past the free tier (10k geocoding, 10k air quality, 5k pollen calls a month free): air quality ≤ $3.60 (a cell listened to 24/7, hourly), pollen ≤ $0.30, geocoding $0.005 per 120 m cell per 30 days | ~$0 inside the default daily caps | shared; ~$0.50 for a lone 3 h/day listener |
 | Extra prompt tokens in announcements and chat | – | ~$0.02–0.05 |
@@ -487,6 +489,20 @@ It is used for:
 - **Savings:** the store vs live split per node shows how much the commons saves. `usage_tracking.record_api_call(cached=True)` already supports this.
 
 City charts belong to the same layer: what a region played, liked and banned this week, computed in SQL. That needs a `region_key` on new `play_events` rows, set from the listener location resolver at play time.
+
+### Gathering from the web (built 30 Sep 2026)
+
+Every collector that scrapes or reads pages goes through one layer, `services/web_fetch.py`, taken from what worked in Market Wizard. APIs with keys (Ticketmaster, Google Places, OpenWeatherMap) keep their own quotas and budgets.
+
+- **Store first.** Check what we already have before any request: remembered links, the same headline, a stored page. Most repeats cost nothing.
+- **One polite client per site.** Requests are spaced (a gap plus random jitter), with a small parallel cap per site. Network errors and 5xx retry with exponential back-off and jitter. One cookie session, an honest user agent, no disguises.
+- **Back off centrally.** A 429 or Google's "sorry" page rests that site for Retry-After, else `WEB_RATE_LIMIT_REST_S`, doubling on repeats. Repeated failures (including pages that yield nothing) rest it for `WEB_REST_S`. Every caller sees the rest at once, so no job keeps hammering a site that said stop.
+- **Budgets.** Each site policy can carry a daily cap (Google News lookups: `WEB_GOOGLE_NEWS_DAILY_CAP`). Every request is reported to usage tracking.
+- **robots.txt** is honoured for page reads (cached a day). Sites that refuse us stay refused: no stealth browsers or rotating fake identities.
+- **Extract little, keep it useful.** Keep the publisher's description and the opening sentences, never whole articles. Vectorise what listeners ask about (title, tags, summary, place, outlet).
+- **LLM work is DeepSeek.** Enrichment that isn't answering a listener right now (ranking, tagging, placing stories) runs on the `LLM_BACKGROUND` chain (DeepSeek, Gemini only as fallback). Open: Radio Mode's For You agent still runs on Gemini, because the tool loop is Gemini-only.
+
+Adding a source means one site policy (or the default page policy), a store with identity rules, and a background worker that reads through `web_fetch`.
 
 ### Freshness and upkeep
 

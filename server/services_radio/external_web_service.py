@@ -12,25 +12,15 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
+from services import web_fetch
 from services.http_client import fetch
 from services.task_utils import spawn
 
 MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/artist/"
-MUSICBRAINZ_MIN_INTERVAL_S = 1.1
-_musicbrainz_lock = asyncio.Lock()
-_musicbrainz_last = 0.0
 
 
 async def musicbrainz_get(url: str, params: dict):
-    global _musicbrainz_last
-    async with _musicbrainz_lock:
-        wait = MUSICBRAINZ_MIN_INTERVAL_S - (time.monotonic() - _musicbrainz_last)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        try:
-            return await fetch("GET", url, circuit=True, params=params)
-        finally:
-            _musicbrainz_last = time.monotonic()
+    return await web_fetch.get(url, web_fetch.MUSICBRAINZ, params=params)
 WEATHER_URL = "https://api.openweathermap.org/data/2.5/"
 WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
 BIOGRAPHY_NEGATIVE_CACHE_SECONDS = 600

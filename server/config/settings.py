@@ -417,18 +417,23 @@ class Settings:
         t.strip().upper() for t in os.getenv("NEWS_PREFETCH_TOPICS", "NATION,WORLD").split(",") if t.strip()
     )
     NEWS_GEO_ENABLED: bool = os.getenv("NEWS_GEO_ENABLED", "true").lower() == "true"
-    NEWS_LINK_DECODE_GAP_S: float = float(os.getenv("NEWS_LINK_DECODE_GAP_S", "1.5"))
     NEWS_LINK_PER_RUN: int = int(os.getenv("NEWS_LINK_PER_RUN", "50"))
-    NEWS_LINK_REST_S: int = int(os.getenv("NEWS_LINK_REST_S", "900"))
     NEWS_LINK_RETRY_S: int = int(os.getenv("NEWS_LINK_RETRY_S", "1800"))
     NEWS_LINK_MAX_ATTEMPTS: int = int(os.getenv("NEWS_LINK_MAX_ATTEMPTS", "3"))
     NEWS_READ_ENABLED: bool = os.getenv("NEWS_READ_ENABLED", "true").lower() == "true"
     NEWS_READ_PARALLEL: int = int(os.getenv("NEWS_READ_PARALLEL", "3"))
     NEWS_READ_PER_RUN: int = int(os.getenv("NEWS_READ_PER_RUN", "40"))
-    NEWS_READ_ROBOTS_TTL_S: int = int(os.getenv("NEWS_READ_ROBOTS_TTL_S", str(24 * 3600)))
-    NEWS_READ_SITE_FAILURES: int = int(os.getenv("NEWS_READ_SITE_FAILURES", "4"))
-    NEWS_READ_SITE_REST_S: int = int(os.getenv("NEWS_READ_SITE_REST_S", str(6 * 3600)))
     NEWS_SUMMARY_CHARS: int = int(os.getenv("NEWS_SUMMARY_CHARS", "900"))
+    WEB_PAGE_GAP_S: float = float(os.getenv("WEB_PAGE_GAP_S", "1.0"))
+    WEB_PAGE_JITTER_S: float = float(os.getenv("WEB_PAGE_JITTER_S", "1.0"))
+    WEB_PAGE_PARALLEL: int = int(os.getenv("WEB_PAGE_PARALLEL", "2"))
+    WEB_GOOGLE_NEWS_GAP_S: float = float(os.getenv("WEB_GOOGLE_NEWS_GAP_S", "2.5"))
+    WEB_GOOGLE_NEWS_JITTER_S: float = float(os.getenv("WEB_GOOGLE_NEWS_JITTER_S", "2.0"))
+    WEB_GOOGLE_NEWS_DAILY_CAP: int = int(os.getenv("WEB_GOOGLE_NEWS_DAILY_CAP", "1500"))
+    WEB_REST_AFTER_FAILURES: int = int(os.getenv("WEB_REST_AFTER_FAILURES", "5"))
+    WEB_REST_S: int = int(os.getenv("WEB_REST_S", str(6 * 3600)))
+    WEB_RATE_LIMIT_REST_S: int = int(os.getenv("WEB_RATE_LIMIT_REST_S", "900"))
+    WEB_ROBOTS_TTL_S: int = int(os.getenv("WEB_ROBOTS_TTL_S", str(24 * 3600)))
     WEATHER_CACHE_S: int = int(os.getenv("WEATHER_CACHE_S", "1800"))
     WEATHER_PERSIST_ENABLED: bool = os.getenv("WEATHER_PERSIST_ENABLED", "true").lower() == "true"
     BIOGRAPHY_PERSIST_ENABLED: bool = os.getenv("BIOGRAPHY_PERSIST_ENABLED", "true").lower() == "true"

@@ -15,7 +15,7 @@ from babel import Locale
 from config import settings
 from services import log_service
 from services.http_client import fetch
-from services import usage_tracking
+from services import usage_tracking, web_fetch
 from services.llm_router import LLM_BACKGROUND
 from services.task_utils import spawn
 from services_radio import news_links
@@ -87,7 +87,6 @@ class NewsService:
         self._locating = asyncio.Lock()
         self._reading = asyncio.Lock()
         self._resolving = asyncio.Lock()
-        self._decode_rest_until = 0.0
         self.reader = NewsReader()
         log_service.external("News Service initialized (Google News RSS"
                              + (", persistent semantic store)" if self.store_enabled else ")"))
@@ -364,11 +363,12 @@ class NewsService:
                 article["item_key"] = titles[title_key(article["title"])]
 
     async def resolve_pending(self) -> int:
-        if not self.store_enabled or self._resolving.locked() or time.monotonic() < self._decode_rest_until:
+        if not self.store_enabled or self._resolving.locked() or web_fetch.resting(news_links.ARTICLE_PAGE):
             return 0
         resolved = merged = failed = 0
         async with self._resolving:
-            while time.monotonic() >= self._decode_rest_until:
+            resting = False
+            while not resting:
                 pending = await self.store.unresolved(settings.NEWS_LINK_PER_RUN)
                 if not pending:
                     break
@@ -377,13 +377,10 @@ class NewsService:
                     if url is None:
                         try:
                             url = await news_links.decode(link_id)
-                        except news_links.RateLimited:
-                            self._decode_rest_until = time.monotonic() + settings.NEWS_LINK_REST_S
-                            log_service.warning(f"News: Google is rate-limiting link lookups, resting "
-                                                f"{settings.NEWS_LINK_REST_S // 60} min")
+                        except web_fetch.HostResting:
+                            resting = True
                             break
                         await self.store.remember_links({link_id: url})
-                        await asyncio.sleep(settings.NEWS_LINK_DECODE_GAP_S)
                     if url is None:
                         failed += 1
                         continue
