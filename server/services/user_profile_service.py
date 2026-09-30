@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-from database.models import User, Conversation, WeatherData
+from database.models import User, Conversation, WeatherData, AiredTalk
 from services import log_service
 from services.user_data_cache_service import user_data_cache
 
@@ -158,6 +158,7 @@ class UserProfileService:
 
     async def delete_conversations(self, user_id: int, db: AsyncSession) -> None:
         await db.execute(delete(Conversation).where(Conversation.user_id == user_id))  # type: ignore
+        await db.execute(delete(AiredTalk).where(AiredTalk.user_id == user_id))
         await db.commit()
 
     async def reset_persona(self, user_id: int, db: AsyncSession) -> None:

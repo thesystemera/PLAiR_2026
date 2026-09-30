@@ -77,7 +77,8 @@ guessing.
 ## Phase 2 as built (1 Oct)
 
 - New table `aired_talk` (`database/models.AiredTalk`: user_id, session_id, kind, label, text, seconds,
-  aired_at), kept `DJ_TIMELINE_KEEP_DAYS` (30). `play_events` is untouched, so charts and top hits see nothing new.
+  aired_at), kept `DJ_TIMELINE_KEEP_DAYS` (2: the hosts can look back 24 hours at most; raise it when the
+  search by meaning is built). Clearing the conversation in the app also deletes the listener's rows. `play_events` is untouched, so charts and top hits see nothing new.
 - Everything the hosts voice is written there as plain text with speaker names, at the one place a voice stream
   finishes airing (`TTSQueueManager._generate_tts_stream` -> `listener_timeline.record_talk`): produced segments
   (news, weather, events, places, biography, lyrics, shoutouts), chat replies and between-track talk. Radio Mode
