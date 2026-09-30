@@ -373,7 +373,7 @@ def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
 EXTRA_TOOL_NAMES = [declaration.name for declaration in DJ_FUNCTION_DECLARATIONS]
 READ_TOOLS.add("request_tools")
 TOOL_NAMES = set(EXTRA_TOOL_NAMES)
-CORE_TOOLS = {"pulse_search", "search_and_play", "playback_control", "rate_track"}
+CORE_TOOLS = {"pulse_search", "pulse_detail", "search_and_play", "playback_control", "rate_track"}
 TOOL_COMPANIONS = {"pulse_search": {"pulse_detail"}, "city_trends": {"pulse_detail"}}
 
 

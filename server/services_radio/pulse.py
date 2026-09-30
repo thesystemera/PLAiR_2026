@@ -128,13 +128,13 @@ class PulseItem:
             entry["aired_recently"] = True
         return entry
 
-    def line(self, tz_name: Optional[str] = None) -> str:
+    def line(self, tz_name: Optional[str] = None, with_id: bool = False) -> str:
         brief = self.brief(tz_name)
         extras = " | ".join(str(brief[k]) for k in ("text", "when", "age", "where", "near") if k in brief)
         if brief.get("linked"):
             extras += " | linked: " + "; ".join(brief["linked"])
         return f"- [{self.kind}] {brief['title']}" + (f" ({extras})" if extras else "") + (
-            " [already mentioned to this listener]" if self.aired else "")
+            " [already mentioned to this listener]" if self.aired else "") + (f" {{id: {self.id}}}" if with_id else "")
 
 
 def _age(moment: datetime) -> str:
