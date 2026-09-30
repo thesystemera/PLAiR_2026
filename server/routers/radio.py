@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.settings import settings
 from database import get_db, User
 from routers.deps import get_current_user
-from service_registry import services
 from services.preferences_service import preferences_service
 from services_radio import radio_segments
 from services_radio.music_beds import music_beds
@@ -44,14 +43,7 @@ async def update_radio_mode(
 ):
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    prefs = await preferences_service.set_radio_settings(int(current_user.id), updates, db)
-    if services.radio_mode_service is not None:
-        await services.radio_mode_service.set_user_prefs(
-            int(current_user.id), prefs, getattr(current_user, "timezone", None),
-            bool(getattr(current_user, "tts_muted", False)))
-    if services.websocket_service is not None:
-        await services.websocket_service.broadcast_to_session(
-            str(current_user.id), {"type": "radio_mode_updated", "data": {"settings": prefs}})
+    prefs = await preferences_service.apply_radio_settings(current_user, updates, db)
     return {"settings": prefs, "persisted": True, "options": _options()}
 
 

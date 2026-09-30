@@ -480,12 +480,15 @@ The studio tools the hosts can use, with what each does, its parameters, cost an
 
 Set needs_tools=true when the hosts must find something out or make something happen:
 - anything local, current or factual beyond the context nodes: gigs and events, places nearby, news, weather detail,
-  air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what the city is playing or asking about
-  (pulse_search, pulse_detail, city_trends, listener_context);
+  air quality or pollen, the neighbourhood, artist facts, listener shoutouts, what listeners said about a song, the
+  listener's own posts, what the city is playing or asking about (pulse_search, pulse_detail, city_trends,
+  listener_context);
 - a music request or a question about what the catalog has (search_and_play, pulse_search);
 - saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_review);
-- any command: skip, go back, pause, resume (playback_control), like or ban a track (rate_track), more like this
-  (seed_radio), a playlist (play_playlist). Nothing happens unless a tool is called, so every action needs its step.
+- any command: skip, go back, pause, resume, restart or jump within the song, drop a queued track
+  (playback_control), like or ban a track or a shoutout (rate_track), more like this (seed_radio), a playlist
+  (play_playlist), the music on another device (move_playback), Radio Mode, its talk breaks or human / AI music
+  (radio_settings). Nothing happens unless a tool is called, so every action needs its step.
 - the segment tools (get_news, get_weather, get_events, find_places, get_artist_biography, explain_lyrics,
   play_shoutouts) air a full produced segment. Put the matching one in the plan whenever the subject comes up, as an
   option: the hosts decide whether a quick answer is enough or the listener wants the full rundown.

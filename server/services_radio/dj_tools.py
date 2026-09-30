@@ -24,7 +24,21 @@ SEARCH_CATEGORIES = list(SEARCH_CATEGORY_PREFIXES.keys())
 SEED_MODES = list(SEED_MODE_DISPLAY.keys())
 PLAYLISTS = list(PLAYLIST_DISPLAY.keys())
 TRACK_TARGETS = ["current", "previous", "next"]
-BRACE_TARGETS = {"current": "current", "previous": "earlier", "next": "later"}
+RATING_TARGETS = TRACK_TARGETS + ["shoutout"]
+BRACE_TARGETS = {"current": "current", "previous": "earlier", "next": "later", "shoutout": "shoutout"}
+PLAYBACK_ACTIONS = ["next", "previous", "pause", "resume", "restart", "seek", "remove"]
+PERSONAL_PLAYLISTS = {"favorites", "discovery"}
+RADIO_TOGGLES = {
+    "enabled": "Radio Mode itself: scheduled talk breaks between the songs.",
+    "news": "The news bulletin at the top of the hour.",
+    "city": "Weather and what's on in the city, at half past.",
+    "local": "Local gigs and spots that fit the listener's taste.",
+    "community": "Listener shoutouts and station stats.",
+    "features": "Trivia, artist stories and the For You feature.",
+    "stings": "Station IDs, jingles and time checks.",
+    "reviews": "Listener reviews played over songs.",
+}
+MUSIC_SOURCES = ["both", "human", "ai"]
 
 SAVE_TOOLS = {"save_shoutout", "save_shoutout_reply", "save_review"}
 READ_TOOLS = {"pulse_search", "pulse_detail", "listener_context", "city_trends"}
@@ -118,7 +132,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                              "'Radiohead'. Empty to browse what's on hand."),
             "kinds": {"type": "array", "items": _enum(PULSE_KINDS, "Kind of knowledge."),
                       "description": "Optional: limit to these kinds (event, place, news, weather, area, artist, "
-                                     "track, community, chart, trend). Leave empty to search everything."},
+                                     "track, community, review, chart, trend). Leave empty to search "
+                                     "everything."},
             "when": _enum(PULSE_WHEN, "Optional time window for events and weather."),
             "near_me": {"type": "boolean",
                         "description": "Local only: gigs, places, news and shoutouts near the listener, from their "
@@ -127,6 +142,11 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), "
                                       "nearest."),
             "within": WITHIN,
+            "mine": {"type": "boolean",
+                     "description": "Only this listener's own posts: their shoutouts, replies and reviews, newest "
+                                    "first. Signed-in listeners only."},
+            "about_track": _enum(TRACK_TARGETS, "Only listener reviews of this track: the one playing now, the "
+                                                "previous one or the next one."),
             "how_many": {"type": "number",
                          "description": f"How many results you want per kind: {settings.PULSE_TOOL_PER_KIND} by "
                                         f"default, up to {settings.PULSE_TOOL_MAX_PER_KIND}. Ask for more when the "
@@ -138,8 +158,9 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "cost": "memory",
         "summary": "the full story on one pulse_search item",
         "description": "Full details of one item from pulse_search plus what it's connected to across the station's "
-                       "knowledge: the gig a shoutout is about, shoutouts and news mentioning a gig or venue, other "
-                       "things nearby or on the same subject. Use it after pulse_search when one item deserves more.",
+                       "knowledge: the gig a shoutout is about, a shoutout's replies, shoutouts and news mentioning a "
+                       "gig or venue, other things nearby or on the same subject. Use it after pulse_search when one "
+                       "item deserves more.",
         "parameters": _schema({"item_id": _string("The id of an item from pulse_search.")}, ["item_id"]),
     },
     {
@@ -186,23 +207,37 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "playback_control",
         "cost": "memory",
-        "summary": "skip, go back, pause or resume",
-        "description": "Skip to the next track, go back, pause or resume this listener's playback.",
-        "parameters": _schema({"action": _enum(["next", "previous", "pause", "resume"], "Playback action.")},
-                              ["action"]),
+        "summary": "skip, go back, pause, resume, restart, jump within the track, or drop a queued track",
+        "description": "Work this listener's transport and queue: skip to the next track, go back, pause, resume, "
+                       "restart the current track from the top, seek to a point in it, or remove an upcoming track "
+                       "from the queue.",
+        "parameters": _schema({
+            "action": _enum(PLAYBACK_ACTIONS, "next, previous, pause, resume, restart (current track from the "
+                                              "start), seek (jump to position_s) or remove (take an upcoming "
+                                              "track out of the queue)."),
+            "position_s": {"type": "number",
+                           "description": "For seek: where to jump to, in seconds from the start of the track."},
+            "title": _string("For remove: the title or artist of the upcoming track to take out. Leave out to "
+                             "remove the very next track."),
+        }, ["action"]),
     },
     {
         "name": "seed_radio",
         "cost": "memory",
         "requires": "a track playing",
-        "summary": "build a station from the track playing now",
-        "description": "Turn the radio into a station built from the track playing now, matched on one aspect "
-                       "('all' for a balanced mix). Use it for 'more like this', or to steer from the current sound.",
-        "parameters": _schema({"mode": _enum(SEED_MODES, "Aspect of the current track to match.")}, ["mode"]),
+        "summary": "build a station from a track",
+        "description": "Turn the radio into a station built from a track, matched on one aspect ('all' for a "
+                       "balanced mix): the track playing now by default, or the previous or next one. Use it for "
+                       "'more like this', or to steer from a sound the listener just heard.",
+        "parameters": _schema({
+            "mode": _enum(SEED_MODES, "Aspect of the track to match."),
+            "target": _enum(TRACK_TARGETS, "Which track to build from: current (default), previous or next."),
+        }, ["mode"]),
     },
     {
         "name": "play_playlist",
         "cost": "memory",
+        "requires": "favorites and discovery need a signed-in listener",
         "summary": "switch to favorites, discovery or top hits",
         "description": "Switch to a playlist: the listener's favorites, discovery (favorites plus similar new "
                        "tracks), or the station's top hits (all time, this week, today). Suits broad asks that don't "
@@ -213,13 +248,42 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "name": "rate_track",
         "cost": "memory",
         "requires": "signed-in listener; ban and dislike need the listener's own negative words",
-        "summary": "like, superstar, clear or ban a track",
-        "description": "Record the listener's rating of a track: like (enjoys it), superstar (an all-time "
-                       "favourite), dislike (clears any rating), ban (never play it again).",
+        "summary": "like, superstar, clear or ban a track or a shoutout",
+        "description": "Record the listener's rating of a track, or of another listener's shoutout, reply or "
+                       "review: like (enjoys it), superstar (an all-time favourite), dislike (clears any rating), "
+                       "ban (never play it again). The result names what was rated.",
         "parameters": _schema({
             "rating": _enum(["like", "superstar", "dislike", "ban"], "Rating to record."),
-            "target": _enum(TRACK_TARGETS, "Which track: the one playing now, the previous one, or the next one."),
+            "target": _enum(RATING_TARGETS, "What to rate: the track playing now, the previous one, the next one, "
+                                            "or shoutout (a listener's post)."),
+            "shoutout_id": _string("For target shoutout: optional id of the post, '<userId>_<timestamp>' or its "
+                                   "pulse id. Leave out for the one that just played for this listener."),
         }, ["rating", "target"]),
+    },
+    {
+        "name": "move_playback",
+        "cost": "memory",
+        "requires": "signed-in listener; the app open on the device to move to",
+        "summary": "move the music to another of the listener's devices",
+        "description": "Move this listener's playback to another of their devices that has the app open (\"play "
+                       "this on my phone\"); the song carries on from the same spot. Leave device out to see which "
+                       "of their devices are online and where the music is playing now.",
+        "parameters": _schema({"device": _string("The device's name or type as the listener said it, e.g. 'phone', "
+                                                 "'Chrome on Windows'. Leave out to list the online devices.")}),
+    },
+    {
+        "name": "radio_settings",
+        "cost": "memory",
+        "summary": "read or change the listener's Radio Mode and music source",
+        "description": "This listener's Radio Mode settings: whether scheduled talk breaks are on, which kinds of "
+                       "break they get, and whether the station plays human-made music, AI-made music or both. "
+                       "Call it with no arguments to read the current settings; pass only what the listener asked "
+                       "to change (\"stop the news breaks\", \"turn radio mode on\", \"only human music\").",
+        "parameters": _schema({
+            **{key: {"type": "boolean", "description": text} for key, text in RADIO_TOGGLES.items()},
+            "music_source": _enum(MUSIC_SOURCES, "Which music plays for this listener: human-made, AI-made or both."),
+            "feature_interval_min": {"type": "number", "description": "Minutes between feature breaks."},
+        }),
     },
     {
         "name": "get_news",
@@ -375,6 +439,8 @@ SHORTFALL_OUTCOMES = {"empty", "failed"}
 
 def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
     if name == "pulse_search":
+        if args.get("mine") or args.get("about_track"):
+            return []
         kinds = args.get("kinds") or list(KIND_SEGMENTS)
         return list(dict.fromkeys(KIND_SEGMENTS[kind] for kind in kinds if kind in KIND_SEGMENTS))
     if name == "search_and_play":
@@ -435,6 +501,7 @@ ACTIVITY = {
     "city_trends": "checking what the whole city's been playing",
     "search_and_play": "digging through the crates for {query}",
     "seed_radio": "building a station around this track",
+    "move_playback": "checking the listener's devices",
     "play_playlist": "lining up the playlist",
     "get_news": "pulling the news wire",
     "get_weather": "checking the sky",
@@ -448,7 +515,8 @@ ACTIVITY = {
 
 LABELS = {
     "playback_control": "working the transport",
-    "rate_track": "rating the track",
+    "rate_track": "saving the rating",
+    "radio_settings": "at the Radio Mode desk",
     "save_shoutout": "posting the shoutout",
     "save_shoutout_reply": "posting the reply",
     "save_review": "saving the review",
@@ -519,7 +587,9 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         return _brace("request_tools", *(args.get("names") or []), value=args.get("reason"))
     if name == "pulse_search":
         return _brace("pulse_search", *(args.get("kinds") or []), args.get("when") or "",
-                      args["within"] if args.get("within") not in (None, "catalog") else "", value=args.get("query"))
+                      args["within"] if args.get("within") not in (None, "catalog") else "",
+                      "mine" if args.get("mine") else "",
+                      BRACE_TARGETS[args["about_track"]] if args.get("about_track") else "", value=args.get("query"))
     if name == "pulse_detail":
         return _brace("pulse_detail", value=args["item_id"])
     if name in ("listener_context", "city_trends"):
@@ -528,13 +598,23 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         return _brace("play" if args["mode"] == "play" else "cue", args["category"],
                       args["within"] if args.get("within") != "catalog" else "", value=args["query"])
     if name == "playback_control":
-        return _brace({"next": "next", "previous": "previous", "pause": "mute", "resume": "activate"}[args["action"]])
+        action = args["action"]
+        if action == "seek":
+            return _brace("seek", value=f"{args['position_s']:g}s")
+        if action == "remove":
+            return _brace("remove", value=args.get("title") or "next")
+        return _brace({"next": "next", "previous": "previous", "pause": "mute", "resume": "activate"}.get(action, action))
     if name == "seed_radio":
-        return _brace("play", "seed", value=args["mode"])
+        return _brace("play", "seed", BRACE_TARGETS[args["target"]] if args["target"] != "current" else "",
+                      value=args["mode"])
+    if name == "move_playback":
+        return _brace("move_playback", value=args.get("device") or "list devices")
+    if name == "radio_settings":
+        return _brace("radio_settings", value=", ".join(f"{key}={value}" for key, value in args.items()) or "read")
     if name == "play_playlist":
         return _brace("play", "playlist", value=args["name"])
     if name == "rate_track":
-        return _brace(args["rating"], BRACE_TARGETS[args["target"]])
+        return _brace(args["rating"], BRACE_TARGETS[args["target"]], value=args.get("shoutout_id"))
     if name == "get_news":
         scope = {"national": "national", "local": "local"}.get(args["scope"], "")
         depth = args.get("depth") if args.get("depth") != DEFAULT_DEPTH else ""
@@ -651,7 +731,8 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "when": choice("when", PULSE_WHEN) if when else None,
                 "near_me": bool(args.get("near_me")), "max_age_days": max_age,
                 "sort": choice("sort", PULSE_SORT, "relevance"), "how_many": how_many,
-                "within": choice("within", SEARCH_SCOPES, "catalog")}
+                "within": choice("within", SEARCH_SCOPES, "catalog"), "mine": bool(args.get("mine")),
+                "about_track": choice("about_track", TRACK_TARGETS) if args.get("about_track") else None}
     if name == "pulse_detail":
         return {"item_id": text("item_id", True)}
     if name == "listener_context":
@@ -671,14 +752,47 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "mode": choice("mode", ["play", "queue"], "play"),
                 "within": choice("within", SEARCH_SCOPES, "catalog")}
     if name == "playback_control":
-        return {"action": choice("action", ["next", "previous", "pause", "resume"])}
+        action = choice("action", PLAYBACK_ACTIONS)
+        if action == "seek":
+            try:
+                return {"action": action, "position_s": max(0.0, float(args.get("position_s")))}
+            except (TypeError, ValueError):
+                raise ValueError("'position_s' is required for seek: seconds from the start of the track")
+        if action == "remove":
+            return {"action": action, "title": text("title")}
+        return {"action": action}
     if name == "seed_radio":
-        return {"mode": choice("mode", SEED_MODES)}
+        return {"mode": choice("mode", SEED_MODES), "target": choice("target", TRACK_TARGETS, "current")}
+    if name == "move_playback":
+        return {"device": text("device")}
+    if name == "radio_settings":
+        changes: Dict[str, Any] = {}
+        for key in RADIO_TOGGLES:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+                value = value.strip().lower() == "true"
+            if value is None:
+                continue
+            if not isinstance(value, bool):
+                raise ValueError(f"'{key}' must be true or false")
+            changes[key] = value
+        if args.get("music_source"):
+            changes["music_source"] = choice("music_source", MUSIC_SOURCES)
+        if args.get("feature_interval_min") not in (None, ""):
+            try:
+                changes["feature_interval_min"] = int(float(args["feature_interval_min"]))
+            except (TypeError, ValueError):
+                raise ValueError("'feature_interval_min' must be a number of minutes")
+        return changes
     if name == "play_playlist":
         return {"name": choice("name", PLAYLISTS)}
     if name == "rate_track":
-        return {"rating": choice("rating", ["like", "superstar", "dislike", "ban"]),
-                "target": choice("target", TRACK_TARGETS, "current")}
+        shoutout_id = (text("shoutout_id") or "").split(":")[-1]
+        if shoutout_id and not _PARENT_ID.match(shoutout_id):
+            raise ValueError("shoutout_id must look like '<userId>_<timestamp>', or be left out")
+        target = choice("target", RATING_TARGETS, "shoutout" if shoutout_id else "current")
+        return {"rating": choice("rating", ["like", "superstar", "dislike", "ban"]), "target": target,
+                "shoutout_id": (shoutout_id or None) if target == "shoutout" else None}
     if name == "get_news":
         category = args.get("category")
         return {"scope": choice("scope", ["world", "national", "local"], "world"),
@@ -720,6 +834,8 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
         return "That's the limit of tool calls for one turn: work with what you already have."
     if args.get("within") in ("favourites", "super_likes") and not ctx.user_id:
         return "Only signed-in listeners have liked tracks to search; search the whole catalog instead."
+    if name == "pulse_search" and args.get("mine") and not ctx.user_id:
+        return "Only signed-in listeners have posts of their own."
     if name in READ_TOOLS:
         return None
     if ctx.origin not in ("voice", "text"):
@@ -733,7 +849,13 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
 
     if name == "rate_track":
         if not ctx.user_id:
-            return "Only signed-in listeners can rate tracks."
+            return "Only signed-in listeners can rate tracks or shoutouts."
+
+    if name == "play_playlist" and args.get("name") in PERSONAL_PLAYLISTS and not ctx.user_id:
+        return "Favorites and discovery are personal playlists for signed-in listeners; offer the top hits instead."
+
+    if name == "move_playback" and not ctx.user_id:
+        return "Only signed-in listeners can move playback between their devices."
 
     if name in SEGMENT_TOOLS:
         if name in ctx.segments:
@@ -754,6 +876,8 @@ class DJToolRuntime:
             "seed_radio": self._seed_radio,
             "play_playlist": self._play_playlist,
             "rate_track": self._rate_track,
+            "move_playback": self._move_playback,
+            "radio_settings": self._radio_settings,
             "get_news": self._get_news,
             "get_weather": self._get_weather,
             "get_events": self._get_events,
@@ -870,18 +994,33 @@ class DJToolRuntime:
         pulse, listener = await self._pulse_listener()
         if pulse is None:
             return {"status": "empty", "note": EMPTY_NOTE}
-        allow_fetch = bool(args["query"]) and self.ctx.live_fetches < settings.DJ_TOOL_MAX_LIVE_FETCHES
+        track_id = None
+        if args.get("about_track"):
+            track_id = self.executor._resolve_track_id(self.session_dict.get("session_id"), args["about_track"])
+            if not track_id:
+                return {"status": "empty", "note": "There is no track at that position."}
+        if args.get("mine"):
+            args["kinds"] = ["community", "review"]
+        elif track_id:
+            args["kinds"] = ["review"]
+        personal = bool(args.get("mine") or track_id)
+        allow_fetch = bool(args["query"]) and not personal and \
+            self.ctx.live_fetches < settings.DJ_TOOL_MAX_LIVE_FETCHES
         query = PulseQuery(listener=listener, text=args["query"], kinds=set(args["kinds"]) or None,
+                           mine=bool(args.get("mine")), track_id=track_id,
                            kind_order=list(args["kinds"]), when=args.get("when"),
                            limit=args["how_many"] * 4, per_kind=args["how_many"], within=args.get("within"),
                            use_ai=bool(args["query"]) and args["kinds"] == ["track"],
                            allow_fetch=allow_fetch, near_me=args.get("near_me", False),
-                           record_demand=self.ctx.origin in ("voice", "text"),
+                           record_demand=self.ctx.origin in ("voice", "text") and not personal,
                            max_age_days=args.get("max_age_days"), sort=args.get("sort") or "relevance")
         items = await pulse.query(query)
         if any(item.live for item in items):
             self.ctx.live_fetches += 1
         if not items:
+            if personal:
+                return {"status": "empty", "note": "This listener hasn't posted anything yet." if args.get("mine")
+                        else "No listener has reviewed that track yet."}
             return {"status": "empty", "note": EMPTY_NOTE}
         pulse.mark_offered(listener, items)
         grouped: Dict[str, list] = {}
@@ -942,17 +1081,28 @@ class DJToolRuntime:
 
     async def _playback_control(self, args):
         async with self.ctx.playback_lock:
-            return await self.executor.execute_playback_control(self.session_dict, args["action"])
+            return await self.executor.execute_playback_control(
+                self.session_dict, args["action"], position_s=args.get("position_s"), title=args.get("title"))
 
     async def _seed_radio(self, args):
         async with self.ctx.playback_lock:
-            return await self.executor.execute_seed_radio(self.session_dict, args["mode"])
+            return await self.executor.execute_seed_radio(self.session_dict, args["mode"], args["target"])
+
+    async def _move_playback(self, args):
+        async with self.ctx.playback_lock:
+            return await self.executor.execute_move_playback(self.session_dict, args.get("device"))
+
+    async def _radio_settings(self, args):
+        return await self.executor.execute_radio_settings(self.session_dict, args)
 
     async def _play_playlist(self, args):
         async with self.ctx.playback_lock:
             return await self.executor.execute_playlist(self.session_dict, args["name"])
 
     async def _rate_track(self, args):
+        if args["target"] == "shoutout":
+            return await self.executor.execute_shoutout_preference(self.session_dict, args["rating"],
+                                                                   args.get("shoutout_id"))
         return await self.executor.execute_track_preference(self.session_dict, args["rating"], args["target"])
 
     async def _get_news(self, args):

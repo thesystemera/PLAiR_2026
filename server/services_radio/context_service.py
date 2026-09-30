@@ -435,6 +435,7 @@ async def get_shoutouts_data(
             dj_service.user_content_vector_search_service, services.user_content_service,
             query=query or "Recent community messages and shoutouts", n=n_results,
             user_id=getattr(user, "id", None), session_id=session_id, user_location=user_location,
+            use_ai=bool(query),
         )
         if not shoutouts:
             return ""

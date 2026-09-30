@@ -192,6 +192,8 @@ class PulseQuery:
     per_kind: int = 3
     kind_order: list = field(default_factory=list)
     within: Optional[str] = None
+    mine: bool = False
+    track_id: Optional[str] = None
 
     def wants(self, kind: str) -> bool:
         return self.kinds is None or kind in self.kinds
@@ -614,12 +616,21 @@ async def _top_reply_entry(listener: PulseListener, shoutout_id: str) -> dict:
     top = await community_engagement.top_reply(replies, listener.user_id)
     if not top:
         return {"replies": len(replies)}
-    reply = {"from": community_on_air.speaker(top), "said": community_on_air.text_of(top)}
-    marker = community_on_air.audio_marker(top)
-    if marker:
-        reply["audio"] = marker
-    return {"replies": len(replies), "top_reply": reply,
-            "how_to_play_reply": "Play or read the top reply straight after the shoutout, introduced as a reply."}
+    def entry(item):
+        reply = {"from": community_on_air.speaker(item), "said": community_on_air.text_of(item)}
+        marker = community_on_air.audio_marker(item)
+        if marker:
+            reply["audio"] = marker
+        return reply
+
+    allowed = await community_engagement.airable([r.get("id") for r in replies], listener.user_id)
+    others = [r for r in await community_engagement.rank(list(replies))
+              if r.get("id") != top.get("id") and r.get("id") in allowed][:settings.PULSE_TOOL_MAX_PER_KIND]
+    result = {"replies": len(replies), "top_reply": entry(top),
+              "how_to_play_reply": "Play or read the top reply straight after the shoutout, introduced as a reply."}
+    if others:
+        result["more_replies"] = [entry(r) for r in others]
+    return result
 
 
 def shoutout_place(shoutout: Dict[str, Any]) -> str:
@@ -656,6 +667,15 @@ def shoutout_in_region(shoutout: Dict[str, Any], listener: PulseListener) -> boo
     return bool(region and region.name.lower() in location)
 
 
+def _own_posts(q: PulseQuery, kind: str) -> list:
+    store = services.user_content_service
+    if store is None or not q.listener.user_id:
+        return []
+    mine = store.items_by_user(int(q.listener.user_id))
+    posts = mine.get("review", []) if kind == KIND_REVIEW else mine.get("shoutout", []) + mine.get("reply", [])
+    return sorted(posts, key=lambda post: str(post.get("timestamp") or ""), reverse=True)[:q.per_kind]
+
+
 class CommunityNode(KnowledgeNode):
     name = "community"
     kinds = (KIND_COMMUNITY,)
@@ -665,6 +685,8 @@ class CommunityNode(KnowledgeNode):
         if search is None:
             return []
         from services_radio import community_on_air
+        if q.mine:
+            return [shoutout_item(post, 1.0, q.listener) for post in _own_posts(q, KIND_COMMUNITY)]
         results = await community_on_air.pick(
             search, services.user_content_service, query=q.text or SHOUTOUT_BROWSE, n=q.per_kind * 4,
             user_id=q.listener.user_id, session_id=q.listener.session_id,
@@ -695,10 +717,12 @@ class ReviewsNode(KnowledgeNode):
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
         from services_radio import community_on_air
+        if q.mine:
+            return [review_item(review, 1.0) for review in _own_posts(q, KIND_REVIEW)]
         results = await community_on_air.pick(
             services.user_content_vector_search_service, services.user_content_service,
             query=q.text or "what listeners think of songs", n=q.per_kind, user_id=q.listener.user_id,
-            session_id=q.listener.session_id, kinds="review", fresh_only=False)
+            session_id=q.listener.session_id, kinds="review", fresh_only=False, track_id=q.track_id)
         return [review_item(review, float(review.get("final_score") or 0.0)) for review in results]
 
 

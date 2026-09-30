@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, Music,
-  Newspaper, Radio, Save, Search, SkipForward, Ticket, TrendingUp, User, Wrench, X
+  Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, Loader2, MapPin, Megaphone, MonitorSmartphone, Music,
+  Newspaper, Radio, Save, Search, SlidersHorizontal, SkipForward, Ticket, TrendingUp, User, Wrench, X
 } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
@@ -22,6 +22,8 @@ const TOOL_ICONS = {
   seed_radio: Radio,
   play_playlist: Radio,
   rate_track: Heart,
+  move_playback: MonitorSmartphone,
+  radio_settings: SlidersHorizontal,
   get_news: Newspaper,
   get_weather: CloudSun,
   get_events: Ticket,

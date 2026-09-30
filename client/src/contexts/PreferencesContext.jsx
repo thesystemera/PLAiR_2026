@@ -209,8 +209,9 @@ export function PreferencesProvider({ children }) {
 
   useWebSocketSubscribe('radio_mode_updated', useCallback((data) => {
     if (!data?.settings || radioModeInflightRef.current > 0) return
-    const saved = normalizeRadioMode(data.settings, radioOptions.feature_intervals_min)
-    saveAccountRadioMode(userIdRef.current, saved)
+    const saved = normalizeRadioMode({ ...radioModeRef.current, ...data.settings }, radioOptions.feature_intervals_min)
+    if (userIdRef.current != null) saveAccountRadioMode(userIdRef.current, saved)
+    else safeStorage.set(RADIO_MODE_STORAGE_KEY, JSON.stringify(saved))
     setRadioModeState(saved)
   }, [radioOptions]))
 

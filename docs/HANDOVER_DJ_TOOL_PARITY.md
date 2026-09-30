@@ -1,7 +1,6 @@
 # Handover: DJ tools should match what the app can do
 
-Written 30 Sep 2026. Status: audit done (steps 1-4, read from the code, nothing built yet); waiting on the owner's
-decisions below before building.
+Written 30 Sep 2026. Status: built and tested on a private backend (30 Sep, late). See "What was built".
 
 ## The goal
 
@@ -14,6 +13,32 @@ The example that started this (30 Sep): the app's search box has two modes (type
 `title: ...` style prefixes, and the AI search on Enter). The DJs' `search_and_play` only had the single-field
 mode with the AI part switched off. The fix was not a new search: it was wiring the tool to the function the
 front end already calls, and adding one variable (`within`: catalog / favourites / super_likes).
+
+## What was built (30 Sep)
+
+Owner's decisions: no settings power tool (audio quality, sound modes and visual settings stay in the app), no
+deleting posts by voice, no song generation or conversation clearing by voice.
+
+Fixed:
+- `rate_track` goes through `preferences_service` (the app's route), so the rating reaches every open device.
+- `play_playlist` refuses favorites / discovery for guests, as `/api/queue/seed` does.
+- `seed_radio` takes `target` (current / previous / next).
+- `play_shoutouts` uses the Shoutouts panel's AI search when the hosts give it a topic.
+
+Added:
+- `playback_control`: `restart`, `seek` (`position_s`), `remove` (an upcoming track by `title`, else the next one).
+- `rate_track` target `shoutout` (+ optional `shoutout_id`): like, superstar, clear or ban another listener's post.
+- `pulse_search` `mine` (the listener's own shoutouts, replies and reviews) and `about_track` (reviews of one
+  track); `pulse_detail` on a shoutout lists its replies (`more_replies`).
+- `move_playback`: move the music to another online device by name; no `device` lists the online devices.
+- `radio_settings`: read or patch Radio Mode, its break types, stings, reviews and music source. Signed-in listeners
+  go through `preferences_service.apply_radio_settings` (now also what `PUT /api/radio-mode` calls); guests get a
+  `radio_mode_updated` patch that the client merges and stores (`PreferencesContext`).
+
+Tested live on port 8011 (test account and a guest): restart, seek, remove next, like a track, radio settings
+change and read, device list, move to a device that isn't online, reviews of the current track, own posts, seed
+from the previous track, play shoutouts then like the one that aired, guest refusals. Not tested: a real move
+between two devices, and the guest Radio Mode patch in a real browser.
 
 ## Rules for closing a gap
 
@@ -99,14 +124,6 @@ quality), login, admin usage, lyric timing generation.
 5. **Decide with the owner** which missing rows to build, in what order. Shoutout like / ban / delete is the
    first one named.
 6. **Build each as the smallest extension** (rule 2), with a live test turn.
-
-## Open decisions for the owner
-
-- **Destructive actions by voice** (delete my shoutout, clear my conversation): do it on request, or have the
-  hosts confirm first?
-- **Client-only settings** (sound mode, tilt effects, audio quality are stored per device in the browser): the
-  DJs would need a message to the client to change them. Worth it, or app-only?
-- **Music generation by voice:** it costs money per song; which limits apply?
 
 ## Where things are
 

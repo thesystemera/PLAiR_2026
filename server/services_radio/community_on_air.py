@@ -54,7 +54,8 @@ async def with_top_replies(items: List[Dict], content_service, user_id: Optional
 
 async def pick(search, content_service, *, query: str, n: int, user_id: Optional[int], session_id: Optional[str],
                user_location: Optional[Tuple[float, float]] = None, skip: Iterable[str] = (),
-               kinds="shoutout", track_id: Optional[str] = None, fresh_only: bool = True) -> List[Dict]:
+               kinds="shoutout", track_id: Optional[str] = None, fresh_only: bool = True,
+               use_ai: bool = False) -> List[Dict]:
     if search is None:
         return []
     exclude = set(skip)
@@ -62,7 +63,7 @@ async def pick(search, content_service, *, query: str, n: int, user_id: Optional
         exclude |= set(community_engagement.last_aired(session_id))
     try:
         found = await search.search(query=query, n_results=max(n * 3, n + 4), user_location=user_location,
-                                    use_ai_analysis=False, content_type=kinds, exclude=exclude, track_id=track_id)
+                                    use_ai_analysis=use_ai, content_type=kinds, exclude=exclude, track_id=track_id)
     except Exception as e:
         log_service.warning(f"[Community] search failed: {type(e).__name__}: {e}")
         return []
