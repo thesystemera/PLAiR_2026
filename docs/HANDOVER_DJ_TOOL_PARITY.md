@@ -1,6 +1,7 @@
 # Handover: DJ tools should match what the app can do
 
-Written 30 Sep 2026. Status: audit not started; the table below is a first pass from a quick inventory.
+Written 30 Sep 2026. Status: audit done (steps 1-4, read from the code, nothing built yet); waiting on the owner's
+decisions below before building.
 
 ## The goal
 
@@ -33,39 +34,58 @@ front end already calls, and adding one variable (`within`: catalog / favourites
 7. **Test on a private backend** (`CLAUDE.md`: port 8011, embeddings copy, `tests/dj_pulse_test.py`), read the
    turn in `data/logs/dj_turns.jsonl`, and don't start the production window yourself.
 
-## First-pass inventory
+## Audit (30 Sep, from the code)
 
-Front-end capabilities come from `client/src/lib/api.js` and the playback commands in `PlaybackContext.jsx`.
+Sources read: every method in `client/src/lib/api.js`, the WebSocket commands in `server/routers/ws.py`, every
+route in `server/routers/*.py`, `TOOL_REGISTRY`, `authorize_tool_call` and the `execute_*` methods.
 DJ tools today (19): `pulse_search`, `pulse_detail`, `listener_context`, `city_trends`, `search_and_play`,
 `playback_control`, `seed_radio`, `play_playlist`, `rate_track`, `get_news`, `get_weather`, `get_events`,
 `find_places`, `get_artist_biography`, `explain_lyrics`, `play_shoutouts`, `save_shoutout`,
 `save_shoutout_reply`, `save_review`.
 
-| Area | What the app can do | DJ tool today | Gap |
+### Existing tools that don't match the app (fix first)
+
+| Tool | The app | The tool | Fix |
 |---|---|---|---|
-| Track search | Typed keyword search, AI search, by category | `search_and_play` (both modes, `within`) | Closed 30 Sep |
-| Search own likes | Favourites / super-likes views | `within` on `search_and_play`, `pulse_search` | Closed 30 Sep |
-| Transport | Play, pause, next, previous | `playback_control` | None |
-| Transport | Seek within a track, restart the track | none | Missing |
-| Queue | Add, play from queue | `search_and_play` | None |
-| Queue | Remove an item, reorder, clear upcoming | none | Missing |
-| Stations | Seed radio (10 modes), playlists (favourites, discovery, top hits) | `seed_radio`, `play_playlist` | Check every mode is reachable |
-| Track ratings | Like, super-like, ban, remove rating | `rate_track` | None |
-| Shoutouts | Play, search by meaning | `play_shoutouts` | Check search parity with the Shoutouts panel's AI search |
-| Shoutouts | Record / type a shoutout, reply, review | `save_shoutout`, `save_shoutout_reply`, `save_review` | None |
-| Shoutouts | Like, super-like, ban a shoutout | none | Missing (the owner's example) |
-| Shoutouts | Delete my own shoutout, reply or review | none | Missing (the owner's example) |
-| Shoutouts | List my own posts, read a track's reviews, read replies | `pulse_detail` (top reply), pulse `review` kind | Partial |
-| Devices | List devices, move playback to another device, rename | none | Missing ("play this on my phone") |
-| Radio Mode | Turn talk breaks on/off, choose features, music source (both / human / AI) | none | Missing |
-| Sound | DJ voice / notification sound modes, audio quality | none | Missing (some are per-device client settings) |
-| Generation | Generate a song, check or cancel a generation job | none | Missing |
-| Uploads / artists | Upload music, edit track details, artist profiles | none | Probably stays in the app; decide |
-| Profile | Username, location, reset persona, clear DJ conversation | none | Missing; decide which belong on air |
-| Stats | Station stats, track analytics, my usage | `city_trends`, pulse `chart` kind | Partial |
-| Offline | Download for offline, cache management | none | Client-only; out of scope |
-| Billing | Checkout, billing portal | none | Out of scope (never by voice) |
-| Sharing | Share video export | none | Client-only; out of scope |
+| `rate_track` | `preferences_service.set_track_preference` / `remove_track_preference`, with `broadcast_preference_change` | its own copy of the database write in `execute_track_preference`; no preference broadcast to the listener's devices | call the preferences service (rule 1) |
+| `play_playlist` | `/api/queue/seed` refuses `favorites` / `discovery` for guests | no check; the tool reports "ok" for a guest (what the queue then holds is not checked yet) | same refusal in `authorize_tool_call` (rule 3) |
+| `seed_radio` | `api.seedRadio(category, trackId)`: a station from any track (Seed Radio modal) | current track only | add `target` (current / previous / next), as `rate_track` has |
+| `play_shoutouts` | Shoutouts panel: AI search on Enter (`use_ai_analysis`) | `community_on_air.pick` always passes `use_ai_analysis=False` | pass the AI weighting when there is a query, as `pulse_search` does for tracks |
+
+### Missing, with the service the tool would call
+
+| Area | What the app does | Route -> service | Smallest extension |
+|---|---|---|---|
+| Transport | Seek, restart the track | WS `seek` -> `playback_service.seek` | `playback_control` actions `restart`, `seek` + `position_s` |
+| Queue | Remove one track | `DELETE /api/queue/remove/{id}` -> `playback_service.remove_from_queue` | `playback_control` action `remove` + `target` |
+| Shoutouts | Like, super-like, ban, clear | `/api/shoutouts/{id}/preference` -> `preferences_service.set_shoutout_preference` (signed in, not your own post) | `rate_track` gains a shoutout target (default: the one that just aired, `community_engagement.last_aired`) |
+| Shoutouts | Delete my own shoutout, reply or review | `DELETE /api/user_content/shoutouts/{id}` -> `user_content_service.delete_shoutout` (own only) | new tool `delete_my_post` (owner decision on confirming) |
+| Shoutouts | List my posts; a track's reviews; a shoutout's replies | `/api/user/community` -> `items_by_user`; `/api/tracks/{id}/reviews`; `.../replies` | `pulse_search` `within: mine` for community/review kinds; full lists via `pulse_detail` |
+| Devices | List online devices, move playback | `/api/devices`, `/api/devices/activate` -> `playback_service.transfer_playback` (target must be online) | new tool `move_playback` (device by name); rename/remove stay in the app |
+| Radio Mode | On/off, each segment type, reviews, stings, feature interval, music source | `PUT /api/radio-mode` -> `preferences_service.set_radio_settings` + `radio_mode_service.set_user_prefs` (guests: WS `radio_mode_prefs`) | new tool `radio_settings` (one patch of `RadioPrefs` fields) |
+| Sound | DJ voice / pings muted, audio quality | `PUT /api/user/profile` (`tts_muted`, `notifications_muted`), `PUT /api/auth/audio-quality`; both stored server-side | fold into the settings tool (owner decision) |
+| Generation | New song from a request, more like a track, cancel, list jobs | `/api/generate` -> `suno_generation_queue_service.start_generation_job` with `rate_limit_service.reserve_generations` (signed in) | new tool `generate_song` (owner decision on limits) |
+| Profile | Clear DJ conversation, reset persona | `/api/manage_user_data` -> `user_profile_service.delete_conversations` / `reset_persona` | owner decision |
+| Stats | One track's analytics, my usage | `/api/analytics/track/{id}`, `/api/usage/me` | track analytics into `pulse_detail` for a track; usage stays in the app |
+
+### Already matching
+
+Track search (both modes, `within`), play / pause / next / previous, add to queue, all 10 seed modes and all 5
+playlists (the tool's enums are built from the same tables), track like / super-like / ban / clear, record or type
+a shoutout, reply or review (same editor verdict and pipeline).
+
+### App-only (no tool planned)
+
+Username, location and timezone, profile picture, uploads, track edits, artwork and artist profiles, device rename
+and remove, offline downloads and cache, billing, share video, visual settings (FPS counter, video clips, visual
+quality), login, admin usage, lyric timing generation.
+
+### Corrections to the first pass
+
+- The app has no queue reorder or clear: only remove (`Queue.jsx` -> `removeFromQueue`). Nothing to match there.
+- Sound mode and audio quality are stored on the server (`users` row), not only per device, so a tool can change
+  them through the existing services. Not checked yet: how an open client learns of the change (the profile
+  route sends no WebSocket event, unlike `radio_mode_updated`).
 
 ## How to run the audit
 
