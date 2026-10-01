@@ -32,10 +32,6 @@ def plain_talk(text: str) -> str:
     return " ".join(PERFORMANCE_TAGS.sub(' ', spoken_text(text)).split())
 
 
-def match_key(context: str) -> str:
-    return "\n".join(line for line in context.splitlines() if not line.startswith("EARLIER"))
-
-
 def conversation_context(current: str, history: List[Tuple[str, str]], turns: int, chars: int) -> str:
     lines = [f"NOW listener: {current.strip()[:chars * 2]}"]
     for listener, hosts in reversed(history[-turns:]):
@@ -148,7 +144,7 @@ class FillerScripts:
         matrix = self._matrix[kind]
         best, best_similarity = None, None
         if matrix is not None:
-            query = await run_on_gpu_executor(self._embed, match_key(context))
+            query = await run_on_gpu_executor(self._embed, context)
             similarities = matrix @ query
             order = list(np.argsort(-similarities))
             eligible = [i for i in order if self._fresh(listener, self._scripts[kind][i], now)] or order
@@ -192,7 +188,7 @@ class FillerScripts:
                     log_service.tts_vector_db(f"Filler scripts: {kind} draft rejected for '{context[:60]}'")
                     return
                 group = uuid.uuid4().hex[:12] if kind == INTERLUDE else None
-                vector = await run_on_gpu_executor(self._embed, match_key(context))
+                vector = await run_on_gpu_executor(self._embed, context)
                 ids = await asyncio.to_thread(self._save, kind, context, scripts, group, vector)
                 self._scripts[kind].extend(FillerScript(row_id, kind, context, script, group, index, vector)
                                            for index, (row_id, script) in enumerate(zip(ids, scripts)))
