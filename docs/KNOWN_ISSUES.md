@@ -129,8 +129,16 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   in `playback_state.py`, artwork prefetch competing with audio fetches.
 - **Generation progress messages** (`plans/unified_ws_protocol.md`, not started): seven message types and dead
   `*_stage` fields to fold into one `task_progress`.
-- **UIState holds business logic** (`docs/UISTATE_CLEANUP_TODO.md`, not started): tilt loop, music ducking,
-  settings and download persistence, video-clip loading. Artwork preloading there is now the intended design.
+- **UIState still holds some business logic** (`docs/UISTATE_CLEANUP_TODO.md`). The September cleanup was about
+  re-renders (slice selectors, `useUIState` removed, one notice store) and did not move these out; checked 1 Oct
+  in `UIStateContext.jsx`: the tilt sensor and its animation loop, music ducking, settings and seed-mode writes to
+  storage, the download-state updater, video-clip loading. It all works; this is tidiness, low priority.
+- **Progress bar for Radio Mode talk breaks** (owner, 1 Oct). While a break is on air, the player's waveform
+  becomes a progress bar for the break. The server knows the script's word count and the measured pace
+  (`talk_clock`), so it can send an estimated length at stream start, then the exact length once the whole break
+  has rendered (rendering runs about 4-6x faster than playback: a 37 s break finished rendering after 10 s). The
+  client divides the DJ stream's played seconds by the best length it has, never moves backwards, and draws it
+  from a ref (no per-frame React state).
 - **LifeSpan ideas not ported** (audit section 3): text normalisation before TTS (units, URLs, "feat."), filler
   lines shown in chat and told to the model, richer clip metadata, a stateful limiter and reverb (A/B first),
   prelude and interlude fillers, per-round timing and cost in the turn log, history hygiene.
