@@ -62,6 +62,9 @@ anything else is carried over as written.
   Tom, mate." to a comedy question, 29 Sep, before the tools-only DJ); `Queen Street` without a city geocodes to
   the wrong one (harmless while prompts ask for full place names).
 
+- **Fixed 1 Oct evening, watch it live: paralanguage read aloud as words.** The DJs sometimes write an object noise as paralanguage (`~taps desk~`, about 3% of tags); the paralanguage writer then bracketed or imitated it (`[taps desk]`, `*click*`) and Chatterbox read it aloud. The writer's engine-tag paragraph now has it voice the host only (15 actions x 2 runs on DeepSeek: clean), stray brackets are snapped to the closest engine tag or dropped, and every contaminated take was purged.
+- **Fixed 1 Oct evening: 'mate' on almost every reply.** A 'cheers, mate' example added to the channel rules that evening raised it from 0.4 to 1.5 per reply; the example is gone and the 108 cached lines and 2 filler scripts that said 'mate' were purged.
+
 ## 3. Requested on 30 Sep, not done
 
 - **Offline unit tests for every DJ tool** (checked: only `tests/dj_tool_loop_test.py` exists). No backend, no
