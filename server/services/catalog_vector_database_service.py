@@ -1,13 +1,24 @@
 import re
+from functools import lru_cache
 from typing import Dict, Any
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
 
 
-VOCAL_SENTENCE = re.compile(
-    r"[^.\n]*\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b[^.\n]*", re.I)
+VOCAL_WORD = re.compile(r"\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b", re.I)
+SENTENCE_BREAK = re.compile(r"[.\n]+")
 WHO_SINGS = {"m": "male vocals", "f": "female vocals"}
 VOCAL_TEXT_MAX_CHARS = 400
+
+
+@lru_cache(maxsize=8192)
+def _vocal_text(instrumental: bool, vocal_gender: str, style_text: str, keywords: str) -> str:
+    if instrumental:
+        return ", ".join(part for part in ("instrumental, no vocals", keywords) if part)
+    parts = [WHO_SINGS.get(vocal_gender, "")]
+    parts += [sentence.strip(" ,;:") for sentence in SENTENCE_BREAK.split(style_text) if VOCAL_WORD.search(sentence)]
+    parts.append(keywords)
+    return ". ".join(dict.fromkeys(part for part in parts if part))[:VOCAL_TEXT_MAX_CHARS]
 
 
 class CatalogVectorDatabaseService(BaseVectorDatabaseService):
@@ -125,9 +136,4 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
 
     @staticmethod
     def _vocal_text(params: Dict[str, Any], style_text: str, keywords: str) -> str:
-        if params.get("instrumental"):
-            return ", ".join(part for part in ("instrumental, no vocals", keywords) if part)
-        parts = [WHO_SINGS.get(params.get("vocal_gender") or "")]
-        parts += [match.group(0).strip(" ,;:") for match in VOCAL_SENTENCE.finditer(style_text)]
-        parts.append(keywords)
-        return ". ".join(dict.fromkeys(part for part in parts if part))[:VOCAL_TEXT_MAX_CHARS]
+        return _vocal_text(bool(params.get("instrumental")), params.get("vocal_gender") or "", style_text, keywords)
