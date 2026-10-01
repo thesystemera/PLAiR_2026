@@ -7,13 +7,13 @@ from config.settings import settings
 
 BRACKETED = re.compile(r"\[([^\]]*)\]")
 WORDS = re.compile(r"[a-z]+")
-STEM_CHARS = 4
+STEM_CHARS = 5
 
 
 def _closest_engine_tag(text: str, allowed) -> str:
     words = WORDS.findall(text.lower())
     matches = [tag for tag in allowed
-               if all(any(word.startswith(part[:STEM_CHARS]) for word in words) for part in tag.split())]
+               if all(any(part[:STEM_CHARS] in word for word in words) for part in tag.split())]
     return max(matches, key=len) if matches else ""
 
 
@@ -172,7 +172,12 @@ class DJPromptSystemService:
                 "prompt (when the tag is close but the action asks for more, e.g. 'laughs out loud' -> "
                 "[laugh] hhaahhahaha-haa), or your phonetic prompt alone (when no tag fits). "
                 "Use only tags from this list, written exactly as shown; these square brackets are the one exception "
-                "to the syntax rule above."
+                "to the syntax rule above.\n"
+                "You only ever write the host's voice. When the action makes a noise with an object (taps desk, "
+                "flicks a switch, taps the mic), the studio plays that noise separately: never imitate it ('tick', "
+                "'click', 'thump', 'tk-tk' are the object, not the voice). Write the little sound the host's own voice "
+                "makes while doing it, different every time: 'taps desk' -> 'hnn-hm', 'flicks a switch' -> 'hup', "
+                "'pushes the fader up' -> 'mmmm-hhaa'. Use an engine tag only when the action is that very sound."
             )
 
         paralanguage_prompt = await self._execute_gpt_stream(
