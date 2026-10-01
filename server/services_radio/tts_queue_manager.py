@@ -16,7 +16,7 @@ from services.task_utils import spawn
 from services_radio.tts_broadcast_service import TimelineMixer, CLIP_CHUNK_MS
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GENERATED_TYPES
 from services_radio.tts_live_stream import LiveStreamEncoder
-from services_radio.tts_processing_service import MotionSlot, MotionTrack, decode_mp3
+from services_radio.tts_processing_service import MotionSlot, MotionTrack, audible_bounds, decode_mp3
 from services_radio.tts_voice_threads import voice_thread
 from services_radio import talk_clock
 
@@ -158,7 +158,7 @@ class IncrementalBlend:
             return
         try:
             speaker = segment.get('speaker', '')
-            start = max(0, self.cursor - self._overlap_ms(segment, self.segments[:-1]))
+            start = self._overlap_start(segment)
             if speaker in VOICE_SPEAKERS:
                 start = max(start, self._voice_end(speaker))
             if held is not None:
@@ -186,20 +186,34 @@ class IncrementalBlend:
                 self.audio += AudioSegment.silent(duration=missing, frame_rate=self.audio.frame_rate).set_channels(
                     self.audio.channels)
             self.audio = self.audio.overlay(audio, position=start)
+        sound_start, sound_end = audible_bounds(audio)
         self.timeline.append({
             'start': start,
             'duration': len(audio),
             'speaker': segment.get('speaker', ''),
-            'intensity': segment.get('audio_process', 0.0)
+            'intensity': segment.get('audio_process', 0.0),
+            'type': segment.get('type'),
+            'char_start': segment.get('char_start', 0),
+            'char_end': segment.get('char_end', 0),
+            'sound_start': start + sound_start,
+            'sound_end': start + sound_end
         })
         return start + len(audio)
 
-    def _overlap_ms(self, segment: Dict, previous: List[Dict]) -> int:
-        overlap_chars = segment.get('overlap', 0)
-        previous_chars = sum(s.get('char_count', 0) for s in previous)
-        if overlap_chars <= 0 or previous_chars <= 0:
-            return 0
-        return int(self.cursor * min(overlap_chars / previous_chars, 0.5))
+    def _overlap_start(self, segment: Dict) -> int:
+        chars = segment.get('overlap', 0)
+        if chars <= 0 or not self.timeline:
+            return self.cursor
+        target = segment.get('char_start', 0) - chars
+        placed = sorted(self.timeline, key=lambda entry: entry['char_start'])
+        before = [entry for entry in placed if entry['char_start'] <= target]
+        if not before:
+            return placed[0]['start']
+        entry = before[-1]
+        if target >= entry['char_end']:
+            return entry['start'] + entry['duration']
+        position = (target - entry['char_start']) / max(1, entry['char_end'] - entry['char_start'])
+        return entry['sound_start'] + int(position * (entry['sound_end'] - entry['sound_start']))
 
     def _voice_end(self, speaker: str) -> int:
         return max(
@@ -208,8 +222,7 @@ class IncrementalBlend:
         )
 
     def safe_end(self, future_segments: List[Dict]) -> int:
-        return min([self.cursor] + [self.cursor - self._overlap_ms(segment, self.segments)
-                                    for segment in future_segments])
+        return min([self.cursor] + [self._overlap_start(segment) for segment in future_segments])
 
     def temporal_intensities(self) -> List[Dict]:
         change_points = set()

@@ -22,7 +22,7 @@ from config.settings import settings
 from services import log_service
 from services import usage_tracking
 from services_radio.tts_processing_service import (
-    MotionSlot, decode_mp3, level_sound_effect, motion_chunks, trim_breath
+    MotionSlot, decode_mp3, level_sound_effect, motion_chunks
 )
 from services_radio.tts_voice_threads import voice_thread
 from services_radio.dj_prompt_helper_service import is_clean_paralanguage
@@ -58,7 +58,6 @@ FILLER_TYPES = {
 GENERATED_TYPES = ('tts_embeddings', 'paralanguage_embeddings', 'breath_embeddings')
 PREPARE_INPUT = {
     'audio_embeddings': level_sound_effect,
-    'breath_embeddings': trim_breath,
 }
 
 INVALID_TITLE_CHARS = re.compile(r'[*~\n\[\]@$%"&.!?]|N/A')

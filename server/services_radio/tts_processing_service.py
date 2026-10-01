@@ -19,12 +19,8 @@ PAN_NOISE_SCALE = 0.02
 PAN_NOISE_PEAK = 0.5
 AMBIENCE_PAN_SPREAD = 0.4
 FADE_FLOOR = 10 ** (-120 / 20)
-BREATH_FRAME_MS = 10
-BREATH_RANGE_DB = 30.0
-BREATH_FLOOR_DBFS = -60.0
-BREATH_GAP_MS = 250
-BREATH_LEAD_MS = 100
-BREATH_TAIL_MS = 120
+AUDIBLE_FRAME_MS = 10
+AUDIBLE_FLOOR_DBFS = -60.0
 
 
 def level_sound_effect(audio: AudioSegment) -> AudioSegment:
@@ -34,31 +30,17 @@ def level_sound_effect(audio: AudioSegment) -> AudioSegment:
     return audio.apply_gain(gain)
 
 
-def trim_breath(audio: AudioSegment) -> AudioSegment:
-    rate = audio.frame_rate
-    hop = int(rate * BREATH_FRAME_MS / 1000)
+def audible_bounds(audio: AudioSegment) -> Tuple[int, int]:
+    hop = int(audio.frame_rate * AUDIBLE_FRAME_MS / 1000)
     samples = np.array(audio.get_array_of_samples(), dtype=np.float32).reshape((-1, audio.channels)).mean(axis=1)
     frames = len(samples) // hop
     if frames == 0:
-        return audio
+        return 0, len(audio)
     rms = np.sqrt(np.mean(samples[:frames * hop].reshape(frames, hop) ** 2, axis=1)) / 32768.0
-    level = 20 * np.log10(rms + 1e-9)
-    active = level > max(float(level.max()) - BREATH_RANGE_DB, BREATH_FLOOR_DBFS)
-    if not active.any():
-        return audio
-    first = int(np.argmax(active))
-    last = first
-    quiet = 0
-    for index in range(first, frames):
-        if active[index]:
-            last, quiet = index, 0
-        else:
-            quiet += 1
-            if quiet * BREATH_FRAME_MS >= BREATH_GAP_MS:
-                break
-    start_ms = max(0, first * BREATH_FRAME_MS - BREATH_LEAD_MS)
-    end_ms = min(len(audio), (last + 1) * BREATH_FRAME_MS + BREATH_TAIL_MS)
-    return audio[start_ms:end_ms]
+    audible = np.where(20 * np.log10(rms + 1e-9) > AUDIBLE_FLOOR_DBFS)[0]
+    if len(audible) == 0:
+        return 0, len(audio)
+    return int(audible[0]) * AUDIBLE_FRAME_MS, min(len(audio), (int(audible[-1]) + 1) * AUDIBLE_FRAME_MS)
 
 
 def _ms_frames(ms: float, rate: int) -> int:
