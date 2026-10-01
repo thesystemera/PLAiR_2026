@@ -385,8 +385,8 @@ export function PlaybackProvider({ children }) {
     setState(prev => mergeDisplayState(prev, data, { includePlayState: true }))
 
     const engine = audio.getEngine()
-    if (engine && desired.crossfadeHint && desired.track?.id) {
-      engine.setCrossfadeHint(desired.track.id, desired.crossfadeHint)
+    if (engine && desired.track?.id && data.crossfade_hint !== undefined) {
+      engine.setCrossfadeHint(desired.track.id, data.crossfade_hint)
     }
 
     const engineOnTrack = isActiveDeviceRef.current && engine?.getCurrentTrackId() === desired.track?.id && engine?.hasCurrentSource()
@@ -581,8 +581,8 @@ export function PlaybackProvider({ children }) {
       publishAudioStateRef.current({ buffering: isBuffering })
     }
 
-    engine.onCrossfadeStateChange = (isCrossfading) => {
-      reportEngineStatus({ isCrossfading })
+    engine.onCrossfadeStateChange = (isCrossfading, crossfadeMs = 0) => {
+      reportEngineStatus({ isCrossfading, crossfadeMs: isCrossfading ? crossfadeMs : 0 })
       if (!isCrossfading) {
         const isFromCache = engine.getCurrentElement()?.getAttribute('data-blob-url') === 'true'
         const bitrate = engine.currentSlot?.metadata?.bitrate || settingsStateRef.current.audioQuality

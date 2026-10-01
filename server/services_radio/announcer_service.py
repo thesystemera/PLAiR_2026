@@ -7,6 +7,7 @@ from collections import deque
 from services import log_service
 from services import usage_tracking
 from services.task_utils import spawn
+from services_radio import crossfade_plan
 from services_radio.dj_content_bank import content_bank
 from services_radio.sting_service import midtrack_max_len
 from config.settings import settings
@@ -286,7 +287,9 @@ class AnnouncerService:
                 self._cache_transition(session_id, cache_key, None)
                 return None
 
-            crossfade_timing = self._calculate_smart_crossfade(current_features, next_features)
+            current_lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
+            next_lyrics = await self.orchestrator.lyrics.load_timestamps(next_track_id)
+            crossfade_timing = crossfade_plan.plan(current_features, next_features, current_lyrics, next_lyrics)
 
             if crossfade_timing:
                 try:
@@ -297,8 +300,6 @@ class AnnouncerService:
                     log_service.warning(f"Failed to push crossfade timing: {e}")
 
             current_duration = current_features.get('duration', 0) * 1000
-            current_lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
-            next_lyrics = await self.orchestrator.lyrics.load_timestamps(next_track_id)
 
             outro_segments = await self._get_quiet_segments(
                 current_features, current_lyrics, start_pct=0.85, end_pct=1.0
@@ -353,8 +354,10 @@ class AnnouncerService:
         if xfade:
             start_s = xfade['optimal_start_ms'] / 1000
             dur_s = xfade['duration_ms'] / 1000
-            overlap = xfade.get('reason', 'unknown')
-            xfade_str = f"Start: {start_s:.1f}s | Dur: {dur_s:.1f}s | Mode: {overlap}"
+            out_s = xfade.get('fade_out_ms', xfade['duration_ms']) / 1000
+            in_s = xfade.get('fade_in_ms', xfade['duration_ms']) / 1000
+            xfade_str = (f"Start: {start_s:.1f}s | Overlap: {dur_s:.1f}s (out {out_s:.1f}s, in {in_s:.1f}s) | "
+                         f"{xfade.get('reason', 'unknown')}")
 
         win_str = "None"
         if window:
@@ -373,45 +376,6 @@ class AnnouncerService:
             f"   └─ 🗣️ Announcer: {win_str}"
         )
         log_service.announcer(log_msg)
-
-    @staticmethod
-    def _calculate_smart_crossfade(current_features: Dict, next_features: Dict) -> Optional[Dict]:
-        SILENCE_THRESHOLD_DB = -45.0
-        STANDARD_OVERLAP_MS = 2000
-
-        def find_sound_boundary(segments, from_end=False):
-            if not segments:
-                return None
-            iterator = reversed(segments) if from_end else segments
-            for seg in iterator:
-                if seg.get('loudness', -60) > SILENCE_THRESHOLD_DB:
-                    if from_end:
-                        return (seg['start'] + seg['duration']) * 1000
-                    else:
-                        return seg['start'] * 1000
-            return None
-
-        curr_segments = current_features.get('loudness_segments', [])
-        curr_duration_ms = current_features.get('duration', 0) * 1000
-
-        last_sound_ms = find_sound_boundary(curr_segments, from_end=True)
-        if last_sound_ms is None:
-            last_sound_ms = curr_duration_ms
-
-        next_segments = next_features.get('loudness_segments', [])
-        first_sound_ms = find_sound_boundary(next_segments, from_end=False)
-        if first_sound_ms is None:
-            first_sound_ms = 0
-
-        optimal_start_ms = last_sound_ms - STANDARD_OVERLAP_MS - first_sound_ms
-        optimal_start_ms = max(0, min(optimal_start_ms, curr_duration_ms - 1000))
-
-        return {
-            'optimal_start_ms': optimal_start_ms,
-            'duration_ms': STANDARD_OVERLAP_MS,
-            'confidence': 'high',
-            'reason': 'Smart (Energy)'
-        }
 
     @staticmethod
     async def _get_quiet_segments(

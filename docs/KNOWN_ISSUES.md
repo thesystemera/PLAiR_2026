@@ -124,6 +124,12 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
+- **Between-track talk and stings (owner, 1 Oct):** the station clock doesn't come in as often as it could,
+  some transitions have nothing between the tracks, and the cool-offs between announcer, stings and Radio Mode
+  breaks are tangled. Look at it as one schedule. The announcer's window still assumes the next song starts when
+  the current one ends (`_analyze_transition` offsets the intro by the full duration and deducts a share of the
+  crossfade); it should use the crossfade plan's real start (`crossfade_plan.plan`, `optimal_start_ms`), which
+  it now gets from the same analysis.
 - **Listener timeline roadmap** (`docs/LISTENER_TIMELINE.md`): search what the hosts said by meaning, then fold
   the other "already aired" lists in. The view in the app (Timeline toggle in the Radio header) was built 1 Oct and
   has not been seen in a browser yet.

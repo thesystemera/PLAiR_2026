@@ -306,6 +306,7 @@ export function UIStateProvider({ children }) {
     activeDeviceId: null,
     activeDeviceOnline: false,
     isCrossfading: false,
+    crossfadeMs: 0,
     is_playing: false,
     currentTrack: null,
     queue: [],
@@ -893,6 +894,7 @@ export function UIStateProvider({ children }) {
     if (updates.activeDeviceId !== undefined) stateUpdates.activeDeviceId = updates.activeDeviceId
     if (updates.activeDeviceOnline !== undefined) stateUpdates.activeDeviceOnline = updates.activeDeviceOnline
     if (updates.isCrossfading !== undefined) stateUpdates.isCrossfading = updates.isCrossfading
+    if (updates.crossfadeMs !== undefined) stateUpdates.crossfadeMs = updates.crossfadeMs
     if (updates.is_playing !== undefined) stateUpdates.is_playing = updates.is_playing
     if (updates.currentTrack !== undefined) stateUpdates.currentTrack = updates.currentTrack
     if (updates.queue !== undefined) stateUpdates.queue = updates.queue

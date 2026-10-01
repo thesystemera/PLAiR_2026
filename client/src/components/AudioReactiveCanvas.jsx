@@ -643,6 +643,9 @@ const ON_AIR_RATE = 2.5
 const ON_AIR_PAUSED = 0.5
 const ON_AIR_BREATHE_SECONDS = 2.4
 const AMBIENT_FLOOR = 0.002
+const CROSSFADE_GLOW = 0.7
+const CROSSFADE_GLOW_MIN_MS = 1000
+const CROSSFADE_RELEASE = 1.2
 
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
@@ -848,7 +851,7 @@ function MultiPassPlane({
 
   const isFullscreen = interfaceState?.isFullscreenVisuals ?? false
 
-  const { interactionEffectsRef, getCategoryMetadata } = useDynamicTheme()
+  const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
   const { fpsCap, glassTaps, reduceMotion, reportFrame, reportRenderer, tier } = useQuality()
   const renderer = useThree(state => state.gl)
   const mainScene = useThree(state => state.scene)
@@ -907,7 +910,10 @@ function MultiPassPlane({
   const localProgressUpdateTimeRef = useRef(Date.now())
   const scratchColorRef = useRef(new Vector3())
   const targetPlayerGradientColorRef = useRef({ r: 0, g: 0, b: 0 })
-  const ambientRef = useRef({ voice: 0, onAir: 0, breatheTime: 0 })
+  const ambientRef = useRef({ voice: 0, onAir: 0, breatheTime: 0, crossfade: 0 })
+  const crossfadeColorRef = useRef(new Vector3())
+  const accentRgbRef = useRef(getAccentRgb())
+  useEffect(() => { accentRgbRef.current = getAccentRgb() }, [getAccentRgb])
 
   const captureScene = useMemo(() => new Scene(), [])
   const captureCamera = useMemo(() => new OrthographicCamera(-1, 1, 1, -1, 0, 1), [])
@@ -1486,6 +1492,15 @@ function MultiPassPlane({
       breathe = 0.8 + 0.2 * Math.sin(ambient.breatheTime * Math.PI * 2 / ON_AIR_BREATHE_SECONDS)
     }
     fgMaterial.uniforms.u_on_air.value = ambient.onAir * breathe
+
+    const crossfadeMs = engineState.crossfadeMs || 0
+    const crossfadeTarget = crossfadeMs >= CROSSFADE_GLOW_MIN_MS ? CROSSFADE_GLOW : 0
+    const crossfadeRate = crossfadeTarget > ambient.crossfade ? 4000 / Math.max(crossfadeMs, 1) : CROSSFADE_RELEASE
+    ambient.crossfade = approach(ambient.crossfade, crossfadeTarget, crossfadeRate, delta)
+    if (ambient.crossfade < AMBIENT_FLOOR && crossfadeTarget === 0) ambient.crossfade = 0
+    const accent = accentRgbRef.current
+    scratchColorRef.current.set(accent.r / 255, accent.g / 255, accent.b / 255)
+    crossfadeColorRef.current.lerp(scratchColorRef.current, Math.min(1, VOICE_COLOR_RATE * delta))
     if (onAirColor) {
       scratchColorRef.current.set(onAirColor.r / 255, onAirColor.g / 255, onAirColor.b / 255)
       fgMaterial.uniforms.u_on_air_color.value.lerp(scratchColorRef.current, Math.min(1, VOICE_COLOR_RATE * delta))
@@ -1611,7 +1626,8 @@ function MultiPassPlane({
     const glowUniforms = fgMaterial.uniforms
     const voiceLevel = glowUniforms.u_voice_level.value
     const onAirLevel = glowUniforms.u_on_air.value
-    glowUniforms.u_glow_active.value = voiceLevel >= 0.001 || onAirLevel >= 0.001 ? 1.0 : 0.0
+    const crossfadeLevel = ambientRef.current.crossfade
+    glowUniforms.u_glow_active.value = voiceLevel >= 0.001 || onAirLevel >= 0.001 || crossfadeLevel >= 0.001 ? 1.0 : 0.0
     const glowAnchorMix = Math.min(1, Math.max(0, glowUniforms.u_radio_button_state.value))
     const glowAnchor = glowUniforms.u_radio_button_pos.value
     glowUniforms.u_glow_center.value.set(
@@ -1621,6 +1637,7 @@ function MultiPassPlane({
     glowUniforms.u_glow_scale.value.set(logicalWidth / Math.max(logicalHeight, 1) * GLOW_FALLOFF_SCALE, GLOW_FALLOFF_SCALE)
     glowUniforms.u_voice_glow.value.copy(glowUniforms.u_voice_color.value).multiplyScalar(voiceLevel * 0.45)
     glowUniforms.u_on_air_glow.value.copy(glowUniforms.u_on_air_color.value).multiplyScalar(onAirLevel)
+      .addScaledVector(crossfadeColorRef.current, crossfadeLevel)
     const panelGlowMix = Math.min(1, Math.max(0, onAirLevel)) * 0.85
     const onAirTint = glowUniforms.u_on_air_color.value
     glowUniforms.u_panel_glow.value.set(

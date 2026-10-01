@@ -7,6 +7,7 @@ const STREAM_CANPLAY_TIMEOUT_MS = 20000
 const SEEK_METADATA_TIMEOUT_MS = 8000
 const SOURCE_RESOLVE_TIMEOUT_MS = 10000
 const CACHED_SWAP_FADE_MS = 120
+const EQUAL_POWER_STEPS = 16
 const CACHED_SWAP_SEEK_LEAD_S = 0.03
 const STREAM_RETRY_DELAY_MS = 2000
 const STREAM_RETRY_LIMIT = 90
@@ -310,11 +311,22 @@ export class AudioEngine {
     }
   }
 
-  _rampGain(gainNode, from, to, durationSec) {
+  _rampGain(gainNode, from, to, durationSec, { delaySec = 0, equalPower = false } = {}) {
     const now = this.context.currentTime
-    gainNode.gain.cancelScheduledValues(now)
-    gainNode.gain.setValueAtTime(from, now)
-    gainNode.gain.linearRampToValueAtTime(to, now + durationSec)
+    const param = gainNode.gain
+    const start = now + Math.max(0, delaySec)
+    param.cancelScheduledValues(now)
+    param.setValueAtTime(from, now)
+    if (start > now) param.setValueAtTime(from, start)
+    if (!equalPower || durationSec <= 0) {
+      param.linearRampToValueAtTime(to, start + durationSec)
+      return
+    }
+    for (let i = 1; i <= EQUAL_POWER_STEPS; i++) {
+      const x = (i / EQUAL_POWER_STEPS) * Math.PI / 2
+      const shape = to > from ? Math.sin(x) : 1 - Math.cos(x)
+      param.linearRampToValueAtTime(from + (to - from) * shape, start + durationSec * i / EQUAL_POWER_STEPS)
+    }
   }
 
   _enforceActiveDevice(operation = 'operation') {
@@ -1002,7 +1014,14 @@ export class AudioEngine {
       startFromEnd = metadataDurationMs - crossfadeHint.optimal_start_ms
       duration = crossfadeHint.duration_ms
     }
-    return { crossfadeHint, startFromEnd, duration }
+    const fade = {
+      outDelayMs: crossfadeHint?.fade_out_delay_ms || 0,
+      outMs: crossfadeHint?.fade_out_ms ?? duration,
+      inDelayMs: crossfadeHint?.fade_in_delay_ms || 0,
+      inMs: crossfadeHint?.fade_in_ms ?? duration,
+      equalPower: true
+    }
+    return { crossfadeHint, startFromEnd, duration, fade }
   }
 
   _holdOnCurrent() {
@@ -1096,7 +1115,7 @@ export class AudioEngine {
         return
       }
 
-      const { crossfadeHint, startFromEnd, duration } = this._crossfadePlan(currentTrack, metadataDurationMs)
+      const { crossfadeHint, startFromEnd, duration, fade } = this._crossfadePlan(currentTrack, metadataDurationMs)
       const currentTimeMs = element.currentTime * 1000
       const timeRemaining = metadataDurationMs - currentTimeMs
 
@@ -1120,6 +1139,7 @@ export class AudioEngine {
       }
 
       if (timeRemaining <= startFromEnd) {
+        const lateMs = Math.max(0, startFromEnd - timeRemaining)
         this._startAutoCrossfade(duration, {
           planned_start_from_end_ms: startFromEnd,
           planned_duration_ms: duration,
@@ -1127,7 +1147,7 @@ export class AudioEngine {
           actual_duration_ms: duration,
           used_backend_hint: !!crossfadeHint,
           backend_confidence: crossfadeHint?.confidence || null
-        })
+        }, { ...fade, outDelayMs: Math.max(0, fade.outDelayMs - lateMs) })
       }
     }
 
@@ -1153,7 +1173,7 @@ export class AudioEngine {
     this.timeUpdateElement.addEventListener('ended', this.endedHandler)
   }
 
-  _startAutoCrossfade(durationMs, info) {
+  _startAutoCrossfade(durationMs, info, fade = { outDelayMs: 0, outMs: durationMs, inDelayMs: 0, inMs: durationMs, equalPower: true }) {
     this.crossfadeScheduled = true
     const oldTrackId = this.currentTrackId
     const newTrackId = this.nextTrackId
@@ -1165,7 +1185,7 @@ export class AudioEngine {
       }
 
       logger.info(`[Audio] 🔀 AUTO-CROSSFADE: ${oldTrackId} -> ${newTrackId} (${durationMs}ms)`)
-      const playing = this._swapToNext(durationMs, true, 'natural')
+      const playing = this._swapToNext(durationMs, true, 'natural', fade)
 
       if (this.onCrossfadeStart) {
         this.onCrossfadeStart(oldTrackId, newTrackId, durationMs, info)
@@ -1483,12 +1503,16 @@ export class AudioEngine {
       const rampSec = this.vinylRapidDuration / 1000
 
       this._rampGain(slot.gain, slot.gain.gain.value, 0, rampSec)
+      this.pendingCleanups.forEach(({ slot: fading }) => {
+        if (fading.gain) this._rampGain(fading.gain, fading.gain.gain.value, 0, rampSec)
+      })
 
       this._vinylAnimate(element, 1.0, 0.1, this.vinylRapidDuration)
 
       if (this._pauseTimer) clearTimeout(this._pauseTimer)
       this._pauseTimer = setTimeout(() => {
         this._pauseTimer = null
+        this._flushPendingCleanups()
         this._markSelfPause(element)
         element.pause()
         element.playbackRate = 1.0
@@ -1681,7 +1705,7 @@ export class AudioEngine {
     this.pendingCleanups.push(entry)
   }
 
-  async _swapToNext(fadeTimeMs = 50, shouldPlay = true, transitionType = 'natural') {
+  async _swapToNext(fadeTimeMs = 50, shouldPlay = true, transitionType = 'natural', fade = null) {
     this._hold = null
     this._flushPendingCleanups()
     this._stopVinylWobble()
@@ -1689,14 +1713,17 @@ export class AudioEngine {
     const current = this.currentSlot
     const next = this.nextSlot
     const actualFadeTime = fadeTimeMs === 0 ? 0.015 : fadeTimeMs / 1000
+    const shape = fade || { outDelayMs: 0, outMs: actualFadeTime * 1000, inDelayMs: 0, inMs: actualFadeTime * 1000, equalPower: false }
+    const totalFadeTime = Math.max(shape.outDelayMs + shape.outMs, shape.inDelayMs + shape.inMs) / 1000
 
     if (this.onCrossfadeStateChange) {
-      this.onCrossfadeStateChange(true)
+      this.onCrossfadeStateChange(true, Math.round(totalFadeTime * 1000))
     }
 
     current.isFadingOut = true
     if (current.gain) {
-      this._rampGain(current.gain, current.gain.gain.value, 0, actualFadeTime)
+      this._rampGain(current.gain, current.gain.gain.value, 0, shape.outMs / 1000,
+        { delaySec: shape.outDelayMs / 1000, equalPower: shape.equalPower })
     }
 
     if (transitionType === 'user' && current.element && !current.element.paused) {
@@ -1709,13 +1736,14 @@ export class AudioEngine {
     this.nextTrackId = null
 
     this._setupAutoCrossfade()
-    this._scheduleSlotCleanup(current, actualFadeTime)
+    this._scheduleSlotCleanup(current, totalFadeTime)
 
     logger.info(`[Audio] 🔄 SWAPPED SLOTS: New Current is Slot ${this.currentSlot === this.slots.A ? 'A' : 'B'} (${this.currentTrackId?.slice(0, 8)})`)
 
     if (shouldPlay) {
       this._playIntent = true
-      this._rampGain(next.gain, 0, 1, actualFadeTime)
+      this._rampGain(next.gain, 0, 1, shape.inMs / 1000,
+        { delaySec: shape.inDelayMs / 1000, equalPower: shape.equalPower })
       if (transitionType === 'user') {
         next.element.playbackRate = 0.85
         this._vinylAnimate(next.element, 0.85, 1.0, actualFadeTime * 1000 * 0.5)

@@ -447,6 +447,9 @@ class Settings:
     TALK_PACE_SAVE_S: int = int(os.getenv("TALK_PACE_SAVE_S", "300"))
     TALK_INTRO_MIN_S: float = float(os.getenv("TALK_INTRO_MIN_S", "4"))
     TALK_ALIGNMENT_MIN: float = float(os.getenv("TALK_ALIGNMENT_MIN", "0.5"))
+    CROSSFADE_MIN_MS: int = int(os.getenv("CROSSFADE_MIN_MS", "1500"))
+    CROSSFADE_MAX_MS: int = int(os.getenv("CROSSFADE_MAX_MS", "5000"))
+    CROSSFADE_FLOOR_MS: int = int(os.getenv("CROSSFADE_FLOOR_MS", "800"))
     NEWS_REPORT_DEPTHS: dict = {
         name.strip(): (int(stories), int(summaries)) for name, stories, summaries in (
             entry.split(":") for entry in os.getenv(
