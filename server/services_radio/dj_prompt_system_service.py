@@ -6,15 +6,24 @@ VOICE_SCRIPT_ROLE = LLM_ANNOUNCE
 from config.settings import settings
 
 BRACKETED = re.compile(r"\[([^\]]*)\]")
+WORDS = re.compile(r"[a-z]+")
+STEM_CHARS = 4
+
+
+def _closest_engine_tag(text: str, allowed) -> str:
+    words = WORDS.findall(text.lower())
+    matches = [tag for tag in allowed
+               if all(any(word.startswith(part[:STEM_CHARS]) for word in words) for part in tag.split())]
+    return max(matches, key=len) if matches else ""
 
 
 def keep_engine_tags(script: str) -> str:
-    allowed = {tag.lower() for tag in settings.ENGINE_SOUND_TAGS} if settings.PARALANGUAGE_ENGINE_TAGS else set()
+    allowed = [tag.lower() for tag in settings.ENGINE_SOUND_TAGS] if settings.PARALANGUAGE_ENGINE_TAGS else []
+
     def engine_tag(match):
-        name = " ".join(match.group(1).split()).lower()
-        return f"[{name}]" if name in allowed else " "
-    kept = BRACKETED.sub(engine_tag, script)
-    return " ".join(kept.split())
+        closest = _closest_engine_tag(match.group(1), allowed)
+        return f"[{closest}]" if closest else " "
+    return " ".join(BRACKETED.sub(engine_tag, script).split())
 
 def gpt_error_handler(func):
     async def wrapper(*args, **kwargs):
