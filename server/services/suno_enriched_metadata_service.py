@@ -25,7 +25,8 @@ class DerivedTags(BaseModel):
 
     inspired_artist: Optional[str] = Field(
         default=None,
-        description="Artist explicitly referenced in style description"
+        description="The one real artist this track is modelled on (target artist, the request, the style, else the "
+                    "closest similar artist); never null"
     )
 
     mood_keywords: List[str] = Field(
@@ -150,9 +151,11 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
    - Include sub-genres that capture mood/style nuances
    - Examples: For dark electronic → ["Electronic", "Darkwave", "Electropop"]
 
-3. **inspired_artist**: Artist name if EXPLICITLY mentioned in style description
-   - Only include if style says "in the style of X" or "like X"
-   - Return null if no specific artist reference
+3. **inspired_artist**: The one real artist this track is modelled on. Never null.
+   - The Target Artist if given; otherwise the artist named in the Original User Request
+   - Otherwise the artist named or clearly imitated in the style description; names there are sometimes
+     misspelled on purpose (e.g. "Nirvna" for Nirvana): give the real name
+   - Otherwise the closest of your similar_artists
 
 4. **mood_keywords**: 3-6 descriptive mood tags from style/prompt
    - Pull from actual text: "dark", "energetic", "melancholic", "hypnotic"
@@ -176,7 +179,6 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
 
 **Important**:
 - Be concise but accurate
-- If Target Artist is present, inspired_artist should NOT be null
 - Use existing style/prompt text as primary source
 - Don't invent information not supported by the input
 - For minimal metadata, do your best with available information"""
