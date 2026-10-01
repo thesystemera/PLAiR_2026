@@ -117,8 +117,9 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
-- **Listener timeline roadmap** (`docs/LISTENER_TIMELINE.md`): search what the hosts said by meaning, fold the
-  other "already aired" lists in, then a "recently heard" view in the app.
+- **Listener timeline roadmap** (`docs/LISTENER_TIMELINE.md`): search what the hosts said by meaning, then fold
+  the other "already aired" lists in. The view in the app (Timeline toggle in the Radio header) was built 1 Oct and
+  has not been seen in a browser yet.
 - **After a server restart the queue and station are lost** (checked: the server keeps playback state in memory
   only, and the client does not send its station back). Offline mode covers the rest of the old "session resync"
   issue: the song and position are handed back, a server that is down shows the offline notice, and a reconnect

@@ -2,7 +2,7 @@ import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
-import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle } from 'lucide-react'
+import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle, History } from 'lucide-react'
 import { useRadioUI, uiState, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
@@ -10,6 +10,7 @@ import { api } from '../lib/api'
 import { useWebSocketEmit } from '../contexts/WebSocketContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { Conversation } from './Conversation'
+import { ListenerTimeline } from './ListenerTimeline'
 import { DJTextComposer } from './DJTextComposer'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
@@ -66,6 +67,7 @@ export function Radio() {
   const playerHeight = interfaceState.playerHeight
 
   const [messageFilter, setMessageFilter] = useState('all')
+  const [showTimeline, setShowTimeline] = useState(false)
   const [filterCounts, setFilterCounts] = useState({
     all: 0,
     interactive: 0,
@@ -157,7 +159,11 @@ export function Radio() {
              return (
                <button
                  key={filter}
-                 onClick={() => !isDisabled && setMessageFilter(filter)}
+                 onClick={() => {
+                   if (isDisabled) return
+                   setMessageFilter(filter)
+                   setShowTimeline(false)
+                 }}
                  disabled={isDisabled}
                  aria-label={`Show ${filter} messages`}
                  title={`Show ${filter} messages`}
@@ -165,7 +171,8 @@ export function Radio() {
                  style={
                    isDisabled
                      ? { backgroundColor: 'rgba(128, 128, 128, 0.1)', borderColor: 'rgba(128, 128, 128, 0.2)', color: 'rgba(128, 128, 128, 0.4)', cursor: 'not-allowed' }
-                     : messageFilter === filter ? getFilterAllActive() : getFilterInactive()
+                     : messageFilter === filter && !showTimeline ? getFilterAllActive()
+                       : showTimeline ? { ...getFilterInactive(), opacity: 0.45 } : getFilterInactive()
                  }
                >
                  {filter === 'all' && <LayoutGrid size={16} />}
@@ -177,6 +184,16 @@ export function Radio() {
                </button>
              )
            })}
+          <button
+            onClick={() => setShowTimeline(value => !value)}
+            aria-pressed={showTimeline}
+            aria-label="Timeline"
+            title={showTimeline ? 'Timeline on: back to the conversation' : 'Timeline: everything that aired for you'}
+            className="ui-press p-1.5 rounded transition-colors border ml-1"
+            style={showTimeline ? getFilterAllActive() : getFilterInactive()}
+          >
+            <History size={16} />
+          </button>
           {!isMobile && (
             <button
               onClick={toggleRadioInput}
@@ -212,12 +229,15 @@ export function Radio() {
             className={besideButton ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
             style={besideButton ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
           >
-            <Conversation
-              isOpen={true}
-              messageFilter={messageFilter}
-              onFilterCounts={handleFilterCounts}
-              shouldAutoScroll={isPanelActive}
-            />
+            {showTimeline && <ListenerTimeline />}
+            <div className={showTimeline ? 'hidden' : undefined}>
+              <Conversation
+                isOpen={true}
+                messageFilter={messageFilter}
+                onFilterCounts={handleFilterCounts}
+                shouldAutoScroll={isPanelActive && !showTimeline}
+              />
+            </div>
           </div>
         </Scroller>
       </div>

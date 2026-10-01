@@ -1,6 +1,6 @@
 # Listener timeline: what aired for this listener
 
-Written 30 Sep 2026. Status: phases 1 and 2 built and tested on a private backend (1 Oct). Phases 3-4 are open; the "recently heard" view in the app (phase 4) is on the to-do list once the rest is in place: the owner wants it as the at-a-glance check that the timeline is accurate.
+Written 30 Sep 2026. Status: phases 1 and 2 built and tested on a private backend (1 Oct). Phase 4, the view in the app, built 1 Oct (see "Phase 4 as built"). Phase 3 is open.
 
 ## The problem
 
@@ -106,6 +106,22 @@ guessing.
   calling `what_aired(id=...)` themselves in a turn.
 - This table is the base for phase 3's "what were you talking about five hours ago": a semantic source over
   `aired_talk` (the LifeSpan conversation-vector pattern) would let the hosts search it by meaning.
+
+## Phase 4 as built (1 Oct): the timeline in the app
+
+- A Timeline toggle (clock icon) in the Radio panel header, next to the message filters. On: the filters dim and
+  the conversation is replaced by `ListenerTimeline.jsx` (the conversation stays mounted underneath, so nothing
+  streaming is lost); tapping a filter goes back to the conversation.
+- It lists everything that aired for this listener in the last 24 hours (the most the timeline allows), newest
+  first: songs with played through / skipped / on air now, shoutouts, replies, reviews, segments and talk breaks,
+  chat replies and between-track talk. Talk and segment rows open to the full text that was said
+  (`GET /api/timeline/entry?id=aired:N`, the listener's own rows only; the id is a query parameter because the
+  request guard refuses `:` in paths).
+- `GET /api/timeline?hours=&limit=` is the same `listener_timeline.timeline()` read the hosts' `what_aired` uses,
+  so what the listener sees is what the hosts can point at. It refreshes every 30 s, on a track change and when a
+  DJ stream ends; offline it says it needs a connection.
+- Checked against the real database: entries, the full-text read, and another listener or a guest getting 404.
+  Not yet seen in a browser.
 
 ## Phases
 

@@ -1,13 +1,44 @@
-from fastapi import APIRouter, Depends
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config.settings import settings
 from database import get_db
+from services import listener_timeline
 from services_radio.conversation_service import get_conversation_history, save_conversation_to_database, save_temp_conversation
 from service_registry import services
 from routers.deps import get_session_info
 
 router = APIRouter()
+
+TIMELINE_MAX_ENTRIES = 150
+
+
+@router.get("/api/timeline")
+async def get_timeline_endpoint(session: dict = Depends(get_session_info), hours: float = 6, limit: int = 100):
+    user = session["user"]
+    minutes = max(1.0, min(hours * 60, float(settings.DJ_TIMELINE_MAX_MINUTES)))
+    span = listener_timeline.window(datetime.now(timezone.utc), from_minutes=minutes)
+    entries, not_shown = await listener_timeline.timeline(
+        user.id if user else None, session["session_id"], kinds=listener_timeline.TIMELINE_KINDS, span=span,
+        limit=max(1, min(limit, TIMELINE_MAX_ENTRIES)))
+    return {
+        "entries": [{"id": entry.id, "kind": entry.kind, "label": entry.label, "at": entry.at.isoformat(),
+                     "ended": entry.ended.isoformat(), "outcome": entry.outcome} for entry in entries],
+        "hours": round(minutes / 60, 2),
+        "not_shown": not_shown,
+    }
+
+
+@router.get("/api/timeline/entry")
+async def get_timeline_entry_endpoint(id: str, session: dict = Depends(get_session_info)):
+    user = session["user"]
+    detail = await listener_timeline.talk_detail(user.id if user else None, session["session_id"], id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return detail
 
 @router.get("/api/conversation")
 async def get_conversation_history_endpoint(

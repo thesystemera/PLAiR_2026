@@ -814,6 +814,28 @@ class API {
     })
   }
 
+  async getTimeline(hours = 6) {
+    return this._routeRequest('getTimeline', [hours], async () => {
+      const res = await this._fetch(`${API_BASE}/timeline?hours=${encodeURIComponent(hours)}`, {
+        method: 'GET',
+        headers: this.getHeaders(true)
+      })
+      if (!res.ok) throw new Error(`Failed to fetch the timeline: ${res.status}`)
+      return res.json()
+    })
+  }
+
+  async getTimelineEntry(entryId) {
+    return this._routeRequest('getTimelineEntry', [entryId], async () => {
+      const res = await this._fetch(`${API_BASE}/timeline/entry?id=${encodeURIComponent(entryId)}`, {
+        method: 'GET',
+        headers: this.getHeaders(true)
+      })
+      if (!res.ok) throw new Error(`Failed to fetch the timeline entry: ${res.status}`)
+      return res.json()
+    })
+  }
+
   async validateCache(autoCleanup = false) {
     return offlineBackend.validateCache(autoCleanup)
   }
