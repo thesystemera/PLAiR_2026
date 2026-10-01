@@ -74,6 +74,7 @@ class TTSStreamPlanner:
                 'type': kind,
                 'content': content,
                 'speaker': speaker,
+                'block_speaker': current_speaker,
                 'overlap': current_overlap,
                 'char_count': len(content),
                 'audio_process': mix
@@ -143,6 +144,29 @@ class TTSStreamPlanner:
 
         return final_content
 
+    @staticmethod
+    def _overlap_target(ordered_content: List[Dict], index: int):
+        host = ordered_content[index].get('block_speaker', ordered_content[index]['speaker'])
+        turn = []
+        for j in range(index - 1, -1, -1):
+            other = ordered_content[j]
+            if other['speaker'] == host:
+                if turn:
+                    break
+                continue
+            if other['type'] == 'sentence' and other['speaker'] != 'computer':
+                turn.append(other)
+        if not turn:
+            return None
+        back = ordered_content[index]['overlap']
+        for line in turn:
+            words = line['content'].split()
+            if back <= len(words):
+                kept = " ".join(words[:len(words) - back])
+                return line['char_start'] + len(kept) + (1 if kept and back else 0)
+            back -= len(words)
+        return turn[-1]['char_start']
+
     def create_stream_plan(self, ordered_content: List[Dict]) -> List[Dict]:
         stream_plan = []
         total_chars = 0
@@ -156,7 +180,12 @@ class TTSStreamPlanner:
         for i, segment in enumerate(ordered_content):
             if segment['overlap'] <= 0:
                 continue
-            window_start = segment['char_start'] - segment['overlap']
+            target = self._overlap_target(ordered_content, i)
+            if target is None:
+                segment['overlap'] = 0
+                continue
+            segment['overlap_target'] = target
+            window_start = target
             touched = []
             j = i - 1
             while j >= 0 and ordered_content[j]['char_end'] > window_start:

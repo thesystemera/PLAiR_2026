@@ -204,7 +204,9 @@ class IncrementalBlend:
         chars = segment.get('overlap', 0)
         if chars <= 0 or not self.timeline:
             return self.cursor
-        target = segment.get('char_start', 0) - chars
+        target = segment.get('overlap_target')
+        if target is None:
+            return self.cursor
         placed = sorted(self.timeline, key=lambda entry: entry['char_start'])
         before = [entry for entry in placed if entry['char_start'] <= target]
         if not before:
@@ -699,6 +701,7 @@ class TTSQueueManager:
                     'char_count': segment.get('char_count', 0),
                     'char_start': segment.get('char_start', 0),
                     'char_end': segment.get('char_end', 0),
+                    'overlap_target': segment.get('overlap_target'),
                     'audio_process': audio_process_mix
                 }
 
