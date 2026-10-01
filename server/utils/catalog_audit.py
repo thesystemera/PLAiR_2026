@@ -84,11 +84,9 @@ def audit(tracks: dict) -> dict:
             flag("video_search_terms at the top level instead of derived_tags", track)
         if not _parses(track.get("created_at")):
             flag("no usable created_at", track)
+        if params.get("video_search_terms"):
+            flag("video_search_terms in generation_params instead of derived_tags", track)
         artists = [a.lower() for a in log_service.track_artists(track)]
-        credited = (params.get("artist_name") or "").strip().lower()
-        inspired = (derived.get("inspired_artist") or "").strip().lower()
-        if not human and credited and inspired and credited != inspired:
-            flag("AI credit and inspired_artist disagree", track)
         if len(set(artists)) > 2:
             flag("three or more different artist names", track)
     return {"problems": problems, "shapes": shapes}
