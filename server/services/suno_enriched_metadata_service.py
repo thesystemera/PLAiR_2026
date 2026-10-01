@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from services import log_service
 from services.base_service import SingletonService
+from services.catalog_credit import ai_artist, is_ai_track, name_like
 from services.llm_router import LLM_BACKGROUND
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
 from config import settings
@@ -23,8 +24,7 @@ class DerivedTags(BaseModel):
         description="2-4 secondary genre tags for discoverability"
     )
 
-    inspired_artist: Optional[str] = Field(
-        default=None,
+    inspired_artist: str = Field(
         description="The one real artist this track is modelled on (target artist, the request, the style, else the "
                     "closest similar artist); never null"
     )
@@ -236,6 +236,11 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
 
             enriched["derived_tags"] = result
             enriched["derived_tags"]["enriched_at"] = datetime.now(timezone.utc).isoformat()
+            if is_ai_track(enriched) and not name_like(result.get("inspired_artist")):
+                artist, source = ai_artist({**enriched, "derived_tags": {**result, "inspired_artist": None}})
+                enriched["derived_tags"]["inspired_artist"] = artist
+                log_service.warning(f"Enrichment gave {metadata.get('id')} no inspired artist; "
+                                    f"using {artist!r} ({source})")
 
             log_service.success(f"Enriched: {metadata.get('id')} → {result['primary_genre']}")
 

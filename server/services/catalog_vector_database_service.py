@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Dict, Any
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
+from services.catalog_credit import search_artist_text
 
 
 VOCAL_WORD = re.compile(r"\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b", re.I)
@@ -110,8 +111,7 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         secondary_genres_text = ', '.join(secondary_genres) if isinstance(secondary_genres, list) else ""
         mood_keywords = derived_tags.get("mood_keywords") or []
         mood_text = ', '.join(mood_keywords) if isinstance(mood_keywords, list) else ""
-        human_artist = params.get("artist_name") if track.get("is_ai_generated") is False else None
-        primary_artist_text = human_artist or derived_tags.get("inspired_artist") or ""
+        primary_artist_text = search_artist_text(track)
         similar_artists = derived_tags.get("similar_artists") or []
         similar_artists_text = ', '.join(similar_artists) if isinstance(similar_artists, list) else ""
         style_text = params.get("style_canonical") or params.get("style") or ""
