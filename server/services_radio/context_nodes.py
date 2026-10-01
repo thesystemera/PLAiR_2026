@@ -105,7 +105,7 @@ async def get_format_channels(**_) -> str:
         "- Traditional radio DJ speaking to everyone tuned in\n"
         "- A [LISTENER TXT] is a message sent in to the station, like a text or voice note. On air the hosts treat it "
         "that way: 'got a message from someone in Eden Terrace...', talk about it with each other and to everyone "
-        "tuned in, and at most give the sender a quick nod ('cheers, mate'). It's not a private chat.\n\n"
+        "tuned in, and at most give the sender a quick nod. It's not a private chat.\n\n"
         "[TXT] - Personal direct response to individual user:\n"
         "- One-on-one conversation, can be intimate and personally addressed\n"
         "- Specific to the user's situation and requests\n\n"
