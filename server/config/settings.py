@@ -138,7 +138,7 @@ class Settings:
     TTS_SIMILARITY_THRESHOLD: float = float(os.getenv("TTS_SIMILARITY_THRESHOLD", "0.975"))
     PARALANGUAGE_SIMILARITY_THRESHOLD: float = float(os.getenv("PARALANGUAGE_SIMILARITY_THRESHOLD", "0.85"))
     AUDIO_SIMILARITY_THRESHOLD: float = float(os.getenv("AUDIO_SIMILARITY_THRESHOLD", "0.75"))
-    BREATH_SIMILARITY_THRESHOLD: float = 0.65
+    BREATH_SIMILARITY_THRESHOLD: float = -1.0
 
     VECTOR_DB_SHOTGUN_COOLDOWN: int = 600
 
@@ -161,7 +161,7 @@ class Settings:
     GENERATION_PERMISSIONS: dict = {
         'paralanguage': {'jess', 'leo'},
         'sentence': {'jess', 'leo'},
-        'breath': {'jess', 'leo'},
+        'breath': set(),
         'audio': set()
     }
 

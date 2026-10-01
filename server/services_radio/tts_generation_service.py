@@ -3,11 +3,9 @@ import aiofiles
 import aiofiles.os
 import uuid
 import os
-import io
 from pydub import AudioSegment
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3
-from mutagen.id3._frames import TIT2, TIT3
+from mutagen.flac import FLAC
+import numpy as np
 import re
 import time
 import itertools
@@ -60,10 +58,25 @@ PREPARE_INPUT = {
     'audio_embeddings': level_sound_effect,
 }
 
+CLIP_EXTENSION = '.flac'
+
 INVALID_TITLE_CHARS = re.compile(r'[*~\n\[\]@$%"&.!?]|N/A')
 
 def sanitize_clip_title(text: str) -> str:
     return re.sub(r'\s+', ' ', INVALID_TITLE_CHARS.sub(' ', text or '')).strip()[:200]
+
+def write_clip(path: str, pcm: bytes, sample_rate: int, title: str, description: Optional[str]):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    samples = np.frombuffer(pcm[:len(pcm) - len(pcm) % 2], dtype=np.int16)
+    sf.write(path, samples, sample_rate, format='FLAC', subtype='PCM_16')
+    audio = FLAC(path)
+    audio['title'] = title
+    if description:
+        audio['description'] = description
+    audio.save()
+
+def new_clip_path(directory: str) -> str:
+    return os.path.join(directory, f'{uuid.uuid4()}{CLIP_EXTENSION}')
 
 class PriorityLimiter:
     def __init__(self, capacity: int):
@@ -349,52 +362,10 @@ class TTSGenerationService:
             return None
         return bytes(pcm)
 
-    async def generate_local_tts(
-            self,
-            sentence: str,
-            voice_settings: dict,
-            priority: str = PRIORITY_HIGH,
-            owner: Optional[str] = None
-    ) -> Optional[bytes]:
-        pcm = await self.generate_pcm(sentence, voice_settings, priority, owner)
-        if pcm is None:
-            return None
-        return await asyncio.to_thread(self._pcm_to_mp3, pcm, settings.TTS_SAMPLE_RATE)
-
-    @staticmethod
-    def _pcm_to_mp3(pcm: bytes, sample_rate: int) -> bytes:
-        segment = AudioSegment(data=pcm[:len(pcm) - len(pcm) % 2], sample_width=2, frame_rate=sample_rate, channels=1)
-        buffer = io.BytesIO()
-        segment.export(buffer, format="mp3", bitrate="192k")
-        return buffer.getvalue()
-
-    def _tag_audio_sync(self, audio_path, tag, audio_description):
+    async def save_generated_clip(self, pcm: bytes, audio_path: str, tag: str, audio_description: Optional[str],
+                                  content_voice: str, embeddings_type: str):
         try:
-            audio = MP3(audio_path, ID3=ID3)
-            if audio.tags is None:
-                audio.add_tags()
-            if audio.tags is not None:
-                audio.tags.add(TIT2(encoding=3, text=tag))
-                if audio_description:
-                    audio.tags.add(TIT3(encoding=3, text=audio_description))
-            audio.save()
-            return True
-        except Exception as e:
-            log_service.error(f"Tagging failed: {e}")
-            return False
-
-    async def _save_audio_and_embedding(self, audio_path, audio_data, tag, audio_description, content_voice,
-                                        embeddings_type):
-        try:
-            directory = os.path.dirname(audio_path)
-            if not os.path.exists(directory):
-                os.makedirs(directory, exist_ok=True)
-
-            async with aiofiles.open(audio_path, 'wb') as f:
-                await f.write(audio_data)
-
-            await asyncio.to_thread(self._tag_audio_sync, audio_path, tag, audio_description)
-
+            await asyncio.to_thread(write_clip, audio_path, pcm, settings.TTS_SAMPLE_RATE, tag, audio_description)
             await asyncio.to_thread(
                 self.vector_db_service.save_embedding,
                 audio_path, tag, content_voice, embeddings_type
@@ -403,17 +374,7 @@ class TTSGenerationService:
                 f"Clip cache: saved {embeddings_type.removesuffix('_embeddings')} clip for {content_voice} "
                 f"'{tag[:40]}' ({os.path.basename(audio_path)})", "tts_generation")
         except Exception as e:
-            log_service.error(f"Background save failed: {e} {traceback.format_exc()}")
-
-    async def save_generated_clip(self, pcm: bytes, audio_path: str, tag: str, audio_description: Optional[str],
-                                  content_voice: str, embeddings_type: str):
-        try:
-            audio_data = await asyncio.to_thread(self._pcm_to_mp3, pcm, settings.TTS_SAMPLE_RATE)
-        except Exception as e:
-            log_service.error(f"Background MP3 encode failed for {audio_path}: {e}")
-            return
-        await self._save_audio_and_embedding(audio_path, audio_data, tag, audio_description, content_voice,
-                                             embeddings_type)
+            log_service.error(f"Background save failed for {audio_path}: {e} {traceback.format_exc()}")
 
     def clip_directory(self, embeddings_type: str, content_voice: str) -> Optional[str]:
         if embeddings_type == 'tts_embeddings':
@@ -462,14 +423,13 @@ class TTSGenerationService:
                 description = await self.generation_description(tag, embeddings_type, content_voice)
                 if not description:
                     return
-                audio_data = await self.generate_local_tts(description, voice_settings, priority=PRIORITY_LOW)
-                if not audio_data:
+                pcm = await self.generate_pcm(description, voice_settings, priority=PRIORITY_LOW)
+                if pcm is None:
                     return
                 title = sanitize_clip_title(tag) if embeddings_type == 'breath_embeddings' else tag
-                directory = self.clip_directory(embeddings_type, content_voice)
-                audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
-                await self._save_audio_and_embedding(
-                    audio_path, audio_data, title or 'breath', description, content_voice, embeddings_type
+                audio_path = new_clip_path(self.clip_directory(embeddings_type, content_voice))
+                await self.save_generated_clip(
+                    pcm, audio_path, title or 'breath', description, content_voice, embeddings_type
                 )
                 log_service.detail(f"Background refresh: cached new {embeddings_type} clip for '{tag[:40]}'", "tts_generation")
         except Exception as e:
@@ -677,7 +637,7 @@ class TTSGenerationService:
             raw_audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank, motion
         )
 
-        audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
+        audio_path = new_clip_path(directory)
         title = (sanitize_clip_title(tag) or 'breath') if embeddings_type == 'breath_embeddings' else tag
         if embeddings_type == 'paralanguage_embeddings':
             self.paralanguage_emoji.note_new_title(title)

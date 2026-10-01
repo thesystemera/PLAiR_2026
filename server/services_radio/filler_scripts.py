@@ -24,7 +24,7 @@ NEAR_BEST = 0.01
 AVOID_EXAMPLES = 8
 SHOW_STYLE_NODES = ['core_dj_identity', 'format_roles_detailed', 'format_tone', 'format_performance_tags_guide',
                     'format_performance_tag_examples', 'format_dialogue_examples']
-PERFORMANCE_TAGS = re.compile(r'~[^~]*~|%[^%]*%|@\d+@|&[\d.]+&|\[[A-Z /]+]')
+PERFORMANCE_TAGS = re.compile(r'~[^~]*~|%[^%]*%|@[WwCc]?[\d.]+@|&[\d.]+&|\[[A-Z /]+]')
 
 
 def plain_talk(text: str) -> str:

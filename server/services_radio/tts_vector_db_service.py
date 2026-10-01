@@ -191,7 +191,7 @@ class VectorDBService:
         except OSError:
             pass
         removed = 0
-        for clip in settings.PARALANGUAGE_AUDIO_DIR.rglob("*.mp3"):
+        for clip in settings.PARALANGUAGE_AUDIO_DIR.rglob("*.flac"):
             clip.unlink(missing_ok=True)
             removed += 1
         conn = self._get_connection()

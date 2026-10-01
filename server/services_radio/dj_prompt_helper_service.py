@@ -21,7 +21,7 @@ STARTER_PARALANGUAGE_TAGS = (
     "grins", "yawns", "sniffs", "inhales sharply", "cracks up",
 )
 _CLEAN_PARALANGUAGE = re.compile(r"[a-z][a-z' -]{1,38}[a-z]")
-WELL_FORMED_TAG = re.compile(r"(~[^~*$%@&\[\]\n]+~|%[^~*$%@&\[\]\n]+%|\$[^~*$%@&\[\]\n]+\$|@\d+@|&\d+(?:\.\d+)?&)")
+WELL_FORMED_TAG = re.compile(r"(~[^~*$%@&\[\]\n]+~|%[^~*$%@&\[\]\n]+%|\$[^~*$%@&\[\]\n]+\$|@[WwCc]?\d+(?:\.\d+)?@|&\d+(?:\.\d+)?&)")
 
 
 def is_clean_paralanguage(tag: str) -> bool:
@@ -180,14 +180,14 @@ INTERNAL_MARKER_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE)
 
 
-NEGATIVE_TIME_SHIFT = re.compile(r'@-\d+@')
+NEGATIVE_TIME_SHIFT = re.compile(r'@[WwCc]?-\d+(?:\.\d+)?@|@-[WwCc]?\d+(?:\.\d+)?@')
 
 
 def correct_negative_time_shifts(text: str) -> str:
     shifts = NEGATIVE_TIME_SHIFT.findall(text)
     if shifts:
-        log_service.filter(f"[TAG CLEANUP] Corrected {len(shifts)} negative time-shift tag(s) ({shifts[0]}) to @0@")
-    return NEGATIVE_TIME_SHIFT.sub('@0@', text)
+        log_service.filter(f"[TAG CLEANUP] Corrected {len(shifts)} negative time-shift tag(s) ({shifts[0]}) to @W0@")
+    return NEGATIVE_TIME_SHIFT.sub('@W0@', text)
 
 
 def normalize_internal_marker(text: str) -> str:
@@ -314,7 +314,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     return text
 
-MARKUP_TOKEN_PATTERN = re.compile(r'~[^~]+~|%[^%]+%|\$[^$\s]+\$|@\d+@|&\d+(?:\.\d+)?&')
+MARKUP_TOKEN_PATTERN = re.compile(r'~[^~]+~|%[^%]+%|\$[^$\s]+\$|@[WwCc]?\d+(?:\.\d+)?@|&\d+(?:\.\d+)?&')
 PROXIMITY_TAG_PATTERN = re.compile(r'&\d+(?:\.\d+)?&')
 SPEAKER_TAG_PATTERN = re.compile(r'\[(LEO|JESS)]')
 

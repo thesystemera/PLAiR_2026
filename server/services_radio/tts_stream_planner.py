@@ -3,6 +3,7 @@ from typing import List, Dict
 from services import log_service
 
 CHANNEL_TAG = re.compile(r'(\[BROADCAST]|\[TXT])')
+TIME_SHIFT = re.compile(r'@([WwCc]?)(\d+(?:\.\d+)?)@')
 
 
 def spoken_text(text: str) -> str:
@@ -34,13 +35,14 @@ class TTSStreamPlanner:
         log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
 
         parts = re.split(
-            r'(~[^~]+~|%[^%]+%|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
+            r'(~[^~]+~|%[^%]+%|\[LEO]|\[JESS]|\$[^$]+\$|@[WwCc]?\d+(?:\.\d+)?@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
             text
         )
 
         ordered_content = []
         current_sentence = ""
         current_overlap = 0
+        current_overlap_unit = 'w'
         pending_proximity = None
         proximity = {}
 
@@ -48,22 +50,23 @@ class TTSStreamPlanner:
             overlap = 0
             audio_process = None
             content = part
+            unit = 'w'
             if part.startswith('@') and part.endswith('@'):
-                try:
-                    overlap = int(part[1:-1])
+                shift = TIME_SHIFT.fullmatch(part)
+                if shift:
+                    unit = 'c' if shift.group(1).lower() == 'c' else 'w'
+                    overlap = float(shift.group(2))
                     content = ""
-                except ValueError:
-                    pass
             elif part.startswith('&') and part.endswith('&'):
                 try:
                     audio_process = float(part[1:-1])
                     content = ""
                 except ValueError:
                     pass
-            return content.strip(), overlap, audio_process
+            return content.strip(), overlap, audio_process, unit
 
         def emit(kind, content, speaker):
-            nonlocal current_overlap, pending_proximity
+            nonlocal current_overlap, current_overlap_unit, pending_proximity
             if pending_proximity is not None:
                 mix = pending_proximity
             else:
@@ -76,10 +79,12 @@ class TTSStreamPlanner:
                 'speaker': speaker,
                 'block_speaker': current_speaker,
                 'overlap': current_overlap,
+                'overlap_unit': current_overlap_unit,
                 'char_count': len(content),
                 'audio_process': mix
             })
             current_overlap = 0
+            current_overlap_unit = 'w'
             pending_proximity = None
 
         def flush_sentence():
@@ -89,7 +94,7 @@ class TTSStreamPlanner:
                 current_sentence = ""
 
         for part in parts:
-            content, overlap, audio_process = process_content(part)
+            content, overlap, audio_process, unit = process_content(part)
 
             if audio_process is not None:
                 pending_proximity = audio_process
@@ -97,6 +102,7 @@ class TTSStreamPlanner:
 
             if overlap > 0:
                 current_overlap = overlap
+                current_overlap_unit = unit
                 continue
 
             if part in ['[JESS]', '[LEO]']:
@@ -158,7 +164,15 @@ class TTSStreamPlanner:
                 turn.append(other)
         if not turn:
             return None
-        back = ordered_content[index]['overlap']
+        segment = ordered_content[index]
+        if segment.get('overlap_unit') == 'c':
+            back = int(round(segment['overlap']))
+            for line in turn:
+                if back <= len(line['content']):
+                    return line['char_start'] + len(line['content']) - back
+                back -= len(line['content']) + 1
+            return turn[-1]['char_start']
+        back = int(round(segment['overlap']))
         for line in turn:
             words = line['content'].split()
             if back <= len(words):

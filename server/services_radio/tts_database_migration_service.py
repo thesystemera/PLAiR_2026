@@ -2,11 +2,30 @@ import os
 import psycopg2
 import numpy as np
 from mutagen._util import MutagenError
+from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from typing import List, Tuple, Dict, Optional
 from models_global import get_sentence_encoder
 from config.settings import settings
 from services import log_service
+
+CLIP_EXTENSIONS = {
+    "tts_embeddings": ".flac",
+    "paralanguage_embeddings": ".flac",
+    "audio_embeddings": ".mp3",
+    "breath_embeddings": ".flac",
+}
+
+
+def read_clip_tags(file_path: str) -> Tuple[Optional[str], Optional[str]]:
+    if file_path.endswith('.flac'):
+        tags = FLAC(file_path)
+        title, description = tags.get('title'), tags.get('description')
+    else:
+        tags = ID3(file_path)
+        title, description = tags.getall('TIT2'), tags.getall('TIT3')
+    return (str(title[0]).strip() if title else None,
+            str(description[0]).strip() if description else None)
 
 
 class TTSDatabaseMigrationService:
@@ -29,13 +48,9 @@ class TTSDatabaseMigrationService:
 
     def extract_title_subtitle(self, file_path: str) -> Tuple[Optional[str], Optional[str]]:
         try:
-            audio = ID3(file_path)
-
-            title_frame = audio.getall('TIT2')
-            if not title_frame:
+            title, subtitle = read_clip_tags(file_path)
+            if title is None:
                 return None, None
-
-            title = str(title_frame[0]).strip()
 
             invalid_chars = {'*', '~', '\n', '[', ']', '🎵', '@', '$', '%', 'N/A', '"'}
             if any(char in title for char in invalid_chars):
@@ -48,17 +63,12 @@ class TTSDatabaseMigrationService:
             if title.startswith('"') or title.endswith('"'):
                 return None, None
 
-            subtitle_frame = audio.getall('TIT3')
-            if subtitle_frame:
-                subtitle = str(subtitle_frame[0]).strip()
-                if 'N/A' in subtitle:
-                    return None, None
-                return title, subtitle
-
-            return title, None
+            if subtitle is not None and 'N/A' in subtitle:
+                return None, None
+            return title, subtitle
 
         except (MutagenError, KeyError, Exception) as e:
-            log_service.debug(f"Failed to extract ID3 tags from {file_path}: {e}")
+            log_service.debug(f"Failed to read clip tags from {file_path}: {e}")
             return None, None
 
     def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
@@ -97,7 +107,7 @@ class TTSDatabaseMigrationService:
             log_service.error(f"Error retrieving existing entries from {table_name}: {e}")
             return {}
 
-    def remove_deleted_files_from_db(self, table_name: str, directory: str) -> int:
+    def remove_deleted_files_from_db(self, table_name: str, directory: str, extension: str) -> int:
         """Remove DB entries for files that no longer exist on disk."""
         try:
             conn = self._get_connection()
@@ -109,7 +119,7 @@ class TTSDatabaseMigrationService:
             existing_files = set()
             for _root, _, files in os.walk(directory):
                 for file in files:
-                    if file.endswith('.mp3'):
+                    if file.endswith(extension):
                         existing_files.add(file)
 
             files_to_remove = db_files - existing_files
@@ -134,6 +144,7 @@ class TTSDatabaseMigrationService:
         directory: str,
         voice_name: str,
         existing_entries: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]],
+        extension: str,
         validate_only: bool = True
     ) -> List[Tuple[str, str, str]]:
 
@@ -149,7 +160,7 @@ class TTSDatabaseMigrationService:
 
         for root, _, files in os.walk(directory):
             for filename in files:
-                if not filename.endswith(".mp3"):
+                if not filename.endswith(extension):
                     continue
 
                 file_count += 1
@@ -242,6 +253,7 @@ class TTSDatabaseMigrationService:
             return 0, 0
 
         directory = self.directory_map[db_type]
+        extension = CLIP_EXTENSIONS[db_type]
 
         log_service.tts_vector_db(f"\n🔨 Migrating {db_type}")
         log_service.tts_vector_db(f"  Directory: {directory}")
@@ -249,7 +261,7 @@ class TTSDatabaseMigrationService:
         os.makedirs(directory, exist_ok=True)
 
         log_service.tts_vector_db("\n📝 Step 1: Cleaning up deleted files...")
-        cleaned = self.remove_deleted_files_from_db(db_type, str(directory))
+        cleaned = self.remove_deleted_files_from_db(db_type, str(directory), extension)
 
         log_service.tts_vector_db("\n📝 Step 2: Scanning audio files...")
         existing_entries = {} if force_rebuild else self.get_existing_entries(db_type)
@@ -261,11 +273,11 @@ class TTSDatabaseMigrationService:
             log_service.tts_vector_db(f"  Found voice directories: {', '.join(subdirs)}")
             for voice_name in subdirs:
                 voice_dir = os.path.join(directory, voice_name)
-                voice_data = self.process_directory(voice_dir, voice_name, existing_entries, validate_only)
+                voice_data = self.process_directory(voice_dir, voice_name, existing_entries, extension, validate_only)
                 all_data.extend(voice_data)
         else:
             log_service.tts_vector_db("  No subdirectories, processing as single voice")
-            all_data = self.process_directory(str(directory), "default", existing_entries, validate_only)
+            all_data = self.process_directory(str(directory), "default", existing_entries, extension, validate_only)
 
         if all_data:
             log_service.tts_vector_db(f"\n🚀 Step 3: Generating embeddings for {len(all_data)} entries...")

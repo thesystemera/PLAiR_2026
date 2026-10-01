@@ -241,13 +241,17 @@ async def get_format_performance_tags(**_) -> str:
 
         "5. TIME-SHIFT TAGS: @X@\n"
         "   Purpose: Come in over the end of your co-host's turn\n"
-        "   Calculation: X = how many WORDS before your co-host stops talking you come in. "
-        "@0@ = right as they finish (no overlap); never negative, never more than the words they said\n\n"
+        "   Calculation: @W2@ = come in 2 WORDS before your co-host stops talking. Most hand-offs come in a "
+        "word or two early (@W1@ or @W2@), so you bounce over each other naturally. Now and then, for a snappy "
+        "jump right on the tail of their last word, count CHARACTERS instead: @C4@ = 4 characters before they "
+        "stop (keep it under 10). People never wait for silence: always come in at least a little early. "
+        "@W0@ = a clean stop with no overlap, only for a deliberate beat; never negative, never more than they "
+        "said\n\n"
 
         "   KEY POINTS:\n"
         "   1. Wordless reactions (laughs, gasps, 'mm') can come in EARLY (bigger @X@); a line that comments on "
         "what your co-host said comes in after they've said it\n"
-        "   1b. Full sentences come in over the last few words only: @X@ up to 3\n"
+        "   1b. Full sentences come in over the last few words only: @W3@ at most\n"
         "   2. EVERY significant phrase should trigger reaction\n"
         "   3. Use multiple reactions per turn\n"
         "   4. Both hosts must stay engaged CONSTANTLY\n"
@@ -309,13 +313,13 @@ async def get_format_dialogue_examples(**_) -> str:
     return (
         "DYNAMIC DIALOGUE EXAMPLE:\n"
         f"[BROADCAST] {host_1} &0.2& Holy shit, you will not BELIEVE what I just found out about the scene! (14 words)\n"
-        f"{host_2} @12@ &0.3& ~gasps in surprise~ @11@ &0.2& %pen dropping% @8@ &0.1& What?! @2@ &0.2& Another scandal?!\n"
-        f"{host_1} @1@ &0.2& You know those underground raves everyone's been talking about? (10 words)\n"
-        f"{host_2} @8@ &0.3& ~leans forward~ @7@ &0.2& %chair squeaking% @3@ &0.1& The warehouse ones?! @0@ &0.2& Don't tell me-\n"
-        f"{host_1} @1@ &0.1& Turns out they're secretly funded by corporate money! (8 words)\n"
-        f"{host_2} @6@ &0.3& ~inhales sharply~ @5@ &0.2& %mic drop% @2@ &0.1& NO! @1@ &0.2& The suits?! @0@ &0.3& Show me the proof!\n"
-        f"{host_1} @1@ &0.2& ~laughs heartily~ &0.1& %chair rolling slightly% Check these documents!\n"
-        f"{host_2} @3@ &0.3& ~excited~ @2@ &0.2& %taps microphone% @1@ &0.1& This is HUGE! @0@ &0.2& We're gonna blow the lid off!"
+        f"{host_2} @W12@ &0.3& ~gasps in surprise~ @W11@ &0.2& %pen dropping% @W8@ &0.1& What?! @W2@ &0.2& Another scandal?!\n"
+        f"{host_1} @C4@ &0.2& You know those underground raves everyone's been talking about? (10 words)\n"
+        f"{host_2} @W8@ &0.3& ~leans forward~ @W7@ &0.2& %chair squeaking% @W3@ &0.1& The warehouse ones?! @W1@ &0.2& Don't tell me-\n"
+        f"{host_1} @C3@ &0.1& Turns out they're secretly funded by corporate money! (8 words)\n"
+        f"{host_2} @W6@ &0.3& ~inhales sharply~ @W5@ &0.2& %mic drop% @W2@ &0.1& NO! @W1@ &0.2& The suits?! @C3@ &0.3& Show me the proof!\n"
+        f"{host_1} @W1@ &0.2& ~laughs heartily~ &0.1& %chair rolling slightly% Check these documents!\n"
+        f"{host_2} @W3@ &0.3& ~excited~ @W2@ &0.2& %taps microphone% @W1@ &0.1& This is HUGE! @C4@ &0.2& We're gonna blow the lid off!"
     )
 
 @node_registry.register(
