@@ -241,7 +241,8 @@ async def get_format_performance_tags(**_) -> str:
 
         "5. TIME-SHIFT TAGS: @X@\n"
         "   Purpose: Position overlapping elements within previous speech\n"
-        "   Calculation: X = (total chars in previous line) - (chars from end where overlap starts)\n\n"
+        "   Calculation: X = how many characters before the END of the previous line you come in "
+        "(bigger X = earlier)\n\n"
 
         "   KEY POINTS:\n"
         "   1. React EARLY in co-host's sentences (larger @X@ numbers)\n"
