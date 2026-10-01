@@ -245,7 +245,8 @@ async def get_format_performance_tags(**_) -> str:
         "@0@ = right as they finish (no overlap); never negative, never more than the words they said\n\n"
 
         "   KEY POINTS:\n"
-        "   1. React EARLY in co-host's sentences (larger @X@ numbers): paralanguage, 'yeah', 'what?!'\n"
+        "   1. Wordless reactions (laughs, gasps, 'mm') can come in EARLY (bigger @X@); a line that comments on "
+        "what your co-host said comes in after they've said it\n"
         "   1b. Full sentences come in over the last few words only: @X@ up to 3\n"
         "   2. EVERY significant phrase should trigger reaction\n"
         "   3. Use multiple reactions per turn\n"
@@ -308,11 +309,11 @@ async def get_format_dialogue_examples(**_) -> str:
     return (
         "DYNAMIC DIALOGUE EXAMPLE:\n"
         f"[BROADCAST] {host_1} &0.2& Holy shit, you will not BELIEVE what I just found out about the scene! (14 words)\n"
-        f"{host_2} @12@ &0.3& ~gasps in surprise~ @11@ &0.2& %pen dropping% @9@ &0.1& What?! @2@ &0.2& Another scandal?!\n"
+        f"{host_2} @12@ &0.3& ~gasps in surprise~ @11@ &0.2& %pen dropping% @8@ &0.1& What?! @2@ &0.2& Another scandal?!\n"
         f"{host_1} @1@ &0.2& You know those underground raves everyone's been talking about? (10 words)\n"
         f"{host_2} @8@ &0.3& ~leans forward~ @7@ &0.2& %chair squeaking% @3@ &0.1& The warehouse ones?! @0@ &0.2& Don't tell me-\n"
         f"{host_1} @1@ &0.1& Turns out they're secretly funded by corporate money! (8 words)\n"
-        f"{host_2} @6@ &0.3& ~inhales sharply~ @5@ &0.2& %mic drop% @4@ &0.1& NO! @3@ &0.2& The suits?! @1@ &0.3& Show me the proof!\n"
+        f"{host_2} @6@ &0.3& ~inhales sharply~ @5@ &0.2& %mic drop% @2@ &0.1& NO! @1@ &0.2& The suits?! @0@ &0.3& Show me the proof!\n"
         f"{host_1} @1@ &0.2& ~laughs heartily~ &0.1& %chair rolling slightly% Check these documents!\n"
         f"{host_2} @3@ &0.3& ~excited~ @2@ &0.2& %taps microphone% @1@ &0.1& This is HUGE! @0@ &0.2& We're gonna blow the lid off!"
     )
