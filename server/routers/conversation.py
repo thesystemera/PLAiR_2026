@@ -17,12 +17,14 @@ TIMELINE_MAX_ENTRIES = 150
 
 
 @router.get("/api/timeline")
-async def get_timeline_endpoint(session: dict = Depends(get_session_info), hours: float = 6, limit: int = 100):
+async def get_timeline_endpoint(session: dict = Depends(get_session_info), hours: float = 6, limit: int = 100,
+                                kinds: Optional[str] = None):
     user = session["user"]
     minutes = max(1.0, min(hours * 60, float(settings.DJ_TIMELINE_MAX_MINUTES)))
     span = listener_timeline.window(datetime.now(timezone.utc), from_minutes=minutes)
+    wanted = [kind for kind in (kinds or "").split(",") if kind in listener_timeline.TIMELINE_KINDS]
     entries, not_shown = await listener_timeline.timeline(
-        user.id if user else None, session["session_id"], kinds=listener_timeline.TIMELINE_KINDS, span=span,
+        user.id if user else None, session["session_id"], kinds=wanted or listener_timeline.TIMELINE_KINDS, span=span,
         limit=max(1, min(limit, TIMELINE_MAX_ENTRIES)))
     return {
         "entries": [{"id": entry.id, "kind": entry.kind, "label": entry.label, "at": entry.at.isoformat(),

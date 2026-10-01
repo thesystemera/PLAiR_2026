@@ -10,7 +10,7 @@ import { api } from '../lib/api'
 import { useWebSocketEmit } from '../contexts/WebSocketContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { Conversation } from './Conversation'
-import { ListenerTimeline } from './ListenerTimeline'
+import { ListenerTimeline, TimelineFilters } from './ListenerTimeline'
 import { DJTextComposer } from './DJTextComposer'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
@@ -68,6 +68,7 @@ export function Radio() {
 
   const [messageFilter, setMessageFilter] = useState('all')
   const [showTimeline, setShowTimeline] = useState(false)
+  const [timelineFilter, setTimelineFilter] = useState('all')
   const [filterCounts, setFilterCounts] = useState({
     all: 0,
     interactive: 0,
@@ -153,17 +154,14 @@ export function Radio() {
 
       <PanelHeader title={<h2 className="text-lg md:text-xl font-bold">Radio</h2>}>
         <div className="flex flex-wrap justify-end gap-1 min-w-0 ml-3">
-           {['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
+           {showTimeline && <TimelineFilters value={timelineFilter} onChange={setTimelineFilter} />}
+           {!showTimeline && ['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
              const hasConversations = filterCounts[filter] > 0
              const isDisabled = !hasConversations
              return (
                <button
                  key={filter}
-                 onClick={() => {
-                   if (isDisabled) return
-                   setMessageFilter(filter)
-                   setShowTimeline(false)
-                 }}
+                 onClick={() => !isDisabled && setMessageFilter(filter)}
                  disabled={isDisabled}
                  aria-label={`Show ${filter} messages`}
                  title={`Show ${filter} messages`}
@@ -171,8 +169,7 @@ export function Radio() {
                  style={
                    isDisabled
                      ? { backgroundColor: 'rgba(128, 128, 128, 0.1)', borderColor: 'rgba(128, 128, 128, 0.2)', color: 'rgba(128, 128, 128, 0.4)', cursor: 'not-allowed' }
-                     : messageFilter === filter && !showTimeline ? getFilterAllActive()
-                       : showTimeline ? { ...getFilterInactive(), opacity: 0.45 } : getFilterInactive()
+                     : messageFilter === filter ? getFilterAllActive() : getFilterInactive()
                  }
                >
                  {filter === 'all' && <LayoutGrid size={16} />}
@@ -229,7 +226,7 @@ export function Radio() {
             className={besideButton ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
             style={besideButton ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
           >
-            {showTimeline && <ListenerTimeline />}
+            {showTimeline && <ListenerTimeline key={timelineFilter} kind={timelineFilter} />}
             <div className={showTimeline ? 'hidden' : undefined}>
               <Conversation
                 isOpen={true}

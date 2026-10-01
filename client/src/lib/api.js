@@ -814,9 +814,10 @@ class API {
     })
   }
 
-  async getTimeline(hours = 6) {
-    return this._routeRequest('getTimeline', [hours], async () => {
-      const res = await this._fetch(`${API_BASE}/timeline?hours=${encodeURIComponent(hours)}`, {
+  async getTimeline(hours = 6, kinds = null, limit = 150) {
+    return this._routeRequest('getTimeline', [hours, kinds, limit], async () => {
+      const kindParam = kinds?.length ? `&kinds=${encodeURIComponent(kinds.join(','))}` : ''
+      const res = await this._fetch(`${API_BASE}/timeline?hours=${encodeURIComponent(hours)}&limit=${limit}${kindParam}`, {
         method: 'GET',
         headers: this.getHeaders(true)
       })

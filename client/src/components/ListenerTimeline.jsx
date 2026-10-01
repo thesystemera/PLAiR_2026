@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
+import { LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
+import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { Expandable, ExpandChevron } from './Motion'
 
 const TIMELINE_HOURS = 24
@@ -11,12 +12,35 @@ const REFRESH_MS = 30000
 const DETAIL_PREFIX = 'aired:'
 
 const KIND_META = {
-  track: { icon: Music, name: 'Song', color: 'text-emerald-400' },
-  shoutout: { icon: Megaphone, name: 'Shoutout', color: 'text-pink-400' },
-  reply: { icon: Reply, name: 'Reply', color: 'text-pink-300' },
-  review: { icon: Star, name: 'Review', color: 'text-amber-400' },
-  segment: { icon: Newspaper, name: 'Segment', color: 'text-sky-400' },
-  talk: { icon: MessageCircle, name: 'DJs', color: 'text-violet-400' },
+  track: { icon: Music, name: 'Song', plural: 'songs', color: 'text-emerald-400' },
+  shoutout: { icon: Megaphone, name: 'Shoutout', plural: 'shoutouts', color: 'text-pink-400' },
+  reply: { icon: Reply, name: 'Reply', plural: 'replies', color: 'text-pink-300' },
+  review: { icon: Star, name: 'Review', plural: 'reviews', color: 'text-amber-400' },
+  segment: { icon: Newspaper, name: 'Segment', plural: 'segments and talk breaks', color: 'text-sky-400' },
+  talk: { icon: MessageCircle, name: 'DJ talk', plural: 'DJ chat and between-track talk', color: 'text-violet-400' },
+}
+
+const FILTERS = ['all', ...Object.keys(KIND_META)]
+
+export function TimelineFilters({ value, onChange }) {
+  const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
+  return FILTERS.map(kind => {
+    const Icon = kind === 'all' ? LayoutGrid : KIND_META[kind].icon
+    const label = kind === 'all' ? 'everything' : KIND_META[kind].plural
+    return (
+      <button
+        key={kind}
+        onClick={() => onChange(kind)}
+        aria-pressed={value === kind}
+        aria-label={`Timeline: ${label}`}
+        title={`Timeline: ${label}`}
+        className="ui-press p-1.5 rounded transition-colors border"
+        style={value === kind ? getFilterAllActive() : getFilterInactive()}
+      >
+        <Icon size={16} />
+      </button>
+    )
+  })
 }
 
 const OUTCOME_STYLE = {
@@ -80,7 +104,7 @@ const TimelineRow = memo(function TimelineRow({ entry }) {
   )
 })
 
-export function ListenerTimeline() {
+export function ListenerTimeline({ kind = 'all' }) {
   const { currentTrackId, offlineMode } = useUISelector(state => ({
     currentTrackId: state.engineState.currentTrack?.id ?? null,
     offlineMode: state.audioState.offlineMode,
@@ -89,7 +113,7 @@ export function ListenerTimeline() {
   const [failed, setFailed] = useState(false)
 
   const load = useCallback(() => {
-    api.getTimeline(TIMELINE_HOURS)
+    api.getTimeline(TIMELINE_HOURS, kind === 'all' ? null : [kind])
       .then(result => {
         setData(result)
         setFailed(false)
@@ -98,7 +122,7 @@ export function ListenerTimeline() {
         logger.warn('[Timeline] Could not load the timeline:', error)
         setFailed(true)
       })
-  }, [])
+  }, [kind])
 
   useEffect(() => {
     if (offlineMode) return undefined
@@ -118,7 +142,8 @@ export function ListenerTimeline() {
     return <p className="py-6 text-center text-sm text-gray-500">{failed ? "Couldn't load the timeline." : 'Loading…'}</p>
   }
   if (!data.entries?.length) {
-    return <p className="py-6 text-center text-sm text-gray-500">Nothing has aired for you in the last {TIMELINE_HOURS} hours yet.</p>
+    const what = kind === 'all' ? 'Nothing has' : `No ${KIND_META[kind]?.plural || 'entries'} have`
+    return <p className="py-6 text-center text-sm text-gray-500">{what} aired for you in the last {TIMELINE_HOURS} hours.</p>
   }
   return (
     <div className="pb-4">

@@ -109,9 +109,11 @@ guessing.
 
 ## Phase 4 as built (1 Oct): the timeline in the app
 
-- A Timeline toggle (clock icon) in the Radio panel header, next to the message filters. On: the filters dim and
-  the conversation is replaced by `ListenerTimeline.jsx` (the conversation stays mounted underneath, so nothing
-  streaming is lost); tapping a filter goes back to the conversation.
+- A Timeline toggle (clock icon) in the Radio panel header, next to the message filters. On: the conversation is
+  replaced by `ListenerTimeline.jsx` (the conversation stays mounted underneath, so nothing streaming is lost) and
+  the message filters give way to the timeline's own (`TimelineFilters`): everything, songs, shoutouts, replies,
+  reviews, segments and talk breaks, DJ talk. A category is filtered on the server (`kinds=`), so a busy day of
+  songs can't push older shoutouts out of the list.
 - It lists everything that aired for this listener in the last 24 hours (the most the timeline allows), newest
   first: songs with played through / skipped / on air now, shoutouts, replies, reviews, segments and talk breaks,
   chat replies and between-track talk. Talk and segment rows open to the full text that was said
