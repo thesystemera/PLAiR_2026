@@ -5,6 +5,17 @@ from services.llm_router import LLM_ANNOUNCE, LLM_BACKGROUND
 VOICE_SCRIPT_ROLE = LLM_ANNOUNCE
 from config.settings import settings
 
+BRACKETED = re.compile(r"\[([^\]]*)\]")
+
+
+def keep_engine_tags(script: str) -> str:
+    allowed = {tag.lower() for tag in settings.ENGINE_SOUND_TAGS} if settings.PARALANGUAGE_ENGINE_TAGS else set()
+    def engine_tag(match):
+        name = " ".join(match.group(1).split()).lower()
+        return f"[{name}]" if name in allowed else " "
+    kept = BRACKETED.sub(engine_tag, script)
+    return " ".join(kept.split())
+
 def gpt_error_handler(func):
     async def wrapper(*args, **kwargs):
         try:
@@ -167,6 +178,11 @@ class DJPromptSystemService:
         )
 
         paralanguage_prompt = paralanguage_prompt.strip() if paralanguage_prompt else ""
+        engine_ready = keep_engine_tags(paralanguage_prompt)
+        if engine_ready != paralanguage_prompt:
+            log_service.warning(f"Paralanguage: {paralanguage_tag!r} script used a tag the voice engine doesn't know: "
+                                f"{paralanguage_prompt!r} -> {engine_ready!r}")
+            paralanguage_prompt = engine_ready
         if not paralanguage_prompt:
             log_service.gpt(f"Paralanguage: No prompt generated for tag: {paralanguage_tag}")
             return None
