@@ -61,6 +61,7 @@ class Wait:
     activity: str = ""
     played: int = 0
     group: Optional[str] = None
+    index: int = -1
     in_flight: bool = False
 
 
@@ -79,7 +80,6 @@ class FillerScripts:
         self.encoder = get_sentence_encoder(settings.SEMANTIC_ENCODER)
         self._scripts: Dict[str, List[FillerScript]] = {kind: [] for kind in KINDS}
         self._matrix: Dict[str, Optional[np.ndarray]] = {kind: None for kind in KINDS}
-        self._played: Dict[Tuple[str, int], float] = {}
         self._learning: set = set()
         self._waits: Dict[str, Wait] = {}
         self._monitor: Optional[asyncio.Task] = None
@@ -121,20 +121,22 @@ class FillerScripts:
     def _embed(self, text: str) -> np.ndarray:
         return self.encoder.encode(text, normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
 
-    def _cooled(self, listener: str, script_id: int, now: float) -> bool:
-        return now - self._played.get((listener, script_id), 0.0) >= settings.FILLER_COOLDOWN_S
+    @staticmethod
+    def _shotgun_key(script: FillerScript) -> str:
+        return f"filler_script:{script.id}"
+
+    def _fresh(self, listener: str, script: FillerScript, now: float) -> bool:
+        return self.generation.vector_db_service.is_fresh(listener, self._shotgun_key(script), now)
 
     def _mark(self, listener: str, script: FillerScript, now: float):
-        if len(self._played) > 20000:
-            self._played = {k: t for k, t in self._played.items() if now - t < settings.FILLER_COOLDOWN_S}
-        self._played[(listener, script.id)] = now
+        self.generation.vector_db_service.note_used(listener, self._shotgun_key(script), now)
 
-    async def pick(self, kind: str, context: str, listener: str,
-                   group: Optional[str] = None) -> Optional[FillerScript]:
+    async def pick(self, kind: str, context: str, listener: str, group: Optional[str] = None,
+                   after: int = -1) -> Optional[FillerScript]:
         now = time.time()
         if group:
-            members = sorted((s for s in self._scripts[kind] if s.group == group), key=lambda s: s.index)
-            follow = next((s for s in members if self._cooled(listener, s.id, now)), None)
+            follow = min((s for s in self._scripts[kind] if s.group == group and s.index > after),
+                         key=lambda s: s.index, default=None)
             if follow is not None:
                 self._mark(listener, follow, now)
             return follow
@@ -144,16 +146,13 @@ class FillerScripts:
         if matrix is not None:
             query = await run_on_gpu_executor(self._embed, context)
             similarities = matrix @ query
-            order = np.argsort(-similarities)
-            eligible = [i for i in order if self._cooled(listener, self._scripts[kind][i].id, now)]
-            if eligible:
-                top = float(similarities[eligible[0]])
-                near = [i for i in eligible if top - float(similarities[i]) < NEAR_BEST]
-                choice = random.choice(near)
-                best, best_similarity = self._scripts[kind][choice], float(similarities[choice])
-                if best.group:
-                    best = min((s for s in self._scripts[kind] if s.group == best.group
-                                and self._cooled(listener, s.id, now)), key=lambda s: s.index)
+            order = list(np.argsort(-similarities))
+            eligible = [i for i in order if self._fresh(listener, self._scripts[kind][i], now)] or order
+            top = float(similarities[eligible[0]])
+            choice = random.choice([i for i in eligible if top - float(similarities[i]) < NEAR_BEST])
+            best, best_similarity = self._scripts[kind][choice], float(similarities[choice])
+            if best.group:
+                best = min((s for s in self._scripts[kind] if s.group == best.group), key=lambda s: s.index)
         if best_similarity is None or best_similarity < settings.FILLER_LEARN_BELOW:
             self.learn(kind, context)
         if best is not None:
@@ -263,12 +262,12 @@ class FillerScripts:
     async def _interlude(self, session_id: str, wait: Wait):
         try:
             context = f"{wait.context}\nWHAT THE HOSTS ARE DOING: {wait.activity}" if wait.activity else wait.context
-            script = await self.pick(INTERLUDE, context, session_id, wait.group)
+            script = await self.pick(INTERLUDE, context, session_id, wait.group, wait.index)
             wait.played += 1
             if script is None:
                 wait.played = settings.INTERLUDE_MAX_PER_TURN
                 return
-            wait.group = script.group
+            wait.group, wait.index = script.group, script.index
             if self._waits.get(session_id) is wait:
                 await self.play(INTERLUDE, script, wait.user_id, session_id, wait.is_guest, wait.session_dict)
         except Exception as e:

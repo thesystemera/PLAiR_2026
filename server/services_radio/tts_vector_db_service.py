@@ -455,6 +455,9 @@ class VectorDBService:
             used_at = self.shotgun_cache.get((listener, filename))
         return used_at is None or now - used_at >= settings.VECTOR_DB_SHOTGUN_COOLDOWN
 
+    def is_fresh(self, listener: Optional[str], key: str, now: float) -> bool:
+        return self._cooled_down(listener, key, now, True)
+
     def note_used(self, listener: Optional[str], filename: str, now: Optional[float] = None):
         now = now or time.time()
         with self.shotgun_lock:

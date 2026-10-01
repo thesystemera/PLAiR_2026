@@ -130,7 +130,6 @@ class Settings:
     USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
     FILLER_LEARN_BELOW: float = float(os.getenv("FILLER_LEARN_BELOW", "0.6"))
-    FILLER_COOLDOWN_S: int = int(os.getenv("FILLER_COOLDOWN_S", "600"))
     FILLER_LEARN_MAX_PENDING: int = int(os.getenv("FILLER_LEARN_MAX_PENDING", "4"))
     INTERLUDE_SILENCE_S: float = float(os.getenv("INTERLUDE_SILENCE_S", "1.0"))
     INTERLUDE_MAX_PER_TURN: int = int(os.getenv("INTERLUDE_MAX_PER_TURN", "3"))
