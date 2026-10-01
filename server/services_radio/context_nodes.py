@@ -241,10 +241,12 @@ async def get_format_performance_tags(**_) -> str:
 
         "5. TIME-SHIFT TAGS: @X@\n"
         "   Purpose: Position overlapping elements within previous speech\n"
-        "   Calculation: X = (total chars in previous line) - (chars from end where overlap starts)\n\n"
+        "   Calculation: X = how many characters before your co-host's line ENDS you come in. "
+        "@0@ = no overlap; never negative, never more than the length of their line\n\n"
 
         "   KEY POINTS:\n"
-        "   1. React EARLY in co-host's sentences (larger @X@ numbers)\n"
+        "   1. React EARLY in co-host's sentences (larger @X@ numbers): paralanguage, 'yeah', 'what?!'\n"
+        "   1b. Full sentences come in over the last few words only: @X@ up to about 15\n"
         "   2. EVERY significant phrase should trigger reaction\n"
         "   3. Use multiple reactions per turn\n"
         "   4. Both hosts must stay engaged CONSTANTLY\n"
@@ -262,7 +264,8 @@ async def get_format_performance_tags(**_) -> str:
         "- Treat every sentence (ending in . ! ? ...) as a distinct element\n"
         "- When interrupting, each complete thought/sentence needs its own @X@ value\n"
         "- Never let a co-host finish multiple sentences without overlapping\n"
-        "- Both hosts should be constantly interjecting complete sentences over each other's speech\n"
+        "- Both hosts should be constantly reacting over each other's speech; complete sentences start over "
+        "the last few words of the co-host's line\n"
         "- Keep audio tags SHORT and GENERIC\n"
         "- Never use audio tags for specific situations\n"
         "- Every overlapping element needs @X@ and &Y& tags\n"
@@ -305,13 +308,13 @@ async def get_format_dialogue_examples(**_) -> str:
     return (
         "DYNAMIC DIALOGUE EXAMPLE:\n"
         f"[BROADCAST] {host_1} &0.2& Holy shit, you will not BELIEVE what I just found out about the scene! (75 chars)\n"
-        f"{host_2} @65@ &0.3& ~gasps in surprise~ @61@ &0.2& %pen dropping% @57@ &0.1& What?! @35@ &0.2& Another scandal?!\n"
+        f"{host_2} @65@ &0.3& ~gasps in surprise~ @61@ &0.2& %pen dropping% @57@ &0.1& What?! @12@ &0.2& Another scandal?!\n"
         f"{host_1} @12@ &0.2& You know those underground raves everyone's been talking about? (68 chars)\n"
         f"{host_2} @58@ &0.3& ~leans forward~ @54@ &0.2& %chair squeaking% @42@ &0.1& The warehouse ones?! @12@ &0.2& Don't tell me-\n"
         f"{host_1} @8@ &0.1& Turns out they're secretly funded by corporate money! (59 chars)\n"
-        f"{host_2} @49@ &0.3& ~inhales sharply~ @45@ &0.2& %mic drop% @41@ &0.1& NO! @35@ &0.2& The suits?! @25@ &0.3& Show me the proof!\n"
+        f"{host_2} @49@ &0.3& ~inhales sharply~ @45@ &0.2& %mic drop% @41@ &0.1& NO! @35@ &0.2& The suits?! @10@ &0.3& Show me the proof!\n"
         f"{host_1} @12@ &0.2& ~laughs heartily~ &0.1& %chair rolling slightly% Check these documents!\n"
-        f"{host_2} @42@ &0.3& ~excited~ @38@ &0.2& %taps microphone% @34@ &0.1& This is HUGE! @25@ &0.2& We're gonna blow the lid off!"
+        f"{host_2} @42@ &0.3& ~excited~ @38@ &0.2& %taps microphone% @34@ &0.1& This is HUGE! @10@ &0.2& We're gonna blow the lid off!"
     )
 
 @node_registry.register(

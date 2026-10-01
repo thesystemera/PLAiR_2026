@@ -256,13 +256,8 @@ class AnnouncerService:
         if session_id in self.transition_cache:
             cached = self.transition_cache[session_id].get(cache_key)
             if cached is not None:
-                if 'crossfade_timing' in cached:
-                    try:
-                        playback_state = self._existing_session_state(session_id)
-                        if playback_state is not None:
-                            playback_state.set_crossfade_timing(current_track_id, next_track_id, cached['crossfade_timing'])
-                    except Exception:
-                        pass
+                if cached.get('crossfade_timing'):
+                    await self._publish_crossfade(session_id, cache_key, cached['crossfade_timing'])
                 return cached
 
         current_name = "Unknown"
@@ -292,12 +287,7 @@ class AnnouncerService:
             crossfade_timing = crossfade_plan.plan(current_features, next_features, current_lyrics, next_lyrics)
 
             if crossfade_timing:
-                try:
-                    playback_state = self._existing_session_state(session_id)
-                    if playback_state is not None:
-                        playback_state.set_crossfade_timing(current_track_id, next_track_id, crossfade_timing)
-                except Exception as e:
-                    log_service.warning(f"Failed to push crossfade timing: {e}")
+                await self._publish_crossfade(session_id, cache_key, crossfade_timing)
 
             current_duration = current_features.get('duration', 0) * 1000
 
@@ -346,6 +336,20 @@ class AnnouncerService:
             log_service.error(f"Traceback: {traceback.format_exc()}")
             self._cache_transition(session_id, cache_key, None)
             return None
+
+    async def _publish_crossfade(self, session_id: str, pair: Tuple[str, str], timing: Dict):
+        playback_state = self._existing_session_state(session_id)
+        if playback_state is None or playback_state.crossfade_timing_cache.get(pair) == timing:
+            return
+        playback_state.set_crossfade_timing(pair[0], pair[1], timing)
+        queue, index = playback_state.queue, playback_state.current_index
+        if index + 1 >= len(queue) or (queue[index].get('id'), queue[index + 1].get('id')) != pair:
+            return
+        from service_registry import services
+        try:
+            await services.websocket_service.broadcast_playback_state(session_id, playback_state.get_state())
+        except Exception as e:
+            log_service.warning(f"Announcer: could not send the crossfade plan: {type(e).__name__}: {e}")
 
     def _log_transition_report(self, session_id, current, next_t, xfade, window):
         short_id = session_id[:8]
