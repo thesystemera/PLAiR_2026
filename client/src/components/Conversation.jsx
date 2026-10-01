@@ -25,10 +25,10 @@ import {
   Brain,
   Radio,
   Globe,
-  Heart
+  Heart,
+  Ear
 } from 'lucide-react'
 import { useUISound } from '../hooks/useUISound'
-import { stripDJMarkup } from '../lib/djMarkup'
 
 const DJ_SPEAKERS = {
   jess: { name: 'Jess', color: 'blue' },
@@ -45,7 +45,7 @@ const MESSAGE_TYPES = {
 
 function cleanMetadata(text) {
   if (!text) return text
-  return stripDJMarkup(text, '')
+  return text
     .replace(/\[HAL11000]/g, '')
     .trim()
 }
@@ -334,10 +334,9 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     return parts.length > 0 ? parts : content
   }
 
-  const renderDJMessage = ({ type, speaker, content, timestamp, messageType, key }) => {
+  const renderDJMessage = ({ type, speaker, content, timestamp, messageType, filler, key }) => {
     let displayContent = content;
     if (typeof displayContent === 'string') {
-        displayContent = stripDJMarkup(displayContent);
         displayContent = displayContent.replace(/\s{2,}/g, ' ').trim();
     }
 
@@ -387,6 +386,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     }
 
     const getFormatIcon = () => {
+      if (filler) return <Ear className="w-4 h-4" />
       if (type === MESSAGE_TYPES.INTERNAL) return <Brain className="w-4 h-4" />
       if (type === MESSAGE_TYPES.BROADCAST) return <Mic className="w-4 h-4" />
       return <MessageSquare className="w-4 h-4" />
@@ -396,13 +396,14 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
       if (type === MESSAGE_TYPES.INTERNAL) return 'Internal Dialogue'
       if (speaker) {
         const speakerData = DJ_SPEAKERS[speaker]
-        return speakerData?.name || speaker
+        const name = speakerData?.name || speaker
+        return filler ? `${name} · off mic` : name
       }
       return type === MESSAGE_TYPES.BROADCAST ? 'Broadcast' : 'Message'
     }
 
     return (
-      <div key={key} className={`p-3 rounded-lg border ${getMessageStyle()} max-w-[80%] w-fit`}>
+      <div key={key} className={`rounded-lg border ${getMessageStyle()} max-w-[80%] w-fit ${filler ? 'px-3 py-2 border-dashed opacity-70 italic' : 'p-3'}`}>
         <div className="flex items-start gap-2">
           <div className="flex items-center gap-1.5 mt-0.5">
             {getFormatIcon()}
@@ -578,6 +579,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     if (data.phase === 'say' && data.text) {
       sayCountRef.current += 1
       const entries = botEntries(data.text, 'interactive', `${turnId}:say${sayCountRef.current}`)
+        .map(entry => (data.kind ? { ...entry, filler: data.kind } : entry))
       setConversations(prev => [...prev, ...entries])
       playBotSound(data.text)
     } else if (data.phase === 'start' && data.call_id) {
@@ -720,13 +722,14 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
         speaker: conv.djSpeaker,
         content: conv.content,
         timestamp: conv.timestamp,
-        messageType: conv.messageType
+        messageType: conv.messageType,
+        filler: conv.filler
       })
     }
 
     const colors = getMessageColors(conv.type)
 
-    const displayContent = stripDJMarkup(conv.content).replace(/\s{2,}/g, ' ').trim()
+    const displayContent = String(conv.content ?? '').replace(/\s{2,}/g, ' ').trim()
 
     return (
       <div className={`border ${colors} max-w-[80%] w-fit ${['info', 'warning', 'error'].includes(conv.type) ? 'mx-auto px-3 py-1.5 rounded-full' : 'p-3 rounded-lg'}`}>

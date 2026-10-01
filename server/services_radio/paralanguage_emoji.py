@@ -6,6 +6,7 @@ from typing import Dict, Optional, Set
 
 from services import log_service
 from services.task_utils import spawn
+from services_radio.dj_prompt_helper_service import chat_text
 
 PARALANGUAGE_TAG = re.compile(r"~([^~\n]{1,60})~")
 DISPLAY_FIELDS = ("bot_response", "content", "text")
@@ -24,7 +25,8 @@ class ParalanguageEmoji:
 
     Every paralanguage title in the voice cache gets an emoji from a small LLM call, stored on its
     paralanguage_embeddings rows. A tag in outgoing chat text is shown as the emoji of the closest cached
-    title. Stored conversation text keeps the raw tags.
+    title, and the other performance tags (sounds, time-shifts, mic proximity) are taken out, so this is the one
+    place chat text is made ready to show. Stored conversation text keeps the raw tags.
     """
 
     def __init__(self, vector_db_service, prompt_service):
@@ -81,17 +83,19 @@ class ParalanguageEmoji:
         return None
 
     async def render(self, text: Optional[str]) -> Optional[str]:
-        if not text or "~" not in text:
+        if not text:
             return text
-        tags = {match.group(1) for match in PARALANGUAGE_TAG.finditer(text)}
-        emojis = {tag: await self.emoji_for(tag) for tag in tags}
-        return PARALANGUAGE_TAG.sub(lambda m: emojis.get(m.group(1)) or m.group(0), text)
+        if "~" in text:
+            tags = {match.group(1) for match in PARALANGUAGE_TAG.finditer(text)}
+            emojis = {tag: await self.emoji_for(tag) for tag in tags}
+            text = PARALANGUAGE_TAG.sub(lambda m: emojis.get(m.group(1)) or ' ', text)
+        return chat_text(text)
 
     async def render_message(self, message: dict) -> dict:
         data = message.get("data")
         if message.get("type") not in ("conversation_update", "dj_activity") or not isinstance(data, dict):
             return message
-        if not any(isinstance(data.get(field), str) and "~" in data[field] for field in DISPLAY_FIELDS):
+        if not any(isinstance(data.get(field), str) for field in DISPLAY_FIELDS):
             return message
         message = copy.deepcopy(message)
         for field in DISPLAY_FIELDS:

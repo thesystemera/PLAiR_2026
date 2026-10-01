@@ -314,6 +314,13 @@ def clean_gpt_output(text, role='dj_content'):
 
     return text
 
+CHAT_MARKUP = re.compile(r'%[A-Za-z][^%\n\d]*%|@[WwCc]?-?\d+(?:\.\d+)?@|&-?\d+(?:\.\d+)?&')
+
+
+def chat_text(text: str) -> str:
+    return re.sub(r'[ \t]{2,}', ' ', CHAT_MARKUP.sub(' ', text))
+
+
 MARKUP_TOKEN_PATTERN = re.compile(r'~[^~]+~|%[^%]+%|\$[^$\s]+\$|@[WwCc]?\d+(?:\.\d+)?@|&\d+(?:\.\d+)?&')
 PROXIMITY_TAG_PATTERN = re.compile(r'&\d+(?:\.\d+)?&')
 SPEAKER_TAG_PATTERN = re.compile(r'\[(LEO|JESS)]')

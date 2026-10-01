@@ -227,11 +227,12 @@ class FillerScripts:
     async def play(self, kind: str, script: FillerScript, user_id: Optional[int], session_id: str,
                    is_guest: bool, session_dict: Dict):
         session_dict.setdefault('on_air', []).append(script.script)
+        session_dict.setdefault('on_air_kinds', {})[script.script] = kind
         await self.queue.add_tts_request(text=script.script, user_id=user_id or 0, tts_type=kind,
                                          is_broadcast=True, is_temp_user=is_guest, session_id=session_id)
         ctx = session_dict.get('turn_ctx')
         if ctx is not None:
-            await ctx.activity("say", text=script.script)
+            await ctx.activity("say", text=script.script, kind=kind)
 
     def begin_wait(self, session_id: str, user_id: Optional[int], is_guest: bool, session_dict: Dict, context: str):
         self._waits[session_id] = Wait(session_dict, user_id, is_guest, context)

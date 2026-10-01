@@ -552,7 +552,7 @@ class ConversationService:
 
         await ctx.activity("turn", input=transcription, origin=origin)
         for aired in list(on_air):
-            await ctx.activity("say", text=aired)
+            await ctx.activity("say", text=aired, kind=session_dict.get('on_air_kinds', {}).get(aired))
         session_dict['turn_ctx'] = ctx
         if self.fillers is not None:
             context = session_dict.get('filler_context') or \
