@@ -202,13 +202,13 @@ async def get_station_capabilities_detailed(**_) -> str:
     )
 
 @node_registry.register(
-    "format_meta_tags_guide",
+    "format_performance_tags_guide",
     "Performance tag guide (paralanguage, audio, timeshift, proximity)",
     cost="medium",
     visible=False,
     role="system"
 )
-async def get_format_meta_tags(**_) -> str:
+async def get_format_performance_tags(**_) -> str:
     return (
         "PERFORMANCE TAG USAGE GUIDELINES:\n"
         "1. PARALANGUAGE TAGS: ~example~\n"
@@ -267,30 +267,30 @@ async def get_format_meta_tags(**_) -> str:
     )
 
 @node_registry.register(
-    "format_meta_tag_examples",
+    "format_performance_tag_examples",
     "Fresh example paralanguage and audio tags for this reply",
     cost="low",
     visible=False
 )
-async def get_format_meta_tag_examples(dj_service=None, **_) -> str:
+async def get_format_performance_tag_examples(dj_service=None, **_) -> str:
     import random
 
     if not dj_service:
         return ""
-    paralanguage = sorted(dj_service.get_all_paralanguage_meta_tags())
-    audio = sorted(dj_service.get_all_audio_meta_tags())
+    paralanguage = sorted(dj_service.get_all_paralanguage_tags())
+    audio = sorted(dj_service.get_all_audio_tags())
     correlated = sorted(dj_service.get_all_correlated_tags())
     return (
         "TAG EXAMPLES (fresh picks for this reply):\n"
         f"Paralanguage: {', '.join(f'~{tag}~' for tag in random.sample(paralanguage, min(10, len(paralanguage))))}\n"
         f"Audio: {', '.join(f'%{tag}%' for tag in random.sample(audio, min(10, len(audio))))}\n"
-        f"Paired: {', '.join(f'{meta} {sound}' for meta, sound in random.sample(correlated, min(5, len(correlated))))}"
+        f"Paired: {', '.join(f'{paralanguage_tag} {sound}' for paralanguage_tag, sound in random.sample(correlated, min(5, len(correlated))))}"
     )
 
 
 @node_registry.register(
     "format_dialogue_examples",
-    "Example dynamic dialogue with proper meta-tag usage",
+    "Example dynamic dialogue with proper performance-tag usage",
     cost="medium",
     visible=True,
     role="system"

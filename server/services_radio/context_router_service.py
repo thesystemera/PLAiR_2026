@@ -119,8 +119,8 @@ def _selection_pulse(selection) -> Dict:
     return clean_pulse(selection.pulse_topic, selection.pulse_kinds, selection.pulse_near_me, selection.pulse_when)
 
 
-DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide",
-                 "format_meta_tag_examples"]
+DEFAULT_NODES = ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide",
+                 "format_performance_tag_examples"]
 
 
 class ContextRouterService(SingletonService):
@@ -421,7 +421,7 @@ CRITICAL RULES:
    - "station_capabilities" - ALWAYS include
    - "format_channels" - ALWAYS include (critical [BROADCAST]/[TXT] rules)
    - "format_tone" - ALWAYS include (language style)
-   - "format_meta_tags_guide" - ALWAYS include (required for structuring responses)
+   - "format_performance_tags_guide" - ALWAYS include (required for structuring responses)
    - "guidelines_critical" - Include when listener requests info/services
    - "guidelines_general" - ALWAYS include
    - "guidelines_internal_dialogue" - ALWAYS include
@@ -453,23 +453,23 @@ CRITICAL RULES:
 Examples:
 
 User: "Hey guys, who are we listening to right now?"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_style_description", "track_release_date", "track_audio_features_full", "conversation_last_turn", "user_basic", "user_persona"]
+Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_style_description", "track_release_date", "track_audio_features_full", "conversation_last_turn", "user_basic", "user_persona"]
 Reasoning: "Track inquiry - include core formatting + roles for DJ banter + full track context + conversation history + user context"
 
 User: "Skip this track"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_station_characteristics", "queue_next_track", "queue_next_details", "track_title_artist", "conversation_last_turn", "user_basic", "user_favorite_artists"]
+Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_station_characteristics", "queue_next_track", "queue_next_details", "track_title_artist", "conversation_last_turn", "user_basic", "user_favorite_artists"]
 Reasoning: "Playback command - core formatting + station vibe + what's next + current track + conversation + user taste"
 
 User: "Tell me about this song"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_release_date", "track_style_description", "track_vocal_info", "track_audio_features_full", "track_lyrics_preview", "conversation_recent", "user_basic", "user_persona", "user_favorite_artists"]
+Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_release_date", "track_style_description", "track_vocal_info", "track_audio_features_full", "track_lyrics_preview", "conversation_recent", "user_basic", "user_persona", "user_favorite_artists"]
 Reasoning: "Broad question about song - core formatting + roles for personality + comprehensive track info + conversation + user profile"
 
 User: "What's the weather like?"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_critical", "guidelines_general", "guidelines_internal_dialogue", "weather_current", "user_basic", "conversation_last_turn", "station_current_show"]
+Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_critical", "guidelines_general", "guidelines_internal_dialogue", "weather_current", "user_basic", "conversation_last_turn", "station_current_show"]
 Reasoning: "Non-music service request - core formatting + critical guidelines + weather + conversation continuity + show context"
 
 User: "Play something upbeat"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_meta_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
+Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
 Reasoning: "Music request - core formatting + roles for personality + user taste profile + current context + conversation history"
 
 Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more.

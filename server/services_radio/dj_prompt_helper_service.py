@@ -183,7 +183,7 @@ INTERNAL_MARKER_PATTERN = re.compile(
 def normalize_internal_marker(text: str) -> str:
     def replacer(match):
         if match.group(0) != '[INTERNAL DIALOGUE]':
-            log_service.filter(f"[META CLEANUP] Normalised notes marker: {match.group(0).strip()}")
+            log_service.filter(f"[TAG CLEANUP] Normalised notes marker: {match.group(0).strip()}")
         return '[INTERNAL DIALOGUE]'
     return INTERNAL_MARKER_PATTERN.sub(replacer, text)
 
@@ -252,7 +252,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     def reduce_double_tags(text):
         def replacer(match, tag_type):
-            log_service.filter(f"[META CLEANUP] ✗ Reduced double {tag_type} tags: {match.group(0)} -> {tag_type}")
+            log_service.filter(f"[TAG CLEANUP] ✗ Reduced double {tag_type} tags: {match.group(0)} -> {tag_type}")
             removed_parts.append(f"Reduced double {tag_type} tags: {match.group(0)} -> {tag_type}")
             return tag_type
 
@@ -273,15 +273,15 @@ def clean_gpt_output(text, role='dj_content'):
             if match.group(2) is None:
                 return match.group(0)
             invalid_content = match.group(0)
-            log_service.filter(f"[META CLEANUP] ✗ Removed invalid tag: {invalid_content[:50]}")
+            log_service.filter(f"[TAG CLEANUP] ✗ Removed invalid tag: {invalid_content[:50]}")
             removed_parts.append(f"Removed invalid tag: {invalid_content}")
             return ' '
 
         return re.sub(pattern, replacer, text)
 
     if role != 'command':
-        log_service.filter(f"[META CLEANUP] Starting cleanup for role '{role}'")
-        log_service.filter(f"[META CLEANUP] Input ({len(original_text)} chars):\n{original_text[:200]}{'...' if len(original_text) > 200 else ''}")
+        log_service.filter(f"[TAG CLEANUP] Starting cleanup for role '{role}'")
+        log_service.filter(f"[TAG CLEANUP] Input ({len(original_text)} chars):\n{original_text[:200]}{'...' if len(original_text) > 200 else ''}")
 
         text = remove_char_counts(text)
         text = strip_asterisks(text)
@@ -292,12 +292,12 @@ def clean_gpt_output(text, role='dj_content'):
         text = re.sub(r'\s+', ' ', text).strip()
 
         if removed_parts:
-            log_service.filter(f"[META CLEANUP] Output ({len(text)} chars): Made {len(removed_parts)} change(s)")
+            log_service.filter(f"[TAG CLEANUP] Output ({len(text)} chars): Made {len(removed_parts)} change(s)")
         else:
-            log_service.filter("[META CLEANUP] No changes needed - text is clean")
+            log_service.filter("[TAG CLEANUP] No changes needed - text is clean")
     else:
         text = re.sub(r'[ \t]+', ' ', text).strip()
-        log_service.filter("[META CLEANUP] Skipped for command role (only normalized whitespace)")
+        log_service.filter("[TAG CLEANUP] Skipped for command role (only normalized whitespace)")
 
     text = filter_response_by_role(text, role)
 

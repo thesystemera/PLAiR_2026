@@ -55,8 +55,8 @@ RADIO_SEGMENT_BASE_NODES = [
     'core_dj_identity',
     'format_channels',
     'format_tone',
-    'format_meta_tags_guide',
-    'format_meta_tag_examples',
+    'format_performance_tags_guide',
+    'format_performance_tag_examples',
     'format_roles_detailed',
     'format_station_characteristics',
     'format_dialogue_examples',
@@ -147,8 +147,8 @@ class DJPromptService:
                     'station_capabilities',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -168,8 +168,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -187,8 +187,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -206,8 +206,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -227,8 +227,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -244,8 +244,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -265,8 +265,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -286,8 +286,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -305,8 +305,8 @@ class DJPromptService:
                     'core_dj_identity',
                     'format_channels',
                     'format_tone',
-                    'format_meta_tags_guide',
-                    'format_meta_tag_examples',
+                    'format_performance_tags_guide',
+                    'format_performance_tag_examples',
                     'format_roles_detailed',
                     'format_station_characteristics',
                     'format_dialogue_examples',
@@ -527,14 +527,14 @@ class DJPromptService:
         log_service.external(f"Segment {gpt_type}: no data - airing honest fallback ({feedback})")
         return UnavailableSegment(text, feedback)
 
-    def get_all_paralanguage_meta_tags(self):
-        titles = [t for t in self.vector_db_service.titles('meta_embeddings') if is_clean_paralanguage(t)]
+    def get_all_paralanguage_tags(self):
+        titles = [t for t in self.vector_db_service.titles('paralanguage_embeddings') if is_clean_paralanguage(t)]
         if len(titles) >= PARALANGUAGE_EXAMPLES_FROM_LIBRARY:
             return titles
         return sorted(set(titles) | set(STARTER_PARALANGUAGE_TAGS))
 
     @lru_cache(maxsize=1)
-    def get_all_audio_meta_tags(self):
+    def get_all_audio_tags(self):
         return self.vector_db_service.titles('audio_embeddings')
 
     @lru_cache(maxsize=1)

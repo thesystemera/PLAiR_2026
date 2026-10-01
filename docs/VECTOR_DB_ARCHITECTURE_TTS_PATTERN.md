@@ -189,7 +189,7 @@ The Annoy indexes serve "more like this track" (seed radio): Annoy returns item 
 data/embeddings/catalog_mpnet_1.ann, catalog_mpnet_2.ann             # Catalog (A/B double buffer)
 data/embeddings/user_content_mpnet_1.ann, user_content_mpnet_2.ann   # User content
 data/embeddings/news_mpnet_*.ann, places_mpnet_*.ann, local_knowledge_mpnet_*.ann, listener_requests_mpnet_*.ann
-data/embeddings/tts_embeddings_1.ann, ...                            # TTS (tts/meta/impulse/breath/audio)
+data/embeddings/tts_embeddings_1.ann, ...                            # TTS (tts/paralanguage/impulse/breath/audio)
 ```
 
 ### Source Files (Persist)

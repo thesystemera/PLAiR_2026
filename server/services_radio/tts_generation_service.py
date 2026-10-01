@@ -21,7 +21,9 @@ from collections import OrderedDict
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
-from services_radio.tts_processing_service import decode_mp3
+from services_radio.tts_processing_service import (
+    MotionSlot, decode_mp3, level_sound_effect, motion_chunks, trim_breath
+)
 from services_radio.tts_voice_threads import voice_thread
 from services_radio.dj_prompt_helper_service import is_clean_paralanguage
 from services_radio.paralanguage_emoji import ParalanguageEmoji
@@ -42,7 +44,7 @@ CLIP_RATE_CACHE_MAX = 20000
 CLIP_AUDIO_CACHE_BYTES = max(0, int(os.getenv("TTS_CLIP_AUDIO_CACHE_MB", "96"))) * 1024 * 1024
 
 EMBEDDINGS_BY_CONTENT_TYPE = {
-    'meta': 'meta_embeddings',
+    'paralanguage': 'paralanguage_embeddings',
     'impulse': 'impulse_embeddings',
     'sentence': 'tts_embeddings',
     'breath': 'breath_embeddings',
@@ -52,11 +54,14 @@ EMBEDDINGS_BY_CONTENT_TYPE = {
 FILLER_TYPES = {
     'breath_embeddings': 'breath',
     'tts_embeddings': 'sentence',
-    'meta_embeddings': 'meta',
+    'paralanguage_embeddings': 'paralanguage',
     'impulse_embeddings': 'impulse',
 }
-GENERATED_TYPES = ('tts_embeddings', 'meta_embeddings', 'impulse_embeddings', 'breath_embeddings')
-EXACT_REFRESH_TYPES = ('tts_embeddings',)
+GENERATED_TYPES = ('tts_embeddings', 'paralanguage_embeddings', 'impulse_embeddings', 'breath_embeddings')
+PREPARE_INPUT = {
+    'audio_embeddings': level_sound_effect,
+    'breath_embeddings': trim_breath,
+}
 
 INVALID_TITLE_CHARS = re.compile(r'[*~\n\[\]@$%"&.!?]|N/A')
 
@@ -145,7 +150,7 @@ class TTSGenerationService:
         self.paralanguage_emoji = ParalanguageEmoji(vector_db_service, ai_service)
 
         self.tts_directory = settings.TTS_AUDIO_DIR
-        self.meta_directory = settings.META_AUDIO_DIR
+        self.paralanguage_directory = settings.PARALANGUAGE_AUDIO_DIR
         self.impulse_directory = settings.IMPULSE_AUDIO_DIR
         self.breath_directory = settings.BREATH_AUDIO_DIR
         self.audio_directory = os.path.join(settings.AUDIO_EFFECT_DIR, 'computer')
@@ -161,7 +166,6 @@ class TTSGenerationService:
         self._background_semaphore = asyncio.Semaphore(settings.TTS_BACKGROUND_CONCURRENCY)
         self._pending_refreshes: Set[Tuple[str, str, str]] = set()
         self._recent_refreshes: Dict[Tuple[str, str, str], float] = {}
-        self._exact_refresh_times: List[float] = []
         self._clip_audio: "OrderedDict[Tuple, AudioSegment]" = OrderedDict()
         self._clip_audio_bytes = 0
         self._clip_rates: Dict[Tuple, int] = {}
@@ -178,7 +182,7 @@ class TTSGenerationService:
 
         for voice in voices:
             os.makedirs(os.path.join(self.tts_directory, voice), exist_ok=True)
-            os.makedirs(os.path.join(self.meta_directory, voice), exist_ok=True)
+            os.makedirs(os.path.join(self.paralanguage_directory, voice), exist_ok=True)
             os.makedirs(os.path.join(self.impulse_directory, voice), exist_ok=True)
             os.makedirs(os.path.join(self.breath_directory, voice), exist_ok=True)
 
@@ -419,8 +423,8 @@ class TTSGenerationService:
     def clip_directory(self, embeddings_type: str, content_voice: str) -> Optional[str]:
         if embeddings_type == 'tts_embeddings':
             return self.get_voice_directory(str(self.tts_directory), content_voice)
-        if embeddings_type == 'meta_embeddings':
-            return self.get_voice_directory(str(self.meta_directory), content_voice)
+        if embeddings_type == 'paralanguage_embeddings':
+            return self.get_voice_directory(str(self.paralanguage_directory), content_voice)
         if embeddings_type == 'impulse_embeddings':
             return self.get_voice_directory(str(self.impulse_directory), content_voice)
         if embeddings_type == 'breath_embeddings':
@@ -433,7 +437,7 @@ class TTSGenerationService:
     def similarity_threshold(embeddings_type: str) -> float:
         return {
             'audio_embeddings': settings.AUDIO_SIMILARITY_THRESHOLD,
-            'meta_embeddings': settings.META_SIMILARITY_THRESHOLD,
+            'paralanguage_embeddings': settings.PARALANGUAGE_SIMILARITY_THRESHOLD,
             'impulse_embeddings': settings.IMPULSE_SIMILARITY_THRESHOLD,
             'breath_embeddings': settings.BREATH_SIMILARITY_THRESHOLD,
         }.get(embeddings_type, settings.TTS_SIMILARITY_THRESHOLD)
@@ -451,20 +455,9 @@ class TTSGenerationService:
             return
         if len(self._pending_refreshes) >= settings.TTS_BACKGROUND_MAX_PENDING:
             return
-        self._exact_refresh_times = [t for t in self._exact_refresh_times if now - t < 3600]
-        if len(self._exact_refresh_times) >= settings.TTS_EXACT_REFRESH_MAX_PER_HOUR:
-            return
-        self._exact_refresh_times.append(now)
         self._recent_refreshes[key] = now
         self._pending_refreshes.add(key)
         spawn(self._refresh_clip(key, embeddings_type, content_voice, tag), name=f"tts_refresh:{permission_key}")
-
-    def note_cache_match(self, embeddings_type: str, content_voice: str, tag: str, similarity: float):
-        if not settings.TTS_EXACT_REFRESH_ENABLED or embeddings_type not in EXACT_REFRESH_TYPES:
-            return
-        if similarity >= settings.TTS_EXACT_REFRESH_BELOW:
-            return
-        self.schedule_refresh(embeddings_type, content_voice, tag)
 
     async def _refresh_clip(self, key, embeddings_type: str, content_voice: str, tag: str):
         usage_tracking.bind(usage_tracking.system_subject("tts_library"))
@@ -499,17 +492,24 @@ class TTSGenerationService:
             audio_process_mix: float = 0.0,
             previous_segment_end_mix: Optional[float] = None,
             next_segment_start_mix: Optional[float] = None,
-            rank: Tuple = RANK_UNRANKED_HIGH
+            rank: Tuple = RANK_UNRANKED_HIGH,
+            motion: Optional[MotionSlot] = None
     ) -> AudioSegment:
-        async with self.processing_slots.slot(rank):
-            return await voice_thread(
-                self.audio_processing_service.process_audio,
-                audio_input,
-                audio_process_mix,
-                previous_segment_end_mix,
-                next_segment_start_mix,
-                speaker=content_voice
-            )
+        noise = await motion.noise() if motion is not None else None
+        try:
+            async with self.processing_slots.slot(rank):
+                return await voice_thread(
+                    self.audio_processing_service.process_audio,
+                    audio_input,
+                    audio_process_mix,
+                    previous_segment_end_mix,
+                    next_segment_start_mix,
+                    speaker=content_voice,
+                    noise=noise
+                )
+        finally:
+            if motion is not None:
+                motion.advance(noise[2], motion_chunks(len(audio_input)))
 
     async def load_clip(
             self,
@@ -518,7 +518,9 @@ class TTSGenerationService:
             audio_process_mix: float = 0.0,
             previous_segment_end_mix: Optional[float] = None,
             next_segment_start_mix: Optional[float] = None,
-            rank: Tuple = RANK_UNRANKED_HIGH
+            rank: Tuple = RANK_UNRANKED_HIGH,
+            prepare=None,
+            motion: Optional[MotionSlot] = None
     ) -> Optional[AudioSegment]:
         try:
             stat = await aiofiles.os.stat(file_path)
@@ -534,8 +536,10 @@ class TTSGenerationService:
         except Exception as e:
             log_service.error(f"Failed to read cached clip {file_path}: {e}")
             return None
+        if prepare is not None:
+            audio = await voice_thread(prepare, audio)
         return await self.process_clip(
-            audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
+            audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank, motion
         )
 
     def _remember_clip_audio(self, key: Tuple, audio: Optional[AudioSegment]):
@@ -581,12 +585,10 @@ class TTSGenerationService:
         async with self.lookup_slots.slot(rank):
             matches = await voice_thread(
                 self.vector_db_service.query_embeddings,
-                tag, content_voice, embeddings_type, 5, listener, respect_cooldown
+                tag, content_voice, embeddings_type, 5, listener, respect_cooldown, threshold
             )
 
         for filename, _title, similarity in matches:
-            if similarity < threshold:
-                break
             cached_file_path = os.path.join(directory, filename)
             if await aiofiles.os.path.exists(cached_file_path):
                 self.vector_db_service.note_used(listener, filename)
@@ -605,8 +607,8 @@ class TTSGenerationService:
             pass
 
     async def generation_description(self, tag: str, embeddings_type: str, content_voice: str) -> Optional[str]:
-        if embeddings_type == 'meta_embeddings':
-            result = await self.ai_service.generate_meta_data_gpt_response(tag)
+        if embeddings_type == 'paralanguage_embeddings':
+            result = await self.ai_service.generate_paralanguage_gpt_response(tag)
             return result[1] if result and result[1] != "N/A" else None
         if embeddings_type == 'impulse_embeddings':
             result = await self.ai_service.generate_impulse_gpt_response(tag, content_voice)
@@ -629,7 +631,8 @@ class TTSGenerationService:
             owner: Optional[str] = None,
             rank: Tuple = RANK_UNRANKED_HIGH,
             group: Optional[Hashable] = None,
-            before_generation=None
+            before_generation=None,
+            motion: Optional[MotionSlot] = None
     ) -> Tuple[Optional[AudioSegment], Optional[str]]:
         directory = self.clip_directory(embeddings_type, content_voice)
         if directory is None:
@@ -639,7 +642,7 @@ class TTSGenerationService:
         if cached_file_path:
             processed_audio = await self.load_clip(
                 cached_file_path, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix,
-                rank=rank
+                rank=rank, prepare=PREPARE_INPUT.get(embeddings_type), motion=motion
             )
             if processed_audio is None:
                 await self._drop_unreadable_clip(cached_file_path, embeddings_type)
@@ -659,7 +662,7 @@ class TTSGenerationService:
 
         if embeddings_type not in GENERATED_TYPES:
             return None, None
-        if embeddings_type == 'meta_embeddings' and not is_clean_paralanguage(tag):
+        if embeddings_type == 'paralanguage_embeddings' and not is_clean_paralanguage(tag):
             log_service.filter(f"[PARALANGUAGE CLEANUP] ✗ Not rendering malformed paralanguage tag: {tag}")
             return None, None
 
@@ -681,13 +684,16 @@ class TTSGenerationService:
             return None, None
 
         raw_audio = AudioSegment(data=pcm, sample_width=2, frame_rate=settings.TTS_SAMPLE_RATE, channels=1)
+        prepare = PREPARE_INPUT.get(embeddings_type)
+        if prepare is not None:
+            raw_audio = await voice_thread(prepare, raw_audio)
         processed_audio = await self.process_clip(
-            raw_audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank
+            raw_audio, content_voice, audio_process_mix, previous_segment_end_mix, next_segment_start_mix, rank, motion
         )
 
         audio_path = os.path.join(directory, f'{uuid.uuid4()}.mp3')
         title = (sanitize_clip_title(tag) or 'breath') if embeddings_type == 'breath_embeddings' else tag
-        if embeddings_type == 'meta_embeddings':
+        if embeddings_type == 'paralanguage_embeddings':
             self.paralanguage_emoji.note_new_title(title)
         spawn(self.save_generated_clip(
             pcm, audio_path, title, audio_description, content_voice, embeddings_type

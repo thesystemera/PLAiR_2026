@@ -35,7 +35,7 @@ async def get_track_title_artist(current_track: Dict = None, **_) -> str:
 **Roles:** the DJ's system prompt is only the `system` nodes of its config, in config order, plus the tool declarations, so it is identical for every listener and turn and is held in a Gemini cache. Every `live` node (track, queue, pulse, weather, profile, conversation, studio clock) goes in the user message.
 
 **75 nodes** (count of `node_registry.register` calls) across categories:
-- **Formatting** (identity, channels, tone, meta-tags, guidelines)
+- **Formatting** (identity, channels, tone, performance tags, guidelines)
 - **Instruction** (biography, lyrics, news, weather, DJ tools)
 - **Data** (biography text, lyrics text, news report, weather data)
 - **Track** (title, style, audio features, lyrics preview)

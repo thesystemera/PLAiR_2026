@@ -31,7 +31,7 @@ from services.ai_service import HANDED_OFF_NOTE, LINE_AIRED_NOTE  # noqa: E402
 from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS, SEGMENT_TOOLS  # noqa: E402
 
 SYSTEM_NODES = ['core_dj_identity', 'station_capabilities', 'format_channels', 'format_tone',
-                'format_meta_tags_guide', 'format_meta_tag_examples', 'format_roles_detailed',
+                'format_performance_tags_guide', 'format_performance_tag_examples', 'format_roles_detailed',
                 'format_station_characteristics', 'format_dialogue_examples', 'guidelines_general',
                 'guidelines_critical', 'guidelines_internal_dialogue', 'instruction_dj_tools', 'tool_guidance',
                 'station_recent_airings', 'studio_clock', 'city_pulse']

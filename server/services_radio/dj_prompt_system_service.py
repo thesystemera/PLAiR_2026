@@ -1,5 +1,7 @@
 from services import log_service
-from services.llm_router import LLM_LIVE, LLM_BACKGROUND
+from services.llm_router import LLM_ANNOUNCE, LLM_BACKGROUND
+
+VOICE_SCRIPT_ROLE = LLM_ANNOUNCE
 from config.settings import settings
 
 def gpt_error_handler(func):
@@ -22,7 +24,7 @@ class DJPromptSystemService:
         }
 
     async def _execute_gpt_stream(self, model: str, max_tokens: int, temperature: float, messages: list,
-                                  role: str = LLM_LIVE) -> str:
+                                  role: str) -> str:
         system_content = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         user_content = messages[1]["content"] if len(messages) > 1 and messages[1]["role"] == "user" else messages[0][
             "content"]
@@ -78,7 +80,8 @@ class DJPromptSystemService:
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input}
-            ]
+            ],
+            role=VOICE_SCRIPT_ROLE
         )
 
         impulse_response = impulse_response.strip()
@@ -91,17 +94,17 @@ class DJPromptSystemService:
         return user_input, impulse_response
 
     @gpt_error_handler
-    async def generate_meta_data_gpt_response(self, meta_tag):
+    async def generate_paralanguage_gpt_response(self, paralanguage_tag):
         system_prompt = (
-            "You are a language model responsible for converting meta tags or action descriptions into phonetic or "
+            "You are a language model responsible for converting paralanguage tags or action descriptions into phonetic or "
             "onomatopoeic prompts suitable for text-to-speech synthesis.\n"
-            "Your task is to take the provided meta tag or action description and generate a concise prompt that represents "
+            "Your task is to take the provided paralanguage tag or action description and generate a concise prompt that represents "
             "the intended action or sound using only phonetic transcriptions or onomatopoeic words, without including any "
-            "English words, the original meta tag/action description, or any meta tag syntax such as asterisks (*).\n"
+            "English words, the original paralanguage tag/action description, or any tag syntax such as asterisks (*).\n"
             "When generating the prompt, focus solely on capturing the verbal sounds or noises associated with the action, "
             "rather than providing descriptive phrases.\n\n"
             "Examples:\n"
-            "- For the meta tag 'scratches head', the prompt could be 'aahha-aha-mmm'\n"
+            "- For the paralanguage tag 'scratches head', the prompt could be 'aahha-aha-mmm'\n"
             "- For 'pauses briefly', the prompt could be '.......oooo......'\n"
             "- For 'laughs hysterically', the prompt could be 'phhaaahhhaahhaahahaha...'\n"
             "- For 'clears throat', the prompt could be '---h-hm---'\n"
@@ -114,26 +117,38 @@ class DJPromptSystemService:
             "- For 'nods', the prompt could be 'mm-hmm'\n"
             "- For 'playful', the prompt could be '--phhth--'\n"
             "- For 'smirks', the prompt could be 'hmph'\n"
-            "Do not use any English words, meta tag syntax, or the original meta tag/action description in the generated prompt. "
+            "Do not use any English words, tag syntax, or the original paralanguage tag/action description in the generated prompt. "
             "Respond with the generated prompt only, without any additional context or explanation."
         )
+        if settings.PARALANGUAGE_ENGINE_TAGS:
+            engine_tags = " ".join(f"[{tag}]" for tag in settings.ENGINE_SOUND_TAGS)
+            system_prompt += (
+                "\n\nThe voice engine can also perform these sounds natively when you write the tag in square brackets: "
+                f"{engine_tags}\n"
+                "Decide what renders the action best: the engine tag alone, the engine tag followed by your phonetic "
+                "prompt (when the tag is close but the action asks for more, e.g. 'laughs out loud' -> "
+                "[laugh] hhaahhahaha-haa), or your phonetic prompt alone (when no tag fits). "
+                "Use only tags from this list, written exactly as shown; these square brackets are the one exception "
+                "to the syntax rule above."
+            )
 
-        meta_data_prompt = await self._execute_gpt_stream(
+        paralanguage_prompt = await self._execute_gpt_stream(
             model=self.config['dj_model'],
             max_tokens=self.config['dj_tokens'],
             temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": meta_tag}
-            ]
+                {"role": "user", "content": paralanguage_tag}
+            ],
+            role=VOICE_SCRIPT_ROLE
         )
 
-        meta_data_prompt = meta_data_prompt.strip() if meta_data_prompt else ""
-        if not meta_data_prompt:
-            log_service.gpt(f"Meta: No prompt generated for meta tag: {meta_tag}")
+        paralanguage_prompt = paralanguage_prompt.strip() if paralanguage_prompt else ""
+        if not paralanguage_prompt:
+            log_service.gpt(f"Paralanguage: No prompt generated for tag: {paralanguage_tag}")
             return None
-        log_service.gpt(f"Meta: {meta_tag} -> {meta_data_prompt}")
-        return meta_tag, meta_data_prompt
+        log_service.gpt(f"Paralanguage: {paralanguage_tag} -> {paralanguage_prompt}")
+        return paralanguage_tag, paralanguage_prompt
 
     @gpt_error_handler
     async def generate_paralanguage_emoji(self, reaction):
@@ -188,7 +203,7 @@ class DJPromptSystemService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
             ],
-            role=LLM_BACKGROUND
+            role=VOICE_SCRIPT_ROLE
         )
 
         breath_prompt = breath_prompt.strip().strip("'\"") if breath_prompt else ""

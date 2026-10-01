@@ -18,7 +18,7 @@ class TTSDatabaseMigrationService:
 
         self.directory_map = {
             "tts_embeddings": settings.TTS_AUDIO_DIR,
-            "meta_embeddings": settings.META_AUDIO_DIR,
+            "paralanguage_embeddings": settings.PARALANGUAGE_AUDIO_DIR,
             "impulse_embeddings": settings.IMPULSE_AUDIO_DIR,
             "audio_embeddings": settings.AUDIO_EFFECT_DIR,
             "breath_embeddings": settings.BREATH_AUDIO_DIR

@@ -29,8 +29,8 @@ class VectorDBService:
 
         self.annoy_index_tts_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_tts_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-        self.annoy_index_meta_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-        self.annoy_index_meta_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_paralanguage_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
+        self.annoy_index_paralanguage_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_impulse_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_impulse_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_audio_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
@@ -40,7 +40,7 @@ class VectorDBService:
 
         self.index_pairs = {
             "tts_embeddings": (self.annoy_index_tts_1, self.annoy_index_tts_2),
-            "meta_embeddings": (self.annoy_index_meta_1, self.annoy_index_meta_2),
+            "paralanguage_embeddings": (self.annoy_index_paralanguage_1, self.annoy_index_paralanguage_2),
             "impulse_embeddings": (self.annoy_index_impulse_1, self.annoy_index_impulse_2),
             "audio_embeddings": (self.annoy_index_audio_1, self.annoy_index_audio_2),
             "breath_embeddings": (self.annoy_index_breath_1, self.annoy_index_breath_2),
@@ -80,7 +80,7 @@ class VectorDBService:
                 CREATE INDEX IF NOT EXISTS idx_{table_name}_voice 
                 ON {table_name}(voice)
             ''')
-        c.execute("ALTER TABLE meta_embeddings ADD COLUMN IF NOT EXISTS emoji TEXT")
+        c.execute("ALTER TABLE paralanguage_embeddings ADD COLUMN IF NOT EXISTS emoji TEXT")
         
         conn.commit()
         conn.close()
@@ -89,7 +89,7 @@ class VectorDBService:
     def _clip_base_directory(self, table_name: str):
         return {
             "tts_embeddings": settings.TTS_AUDIO_DIR,
-            "meta_embeddings": settings.META_AUDIO_DIR,
+            "paralanguage_embeddings": settings.PARALANGUAGE_AUDIO_DIR,
             "impulse_embeddings": settings.IMPULSE_AUDIO_DIR,
             "audio_embeddings": settings.AUDIO_EFFECT_DIR,
             "breath_embeddings": settings.BREATH_AUDIO_DIR,
@@ -126,7 +126,7 @@ class VectorDBService:
         conn = self._get_connection()
         try:
             c = conn.cursor()
-            c.execute("SELECT DISTINCT ON (lower(title)) lower(title), emoji FROM meta_embeddings WHERE emoji IS NOT NULL")
+            c.execute("SELECT DISTINCT ON (lower(title)) lower(title), emoji FROM paralanguage_embeddings WHERE emoji IS NOT NULL")
             return dict(c.fetchall())
         finally:
             conn.close()
@@ -135,7 +135,7 @@ class VectorDBService:
         conn = self._get_connection()
         try:
             c = conn.cursor()
-            c.execute("UPDATE meta_embeddings SET emoji = %s WHERE lower(title) = lower(%s)", (emoji, title))
+            c.execute("UPDATE paralanguage_embeddings SET emoji = %s WHERE lower(title) = lower(%s)", (emoji, title))
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -186,8 +186,38 @@ class VectorDBService:
                     del rows[row_id]
         log_service.tts_vector_db(f"Vector Cache: Removed stale {db_type} embedding: {filename}")
 
+    def purge_paralanguage_on_mode_change(self):
+        mode = "engine-tags" if settings.PARALANGUAGE_ENGINE_TAGS else "phonetic"
+        marker = settings.PARALANGUAGE_AUDIO_DIR / ".paralanguage_mode"
+        try:
+            if marker.read_text(encoding="utf-8").strip() == mode:
+                return
+        except OSError:
+            pass
+        removed = 0
+        for clip in settings.PARALANGUAGE_AUDIO_DIR.rglob("*.mp3"):
+            clip.unlink(missing_ok=True)
+            removed += 1
+        conn = self._get_connection()
+        try:
+            c = conn.cursor()
+            c.execute("SELECT to_regclass('paralanguage_embeddings')")
+            if c.fetchone()[0] is not None:
+                c.execute("TRUNCATE paralanguage_embeddings RESTART IDENTITY")
+            conn.commit()
+        finally:
+            conn.close()
+        for slot in (1, 2):
+            ann_file = os.path.join(str(settings.EMBEDDINGS_DIR), f"paralanguage_embeddings_{slot}.ann")
+            if os.path.exists(ann_file):
+                os.remove(ann_file)
+        settings.PARALANGUAGE_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        marker.write_text(mode, encoding="utf-8")
+        log_service.system(f"[TTS CACHE] paralanguage mode is now '{mode}': purged {removed} paralanguage clips to re-render")
+
     def load_initial_data(self):
         start_time = time.perf_counter()
+        self.purge_paralanguage_on_mode_change()
         self.drop_stale_encoder_rows()
         self.purge_missing_files()
 
@@ -207,7 +237,7 @@ class VectorDBService:
     def _load_annoy_indexes(self):
         indexes = [
             ("tts_embeddings", self.annoy_index_tts_1, self.annoy_index_tts_2),
-            ("meta_embeddings", self.annoy_index_meta_1, self.annoy_index_meta_2),
+            ("paralanguage_embeddings", self.annoy_index_paralanguage_1, self.annoy_index_paralanguage_2),
             ("impulse_embeddings", self.annoy_index_impulse_1, self.annoy_index_impulse_2),
             ("audio_embeddings", self.annoy_index_audio_1, self.annoy_index_audio_2),
             ("breath_embeddings", self.annoy_index_breath_1, self.annoy_index_breath_2)
@@ -445,7 +475,8 @@ class VectorDBService:
             db_type: str,
             top_n: int = 5,
             listener: Optional[str] = None,
-            respect_cooldown: bool = True
+            respect_cooldown: bool = True,
+            min_similarity: float = float('-inf')
     ) -> List[Tuple[str, str, float]]:
         query_start_time = time.perf_counter()
         query_embedding = self._normalized(self._embedding_for(response_str))
@@ -496,7 +527,7 @@ class VectorDBService:
                     else:
                         skipped_count += 1
 
-        all_matches.sort(key=lambda x: x[2], reverse=True)
+        all_matches = sorted((m for m in all_matches if m[2] >= min_similarity), key=lambda x: x[2], reverse=True)
 
         while all_matches and len(results) < top_n:
             current_similarity = all_matches[0][2]

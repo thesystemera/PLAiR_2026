@@ -77,7 +77,7 @@ class Settings:
 
     TTS_ENGINE_DATA_DIR: Path = BASE_DIR / "data" / "tts_dj_engine_data"
     TTS_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "tts_audio"
-    META_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "meta_audio"
+    PARALANGUAGE_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "paralanguage_audio"
     IMPULSE_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "impulse_audio"
     BREATH_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "breath_audio"
     AUDIO_EFFECT_DIR: Path = TTS_ENGINE_DATA_DIR / "audio_effect_audio"
@@ -94,7 +94,7 @@ class Settings:
 
     # TTS embedding table names (stored in ai_radio_embeddings PostgreSQL database)
     TTS_EMBEDDING_TABLES: list = [
-        "tts_embeddings", "meta_embeddings", "impulse_embeddings", "audio_embeddings", "breath_embeddings"
+        "tts_embeddings", "paralanguage_embeddings", "impulse_embeddings", "audio_embeddings", "breath_embeddings"
     ]
 
     # TTS database pools - maps table names to PostgreSQL database URL
@@ -104,7 +104,7 @@ class Settings:
         """Returns mapping of TTS embedding table names to PostgreSQL connection."""
         return {
             "tts_embeddings": self.EMBEDDINGS_DATABASE_URL,
-            "meta_embeddings": self.EMBEDDINGS_DATABASE_URL,
+            "paralanguage_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "impulse_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "audio_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "breath_embeddings": self.EMBEDDINGS_DATABASE_URL,
@@ -132,9 +132,9 @@ class Settings:
     USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
     IMPULSE_SIMILARITY_THRESHOLD: float = 0.75
-    TTS_SIMILARITY_THRESHOLD: float = 0.95
-    META_SIMILARITY_THRESHOLD: float = 0.75
-    AUDIO_SIMILARITY_THRESHOLD: float = 0.5
+    TTS_SIMILARITY_THRESHOLD: float = float(os.getenv("TTS_SIMILARITY_THRESHOLD", "0.975"))
+    PARALANGUAGE_SIMILARITY_THRESHOLD: float = float(os.getenv("PARALANGUAGE_SIMILARITY_THRESHOLD", "0.85"))
+    AUDIO_SIMILARITY_THRESHOLD: float = float(os.getenv("AUDIO_SIMILARITY_THRESHOLD", "0.75"))
     BREATH_SIMILARITY_THRESHOLD: float = 0.65
 
     VECTOR_DB_SHOTGUN_COOLDOWN: int = 600
@@ -144,16 +144,19 @@ class Settings:
     TTS_REQUEST_TIMEOUT: float = float(os.getenv("TTS_REQUEST_TIMEOUT", "120"))
     TTS_SAMPLE_RATE: int = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
 
-    TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-30"))
-    TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-8"))
+    TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-46"))
+    TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-24"))
+    PARALANGUAGE_ENGINE_TAGS: bool = os.getenv("PARALANGUAGE_ENGINE_TAGS", "true").lower() == "true"
+    ENGINE_SOUND_TAGS: tuple = ("laugh", "chuckle", "sigh", "gasp", "cough", "clear throat", "sniff", "groan",
+                                "shush", "crying", "whispering")
     VOICE_PREFERENCES: dict = {
         "jess": {"voice": "jess", "temperature": 0.8},
-        "leo": {"voice": "leo", "temperature": 0.8},
+        "leo": {"voice": "leo", "temperature": 0.8, "gain_db": float(os.getenv("LEO_GAIN_DB", "2.2"))},
         "station": {"voice": "station", "temperature": 0.8},
     }
 
     GENERATION_PERMISSIONS: dict = {
-        'meta': {'jess', 'leo'},
+        'paralanguage': {'jess', 'leo'},
         'impulse': {'jess', 'leo'},
         'sentence': {'jess', 'leo'},
         'breath': {'jess', 'leo'},
@@ -163,25 +166,25 @@ class Settings:
     TTS_BACKGROUND_CONCURRENCY: int = int(os.getenv("TTS_BACKGROUND_CONCURRENCY", "1"))
     TTS_BACKGROUND_MAX_PENDING: int = int(os.getenv("TTS_BACKGROUND_MAX_PENDING", "8"))
     TTS_BACKGROUND_REFRESH_COOLDOWN_S: int = int(os.getenv("TTS_BACKGROUND_REFRESH_COOLDOWN_S", "600"))
-    TTS_EXACT_REFRESH_ENABLED: bool = os.getenv("TTS_EXACT_REFRESH_ENABLED", "true").lower() == "true"
-    TTS_EXACT_REFRESH_BELOW: float = float(os.getenv("TTS_EXACT_REFRESH_BELOW", "0.97"))
-    TTS_EXACT_REFRESH_MAX_PER_HOUR: int = int(os.getenv("TTS_EXACT_REFRESH_MAX_PER_HOUR", "600"))
 
     AUDIO_EFFECT_CONFIG: dict = {
-        'global': {
-            'reverb': {
+        'proximity': {
+            'near_m': 0.05,
+            'far_m': 4.0,
+            'reference_m': 0.12,
+            'max_near_boost_db': 4.0,
+            'proximity_bass_db': 6.0,
+            'proximity_bass_hz': 150.0,
+            'proximity_bass_until_m': 0.3,
+            'air_loss_db': -8.0,
+            'air_loss_hz': 5000.0,
+            'output_trim_db': -3.7,
+            'room': {
                 'room_size': 0.0025,
                 'damping': 0.7,
+                'width': 1.0,
                 'wet_level': 0.15,
                 'dry_level': 0.85
-            },
-            'gain': {
-                'min_gain_db': 0,
-                'max_gain_db': -4
-            },
-            'eq': {
-                'high_shelf_cut_max': -6,
-                'low_shelf_boost_max': 3
             }
         },
         'station': {
@@ -768,7 +771,7 @@ class Settings:
 
         # TTS engine directories
         cls.TTS_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-        cls.META_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        cls.PARALANGUAGE_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.IMPULSE_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.BREATH_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.AUDIO_EFFECT_DIR.mkdir(parents=True, exist_ok=True)

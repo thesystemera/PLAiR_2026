@@ -82,9 +82,9 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 - **Streets on air.** The listener context lets the hosts name the listener's street. Privacy.
 - **Segment scripts cached word for word** (bio and lyrics for 7 days; news 20 min; weather 1 h).
-- **Clip-match thresholds** (meta and impulse 0.75, sound effects 0.5, breaths 0.65) were tuned for flan-T5 and
-  not re-tuned for mpnet. Sound effects are cache-only, so a missed `%sfx%` is silently dropped. Measure hit rates
-  first.
+- **Clip-match thresholds:** TTS (0.975), paralanguage (0.85) and sound effects (0.75) were re-measured on mpnet on
+  2026-10-01; impulse (0.75) and breaths (0.65) still date from flan-T5. Sound effects are cache-only, so a `%sfx%`
+  with no match at 0.75 is dropped.
 - **Sound-effect beds** were −80 dB (silent) in the old player and are audible now.
 - **Proximity effect is about half as strong** as the old player (`&N&` lines go through the effects chain once,
   not twice).

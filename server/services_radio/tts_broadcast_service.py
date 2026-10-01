@@ -1,36 +1,8 @@
 from pydub import AudioSegment
 from typing import Dict, List, Optional, Tuple
-from config.settings import settings
-from services import log_service
 
 CHUNK_SIZE = 8192
 CLIP_CHUNK_MS = 1000
-MAX_PEAK_DB = -1.0
-
-def sound_effect_gain_db(dbfs: float, max_dbfs: float) -> float:
-    if dbfs == float('-inf') or max_dbfs == float('-inf'):
-        return 0.0
-    gain = settings.TTS_SFX_TARGET_DBFS - dbfs
-    return min(gain, settings.TTS_SFX_MAX_PEAK_DBFS - max_dbfs)
-
-def level_sound_effect(audio: AudioSegment) -> AudioSegment:
-    if len(audio) == 0:
-        return audio
-    before_dbfs = audio.dBFS
-    gain = sound_effect_gain_db(before_dbfs, audio.max_dBFS)
-    leveled = audio.apply_gain(gain)
-    log_service.detail(
-        f"Background audio: BEFORE={before_dbfs:.1f} dBFS, AFTER={leveled.dBFS:.1f} dBFS, GAIN={gain:+.1f} dB",
-        "tts_broadcast"
-    )
-    return leveled
-
-def limit_peaks(audio_segment: AudioSegment, max_db: float = MAX_PEAK_DB) -> AudioSegment:
-    if len(audio_segment) == 0:
-        return audio_segment
-    if audio_segment.dBFS > max_db:
-        return audio_segment.apply_gain(max_db - audio_segment.dBFS)
-    return audio_segment
 
 def chunk_span(current_pos: int, audio_length: int, intensities) -> Tuple[int, bool]:
     if not isinstance(intensities, list):
@@ -83,7 +55,7 @@ class TimelineMixer:
 
     def add_background(self, audio: AudioSegment, speaker_intensities: Dict):
         self.pending_background.append({
-            'audio': level_sound_effect(audio),
+            'audio': audio,
             'speaker_intensities': speaker_intensities
         })
 
@@ -108,7 +80,7 @@ class TimelineMixer:
         self.background_queue = remaining_bg
         self.chunks_mixed += 1
         self.audio_mixed_ms += len(current_chunk)
-        return limit_peaks(mixed_chunk, MAX_PEAK_DB)
+        return mixed_chunk
 
     def mix_main(self, audio_segment: AudioSegment, speaker_intensities, start: int = 0,
                  safe_end: Optional[int] = None) -> Tuple[List[Tuple[AudioSegment, Dict]], int]:

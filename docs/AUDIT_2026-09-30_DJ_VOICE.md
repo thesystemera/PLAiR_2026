@@ -83,7 +83,7 @@ Deliberate improvements confirmed as fine: the planner, blend maths and effects 
 ## 4. Paralanguage emojis: design notes
 
 1. **Keep the owner's phonetic prompt word for word.** Get the emoji from a separate small call per new tag title (or a batch backfill like LifeSpan's seeding script), not by changing that prompt.
-2. **Store the emoji with the clip.** Add an `emoji` column on `meta_embeddings` (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`) and a `TXXX:EMOJI` ID3 frame, which re-indexing reads back.
+2. **Store the emoji with the clip.** Add an `emoji` column on `paralanguage_embeddings` (then called `meta_embeddings`) (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`) and a `TXXX:EMOJI` ID3 frame, which re-indexing reads back.
 3. **Look it up.** `paralanguage_emoji(tag)` returns the nearest paralanguage row (no threshold, voice or cooldown), cached per tag.
 4. **Apply it only at display boundaries, never to TTS input or stored text:**
    - the `dj_activity` "say" events;

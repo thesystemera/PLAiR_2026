@@ -13,10 +13,10 @@ from services import log_service
 from services import usage_tracking
 from services import listener_timeline
 from services.task_utils import spawn
-from services_radio.tts_broadcast_service import TimelineMixer, limit_peaks, CLIP_CHUNK_MS
+from services_radio.tts_broadcast_service import TimelineMixer, CLIP_CHUNK_MS
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GENERATED_TYPES
 from services_radio.tts_live_stream import LiveStreamEncoder
-from services_radio.tts_processing_service import decode_mp3
+from services_radio.tts_processing_service import MotionSlot, MotionTrack, decode_mp3
 from services_radio.tts_voice_threads import voice_thread
 from services_radio import talk_clock
 
@@ -26,11 +26,28 @@ SESSION_WORKER_IDLE_TIMEOUT_S = 60.0
 RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
-FILLER_SECONDS = {'meta': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
+FILLER_SECONDS = {'paralanguage': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 PACE_KIND = {'announcer': 'announcer', 'interactive': 'chat', 'sting': None, 'shoutouts': None}
 
 RADIO_BREAK_TYPE = 'radio_segment'
+HOST_VOICE_TYPES = frozenset({'sentence', 'paralanguage', 'impulse', 'breath'})
+
+
+def motion_track(segment: Dict) -> Optional[str]:
+    return segment['speaker'] if segment['type'] in HOST_VOICE_TYPES else None
+
+
+def own_track_mix(ordered_content: List[Dict], index: int, step: int) -> Optional[float]:
+    track = motion_track(ordered_content[index])
+    if track is None:
+        return None
+    position = index + step
+    while 0 <= position < len(ordered_content):
+        if motion_track(ordered_content[position]) == track:
+            return ordered_content[position].get('audio_process', 0.0)
+        position += step
+    return None
 
 
 def plain_script(spoken: List[Dict]) -> str:
@@ -85,6 +102,7 @@ class _SegmentRender:
         self.resolved = asyncio.Event()
         self.rate: Optional[int] = None
         self.task: Optional[asyncio.Task] = None
+        self.motion: Optional[MotionSlot] = None
 
     def resolve(self, rate: Optional[int]):
         if not self.resolved.is_set():
@@ -117,93 +135,76 @@ class IncrementalBlend:
     def __init__(self):
         self.segments: List[Dict] = []
         self.audio = AudioSegment.empty()
-        self.total_duration = 0
+        self.cursor = 0
         self.timeline: List[Dict] = []
+        self._held_breath: Optional[Dict] = None
+
+    @property
+    def total_duration(self) -> int:
+        return len(self.audio)
 
     def add(self, segment: Dict):
-        segments_to_blend = self.segments
-        segments_to_blend.append(segment)
-        i = len(segments_to_blend) - 1
-
+        held = self._take_held_breath(segment)
+        self.segments.append(segment)
         if segment['audio'] is None:
             return
+        if segment.get('type') == 'breath':
+            self._held_breath = segment
+            return
         try:
-            segment_audio = segment['audio']
-            segment_duration = len(segment_audio)
             speaker = segment.get('speaker', '')
-            audio_process = segment.get('audio_process', 0.0)
-
-            if i == 0:
-                self.audio += segment_audio
-                self.timeline.append({
-                    'start': 0,
-                    'duration': segment_duration,
-                    'speaker': speaker,
-                    'intensity': audio_process
-                })
-                self.total_duration += segment_duration
-                return
-
-            overlap_chars = segment.get('overlap', 0)
-            previous_segments_chars = sum(s.get('char_count', 0) for s in segments_to_blend[:i])
-            overlap_ratio = overlap_chars / previous_segments_chars if previous_segments_chars > 0 else 0
-
-            prev_speaker = segments_to_blend[i - 1].get('speaker', '')
-            if speaker == prev_speaker:
-                blend_position = self.total_duration
-                overlap_duration = 0
-            else:
-                overlap_ratio = min(overlap_ratio, 0.5)
-                overlap_duration = int(self.total_duration * overlap_ratio)
-                overlap_duration = min(overlap_duration, self.total_duration)
-                blend_position = self.total_duration - overlap_duration
-                own_voice_end = self._voice_end(speaker)
-                if blend_position < own_voice_end:
-                    blend_position = own_voice_end
-                    overlap_duration = self.total_duration - blend_position
-
-            try:
-                self.timeline.append({
-                    'start': blend_position,
-                    'duration': segment_duration,
-                    'speaker': speaker,
-                    'intensity': audio_process
-                })
-
-                temp_blend = self.audio.overlay(segment_audio, position=blend_position)
-                if temp_blend.dBFS >= -1.0:
-                    gain_reduction = -1.0 - temp_blend.dBFS
-                    segment_audio = segment_audio.apply_gain(gain_reduction)
-
-                self.audio = self.audio.overlay(segment_audio, position=blend_position)
-                self.audio += segment_audio[overlap_duration:]
-                self.total_duration = len(self.audio)
-
-            except Exception as e:
-                log_service.error(f"Audio Blending: Failed to blend segment {i}: {e}")
-
+            start = max(0, self.cursor - self._overlap_ms(segment, self.segments[:-1]))
+            if speaker in VOICE_SPEAKERS:
+                start = max(start, self._voice_end(speaker))
+            if held is not None:
+                start = self._place(held, start)
+            end = self._place(segment, start)
+            if segment.get('type') != 'audio':
+                self.cursor = max(self.cursor, end)
         except Exception as e:
-            log_service.error(f"Audio Blending: Failed to process segment {i}: {e}")
+            log_service.error(f"Audio Blending: Failed to blend segment {len(self.segments) - 1}: {e}")
+
+    def _take_held_breath(self, segment: Dict) -> Optional[Dict]:
+        held, self._held_breath = self._held_breath, None
+        if held is None or segment.get('type') != 'sentence' or segment.get('speaker') != held.get('speaker')                 or held.get('char_end') != segment.get('char_start'):
+            return None
+        return held
+
+    def _place(self, segment: Dict, start: int) -> int:
+        audio = segment['audio']
+        if not self.timeline and len(self.audio) == 0:
+            self.audio = AudioSegment.silent(duration=start, frame_rate=audio.frame_rate).set_channels(
+                audio.channels) + audio if start else audio
+        else:
+            missing = start + len(audio) - len(self.audio)
+            if missing > 0:
+                self.audio += AudioSegment.silent(duration=missing, frame_rate=self.audio.frame_rate).set_channels(
+                    self.audio.channels)
+            self.audio = self.audio.overlay(audio, position=start)
+        self.timeline.append({
+            'start': start,
+            'duration': len(audio),
+            'speaker': segment.get('speaker', ''),
+            'intensity': segment.get('audio_process', 0.0)
+        })
+        return start + len(audio)
+
+    def _overlap_ms(self, segment: Dict, previous: List[Dict]) -> int:
+        overlap_chars = segment.get('overlap', 0)
+        previous_chars = sum(s.get('char_count', 0) for s in previous)
+        if overlap_chars <= 0 or previous_chars <= 0:
+            return 0
+        return int(self.cursor * min(overlap_chars / previous_chars, 0.5))
 
     def _voice_end(self, speaker: str) -> int:
-        if speaker not in VOICE_SPEAKERS:
-            return 0
         return max(
             (entry['start'] + entry['duration'] for entry in self.timeline if entry['speaker'] == speaker),
             default=0
         )
 
     def safe_end(self, future_segments: List[Dict]) -> int:
-        total = self.total_duration
-        previous_chars = sum(s.get('char_count', 0) for s in self.segments)
-        bound = total
-        for segment in future_segments:
-            overlap_chars = segment.get('overlap', 0)
-            if overlap_chars <= 0:
-                continue
-            ratio = min(overlap_chars / previous_chars, 0.5) if previous_chars > 0 else 0.5
-            bound = min(bound, total - int(total * ratio))
-        return bound
+        return min([self.cursor] + [self.cursor - self._overlap_ms(segment, self.segments)
+                                    for segment in future_segments])
 
     def temporal_intensities(self) -> List[Dict]:
         change_points = set()
@@ -428,6 +429,11 @@ class TTSQueueManager:
         log_service.tts_queue_manager(f"DJ voice for {listener}: {kind} started | {shape}{quote}")
 
         renders = [_SegmentRender(index, segment) for index, segment in enumerate(ordered_content)]
+        motion_tracks: Dict[str, MotionTrack] = {}
+        for render in renders:
+            track = motion_track(render.segment)
+            if track is not None:
+                render.motion = motion_tracks.setdefault(track, MotionTrack()).slot()
         renders_by_segment = {id(render.segment): render for render in renders}
         turn = _Turn(next(self._turn_seq), owner, renders)
         encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id)
@@ -448,7 +454,7 @@ class TTSQueueManager:
             await encoder.start()
             if lead_in is not None:
                 for audio, intensities in lead_in.pieces():
-                    await encoder.feed(limit_peaks(audio), intensities)
+                    await encoder.feed(audio, intensities)
 
             for plan_item in stream_plan:
                 if plan_item['type'] == 'blend':
@@ -514,7 +520,7 @@ class TTSQueueManager:
         try:
             await encoder.start()
             for audio, intensities in clip.pieces():
-                await encoder.feed(limit_peaks(audio), intensities)
+                await encoder.feed(audio, intensities)
             completed = True
         finally:
             if completed:
@@ -586,12 +592,8 @@ class TTSQueueManager:
         rank = turn.rank(segment_index)
         generation = self.tts_generation_service
 
-        previous_segment_end_mix = None
-        next_segment_start_mix = None
-        if segment_index > 0 and ordered_content[segment_index - 1]['speaker'] == content_voice:
-            previous_segment_end_mix = ordered_content[segment_index - 1].get('audio_process', 0.0)
-        if segment_index < len(ordered_content) - 1 and ordered_content[segment_index + 1]['speaker'] == content_voice:
-            next_segment_start_mix = ordered_content[segment_index + 1].get('audio_process', 0.0)
+        previous_segment_end_mix = own_track_mix(ordered_content, segment_index, -1)
+        next_segment_start_mix = own_track_mix(ordered_content, segment_index, 1)
 
         audio_segment = None
         file_path = None
@@ -608,8 +610,6 @@ class TTSQueueManager:
                     listener=owner
                 )
                 cached_file_path = cached[0] if cached else None
-                if cached and can_generate:
-                    generation.note_cache_match(embeddings_type, clip_voice, tag, cached[1])
                 if cached_file_path:
                     render.resolve(await generation.clip_rate(cached_file_path))
                 elif can_generate and embeddings_type in GENERATED_TYPES:
@@ -621,7 +621,8 @@ class TTSQueueManager:
                     tag, embeddings_type, clip_voice, cached_file_path,
                     audio_process_mix, previous_segment_end_mix, next_segment_start_mix,
                     can_generate=can_generate, owner=owner, rank=rank, group=turn.group,
-                    before_generation=lambda: turn.wait_resolved_before(segment_index)
+                    before_generation=lambda: turn.wait_resolved_before(segment_index),
+                    motion=render.motion
                 )
 
             elif content_type == 'user_content':
@@ -664,6 +665,8 @@ class TTSQueueManager:
             log_service.error(f"Unexpected error: {e}")
         finally:
             render.resolve(NO_AUDIO)
+            if render.motion is not None:
+                render.motion.release()
 
         return None
 

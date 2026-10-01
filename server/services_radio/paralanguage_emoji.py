@@ -23,7 +23,7 @@ class ParalanguageEmoji:
     """Shows paralanguage tags (~laughs~) as emojis in the chat, the LifeSpan way.
 
     Every paralanguage title in the voice cache gets an emoji from a small LLM call, stored on its
-    meta_embeddings rows. A tag in outgoing chat text is shown as the emoji of the closest cached
+    paralanguage_embeddings rows. A tag in outgoing chat text is shown as the emoji of the closest cached
     title. Stored conversation text keeps the raw tags.
     """
 
@@ -72,7 +72,7 @@ class ParalanguageEmoji:
         if key in titles:
             self._by_tag[key] = titles[key]
             return titles[key]
-        for title in await asyncio.to_thread(self.db.nearest_titles, 'meta_embeddings', key, 5):
+        for title in await asyncio.to_thread(self.db.nearest_titles, 'paralanguage_embeddings', key, 5):
             known = titles.get(title.strip().lower())
             if known:
                 self._by_tag[key] = known
