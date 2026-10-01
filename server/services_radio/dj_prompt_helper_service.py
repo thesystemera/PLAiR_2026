@@ -180,6 +180,16 @@ INTERNAL_MARKER_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE)
 
 
+NEGATIVE_TIME_SHIFT = re.compile(r'@-\d+@')
+
+
+def correct_negative_time_shifts(text: str) -> str:
+    shifts = NEGATIVE_TIME_SHIFT.findall(text)
+    if shifts:
+        log_service.filter(f"[TAG CLEANUP] Corrected {len(shifts)} negative time-shift tag(s) ({shifts[0]}) to @0@")
+    return NEGATIVE_TIME_SHIFT.sub('@0@', text)
+
+
 def normalize_internal_marker(text: str) -> str:
     def replacer(match):
         if match.group(0) != '[INTERNAL DIALOGUE]':
@@ -211,6 +221,7 @@ def clean_gpt_output(text, role='dj_content'):
 
     text = remove_consecutive_duplicates(text)
     text = normalize_internal_marker(text)
+    text = correct_negative_time_shifts(text)
 
     original_text = text
     removed_parts = []
