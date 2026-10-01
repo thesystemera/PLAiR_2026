@@ -486,7 +486,8 @@ Set needs_tools=true when the hosts must find something out or make something ha
 - the listener pointing back at something that already played for them and isn't simply the current, previous or
   next track: an earlier song, a shoutout, reply or review they heard, a segment that aired or something the hosts
   said earlier (what_aired, then the action tool if they want something done);
-- a music request or a question about what the catalog has (search_and_play, pulse_search);
+- a music request or a question about what the catalog has (search_and_play, pulse_search); the listener trying to
+  pin down one particular song or band from clues (find_tracks, then search_and_play with the chosen track_id);
 - saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_review);
 - any command: skip, go back, pause, resume, restart or jump within the song, drop a queued track
   (playback_control), like or ban a track or a shoutout (rate_track), more like this (seed_radio), a playlist

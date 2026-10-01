@@ -1,6 +1,13 @@
+import re
 from typing import Dict, Any
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
+
+
+VOCAL_SENTENCE = re.compile(
+    r"[^.\n]*\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b[^.\n]*", re.I)
+WHO_SINGS = {"m": "male vocals", "f": "female vocals"}
+VOCAL_TEXT_MAX_CHARS = 400
 
 
 class CatalogVectorDatabaseService(BaseVectorDatabaseService):
@@ -100,7 +107,8 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         theme_text = (derived_tags.get("lyrical_interpretation") or "")[:300]
         lyrics_text = (params.get("prompt") or "")[:200]
         vocal_keywords = derived_tags.get("vocal_style_keywords") or []
-        vocal_text = ', '.join(vocal_keywords) if isinstance(vocal_keywords, list) else ""
+        vocal_text = self._vocal_text(params, style_text,
+                                      ', '.join(vocal_keywords) if isinstance(vocal_keywords, list) else "")
 
         return {
             "song_title": song_title,
@@ -114,3 +122,12 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
             "lyrics": lyrics_text,
             "vocal": vocal_text
         }
+
+    @staticmethod
+    def _vocal_text(params: Dict[str, Any], style_text: str, keywords: str) -> str:
+        if params.get("instrumental"):
+            return ", ".join(part for part in ("instrumental, no vocals", keywords) if part)
+        parts = [WHO_SINGS.get(params.get("vocal_gender") or "")]
+        parts += [match.group(0).strip(" ,;:") for match in VOCAL_SENTENCE.finditer(style_text)]
+        parts.append(keywords)
+        return ". ".join(dict.fromkeys(part for part in parts if part))[:VOCAL_TEXT_MAX_CHARS]

@@ -41,7 +41,7 @@ RADIO_TOGGLES = {
 MUSIC_SOURCES = ["both", "human", "ai"]
 
 SAVE_TOOLS = {"save_shoutout", "save_shoutout_reply", "save_review"}
-READ_TOOLS = {"pulse_search", "pulse_detail", "listener_context", "city_trends", "what_aired"}
+READ_TOOLS = {"pulse_search", "pulse_detail", "listener_context", "city_trends", "what_aired", "find_tracks"}
 TOOLS_PREFIX = "[STUDIO TOOLS]"
 PULSE_KINDS = ["event", "place", "news", "weather", "area", "artist", "track", "community", "review", "chart", "trend"]
 PULSE_WHEN = ["now", "today", "tonight", "tomorrow", "weekend", "week", "month"]
@@ -86,6 +86,9 @@ WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
                          "favourites when they ask for something of their own: 'one of my favourites', 'that song "
                          "I liked', or a description of a track they know they have liked."}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
+FIND_DEFAULT = 8
+FIND_MAX = 15
+STARTS_WITH_MAX_CHARS = 20
 SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your reply. It needs one hand-off line "
                 "in total: if you already said a line with this call, that was it - go straight to your notes and "
                 "[TASK]. Do not invent the details.")
@@ -235,25 +238,61 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "search_and_play",
         "cost": "memory",
-        "summary": "find tracks with the station's smart search and play or queue them",
-        "description": "Find tracks and play the best match now, or queue matches after the current track. By "
-                       "default it is the station's smart search, the same one the app's search box uses: give it "
-                       "the listener's words and it works out which aspects they mean (genre, mood, style, vocals, "
-                       "theme, lyrics, artist) and weighs them. Name a category only to pin the search to one "
-                       "field: primary_artist or song_title for an exact name, which also says plainly when the "
-                       "catalog doesn't have it and what the closest match was. Use it whenever the listener wants "
-                       "to hear something. Typical pattern: mode 'play' for the main request, 'queue' for extras.",
+        "summary": "play or queue music: search and play in one step, or play a track you picked by its id",
+        "description": "Plays music. Two ways to use it. (1) Search and play in one step, when any good match will "
+                       "do or the listener names exactly what they want: a mood, genre or vibe ('something dreamy', "
+                       "'jazz'), or an artist or song by name. When they want one particular band or song they can "
+                       "only describe, use find_tracks first instead. The search is the station's smart search, the same one the app's "
+                       "search box uses: it works out which aspects the words mean (genre, mood, style, vocals, "
+                       "theme, lyrics, artist) and weighs them; name a category to pin one field (primary_artist or "
+                       "song_title for an exact name, which also says plainly when the catalog doesn't have it). "
+                       "It plays the closest match straight away, unseen. (2) Play a specific track you have already "
+                       "picked: pass its track_id (from find_tracks, what_aired or pulse_search). When the listener "
+                       "is trying to pin down one particular song or band from clues rather than asking for a vibe, "
+                       "don't play the closest match blind: look with find_tracks first, then play the one that fits "
+                       "here by track_id. Typical patterns: mode 'play' for the main request, 'queue' for extras; "
+                       "find_tracks, then search_and_play(track_id=..., mode='play').",
         "parameters": _schema({
             "query": _string("What to search for, in the listener's own words: 'Nine Inch Nails', 'melancholic', "
-                             "'90s rock with a male and a female singer', 'something dreamy with TR-808 drums'."),
-            "mode": _enum(["play", "queue"], "play = start the first match now; queue = add matches after the "
-                                             "current track."),
+                             "'something dreamy with TR-808 drums'. Leave out when you pass track_id."),
+            "mode": _enum(["play", "queue"], "play = start it now; queue = add it after the current track."),
+            "track_id": _string("A track you picked, by its id from find_tracks, what_aired or pulse_search: plays "
+                                "exactly that track instead of searching."),
             "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search. Or pin one field: "
                                                  "song_title, primary_artist, similar_artists, primary_genre, "
                                                  "secondary_genres (sub-genres/tags), mood, style (production), "
                                                  "theme (lyrical subject), vocal (delivery), lyrics."),
             "within": WITHIN,
-        }, ["query", "mode"]),
+        }, ["mode"]),
+    },
+    {
+        "name": "find_tracks",
+        "cost": "memory",
+        "summary": "look through the catalog and get candidates to choose from, without playing anything",
+        "description": "Looks through the PLAiR catalog and returns the closest tracks for you to choose from: title, "
+                       "artist, genre, who sings and a line on the sound, with each track's id. Nothing plays. Use it "
+                       "when the listener is trying to pin down one particular band, artist or song from clues "
+                       "('that 90s band with a guy and a girl singing', 'the one that goes...', 'I think it starts "
+                       "with S'), or whenever you want to see what fits before playing. Work it out like a DJ would: "
+                       "the catalog search goes by sound and meaning, so it can't get from clues like a first letter, "
+                       "a decade or who is in the band to a name; your own music knowledge can. First think which "
+                       "real artists or songs fit the clues, then in the same step call find_tracks once with the "
+                       "clues and once for each likely name (category primary_artist or song_title). The pick is "
+                       "yours: play the best fit with search_and_play track_id, the way a DJ would, without asking "
+                       "the listener to confirm.",
+        "parameters": _schema({
+            "query": _string("The listener's clues in their own words, or a name to check: '90s band with a male "
+                             "and a female singer', 'Sonic Youth'."),
+            "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search over the clues. "
+                                                 "primary_artist or song_title to check a name; or one other field "
+                                                 "as in search_and_play."),
+            "within": WITHIN,
+            "starts_with": _string("Optional: only artists whose name starts with these letters, e.g. 'S' (a leading "
+                                   "'The' is ignored); with category song_title, titles instead. The whole catalog "
+                                   "is filtered, so use it when the listener remembers how the name starts."),
+            "how_many": {"type": "number", "description": f"How many candidates: {FIND_DEFAULT} by default, up to "
+                                                          f"{FIND_MAX}."},
+        }, ["query"]),
     },
     {
         "name": "playback_control",
@@ -500,7 +539,9 @@ def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
         kinds = args.get("kinds") or list(KIND_SEGMENTS)
         return list(dict.fromkeys(KIND_SEGMENTS[kind] for kind in kinds if kind in KIND_SEGMENTS))
     if name == "search_and_play":
-        return ["pulse_search", "seed_radio"]
+        return ["find_tracks", "pulse_search", "seed_radio"]
+    if name == "find_tracks":
+        return ["pulse_search"]
     if name == "pulse_detail":
         return ["pulse_search"]
     if name in SEGMENT_TOOLS:
@@ -511,7 +552,7 @@ def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
 EXTRA_TOOL_NAMES = [declaration.name for declaration in DJ_FUNCTION_DECLARATIONS]
 READ_TOOLS.add("request_tools")
 TOOL_NAMES = set(EXTRA_TOOL_NAMES)
-CORE_TOOLS = {"pulse_search", "pulse_detail", "search_and_play", "playback_control", "rate_track"}
+CORE_TOOLS = {"pulse_search", "pulse_detail", "search_and_play", "find_tracks", "playback_control", "rate_track"}
 TOOL_COMPANIONS = {"pulse_search": {"pulse_detail"}, "city_trends": {"pulse_detail"}}
 
 
@@ -557,6 +598,7 @@ ACTIVITY = {
     "what_aired": "checking the log of what's been on air",
     "city_trends": "checking what the whole city's been playing",
     "search_and_play": "digging through the crates for {query}",
+    "find_tracks": "flipping through the records for {query}",
     "seed_radio": "building a station around this track",
     "move_playback": "checking the listener's devices",
     "play_playlist": "lining up the playlist",
@@ -666,8 +708,13 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
     if name in ("listener_context", "city_trends"):
         return _brace(name, value=args.get("topic"))
     if name == "search_and_play":
+        if args.get("track_id"):
+            return _brace("play" if args["mode"] == "play" else "cue", "track", value=args["track_id"])
         return _brace("play" if args["mode"] == "play" else "cue", args["category"],
                       args["within"] if args.get("within") != "catalog" else "", value=args["query"])
+    if name == "find_tracks":
+        return _brace("find", args["category"], args["within"] if args.get("within") != "catalog" else "",
+                      f"starts with {args['starts_with']}" if args.get("starts_with") else "", value=args["query"])
     if name == "playback_control":
         action = args["action"]
         if action == "seek":
@@ -846,9 +893,18 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     if name == "city_trends":
         return {"topic": text("topic") or ""}
     if name == "search_and_play":
-        return {"category": choice("category", SEARCH_CATEGORIES, "description"), "query": text("query", True),
+        track_id = (text("track_id") or "").split(":")[-1]
+        if track_id and not _TRACK_ID.match(track_id):
+            raise ValueError("'track_id' must be a track id from find_tracks, what_aired or pulse_search")
+        return {"category": choice("category", SEARCH_CATEGORIES, "description"),
+                "query": text("query", required=not track_id), "track_id": track_id or None,
                 "mode": choice("mode", ["play", "queue"], "play"),
                 "within": choice("within", SEARCH_SCOPES, "catalog")}
+    if name == "find_tracks":
+        return {"query": text("query", True), "category": choice("category", SEARCH_CATEGORIES, "description"),
+                "within": choice("within", SEARCH_SCOPES, "catalog"),
+                "starts_with": (text("starts_with") or "")[:STARTS_WITH_MAX_CHARS] or None,
+                "how_many": int(number("how_many", FIND_DEFAULT, FIND_MAX))}
     if name == "playback_control":
         action = choice("action", PLAYBACK_ACTIONS)
         if action == "seek":
@@ -972,6 +1028,7 @@ class DJToolRuntime:
         self.ctx = ctx
         self._handlers: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
             "search_and_play": self._search_and_play,
+            "find_tracks": self._find_tracks,
             "playback_control": self._playback_control,
             "seed_radio": self._seed_radio,
             "play_playlist": self._play_playlist,
@@ -1200,12 +1257,24 @@ class DJToolRuntime:
         self.executor.spawn_segment(coro, self.session_dict, f"dj_tool_{name}")
         return {"status": "scheduled", "note": SEGMENT_NOTE}
 
-    async def _search_and_play(self, args):
+    @staticmethod
+    def _catalog_query(args) -> str:
         prefix = SEARCH_CATEGORY_PREFIXES[args["category"]]
-        query = f"{prefix}: {args['query']}" if prefix else args["query"].replace(": ", " ")
+        return f"{prefix}: {args['query']}" if prefix else args["query"].replace(": ", " ")
+
+    async def _search_and_play(self, args):
         async with self.ctx.playback_lock:
-            return await self.executor.execute_searches(self.session_dict, [(query, args["mode"] == "play")],
+            if args.get("track_id"):
+                return await self.executor.execute_play_ids(self.session_dict, [args["track_id"]],
+                                                            args["mode"] == "play")
+            return await self.executor.execute_searches(self.session_dict,
+                                                        [(self._catalog_query(args), args["mode"] == "play")],
                                                         within=args.get("within"))
+
+    async def _find_tracks(self, args):
+        return await self.executor.find_tracks(self.session_dict, self._catalog_query(args),
+                                               within=args.get("within"), how_many=args["how_many"],
+                                               starts_with=args.get("starts_with"))
 
     async def _playback_control(self, args):
         async with self.ctx.playback_lock:

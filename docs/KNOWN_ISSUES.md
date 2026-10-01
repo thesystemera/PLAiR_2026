@@ -50,7 +50,8 @@ anything else is carried over as written.
 - **The announcer's length.** One announcement ran 32 s in a ~9 s gap. The log line `announcement | window … |
   wrote N words` and the saved prompt in `dj_turns.jsonl` will show what happened; nothing has been read yet.
   Suspect: the time constraint sits mid-prompt, before the talking-points menu.
-- **`search_and_play` plays the closest match straight away** when nothing matches, before the DJs can ask.
+- **Picking a track from clues: built 1 Oct, watch it live.** `find_tracks` lets the hosts look before they play. End-to-end runs (`tests/dj_find_test.py`): the Sonic Youth request 2 of 2, Pixies 2 of 2, Aphex Twin 2 of 2, a plain vibe 2 of 2; the Stereolab one ('French woman over Moog synths ... play them') 0 of 2: the hosts read 'play them' as a vibe and searched blind. Some catalog tracks have no artist at all ('Afterimage'), so they show up as 'by -'.
+- **The catalog's vocal category now says who sings** (male / female / instrumental plus the style's sentences about the vocals; it used to be delivery keywords only). Measured: 'instrumental, no vocals' 0 -> 6 instrumentals in the top 10, the French-accented singer #2 -> #1. The Annoy index (seed radio) keeps the old vocal vectors until its next rebuild.
 - **Not yet tried in the real app:** a real move between two devices, the guest Radio Mode change in a browser, a
   reply to an earlier shoutout by id, Radio Mode breaks and reviews in `what_aired`, asking by clock time, the
   exact-title queue change, the "tool call limit" refusal message, favourites search against a large like list,

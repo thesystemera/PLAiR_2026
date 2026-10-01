@@ -18,6 +18,7 @@ const LOOKUP_EFFECT = { x: 0.5, y: 0.3, intensity: 0.5 }
 
 const TOOL_ICONS = {
   search_and_play: Disc3,
+  find_tracks: Search,
   playback_control: SkipForward,
   seed_radio: Radio,
   play_playlist: Radio,
