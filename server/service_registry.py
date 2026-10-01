@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from services_radio.tts_stream_planner import TTSStreamPlanner
     from services_radio.tts_queue_manager import TTSQueueManager
     from services_radio.tts_broadcast_service import AudioBroadcastService
+    from services_radio.filler_scripts import FillerScripts
     from services_radio.dj_prompt_service import DJPromptService
     from services_radio.dj_prompt_system_service import DJPromptSystemService
     from services_radio.dj_command_executor import CommandExecutorService
@@ -69,6 +70,7 @@ class ServiceRegistry:
         self.tts_stream_planner: Optional["TTSStreamPlanner"] = None
         self.tts_queue_manager: Optional["TTSQueueManager"] = None
         self.tts_broadcast_service: Optional["AudioBroadcastService"] = None
+        self.filler_scripts: Optional["FillerScripts"] = None
         self.dj_prompt_service: Optional["DJPromptService"] = None
         self.dj_prompt_system_service: Optional["DJPromptSystemService"] = None
         self.command_executor: Optional["CommandExecutorService"] = None

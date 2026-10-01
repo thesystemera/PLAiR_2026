@@ -89,6 +89,7 @@ from services import log_service
 from services import usage_tracking
 from database import init_db, engine, AsyncSessionLocal
 from services_radio.conversation_service import conversation_service
+from services_radio.filler_scripts import FillerScripts
 from config import settings
 
 from service_registry import services
@@ -516,6 +517,10 @@ async def lifespan(_app: FastAPI):
     log_service.success("✓ Command Executor initialized")
 
     log_service.system("Initializing conversation service...")
+    services.filler_scripts = filler_scripts = FillerScripts(
+        dj_prompt_system_service, tts_generation_service, tts_queue_manager, dj_prompt_service)
+    await asyncio.to_thread(filler_scripts.load)
+
     conversation_service.initialize(
         dj_prompt_service=dj_prompt_service,
         tts_queue_manager=tts_queue_manager,
@@ -524,7 +529,8 @@ async def lifespan(_app: FastAPI):
         whisper_service=whisper_dual_service,
         ai_service=ai_service,
         broadcast_func=websocket_service.broadcast_to_session,
-        broadcast_all_func=websocket_service.broadcast_to_all_users
+        broadcast_all_func=websocket_service.broadcast_to_all_users,
+        fillers=filler_scripts
     )
     log_service.success("✓ Conversation service initialized")
 

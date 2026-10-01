@@ -18,6 +18,7 @@ from services_radio.context_node_registry import node_registry
 from services_radio.context_service import gather_raw_dependencies
 from services_radio import listener_location as location_resolver
 from services_radio import talk_clock
+from services_radio.filler_scripts import plain_talk
 from services_radio.context_router_service import context_router_service
 from services import log_service
 from services.llm_router import LLM_LIVE, LLM_DJ, LLM_ANNOUNCE, LLM_INTERPRET
@@ -895,8 +896,11 @@ class DJPromptService:
 
         log_service.gpt(f"Interactive Tools: Prompt System: {system_prompt}")
 
-        user_message = f"{live_context}\n\n[LISTENER TXT] {transcription}" if live_context else \
-            f"[LISTENER TXT] {transcription}"
+        aired = " / ".join(filter(None, (plain_talk(text) for text in session_dict.get('on_air') or [])))
+        on_air_note = (f"[ON AIR JUST NOW] You already reacted on air: \"{aired}\". Carry on from it naturally; "
+                       "don't repeat it.\n\n") if aired else ""
+        user_message = f"{live_context}\n\n{on_air_note}[LISTENER TXT] {transcription}" if live_context else \
+            f"{on_air_note}[LISTENER TXT] {transcription}"
         log_service.gpt(f"Interactive Tools: Prompt User: {user_message}")
 
         spoken_preambles = []

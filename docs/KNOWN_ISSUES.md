@@ -77,7 +77,7 @@ anything else is carried over as written.
   day and find third rounds that added nothing (the `[TASK]` review step); the `(75 chars)` notes in the example
   dialogue are copied into replies (owner's call, they may teach overlap timing); guest padding ("Unknown
   Location", "None (Guest)"); City Pulse noise (weather and area items carry unrelated "linked" news, two takes of
-  one song list as identical lines); whether the ~3 s filler before every reply is still wanted.
+  one song list as identical lines).
 
 ## 4. Owner decisions
 
@@ -86,7 +86,8 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 - **Streets on air.** The listener context lets the hosts name the listener's street. Privacy.
 - **Segment scripts cached word for word** (bio and lyrics for 7 days; news 20 min; weather 1 h).
 - **Clip-match thresholds:** TTS (0.975), paralanguage (0.85) and sound effects (0.75) were re-measured on mpnet on
-  2026-10-01; impulse (0.75) and breaths (0.65) still date from flan-T5. Sound effects are cache-only, so a `%sfx%`
+  2026-10-01; breaths (0.65) still date from flan-T5. Impulse and interlude scripts always play the closest script and
+  write a better one under `FILLER_LEARN_BELOW` (0.6, LifeSpan's value, not yet measured on mpnet). Sound effects are cache-only, so a `%sfx%`
   with no match at 0.75 is dropped.
 - **Sound-effect beds** were −80 dB (silent) in the old player and are audible now.
 - **Proximity effect is about half as strong** as the old player (`&N&` lines go through the effects chain once,
@@ -143,9 +144,12 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   stream's own clock (`DJStreamPlayer.getProgress`, `TalkBreakController.progress`); other devices work it out
   from `talk_break.on_air_at_ms` and `server_time_ms` (they don't freeze while the break is paused). Check it on
   the next break after PLAiR Start.
-- **LifeSpan ideas not ported** (audit section 3): text normalisation before TTS (units, URLs, "feat."), filler
-  lines shown in chat and told to the model, richer clip metadata, a stateful limiter and reverb (A/B first),
-  prelude and interlude fillers, per-round timing and cost in the turn log, history hygiene.
+- **LifeSpan ideas not ported** (audit section 3): text normalisation before TTS (units, URLs, "feat."), richer
+  clip metadata, a stateful limiter and reverb (A/B first), prelude, interject and interrupt fillers, per-round
+  timing and cost in the turn log, history hygiene. Impulse and interlude scripts were ported on 2026-10-01.
+- **Fillers next (owner's ideas):** impulses as a "fly on the wall" view of the studio; a vector conversation store
+  so impulse and interlude keys match by meaning across sessions; interludes aired mid-turn are not yet told to
+  the DJ model between tool rounds (only the impulse is, via `[ON AIR JUST NOW]`).
 - **City Pulse:** the places city sweep was never seen running after deploy (`regional_knowledge_refresher`);
   `local_nuggets` view went missing once on a running backend (30 Sep, cause not found); RNZ blocks page reads
   (no summaries); watch `[WEB] … rate limited` for Google link lookups.

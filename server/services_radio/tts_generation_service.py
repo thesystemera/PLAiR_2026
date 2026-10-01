@@ -45,7 +45,6 @@ CLIP_AUDIO_CACHE_BYTES = max(0, int(os.getenv("TTS_CLIP_AUDIO_CACHE_MB", "96")))
 
 EMBEDDINGS_BY_CONTENT_TYPE = {
     'paralanguage': 'paralanguage_embeddings',
-    'impulse': 'impulse_embeddings',
     'sentence': 'tts_embeddings',
     'breath': 'breath_embeddings',
     'audio': 'audio_embeddings'
@@ -55,9 +54,8 @@ FILLER_TYPES = {
     'breath_embeddings': 'breath',
     'tts_embeddings': 'sentence',
     'paralanguage_embeddings': 'paralanguage',
-    'impulse_embeddings': 'impulse',
 }
-GENERATED_TYPES = ('tts_embeddings', 'paralanguage_embeddings', 'impulse_embeddings', 'breath_embeddings')
+GENERATED_TYPES = ('tts_embeddings', 'paralanguage_embeddings', 'breath_embeddings')
 PREPARE_INPUT = {
     'audio_embeddings': level_sound_effect,
     'breath_embeddings': trim_breath,
@@ -151,7 +149,6 @@ class TTSGenerationService:
 
         self.tts_directory = settings.TTS_AUDIO_DIR
         self.paralanguage_directory = settings.PARALANGUAGE_AUDIO_DIR
-        self.impulse_directory = settings.IMPULSE_AUDIO_DIR
         self.breath_directory = settings.BREATH_AUDIO_DIR
         self.audio_directory = os.path.join(settings.AUDIO_EFFECT_DIR, 'computer')
         self.engine_slots = PriorityLimiter(ENGINE_SLOTS)
@@ -183,7 +180,6 @@ class TTSGenerationService:
         for voice in voices:
             os.makedirs(os.path.join(self.tts_directory, voice), exist_ok=True)
             os.makedirs(os.path.join(self.paralanguage_directory, voice), exist_ok=True)
-            os.makedirs(os.path.join(self.impulse_directory, voice), exist_ok=True)
             os.makedirs(os.path.join(self.breath_directory, voice), exist_ok=True)
 
         os.makedirs(self.audio_directory, exist_ok=True)
@@ -425,8 +421,6 @@ class TTSGenerationService:
             return self.get_voice_directory(str(self.tts_directory), content_voice)
         if embeddings_type == 'paralanguage_embeddings':
             return self.get_voice_directory(str(self.paralanguage_directory), content_voice)
-        if embeddings_type == 'impulse_embeddings':
-            return self.get_voice_directory(str(self.impulse_directory), content_voice)
         if embeddings_type == 'breath_embeddings':
             return self.get_voice_directory(str(self.breath_directory), content_voice)
         if embeddings_type == 'audio_embeddings':
@@ -438,7 +432,6 @@ class TTSGenerationService:
         return {
             'audio_embeddings': settings.AUDIO_SIMILARITY_THRESHOLD,
             'paralanguage_embeddings': settings.PARALANGUAGE_SIMILARITY_THRESHOLD,
-            'impulse_embeddings': settings.IMPULSE_SIMILARITY_THRESHOLD,
             'breath_embeddings': settings.BREATH_SIMILARITY_THRESHOLD,
         }.get(embeddings_type, settings.TTS_SIMILARITY_THRESHOLD)
 
@@ -610,9 +603,6 @@ class TTSGenerationService:
         if embeddings_type == 'paralanguage_embeddings':
             result = await self.ai_service.generate_paralanguage_gpt_response(tag)
             return result[1] if result and result[1] != "N/A" else None
-        if embeddings_type == 'impulse_embeddings':
-            result = await self.ai_service.generate_impulse_gpt_response(tag, content_voice)
-            return result[1] if result and result[1] and result[1] != "N/A" else None
         if embeddings_type == 'breath_embeddings':
             result = await self.ai_service.generate_breath_gpt_response(tag)
             return result[1] if result and result[1] and result[1] != "N/A" else None
@@ -655,9 +645,6 @@ class TTSGenerationService:
                 return processed_audio, cached_file_path
 
         if not can_generate:
-            if embeddings_type == 'impulse_embeddings':
-                log_service.detail(
-                    "Impulse: No suitable impulse found in vector DB and generation not permitted.", "tts_generation")
             return None, None
 
         if embeddings_type not in GENERATED_TYPES:

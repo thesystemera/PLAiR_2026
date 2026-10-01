@@ -1,3 +1,4 @@
+import re
 from services import log_service
 from services.llm_router import LLM_ANNOUNCE, LLM_BACKGROUND
 
@@ -39,59 +40,75 @@ class DJPromptSystemService:
         )
         return response or ""
 
+    @staticmethod
+    def _avoid_block(avoid) -> str:
+        if not avoid:
+            return ""
+        return ("\nAlready in the library, so write something different (wording, rhythm, who speaks):\n"
+                + "\n".join(f"- {line}" for line in avoid) + "\n")
+
     @gpt_error_handler
-    async def generate_impulse_gpt_response(self, user_input, responding_voice):
-        responding_dj = "Jess" if responding_voice == "jess" else "Leo"
-        other_dj = "Leo" if responding_dj == "Jess" else "Jess"
-
+    async def write_impulse_script(self, show_style, context, lead, cohost, avoid):
+        lead_name, cohost_name = lead.title(), cohost.title()
         system_prompt = (
-            f"You are {responding_dj}, one of the quick-witted DJs at PLAiR.fm, co-hosting with {other_dj}. "
-            "You're part of a rebellious pirate radio station broadcasting from an undisclosed location. "
-            "You've just received a text from a listener and need to give a single, quick, off-the-cuff response "
-            f"while you or {other_dj} prepares a more detailed answer.\n\n"
-            "Your response should be:\n"
-            "1. A single, casual, and spontaneous reaction, as if you've just seen the message\n"
-            "2. A brief acknowledgment or initial reaction to the listener's input\n"
-            "3. For direct questions, use playful deflection or mention that you or your co-host will look into it\n"
-            "4. Incorporate radio jargon, music references, or mild swearing when appropriate\n"
-            "5. Don't shy away from controversial topics, but maintain a balance\n"
-            f"6. Feel free to mention or involve {other_dj} in your response\n\n"
-            "Examples of single responses:\n"
-            f"- 'Whoa, hold up! Let me get {other_dj} on this...'\n"
-            "- 'Holy sh*t, did you just ask about...? Give us a sec!'\n"
-            f"- 'Well, that's a spicy one! {other_dj}'s gonna love this.'\n"
-            "- 'Damn, listener! You're keeping us on our toes!'\n"
-            f"- 'Huh? Oh, right! Let me nudge {other_dj} and we'll get to that.'\n"
-            f"- '{other_dj}, you hearing this? Our listeners are wild!'\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. Provide only ONE response, not a list of options.\n"
-            "2. Keep your response casual and spontaneous, between TWO to TEN words.\n"
-            "3. Do not include any explanations or additional commentary.\n"
-            "4. Respond as if you're speaking directly to the listener in real-time."
+            f"{show_style}\n\n"
+            "YOUR JOB: the instant on-air reaction. A listener has just messaged the studio and the hosts react the "
+            f"moment it lands, like a real station: 'oh, we just got a text', a laugh, {lead_name} pulling "
+            f"{cohost_name} in, while the full answer is still being prepared. It airs before anything else, so:\n"
+            "1. React to what the listener just said (NOW), in the tone of the conversation so far (EARLIER).\n"
+            "2. Don't answer, give facts or promise specifics; deflect playfully or say you're on it.\n"
+            f"3. [BROADCAST] channel. {lead_name} speaks first; {cohost_name} may chip in or talk over. One or two "
+            "short lines, TWO to FOURTEEN spoken words in total, at most one reaction and one room sound.\n"
+            + self._avoid_block(avoid) +
+            "\nReply with the script only."
         )
-
-        log_service.gpt("Impulse: IMPULSE GPT System Prompt: " + system_prompt)
-        log_service.gpt("Impulse: IMPULSE GPT User Input: " + user_input)
-
-        impulse_response = await self._execute_gpt_stream(
+        script = await self._execute_gpt_stream(
             model=self.config['dj_model'],
             max_tokens=settings.DJ_MICRO_MAX_TOKENS,
             temperature=self.config['dj_temperature'],
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
+                {"role": "user", "content": context}
             ],
             role=VOICE_SCRIPT_ROLE
         )
+        log_service.gpt(f"Impulse script: {context.splitlines()[0][:80]} -> {script}")
+        return (script or "").strip()
 
-        impulse_response = impulse_response.strip()
-        log_service.api(f"Impulse: IMPULSE ASSISTANT ({responding_dj}): {impulse_response}")
-
-        words = impulse_response.split()
-        if len(words) > 10:
-            impulse_response = ' '.join(words[:10])
-
-        return user_input, impulse_response
+    @gpt_error_handler
+    async def write_interlude_scripts(self, show_style, context, lead, cohost, avoid, count):
+        lead_name = lead.title()
+        system_prompt = (
+            f"{show_style}\n\n"
+            "YOUR JOB: interludes. A listener is waiting on an answer and the studio has gone quiet while the hosts "
+            "work on it. Write a SEQUENCE of short bits of radio theatre that play one after another as the wait "
+            "drags on, each building on the one before:\n"
+            "#1 OPENING: acknowledge what they're digging into, casual and confident.\n"
+            "#2 STILL GOING: they're on it, almost there, a bit of studio banter.\n"
+            "#3 ESCALATING: mock-apologetic or surprised it's taking this long, a laugh about the pirate gear.\n"
+            "Further beats keep escalating with good humour.\n"
+            "Rules:\n"
+            "- Fit the conversation: what the listener asked (NOW), what was said before (EARLIER) and "
+            "WHAT THE HOSTS ARE DOING, in plain words (never tool or system names).\n"
+            "- Never give the answer, facts or numbers; they're still working on it.\n"
+            f"- [BROADCAST] channel. {lead_name} opens; both hosts can react and talk over each other, with room "
+            "sounds of what they're doing. Each beat FIVE to TWENTY spoken words.\n"
+            + self._avoid_block(avoid) +
+            f"\nReply with exactly {count} beats as a numbered list, one complete script per line (1. ..., 2. ...)."
+        )
+        reply = await self._execute_gpt_stream(
+            model=self.config['dj_model'],
+            max_tokens=self.config['dj_tokens'],
+            temperature=self.config['dj_temperature'],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": context}
+            ],
+            role=VOICE_SCRIPT_ROLE
+        )
+        beats = [match.strip() for match in re.findall(r'^\s*\d+[.)]\s*(.+?)\s*$', reply or "", re.MULTILINE)]
+        log_service.gpt(f"Interlude scripts: {context.splitlines()[0][:80]} -> {beats}")
+        return beats[:count]
 
     @gpt_error_handler
     async def generate_paralanguage_gpt_response(self, paralanguage_tag):

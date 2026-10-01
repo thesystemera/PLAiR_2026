@@ -78,7 +78,6 @@ class Settings:
     TTS_ENGINE_DATA_DIR: Path = BASE_DIR / "data" / "tts_dj_engine_data"
     TTS_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "tts_audio"
     PARALANGUAGE_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "paralanguage_audio"
-    IMPULSE_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "impulse_audio"
     BREATH_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "breath_audio"
     AUDIO_EFFECT_DIR: Path = TTS_ENGINE_DATA_DIR / "audio_effect_audio"
     STUDIO_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "studio_audio"
@@ -94,7 +93,7 @@ class Settings:
 
     # TTS embedding table names (stored in ai_radio_embeddings PostgreSQL database)
     TTS_EMBEDDING_TABLES: list = [
-        "tts_embeddings", "paralanguage_embeddings", "impulse_embeddings", "audio_embeddings", "breath_embeddings"
+        "tts_embeddings", "paralanguage_embeddings", "audio_embeddings", "breath_embeddings"
     ]
 
     # TTS database pools - maps table names to PostgreSQL database URL
@@ -105,7 +104,6 @@ class Settings:
         return {
             "tts_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "paralanguage_embeddings": self.EMBEDDINGS_DATABASE_URL,
-            "impulse_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "audio_embeddings": self.EMBEDDINGS_DATABASE_URL,
             "breath_embeddings": self.EMBEDDINGS_DATABASE_URL,
         }
@@ -131,7 +129,13 @@ class Settings:
 
     USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
-    IMPULSE_SIMILARITY_THRESHOLD: float = 0.75
+    FILLER_LEARN_BELOW: float = float(os.getenv("FILLER_LEARN_BELOW", "0.6"))
+    FILLER_COOLDOWN_S: int = int(os.getenv("FILLER_COOLDOWN_S", "600"))
+    FILLER_LEARN_MAX_PENDING: int = int(os.getenv("FILLER_LEARN_MAX_PENDING", "4"))
+    INTERLUDE_SILENCE_S: float = float(os.getenv("INTERLUDE_SILENCE_S", "1.0"))
+    INTERLUDE_MAX_PER_TURN: int = int(os.getenv("INTERLUDE_MAX_PER_TURN", "3"))
+    INTERLUDE_SEQUENCE: int = int(os.getenv("INTERLUDE_SEQUENCE", "3"))
+    INTERLUDE_MONITOR_INTERVAL_S: float = float(os.getenv("INTERLUDE_MONITOR_INTERVAL_S", "0.5"))
     TTS_SIMILARITY_THRESHOLD: float = float(os.getenv("TTS_SIMILARITY_THRESHOLD", "0.975"))
     PARALANGUAGE_SIMILARITY_THRESHOLD: float = float(os.getenv("PARALANGUAGE_SIMILARITY_THRESHOLD", "0.85"))
     AUDIO_SIMILARITY_THRESHOLD: float = float(os.getenv("AUDIO_SIMILARITY_THRESHOLD", "0.75"))
@@ -157,7 +161,6 @@ class Settings:
 
     GENERATION_PERMISSIONS: dict = {
         'paralanguage': {'jess', 'leo'},
-        'impulse': {'jess', 'leo'},
         'sentence': {'jess', 'leo'},
         'breath': {'jess', 'leo'},
         'audio': set()
@@ -268,7 +271,6 @@ class Settings:
     GEMINI_DJ_MAX_TOKENS: int = int(os.getenv("GEMINI_DJ_MAX_TOKENS", "8192"))
 
     DJ_TOOL_MAX_LIVE_FETCHES: int = int(os.getenv("DJ_TOOL_MAX_LIVE_FETCHES", "2"))
-    DJ_TOOL_FILLERS_PER_TURN: int = int(os.getenv("DJ_TOOL_FILLERS_PER_TURN", "2"))
     PULSE_ENABLED: bool = os.getenv("PULSE_ENABLED", "true").lower() == "true"
     PULSE_NODE_TIMEOUT_S: float = float(os.getenv("PULSE_NODE_TIMEOUT_S", "2.5"))
     PULSE_FETCH_TIMEOUT_S: float = float(os.getenv("PULSE_FETCH_TIMEOUT_S", "7"))
@@ -772,7 +774,6 @@ class Settings:
         # TTS engine directories
         cls.TTS_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.PARALANGUAGE_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-        cls.IMPULSE_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.BREATH_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.AUDIO_EFFECT_DIR.mkdir(parents=True, exist_ok=True)
         cls.STUDIO_AUDIO_DIR.mkdir(parents=True, exist_ok=True)

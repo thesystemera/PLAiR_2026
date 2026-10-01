@@ -1,5 +1,4 @@
 import re
-import random
 from typing import List, Dict
 from services import log_service
 
@@ -25,21 +24,17 @@ class TTSStreamPlanner:
 
         text = spoken_text(text)
 
-        if text.startswith('[IMPULSE]'):
-            current_speaker = random.choice(['jess', 'leo'])
-            log_service.detail(f"IMPULSE detected - randomly chose: {current_speaker}", "tts_stream_planner")
-        else:
-            first_speaker_match = re.search(r'\[(LEO|JESS)]', text)
-            if not first_speaker_match:
-                error_msg = f"NO SPEAKER TAG FOUND! Text must start with [LEO] or [JESS]. Text: {text[:100]}"
-                log_service.error(error_msg)
-                raise ValueError(error_msg)
+        first_speaker_match = re.search(r'\[(LEO|JESS)]', text)
+        if not first_speaker_match:
+            error_msg = f"NO SPEAKER TAG FOUND! Text must start with [LEO] or [JESS]. Text: {text[:100]}"
+            log_service.error(error_msg)
+            raise ValueError(error_msg)
 
-            current_speaker = first_speaker_match.group(1).lower()
-            log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
+        current_speaker = first_speaker_match.group(1).lower()
+        log_service.detail(f"Initial speaker extracted from text: {current_speaker}", "tts_stream_planner")
 
         parts = re.split(
-            r'(~[^~]+~|%[^%]+%|\[IMPULSE][^\[]+\[/IMPULSE]|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
+            r'(~[^~]+~|%[^%]+%|\[LEO]|\[JESS]|\$[^$]+\$|@\d+@|&\d+(?:\.\d+)?&|(?<![A-Z]\.)(?<=[.!?])\s+)',
             text
         )
 
@@ -112,9 +107,6 @@ class TTSStreamPlanner:
             elif part.startswith('%') and part.endswith('%'):
                 flush_sentence()
                 emit('audio', part.strip('%'), 'computer')
-            elif part.startswith('[IMPULSE]') and part.endswith('[/IMPULSE]'):
-                flush_sentence()
-                emit('impulse', part[9:-10], current_speaker)
             elif part.startswith('$') and part.endswith('$'):
                 flush_sentence()
                 emit('user_content', part.strip('$'), current_speaker)

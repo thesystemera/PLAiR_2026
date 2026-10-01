@@ -14,10 +14,13 @@ from database.models import Conversation, User
 from services import log_service
 from services_radio.tts_stream_planner import spoken_text
 from services_radio import talk_clock
+from services_radio.filler_scripts import IMPULSE, conversation_context, plain_talk
 from services import usage_tracking
 from services.task_utils import spawn
 from config.settings import settings
 
+FILLER_CONTEXT_TURNS = 2
+FILLER_CONTEXT_CHARS = 200
 TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
 FAILED_TURN_LINES = (
@@ -257,6 +260,7 @@ class ConversationService:
         self.ai_service = None
         self.broadcast_func: Optional[Callable] = None
         self.broadcast_all_func: Optional[Callable] = None
+        self.fillers = None
         self._active_turns: Dict[str, Set[asyncio.Task]] = {}
         self._turn_started_at: Dict[str, float] = {}
 
@@ -268,7 +272,8 @@ class ConversationService:
                    whisper_service,
                    ai_service=None,
                    broadcast_func: Optional[Callable] = None,
-                   broadcast_all_func: Optional[Callable] = None):
+                   broadcast_all_func: Optional[Callable] = None,
+                   fillers=None):
 
         self.dj_prompt_service = dj_prompt_service
         self.tts_queue_manager = tts_queue_manager
@@ -278,6 +283,7 @@ class ConversationService:
         self.ai_service = ai_service
         self.broadcast_func = broadcast_func
         self.broadcast_all_func = broadcast_all_func
+        self.fillers = fillers
         log_service.success("✓ Conversation Orchestrator Service initialized")
 
     async def _safe_bg_task(self, coro, name="conversation_task"):
@@ -335,6 +341,7 @@ class ConversationService:
         log_service.listener(f"{log_service.who(session_id)}: typed to the DJ: \"{_quote(text)}\"")
         turn_tasks = await self._begin_turn(session_id, session_dict, "text")
         await self._interrupt_session_speech(session_id, user_id)
+        await self._play_impulse(text, user_id, session_id, is_guest, session_dict)
 
         self._track_turn_task(turn_tasks, spawn(self._safe_bg_task(
             self._process_gpt_and_orchestrate(text, user_id, session_id, is_guest, session_dict, origin="text"),
@@ -382,20 +389,7 @@ class ConversationService:
                 "data": {"text": fast_transcription}
             })
 
-        impulse_text = f"[IMPULSE]{fast_transcription}[/IMPULSE]"
-
-        if self.tts_queue_manager is None:
-            raise RuntimeError("tts_queue_manager not initialized")
-
-        await self.tts_queue_manager.add_tts_request(
-            text=impulse_text,
-            user_id=user_id or 0,
-            tts_type="interactive",
-            is_broadcast=True,
-            is_temp_user=is_guest,
-            session_id=session_id
-        )
-
+        await self._play_impulse(fast_transcription, user_id, session_id, is_guest, session_dict)
         return fast_transcription
 
     async def _process_audio_full_flow_parallel(self, audio_bytes, save_task, session_id, user_id, session_dict,
@@ -510,24 +504,33 @@ class ConversationService:
                 "persist_conversation_turn"
             ), name=f"persist_conversation_turn:{session_id}")
 
-    async def _play_filler(self, description, user_id, is_guest, session_id):
-        from services_radio.tts_queue_manager import PrerenderedClip
-        queue = self.tts_queue_manager
-        generation = queue.tts_generation_service
-        voice = random.choice(sorted(settings.GENERATION_PERMISSIONS.get('impulse', set())) or ['leo'])
-        owner = session_id or f"user:{user_id or 0}"
-        best = await generation.lookup_clip(description, 'impulse_embeddings', voice, float('-inf'), listener=owner)
-        if best is None:
-            best = await generation.lookup_clip(description, 'impulse_embeddings', voice, float('-inf'),
-                                                listener=owner, respect_cooldown=False)
-        if best is None or best[1] < settings.IMPULSE_SIMILARITY_THRESHOLD:
-            generation.schedule_refresh('impulse_embeddings', voice, description)
-        if best is None:
+    async def _filler_context(self, current: str, user_id, session_id, is_guest) -> str:
+        if is_guest or not user_id:
+            history = await get_conversation_history(temp_user_id=session_id, format_type='json')
+        else:
+            async with AsyncSessionLocal() as db:
+                history = await get_conversation_history(user_id=user_id, db=db, format_type='json',
+                                                         limit=FILLER_CONTEXT_TURNS + 1)
+        pairs = []
+        for entry in history or []:
+            if entry.get('type') == 'user':
+                pairs.append([entry.get('content') or '', ''])
+            elif entry.get('type') == 'bot' and pairs:
+                pairs[-1][1] = plain_talk(entry.get('content') or '')
+        return conversation_context(current, [tuple(pair) for pair in pairs], FILLER_CONTEXT_TURNS,
+                                    FILLER_CONTEXT_CHARS)
+
+    async def _play_impulse(self, text, user_id, session_id, is_guest, session_dict):
+        if self.fillers is None:
             return
-        audio = await generation.load_clip(best[0], voice)
-        if audio is not None:
-            await queue.add_clip_request(PrerenderedClip(audio, label=f"filler:{voice}"), user_id or 0,
-                                         "interactive", is_guest, session_id)
+        try:
+            context = await self._filler_context(text, user_id, session_id, is_guest)
+            session_dict['filler_context'] = context
+            script = await self.fillers.pick(IMPULSE, context, session_id)
+            if script is not None:
+                await self.fillers.play(IMPULSE, script, user_id, session_id, is_guest, session_dict)
+        except Exception as e:
+            log_service.error(f"{log_service.who(session_id)}: impulse failed: {e}")
 
     async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
         from services_radio.dj_tools import DJToolRuntime, DJTurnContext, tool_activity
@@ -544,35 +547,27 @@ class ConversationService:
             ctx.notify = notify
         runtime = DJToolRuntime(self.command_executor, ctx)
         spoken = []
-        impulse_sent = []
+        on_air = session_dict.setdefault('on_air', [])
         trace = {"route": ""}
 
         await ctx.activity("turn", input=transcription, origin=origin)
+        for aired in list(on_air):
+            await ctx.activity("say", text=aired)
+        session_dict['turn_ctx'] = ctx
+        if self.fillers is not None:
+            context = session_dict.get('filler_context') or \
+                await self._filler_context(transcription, user_id, session_id, is_guest)
+            self.fillers.begin_wait(session_id, user_id, is_guest, session_dict, context)
 
         async def speak_preamble(text, calls=()):
             if text:
                 await self._speak_dj_text(text, user_id, session_id, is_guest)
                 spoken.append(text)
+                on_air.append(text)
                 await ctx.activity("say", text=text)
                 return
-            if len(impulse_sent) >= settings.DJ_TOOL_FILLERS_PER_TURN or self.tts_queue_manager is None:
-                return
-            activity = tool_activity(calls)
-            if activity:
-                impulse_sent.append(activity)
-                await self._play_filler(activity, user_id, is_guest, session_id)
-                return
-            if origin == "text" and not spoken and not impulse_sent:
-                impulse_sent.append(transcription)
-                safe_text = transcription.replace("[", "(").replace("]", ")")
-                await self.tts_queue_manager.add_tts_request(
-                    text=f"[IMPULSE]{safe_text}[/IMPULSE]",
-                    user_id=user_id or 0,
-                    tts_type="interactive",
-                    is_broadcast=True,
-                    is_temp_user=is_guest,
-                    session_id=session_id
-                )
+            if self.fillers is not None:
+                self.fillers.note_activity(session_id, tool_activity(calls))
 
         async def announce_route(route):
             steps = [str(step).split("(", 1)[0].strip() for step in route.get("tool_plan") or []]
@@ -613,17 +608,18 @@ class ConversationService:
                 log_service.error(f"{log_service.who(session_id)}: DJ turn produced no reply - airing a fallback line")
                 fallback = random.choice(FAILED_TURN_LINES)
                 await self._speak_dj_text(fallback, user_id, session_id, is_guest)
+                on_air.append(fallback)
                 await ctx.activity("say", text=fallback)
                 return
 
             if main_response and main_response not in spoken:
                 await self._speak_dj_text(main_response, user_id, session_id, is_guest)
+                on_air.append(main_response)
                 await ctx.activity("say", text=main_response)
             if notes:
                 await ctx.activity("say", text=notes)
 
-            reply_parts = spoken + [main_response] if main_response and main_response not in spoken else spoken
-            full_main = "\n".join(reply_parts)
+            full_main = "\n".join(on_air)
             full_response = full_main + "\n" + notes if notes else full_main
 
             commands_for_display = runtime.commands_for_display()
@@ -645,6 +641,9 @@ class ConversationService:
             await asyncio.shield(self._publish_turn(transcription, full_response, commands_for_display,
                                                     user_id, session_id, is_guest, ctx.turn_id))
         finally:
+            if self.fillers is not None:
+                self.fillers.end_wait(session_id, session_dict)
+            session_dict.pop('turn_ctx', None)
             ctx.gate.set()
             if ctx.activity_sent:
                 await ctx.activity("done")

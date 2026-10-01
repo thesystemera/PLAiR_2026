@@ -31,8 +31,6 @@ class VectorDBService:
         self.annoy_index_tts_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_paralanguage_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_paralanguage_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-        self.annoy_index_impulse_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
-        self.annoy_index_impulse_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_audio_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_audio_2 = AnnoyIndex(EMBEDDING_DIM, 'angular')
         self.annoy_index_breath_1 = AnnoyIndex(EMBEDDING_DIM, 'angular')
@@ -41,7 +39,6 @@ class VectorDBService:
         self.index_pairs = {
             "tts_embeddings": (self.annoy_index_tts_1, self.annoy_index_tts_2),
             "paralanguage_embeddings": (self.annoy_index_paralanguage_1, self.annoy_index_paralanguage_2),
-            "impulse_embeddings": (self.annoy_index_impulse_1, self.annoy_index_impulse_2),
             "audio_embeddings": (self.annoy_index_audio_1, self.annoy_index_audio_2),
             "breath_embeddings": (self.annoy_index_breath_1, self.annoy_index_breath_2),
         }
@@ -90,7 +87,6 @@ class VectorDBService:
         return {
             "tts_embeddings": settings.TTS_AUDIO_DIR,
             "paralanguage_embeddings": settings.PARALANGUAGE_AUDIO_DIR,
-            "impulse_embeddings": settings.IMPULSE_AUDIO_DIR,
             "audio_embeddings": settings.AUDIO_EFFECT_DIR,
             "breath_embeddings": settings.BREATH_AUDIO_DIR,
         }.get(table_name)
@@ -238,7 +234,6 @@ class VectorDBService:
         indexes = [
             ("tts_embeddings", self.annoy_index_tts_1, self.annoy_index_tts_2),
             ("paralanguage_embeddings", self.annoy_index_paralanguage_1, self.annoy_index_paralanguage_2),
-            ("impulse_embeddings", self.annoy_index_impulse_1, self.annoy_index_impulse_2),
             ("audio_embeddings", self.annoy_index_audio_1, self.annoy_index_audio_2),
             ("breath_embeddings", self.annoy_index_breath_1, self.annoy_index_breath_2)
         ]

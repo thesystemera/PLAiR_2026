@@ -82,7 +82,7 @@ def filter_response_by_role(text: str, role: str) -> str:
 
     role_rules = {
         'dj_interactive': {
-            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'JESS', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE'],
+            'allowed_tags': ['BROADCAST', 'TXT', 'LEO', 'JESS', 'INTERNAL DIALOGUE', 'TASK'],
             'forbidden_tags': ['HAL11000', 'STUDIO TOOLS'],
             'description': 'Interactive DJ'
         },
@@ -103,7 +103,7 @@ def filter_response_by_role(text: str, role: str) -> str:
         },
         'command': {
             'allowed_tags': [],
-            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'JESS', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE', 'HAL11000', 'STUDIO TOOLS'],
+            'forbidden_tags': ['BROADCAST', 'TXT', 'LEO', 'JESS', 'INTERNAL DIALOGUE', 'TASK', 'HAL11000', 'STUDIO TOOLS'],
             'description': 'Command extraction'
         }
     }
@@ -265,9 +265,9 @@ def clean_gpt_output(text, role='dj_content'):
 
     def keep_valid_tags(text):
         valid_tags = [
-            'BROADCAST', 'TXT', 'JESS', 'LEO', 'INTERNAL DIALOGUE', 'TASK', 'IMPULSE'
+            'BROADCAST', 'TXT', 'JESS', 'LEO', 'INTERNAL DIALOGUE', 'TASK'
         ]
-        pattern = r'\[(' + '|'.join(valid_tags) + r')\]|\[/IMPULSE\]|\[([^\[\]\n]*)\]'
+        pattern = r'\[(' + '|'.join(valid_tags) + r')\]|\[([^\[\]\n]*)\]'
 
         def replacer(match):
             if match.group(2) is None:

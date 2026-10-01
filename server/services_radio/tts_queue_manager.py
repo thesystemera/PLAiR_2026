@@ -26,12 +26,14 @@ SESSION_WORKER_IDLE_TIMEOUT_S = 60.0
 RENDER_CANCEL_TIMEOUT_S = 2.0
 NO_AUDIO = 0
 SPOKEN_CHARS_PER_S = 16.0
-FILLER_SECONDS = {'paralanguage': 1.0, 'impulse': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
+FILLER_SECONDS = {'paralanguage': 1.0, 'breath': 0.4, 'audio': 0.0, 'user_content': 8.0}
 VOICE_SPEAKERS = frozenset(settings.VOICE_PREFERENCES)
 PACE_KIND = {'announcer': 'announcer', 'interactive': 'chat', 'sting': None, 'shoutouts': None}
 
 RADIO_BREAK_TYPE = 'radio_segment'
-HOST_VOICE_TYPES = frozenset({'sentence', 'paralanguage', 'impulse', 'breath'})
+HOST_VOICE_TYPES = frozenset({'sentence', 'paralanguage', 'breath'})
+FILLER_TTS_TYPES = frozenset({'impulse', 'interlude'})
+AUDIO_CLOCK_TTL_S = 3600.0
 
 
 def motion_track(segment: Dict) -> Optional[str]:
@@ -67,6 +69,8 @@ TTS_TYPE_LABELS = {
     'radio_segment': 'talk break',
     'sting': 'station sting',
     'shoutouts': 'shoutout segment',
+    'impulse': 'impulse',
+    'interlude': 'interlude',
 }
 
 class PrerenderedClip:
@@ -116,9 +120,10 @@ def _spoken_seconds(segment: Dict) -> float:
 
 
 class _Turn:
-    def __init__(self, seq: int, owner: str, renders: List[_SegmentRender]):
+    def __init__(self, seq: int, owner: str, renders: List[_SegmentRender], cache_only: bool = False):
         self.seq = seq
         self.group = (owner, seq)
+        self.cache_only = cache_only
         self.renders = renders
         self.audible = False
         self.deadlines = list(itertools.accumulate(
@@ -256,6 +261,7 @@ class TTSQueueManager:
         self._session_workers: Dict[str, asyncio.Task] = {}
         self._session_active: Dict[str, asyncio.Task] = {}
         self._turn_seq = itertools.count(1)
+        self._audio_until: Dict[str, float] = {}
 
         log_service.detail("TTS Request: Initializing TTSQueueManager", "tts_queue_manager")
 
@@ -271,6 +277,17 @@ class TTSQueueManager:
         queue = self._session_queues.get(key)
         task = self._session_active.get(key)
         return (queue is not None and not queue.empty()) or (task is not None and not task.done())
+
+    def quiet_for(self, session_id: Optional[str], user_id: int = 0) -> float:
+        if self.session_busy(session_id, user_id):
+            return 0.0
+        return max(0.0, time.monotonic() - self._audio_until.get(self._session_key(session_id, user_id), 0.0))
+
+    def _note_audio(self, key: str, seconds: float):
+        now = time.monotonic()
+        if len(self._audio_until) > 1000:
+            self._audio_until = {k: t for k, t in self._audio_until.items() if now - t < AUDIO_CLOCK_TTL_S}
+        self._audio_until[key] = max(now, self._audio_until.get(key, 0.0)) + seconds
 
     def _enqueue(self, item: Tuple):
         key = self._session_key(item[5], item[1])
@@ -396,6 +413,7 @@ class TTSQueueManager:
             await self.tts_generation_service.abort_jobs(key, job_ids)
 
         await self.audio_broadcast_service.broadcast_cancel(room)
+        self._audio_until[key] = time.monotonic()
         if cancelled_active or dropped or job_ids:
             log_service.tts_queue_manager(
                 f"DJ voice for {log_service.who(session_id, user_id=user_id)}: interrupted by a new listener turn "
@@ -435,7 +453,7 @@ class TTSQueueManager:
             if track is not None:
                 render.motion = motion_tracks.setdefault(track, MotionTrack()).slot()
         renders_by_segment = {id(render.segment): render for render in renders}
-        turn = _Turn(next(self._turn_seq), owner, renders)
+        turn = _Turn(next(self._turn_seq), owner, renders, cache_only=tts_type in FILLER_TTS_TYPES)
         encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id)
         mixer = TimelineMixer()
         started_at = time.perf_counter()
@@ -455,6 +473,7 @@ class TTSQueueManager:
             if lead_in is not None:
                 for audio, intensities in lead_in.pieces():
                     await encoder.feed(audio, intensities)
+                    self._note_audio(owner, len(audio) / 1000.0)
 
             for plan_item in stream_plan:
                 if plan_item['type'] == 'blend':
@@ -491,11 +510,11 @@ class TTSQueueManager:
                 else:
                     await encoder.cancel()
 
-            if completed and spoken and tts_type != RADIO_BREAK_TYPE and not text.startswith("[IMPULSE]"):
+            if completed and spoken and tts_type != RADIO_BREAK_TYPE and not turn.cache_only:
                 spawn(listener_timeline.record_talk(
                     int(owner) if owner.isdigit() else None, owner, tts_type, plain_script(spoken),
                     seconds=encoder.fed_seconds), name=f"aired_talk:{owner}")
-            if completed:
+            if completed and not turn.cache_only:
                 talk_clock.meter.note(
                     PACE_KIND.get(tts_type, 'segment'),
                     sum(len((segment.get('content') or '').split()) for segment in spoken),
@@ -521,6 +540,7 @@ class TTSQueueManager:
             await encoder.start()
             for audio, intensities in clip.pieces():
                 await encoder.feed(audio, intensities)
+                self._note_audio(self._session_key(session_id, user_id), len(audio) / 1000.0)
             completed = True
         finally:
             if completed:
@@ -535,6 +555,7 @@ class TTSQueueManager:
     async def _feed(self, encoder: LiveStreamEncoder, chunks: List[Tuple[AudioSegment, Dict]], turn: _Turn):
         for audio, intensities in chunks:
             await encoder.feed(audio, intensities)
+            self._note_audio(turn.group[0], len(audio) / 1000.0)
         if chunks and not turn.audible:
             turn.audible = True
             self.tts_generation_service.widen_turn(turn.group)
@@ -605,10 +626,17 @@ class TTSQueueManager:
                 can_generate = content_voice in settings.GENERATION_PERMISSIONS.get(content_type, set())
                 tag = (segment.get('context') or segment['content'] if content_type == 'breath' else segment['content']).strip()
 
-                cached = await generation.lookup_clip(
-                    tag, embeddings_type, clip_voice, generation.similarity_threshold(embeddings_type), rank,
-                    listener=owner
-                )
+                threshold = generation.similarity_threshold(embeddings_type)
+                if turn.cache_only:
+                    cached = await generation.lookup_clip(tag, embeddings_type, clip_voice, float('-inf'), rank,
+                                                          listener=owner) or                         await generation.lookup_clip(tag, embeddings_type, clip_voice, float('-inf'), rank,
+                                                     listener=owner, respect_cooldown=False)
+                    if can_generate and (cached is None or cached[1] < threshold):
+                        generation.schedule_refresh(embeddings_type, clip_voice, tag)
+                    can_generate = False
+                else:
+                    cached = await generation.lookup_clip(tag, embeddings_type, clip_voice, threshold, rank,
+                                                          listener=owner)
                 cached_file_path = cached[0] if cached else None
                 if cached_file_path:
                     render.resolve(await generation.clip_rate(cached_file_path))
