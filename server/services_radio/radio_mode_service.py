@@ -64,6 +64,7 @@ class BreakPlan:
             "status": self.status,
             "bed": self.bed,
             "duration_s": round(self.duration_s, 2) if self.duration_s else None,
+            "on_air_at_ms": int(self.started_at * 1000) if self.status == "on_air" and self.started_at else None,
         }
 
 

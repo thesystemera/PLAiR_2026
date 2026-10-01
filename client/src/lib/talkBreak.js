@@ -85,7 +85,21 @@ export class TalkBreakController {
 
   display() {
     if (!this.isLive() || !this.info) return null
-    return { id: this.info.id, kind: this.info.kind, label: this.info.label, title: this.info.title, paused: this.paused }
+    return {
+      id: this.info.id,
+      kind: this.info.kind,
+      label: this.info.label,
+      title: this.info.title,
+      paused: this.paused,
+      durationS: this.info.durationS,
+    }
+  }
+
+  progress() {
+    if (!this.isLive() || !this.info) return null
+    const live = this.player?.getProgress(this.info.streamId)
+    if (live) return live
+    return this.info.durationS ? { elapsed: 0, duration: this.info.durationS } : null
   }
 
   setActive(active) {
@@ -241,6 +255,7 @@ export class TalkBreakController {
       label: talkBreak.label,
       title: talkBreak.title,
       bed: talkBreak.bed || null,
+      durationS: this.player.stagedDuration(talkBreak.stream_id),
     }
     if (this.bed && this.info.bed) this.bed.prepare(this.info.bed)
     this.log.info(`[TalkBreak] Armed ${talkBreak.label} after ${trackId.slice(0, 8)} (talk-up ${Math.round(talkUpMs)}ms)`)

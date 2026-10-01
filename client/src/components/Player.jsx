@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
+import { ON_AIR_LAMP } from '../lib/themeManager'
 
 const PLAYED_WINDOW_STYLE = {
   transition: CSS_TRANSITION.progress
@@ -218,10 +219,10 @@ const StaticWaveformLayer = memo(function StaticWaveformLayer({ bars, variant })
 
 export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playback = usePlaybackActions()
-  const { togglePlay, next, previous, audio } = playback
+  const { togglePlay, next, previous, audio, talkBreakProgress } = playback
   const {
     audioFeatures, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess, toastError,
-    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading,
+    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     isCached: state.audioState.isCached,
@@ -236,7 +237,9 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     currentTrack: state.engineState.currentTrack,
     is_playing: state.engineState.is_playing,
     isCrossfading: state.engineState.isCrossfading,
+    talkBreak: state.engineState.talkBreak,
   }))
+  const onAir = !!talkBreak
   const { user, refreshUser } = useAuth()
   const { isPhoneLandscape } = useViewport()
   const compact = isPhoneLandscape
@@ -315,7 +318,25 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   useEffect(() => {
     if (!isScreenVisible) return
 
+    const updateBreakProgress = () => {
+      const progress = talkBreakProgress()
+      const percent = progress?.duration > 0 ? Math.min(100, Math.max(0, (progress.elapsed / progress.duration) * 100)) : 0
+      if (percent !== progressPercentRef.current) {
+        progressPercentRef.current = percent
+        writeProgressStyles()
+      }
+      const timeNode = progressTimeRef.current
+      if (timeNode) {
+        const text = formatDuration(Math.floor((progress?.elapsed || 0) * 1000))
+        if (timeNode.textContent !== text) timeNode.textContent = text
+      }
+    }
+
     const updateProgress = () => {
+      if (onAir) {
+        updateBreakProgress()
+        return
+      }
       const progress = engineRef.current.progress_ms || 0
       const duration = currentTrack?.duration_ms || 0
       const percent = duration > 0 ? Math.min(100, Math.max(0, (progress / duration) * 100)) : 0
@@ -338,7 +359,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     const intervalId = setInterval(updateProgress, 100)
 
     return () => clearInterval(intervalId)
-  }, [engineRef, currentTrack, isScreenVisible, actualDuration, writeProgressStyles])
+  }, [engineRef, currentTrack, isScreenVisible, actualDuration, writeProgressStyles, onAir, talkBreakProgress])
 
   const handleSeek = useCallback((e) => {
     if (!durationMs) return
@@ -631,7 +652,31 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       >
         {formatDuration(0)}
       </span>
-      {audioFeatures ? (
+      {onAir ? (
+        <div
+          className={`flex-1 relative overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          title={talkBreak.title || talkBreak.label}
+        >
+          <div
+            ref={progressRefCallbacks.bar}
+            className="absolute inset-0 will-change-transform"
+            style={{
+              background: `linear-gradient(90deg, ${ON_AIR_LAMP}33, ${ON_AIR_LAMP}aa)`,
+              opacity: talkBreak.paused ? 0.5 : 1,
+              transition: CSS_TRANSITION.progress
+            }}
+          >
+            <div className="absolute right-0 top-0 bottom-0 w-0.5" style={{ backgroundColor: getWhite() }} />
+          </div>
+          <div
+            className="absolute inset-0 flex items-center justify-center gap-1.5 px-2 pointer-events-none text-xs font-semibold tracking-wide"
+            style={{ color: getWhite() }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: ON_AIR_LAMP }} />
+            <span className="truncate">{talkBreak.title || talkBreak.label}</span>
+          </div>
+        </div>
+      ) : audioFeatures ? (
         <div
           className={`flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           onClick={handleSeek}
@@ -696,7 +741,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         className="text-xs tabular-nums min-w-[40px] text-center transition-colors duration-theme"
         style={{ color: getGrey400() }}
       >
-        {formatDuration(durationMs)}
+        {onAir ? (talkBreak.durationS ? formatDuration(Math.round(talkBreak.durationS * 1000)) : '–') : formatDuration(durationMs)}
       </span>
     </div>
   ) : null

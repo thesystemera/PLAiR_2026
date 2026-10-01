@@ -239,13 +239,26 @@ export function PlaybackProvider({ children }) {
       view = talkBreak.display()
     } else {
       const server = serverTalkBreakRef.current
-      if (server?.status === 'on_air') view = { id: server.id, kind: server.kind, label: server.label, title: server.title, paused: false }
+      if (server?.status === 'on_air') {
+        view = {
+          id: server.id, kind: server.kind, label: server.label, title: server.title, paused: false,
+          durationS: server.duration_s ?? null,
+        }
+      }
     }
-    const key = view ? `${view.id}:${view.label}:${view.paused}` : null
+    const key = view ? `${view.id}:${view.label}:${view.paused}:${view.durationS}` : null
     if (key === talkBreakDisplayRef.current) return
     talkBreakDisplayRef.current = key
     reportEngineStatus({ talkBreak: view })
   }, [reportEngineStatus, talkBreak])
+
+  const talkBreakProgress = useCallback(() => {
+    if (isActiveDeviceRef.current) return talkBreak.progress()
+    const server = serverTalkBreakRef.current
+    if (server?.status !== 'on_air' || !server.duration_s || !server.on_air_at_ms || !server.serverTimeMs) return null
+    const elapsed = (server.serverTimeMs - server.on_air_at_ms + Date.now() - server.receivedAt) / 1000
+    return { elapsed: Math.min(server.duration_s, Math.max(0, elapsed)), duration: server.duration_s }
+  }, [talkBreak])
 
   useEffect(() => { publishTalkBreakRef.current = publishTalkBreak }, [publishTalkBreak])
 
@@ -470,7 +483,9 @@ export function PlaybackProvider({ children }) {
       audioNeedsTap: weAreActive && blockedRef.current
     })
 
-    serverTalkBreakRef.current = data.talk_break ?? null
+    serverTalkBreakRef.current = data.talk_break
+      ? { ...data.talk_break, serverTimeMs: data.server_time_ms ?? null, receivedAt: Date.now() }
+      : null
     talkBreak.setActive(weAreActive)
     talkBreak.onServerState(data.talk_break ?? null, {
       currentTrackId: data.current_track?.id ?? null,
@@ -1491,10 +1506,11 @@ export function PlaybackProvider({ children }) {
     transferPlayback,
     audio,
     talkBreak,
+    talkBreakProgress,
   }), [
     playTrack, togglePlay, resumePlayback, pausePlayback, next, previous,
     seek, addToQueue, removeFromQueue, seedRadio,
-    reloadCurrentTrackQuality, transferPlayback, audio, talkBreak
+    reloadCurrentTrackQuality, transferPlayback, audio, talkBreak, talkBreakProgress
   ])
 
   const value = useMemo(() => ({ state, connected, ...actions }), [state, connected, actions])

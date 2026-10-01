@@ -285,14 +285,18 @@ export class DJStreamPlayer {
     return !!streamId && this.cur?.id === streamId
   }
 
-  getRemaining(streamId) {
+  getProgress(streamId) {
     const cur = this.cur
     if (!cur || cur.id !== streamId || !this.element) return null
-    const now = this.element.currentTime || 0
-    const duration = this.element.duration
-    if (cur.eos && Number.isFinite(duration) && duration > 0) return Math.max(0, duration - now)
-    if (cur.durationS) return Math.max(0, cur.durationS - now)
-    return null
+    const elementDuration = this.element.duration
+    const duration = cur.eos && Number.isFinite(elementDuration) && elementDuration > 0 ? elementDuration : cur.durationS
+    if (!duration) return null
+    return { elapsed: Math.min(duration, this.element.currentTime || 0), duration }
+  }
+
+  getRemaining(streamId) {
+    const progress = this.getProgress(streamId)
+    return progress ? Math.max(0, progress.duration - progress.elapsed) : null
   }
 
   cancelStream(streamId, reason = 'cancel') {

@@ -133,12 +133,12 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   re-renders (slice selectors, `useUIState` removed, one notice store) and did not move these out; checked 1 Oct
   in `UIStateContext.jsx`: the tilt sensor and its animation loop, music ducking, settings and seed-mode writes to
   storage, the download-state updater, video-clip loading. It all works; this is tidiness, low priority.
-- **Progress bar for Radio Mode talk breaks** (owner, 1 Oct). While a break is on air, the player's waveform
-  becomes a progress bar for the break. The server knows the script's word count and the measured pace
-  (`talk_clock`), so it can send an estimated length at stream start, then the exact length once the whole break
-  has rendered (rendering runs about 4-6x faster than playback: a 37 s break finished rendering after 10 s). The
-  client divides the DJ stream's played seconds by the best length it has, never moves backwards, and draws it
-  from a ref (no per-frame React state).
+- **Talk-break progress bar: built 1 Oct, not yet seen in a browser.** A break only goes on air once it has fully
+  rendered, so its exact length is already known (`stagedDuration`); no estimate is needed. While a break is on
+  air the player's waveform becomes an ON AIR bar (title, elapsed / total). The playing device reads the DJ
+  stream's own clock (`DJStreamPlayer.getProgress`, `TalkBreakController.progress`); other devices work it out
+  from `talk_break.on_air_at_ms` and `server_time_ms` (they don't freeze while the break is paused). Check it on
+  the next break after PLAiR Start.
 - **LifeSpan ideas not ported** (audit section 3): text normalisation before TTS (units, URLs, "feat."), filler
   lines shown in chat and told to the model, richer clip metadata, a stateful limiter and reverb (A/B first),
   prelude and interlude fillers, per-round timing and cost in the turn log, history hygiene.
