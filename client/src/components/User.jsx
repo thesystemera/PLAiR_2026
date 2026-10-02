@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff, Crown, VolumeX } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -19,20 +19,38 @@ import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
 import { Scroller } from './Scroller'
-import { ExpandSection, Expandable, ExpandChevron } from './Motion'
-import { SettingRow, ToggleChip } from './SettingRow'
+import { Expandable, ExpandChevron } from './Motion'
+import { SettingTile, TileGroup, nextOf } from './SettingTile'
 import { RadioModeSettings } from './RadioModeSettings'
 import { AccountSettings } from './AccountSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
 
-const SOUND_MODE_ACTIVE_CLASS = {
-  both: 'bg-green-500/30 text-green-300 border border-green-500/50',
-  dj: 'bg-sky-500/30 text-sky-300 border border-sky-500/50',
-  ping: 'bg-amber-500/30 text-amber-300 border border-amber-500/50',
-  off: 'bg-red-500/30 text-red-300 border border-red-500/50',
+const SOUND_MODE_COLOR = { both: '#4ade80', dj: '#38bdf8', ping: '#fbbf24', off: '#f87171' }
+const AUDIO_QUALITIES = ['auto', '256k', '192k', '128k']
+const AUDIO_QUALITY_LABELS = { auto: 'Auto', '256k': '256k', '192k': '192k', '128k': '128k' }
+const VISUAL_QUALITIES = ['high', 'medium', 'low']
+const VISUAL_QUALITY_LABELS = { high: 'HIGH', medium: 'MID', low: 'LOW' }
+const VISUAL_QUALITY_COLOR = { high: '#c084fc', medium: '#fbbf24', low: '#4ade80' }
+const LIBRARY_KINDS = [{ id: 'track', label: 'Tracks' }, { id: 'shoutout', label: 'Shoutouts' }]
+const LIBRARY_RATINGS = [
+  { id: 'liked', label: 'Liked', icon: Heart, color: 'text-pink-500' },
+  { id: 'super_liked', label: 'Super liked', icon: Star, color: 'text-yellow-500' },
+  { id: 'banned', label: 'Banned', icon: Ban, color: 'text-red-500' },
+]
+const CHIP = 'ui-press px-3 py-1 rounded-full text-xs font-medium transition'
+const CHIP_ON = 'bg-white/15 text-white'
+const CHIP_OFF = 'text-gray-400 hover:text-white hover:bg-white/5'
+const SELECT_CLASS = 'w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition'
+
+const deviceName = (list, id) => {
+  if (!id) return 'Default'
+  const label = list.find(device => device.id === id)?.label || 'Default'
+  return label.replace(/\s*\(.*?\)\s*/g, ' ').trim() || 'Default'
 }
+
+const shortPlace = (location) => String(location || '').split(',')[0].trim()
 
 const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
   const [isTesting, setIsTesting] = useState(false)
@@ -596,26 +614,16 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { showConfirm } = useDialog()
   const deletePost = useDeletePost()
 
-  const [loading, setLoading] = useState(true)
   const [showCachedTracks, setShowCachedTracks] = useState(false)
   const [isEditingUsername, setIsEditingUsername] = useState(false)
   const [newUsername, setNewUsername] = useState('')
 
-  const [expandedLiked, setExpandedLiked] = useState(false)
-  const [expandedSuperLiked, setExpandedSuperLiked] = useState(false)
-  const [expandedBanned, setExpandedBanned] = useState(false)
-  const [expandedSuperLikedShoutouts, setExpandedSuperLikedShoutouts] = useState(false)
-  const [expandedLikedShoutouts, setExpandedLikedShoutouts] = useState(false)
-  const [expandedBannedShoutouts, setExpandedBannedShoutouts] = useState(false)
+  const [expandedLibrary, setExpandedLibrary] = useState(false)
+  const [libraryKind, setLibraryKind] = useState('track')
+  const [libraryRating, setLibraryRating] = useState('liked')
 
-  const [profilePersonaExpanded, setProfilePersonaExpanded] = useState(() => safeStorage.get('userPanel_profilePersona') === 'true')
-  const [audioDevicesExpanded, setAudioDevicesExpanded] = useState(() => safeStorage.get('userPanel_audioDevices') === 'true')
-  const [locationExpanded, setLocationExpanded] = useState(() => safeStorage.get('userPanel_location') === 'true')
-  const [libraryExpanded, setLibraryExpanded] = useState(() => safeStorage.get('userPanel_library') === 'true')
-  const [storageExpanded, setStorageExpanded] = useState(() => safeStorage.get('userPanel_storage') === 'true')
-  const [uploadsExpanded, setUploadsExpanded] = useState(() => safeStorage.get('userPanel_uploads') === 'true')
-  const [postsExpanded, setPostsExpanded] = useState(() => safeStorage.get('userPanel_posts') === 'true')
-  const [artistsExpanded, setArtistsExpanded] = useState(() => safeStorage.get('userPanel_artists') === 'true')
+  const [openTile, setOpenTile] = useState(() => safeStorage.get('userPanel_openTile') || null)
+  const toggleTile = useCallback((key) => setOpenTile(prev => (prev === key ? null : key)), [])
   const [myArtists, setMyArtists] = useState([])
   const [loadingArtists, setLoadingArtists] = useState(false)
   const [newArtistName, setNewArtistName] = useState('')
@@ -652,11 +660,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }), [shoutoutPreferences])
 
   useEffect(() => {
-    if (!isAuthenticated) { setLoading(false); return }
-    setLoading(false)
-  }, [isAuthenticated])
-
-  useEffect(() => {
     if (!isAuthenticated) return
     let cancelled = false
     api.getBillingStatus()
@@ -666,15 +669,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }, [isAuthenticated, user?.tier])
 
   useEffect(() => {
-    safeStorage.set('userPanel_profilePersona', String(profilePersonaExpanded))
-    safeStorage.set('userPanel_audioDevices', String(audioDevicesExpanded))
-    safeStorage.set('userPanel_location', String(locationExpanded))
-    safeStorage.set('userPanel_library', String(libraryExpanded))
-    safeStorage.set('userPanel_storage', String(storageExpanded))
-    safeStorage.set('userPanel_uploads', String(uploadsExpanded))
-    safeStorage.set('userPanel_posts', String(postsExpanded))
-    safeStorage.set('userPanel_artists', String(artistsExpanded))
-  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, uploadsExpanded, postsExpanded, artistsExpanded])
+    if (openTile) safeStorage.set('userPanel_openTile', openTile)
+    else safeStorage.remove('userPanel_openTile')
+  }, [openTile])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -721,26 +718,24 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }, [isAuthenticated])
 
   useEffect(() => {
-    if (uploadsExpanded && isAuthenticated) {
-      void fetchUserUploads()
-    }
-  }, [uploadsExpanded, isAuthenticated, fetchUserUploads])
+    if (isAuthenticated) void fetchUserUploads()
+  }, [isAuthenticated, fetchUserUploads])
 
   const uploadModalWasOpenRef = useRef(uploadModalOpen)
   useEffect(() => {
     const wasOpen = uploadModalWasOpenRef.current
     uploadModalWasOpenRef.current = uploadModalOpen
-    if (wasOpen && !uploadModalOpen && uploadsExpanded && isAuthenticated) {
+    if (wasOpen && !uploadModalOpen && isAuthenticated) {
       void fetchUserUploads({ quiet: true })
     }
-  }, [uploadModalOpen, uploadsExpanded, isAuthenticated, fetchUserUploads])
+  }, [uploadModalOpen, isAuthenticated, fetchUserUploads])
 
   const handledUploadUpdatesRef = useRef(uploadUpdates)
   useEffect(() => {
     if (uploadUpdates === handledUploadUpdatesRef.current) return
     handledUploadUpdatesRef.current = uploadUpdates
-    if (uploadsExpanded && isAuthenticated) void fetchUserUploads({ quiet: true })
-  }, [uploadUpdates, uploadsExpanded, isAuthenticated, fetchUserUploads])
+    if (isAuthenticated) void fetchUserUploads({ quiet: true })
+  }, [uploadUpdates, isAuthenticated, fetchUserUploads])
 
   const fetchMyArtists = useCallback(async () => {
     if (!isAuthenticated) return
@@ -756,10 +751,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }, [isAuthenticated])
 
   useEffect(() => {
-    if (artistsExpanded && isAuthenticated) {
-      void fetchMyArtists()
-    }
-  }, [artistsExpanded, isAuthenticated, fetchMyArtists])
+    if (isAuthenticated) void fetchMyArtists()
+  }, [isAuthenticated, fetchMyArtists])
 
   const handleAddArtist = async () => {
     const name = newArtistName.split(/\s+/).filter(Boolean).join(' ')
@@ -785,7 +778,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       if (profile.name && profile.name !== artist.name) {
         const count = tracksUpdated || 0
         success(`Renamed - ${count} track${count === 1 ? '' : 's'} updated`)
-        if (uploadsExpanded) void fetchUserUploads()
+        void fetchUserUploads({ quiet: true })
       } else {
         success('Artist saved')
       }
@@ -794,7 +787,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       error(err.message || 'Could not save the artist')
       return false
     }
-  }, [success, error, uploadsExpanded, fetchUserUploads])
+  }, [success, error, fetchUserUploads])
 
   const handleDeleteArtist = useCallback(async (artist) => {
     const confirmed = await showConfirm({
@@ -833,7 +826,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       if (result.ok) {
         setUserUploads(prev => prev.filter(t => t.id !== trackId))
         success('Track deleted')
-        if (artistsExpanded) void fetchMyArtists()
+        void fetchMyArtists()
       } else {
         error('Failed to delete track')
       }
@@ -1045,6 +1038,237 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const filteredLikedShoutouts = useMemo(() => shoutouts.liked.filter(s => s?.id), [shoutouts.liked])
   const filteredBannedShoutouts = useMemo(() => shoutouts.banned.filter(s => s?.id), [shoutouts.banned])
 
+  const libraryLists = {
+    track: { liked: filteredLikedTracks, super_liked: filteredSuperLikedTracks, banned: filteredBannedTracks },
+    shoutout: { liked: filteredLikedShoutouts, super_liked: filteredSuperLikedShoutouts, banned: filteredBannedShoutouts },
+  }
+  const libraryCount = Object.values(libraryLists).reduce((sum, lists) => sum + Object.values(lists).reduce((n, list) => n + list.length, 0), 0)
+  const libraryRatingMeta = LIBRARY_RATINGS.find(rating => rating.id === libraryRating) || LIBRARY_RATINGS[0]
+  const libraryItems = libraryLists[libraryKind][libraryRatingMeta.id]
+  const hasAboutYou = !!(user?.persona || user?.profile || user?.shoutout_interests)
+  const hasLocation = !!(user?.location || user?.timezone || user?.weather_description)
+  const isPremium = user?.tier === 'premium'
+
+  const deviceDrawer = (kind) => {
+    const isMic = kind === 'mic'
+    const list = isMic ? devices.microphones : devices.speakers
+    const selected = isMic ? selectedMicrophone : selectedSpeaker
+    const onChange = async (e) => {
+      try {
+        if (isMic) selectMicrophone(e.target.value)
+        else await selectSpeaker(e.target.value)
+        success(isMic ? 'Microphone updated' : 'Speakers updated')
+      } catch (_err) {
+        error('Failed to change speakers')
+        logger.error('Failed to change speakers:', _err)
+      }
+    }
+    return (
+      <div>
+        <select value={selected} onChange={onChange} aria-label={isMic ? 'Microphone' : 'Speakers'} className={SELECT_CLASS}>
+          <option value="">{isMic ? 'Default Microphone' : 'Default Speakers'}</option>
+          {list.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
+        </select>
+        {isMic && list.length === 0 && (
+          <button onClick={requestPermissions} className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1">
+            Grant microphone access
+          </button>
+        )}
+        <DeviceTester deviceId={selected} type={isMic ? 'mic' : 'speaker'} />
+      </div>
+    )
+  }
+
+  const listeningDrawers = { mic: deviceDrawer('mic'), speakers: deviceDrawer('speaker') }
+
+  const stuffDrawers = {
+    library: (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1">
+          {LIBRARY_KINDS.map(kind => (
+            <button key={kind.id} onClick={() => { setLibraryKind(kind.id); setExpandedLibrary(false) }} aria-pressed={libraryKind === kind.id} className={`${CHIP} ${libraryKind === kind.id ? CHIP_ON : CHIP_OFF}`}>
+              {kind.label}
+            </button>
+          ))}
+          <span className="w-px h-4 bg-white/10 mx-1" />
+          {LIBRARY_RATINGS.map(rating => (
+            <button key={rating.id} onClick={() => { setLibraryRating(rating.id); setExpandedLibrary(false) }} aria-pressed={libraryRating === rating.id} className={`${CHIP} ${libraryRating === rating.id ? CHIP_ON : CHIP_OFF}`}>
+              {rating.label} {libraryLists[libraryKind][rating.id].length}
+            </button>
+          ))}
+        </div>
+        <PreferenceList
+          title={`${libraryRatingMeta.label} ${libraryKind === 'track' ? 'tracks' : 'shoutouts'}`}
+          items={libraryItems}
+          icon={libraryRatingMeta.icon}
+          iconColor={libraryRatingMeta.color}
+          expanded={expandedLibrary}
+          onToggleExpand={setExpandedLibrary}
+          emptyMessage={`Nothing ${libraryRatingMeta.label.toLowerCase()} yet`}
+          renderItem={(item) => (libraryKind === 'track'
+            ? <TrackItem key={item.id} track={item} icon={libraryRatingMeta.icon} iconColor={libraryRatingMeta.color} onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', item.id)} />
+            : <ShoutoutItem key={item.id} shoutout={item} icon={libraryRatingMeta.icon} iconColor={libraryRatingMeta.color} onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', item.id)} isPlaying={playingShoutout?.id === item.id} />)}
+        />
+      </div>
+    ),
+    posts: (
+      <div className="space-y-6">
+        <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} emptyMessage="You haven't posted a shoutout yet"
+          renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+        <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} emptyMessage="You haven't reviewed a song yet"
+          renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+      </div>
+    ),
+    uploads: (
+      <div className="space-y-3">
+        <button onClick={openUploadModal} className="ui-press-soft w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center justify-center gap-2 transition font-medium">
+          <Upload size={18} />
+          Upload Your Music
+        </button>
+        {loadingUploads && userUploads.length === 0 ? (
+          <div className="ui-fade-in flex items-center justify-center py-8">
+            <Loader2 size={24} className="animate-spin text-gray-400" />
+          </div>
+        ) : userUploads.length === 0 ? (
+          <div className="ui-fade-in text-center py-4">
+            <p className="text-sm text-gray-400">No uploads yet</p>
+            <p className="text-xs text-gray-500 mt-1">Upload your music and we&apos;ll analyze it with AI</p>
+          </div>
+        ) : (
+          <div className="ui-fade-in space-y-2">
+            {userUploads.map(track => (
+              <UploadedTrackItem key={track.id} track={track} onPlayTrack={onPlayTrack} onEditUpload={openEditTrack} onDeleteUpload={handleDeleteUpload} isDeleting={deletingUploadId === track.id} />
+            ))}
+          </div>
+        )}
+      </div>
+    ),
+    artists: (
+      <div className="space-y-3">
+        <p className="text-xs text-gray-400">Your uploads are credited to these names. Pick one when you upload.</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={newArtistName}
+            onChange={(e) => setNewArtistName(e.target.value)}
+            placeholder="Add a band or artist"
+            maxLength={80}
+            aria-label="New band or artist name"
+            className={`${ARTIST_INPUT_CLASS} flex-1 min-w-0`}
+            enterKeyHint="done"
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleAddArtist() }}
+          />
+          <button onClick={handleAddArtist} disabled={addingArtist || !newArtistName.trim()} className="ui-press px-3 py-2 rounded-lg text-sm font-medium bg-fuchsia-600 hover:bg-fuchsia-700 text-white flex items-center gap-1.5 disabled:opacity-50 transition">
+            {addingArtist ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            Add
+          </button>
+        </div>
+        {loadingArtists && myArtists.length === 0 ? (
+          <div className="ui-fade-in flex items-center justify-center py-6"><Loader2 size={20} className="animate-spin text-gray-400" /></div>
+        ) : myArtists.length === 0 ? (
+          <p className="ui-fade-in text-sm text-gray-400">No artists yet. Uploads use your username until you add one.</p>
+        ) : (
+          <div className="ui-fade-in space-y-2">
+            {myArtists.map(artist => (
+              <ArtistProfileItem key={artist.id} artist={artist} onSave={handleSaveArtist} onDelete={handleDeleteArtist} isDeleting={deletingArtistId === artist.id} />
+            ))}
+          </div>
+        )}
+      </div>
+    ),
+    about: hasAboutYou ? (
+      <div className="space-y-3">
+        {[
+          { key: 'persona', label: 'AI Persona', text: user?.persona },
+          { key: 'profile', label: 'Listener Profile', text: user?.profile },
+          { key: 'interests', label: 'Shoutout Interests', text: user?.shoutout_interests },
+        ].filter(part => part.text).map(part => (
+          <div key={part.key}>
+            <div className="text-xs font-semibold text-purple-300 mb-1">{part.label}</div>
+            <p className="text-sm text-gray-300 leading-relaxed">{part.text}</p>
+          </div>
+        ))}
+      </div>
+    ) : null,
+    location: hasLocation ? (
+      <div className="space-y-2 text-sm">
+        {user?.location && <div className="flex items-center gap-2"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user.location}</span></div>}
+        {user?.timezone && <div className="flex items-center gap-2"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user.timezone}</span></div>}
+        {user?.weather_description && <div className="flex items-center gap-2"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user.weather_description}</span></div>}
+      </div>
+    ) : null,
+  }
+
+  const storageDrawer = (
+    <div className="space-y-3">
+      {downloadState?.isEnabled && (
+        <div className="text-xs text-gray-400 space-y-1">
+          {downloadState.isDownloading && (
+            <div className="flex items-center gap-2">
+              <Loader2 size={12} className="animate-spin text-purple-400" />
+              <span>Downloading: {downloadState.currentTrackTitle}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span>Today: {formatBytes(downloadState.dailyDownloadedBytes)} / {formatBytes(downloadState.dailyLimit)}</span>
+            {downloadState.downloadedCount > 0 && <span>{downloadState.downloadedCount} tracks downloaded</span>}
+          </div>
+        </div>
+      )}
+      <div>
+        <div className="flex items-center justify-between mb-2 text-xs">
+          <span className="font-semibold text-gray-300">Local storage</span>
+          <span className="text-gray-400">{formatBytes(storageInfo.usedBytes)} / {formatBytes(storageInfo.maxBytes)}</span>
+        </div>
+        <div className="w-full bg-gray-700 rounded-full h-2 mb-2 overflow-hidden">
+          <div className={`h-2 w-full origin-left transition-[transform,background-color] duration-base ${storageInfo.usedPercentage > 80 ? 'bg-red-500' : storageInfo.usedPercentage > 60 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ transform: `scaleX(${Math.min(storageInfo.usedPercentage, 100) / 100})` }} />
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-gray-400">{storageInfo.trackCount} tracks cached</span>
+          {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
+        </div>
+        <Expandable open={showCachedTracks && storageInfo.trackCount > 0} innerClassName="pt-3">
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {storageInfo.tracks.map(track => (
+              <div key={track.trackId} className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
+                <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onPlayTrack(track.trackId)}>
+                  <div className="text-xs font-medium truncate">{track.metadata?.generation_params?.title || track.metadata?.title || 'Untitled'}</div>
+                  <div className="text-xs text-gray-500 truncate">{formatBytes(track.size)} • {track.bitrate}</div>
+                </div>
+                <button onClick={() => handleDeleteCachedTrack(track.trackId)} aria-label="Remove download" className="ui-press transition p-1 hover:bg-red-500/20 rounded"><Trash2 size={12} className="text-gray-400 hover:text-red-500" /></button>
+              </div>
+            ))}
+          </div>
+        </Expandable>
+        {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
+      </div>
+      <div className="flex justify-between text-xs">
+        <span className="text-gray-400">Data this session / total</span>
+        <span className="text-gray-300">{formatBytes(dataUsage.sessionDownloaded)} / {formatBytes(dataUsage.totalDownloaded)}</span>
+      </div>
+    </div>
+  )
+
+  const premiumDrawer = isPremium ? (
+    <div className="space-y-1 text-sm">
+      {generationUsage && <p className="text-gray-300">{generationUsage.remaining} of {generationUsage.limit} AI generations left this {generationUsage.period}</p>}
+      {periodEnd && !Number.isNaN(periodEnd.getTime()) && <p className="text-xs text-gray-400">Current period ends {periodEnd.toLocaleDateString()}</p>}
+      {billingStatus?.status === 'past_due' && <p className="text-xs text-red-400">Your last payment failed. Update your payment method to keep Premium.</p>}
+      {billingStatus?.has_billing_account && (
+        <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-2 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">
+          {billingBusy ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />} Manage subscription
+        </button>
+      )}
+    </div>
+  ) : (
+    <div className="space-y-3">
+      <p className="text-sm text-gray-300">Get ~100 AI tracks per month and support development!</p>
+      <button onClick={handleUpgradeToPremium} disabled={billingBusy} className="ui-press-soft w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2 disabled:opacity-60" style={{ background: getPremiumGradient() }}>
+        {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <Crown size={18} />} Upgrade to Premium - {priceLabel}
+      </button>
+    </div>
+  )
+
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col h-full relative">
@@ -1063,7 +1287,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             <button onClick={onLogin} className="ui-press-soft w-full px-4 py-3 rounded-lg border border-amber-500/60 text-amber-300 hover:bg-amber-500/10 flex items-center justify-center gap-2 transition">
               <LogIn size={20} /> Login
             </button>
-            <RadioModeSettings className="pt-4 border-t border-gray-800" />
+            <RadioModeSettings className="mt-4 text-left" />
           </div>
         </div>
         </Scroller>
@@ -1118,527 +1342,54 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       />
 
       <Scroller className="flex-1">
-        {(user?.persona || user?.profile || user?.shoutout_interests) && (
-          <ExpandSection
-            className="p-4 md:p-6 border-b border-gray-800"
-            open={profilePersonaExpanded}
-            onToggle={setProfilePersonaExpanded}
-            icon={Sparkles}
-            iconClassName="text-purple-400"
-            title="Profile & Persona"
-            contentClassName="space-y-3 pl-2"
-          >
-            {user?.persona && (
-              <div className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 p-3 rounded-lg border border-purple-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <UserIcon size={14} className="text-purple-400" />
-                  <label className="text-xs font-semibold text-purple-300">AI Persona</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.persona}</p>
-              </div>
-            )}
-            {user?.profile && (
-              <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 p-3 rounded-lg border border-blue-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Star size={14} className="text-blue-400" />
-                  <label className="text-xs font-semibold text-blue-300">Listener Profile</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.profile}</p>
-              </div>
-            )}
-            {user?.shoutout_interests && (
-              <div className="bg-gradient-to-br from-cyan-500/10 to-teal-500/10 p-3 rounded-lg border border-cyan-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Mic2 size={14} className="text-cyan-400" />
-                  <label className="text-xs font-semibold text-cyan-300">Shoutout Interests</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.shoutout_interests}</p>
-              </div>
-            )}
-          </ExpandSection>
-        )}
+        <div className="p-3 md:p-4 space-y-3">
+          <TileGroup title="Listening" drawerKey={listeningDrawers[openTile] ? openTile : null} drawer={listeningDrawers[openTile] || null}>
+            <SettingTile drawer open={openTile === 'mic'} onClick={() => toggleTile('mic')} icon={Mic2} label="Microphone" color="#60a5fa" value={deviceName(devices.microphones, selectedMicrophone)} />
+            <SettingTile drawer open={openTile === 'speakers'} onClick={() => toggleTile('speakers')} icon={Volume2} label="Speakers" color="#60a5fa" value={deviceName(devices.speakers, selectedSpeaker)} />
+            <SettingTile cycle on icon={Music} label="Audio quality" color="#c084fc" value={AUDIO_QUALITY_LABELS[settingsState.audioQuality] || 'Auto'} hint="Streaming quality. Auto follows your connection." onClick={() => handleAudioQualityChange(nextOf(AUDIO_QUALITIES, settingsState.audioQuality))} />
+            <SettingTile cycle on={soundMode?.id !== 'off'} icon={soundMode?.id === 'off' ? VolumeX : Headphones} label="Sounds" color={SOUND_MODE_COLOR[soundMode?.id] || '#4ade80'} value={soundMode?.short || 'DJ+PING'} hint="DJ voice and notification pings" onClick={() => handleSetSoundMode(nextOf(SOUND_MODES, soundMode))} />
+            <SettingTile on={settingsState.autoClaimOnOpen !== false} icon={Smartphone} label="Auto-switch" color="#60a5fa" value={settingsState.autoClaimOnOpen !== false ? 'ON' : 'OFF'} hint="Move playback to the device you open" onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })} />
+          </TileGroup>
 
-        <ExpandSection
-          className="p-4 md:p-6 border-b border-gray-800"
-          open={audioDevicesExpanded}
-          onToggle={setAudioDevicesExpanded}
-          icon={Headphones}
-          iconClassName="text-blue-400"
-          title="Audio & Devices"
-          contentClassName="space-y-3 pl-2"
-        >
-          <SettingRow icon={Mic2} label="Microphone">
-            <select value={selectedMicrophone} onChange={(e) => { selectMicrophone(e.target.value); success('Microphone updated') }} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
-              <option value="">Default Microphone</option>
-              {devices.microphones.map(mic => <option key={mic.id} value={mic.id}>{mic.label}</option>)}
-            </select>
-            {devices.microphones.length === 0 && (
-              <button onClick={requestPermissions} className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1">
-                Grant microphone access
-              </button>
-            )}
-            <DeviceTester deviceId={selectedMicrophone} type="mic" />
-          </SettingRow>
+          <RadioModeSettings />
 
-          <SettingRow icon={Volume2} label="Speakers">
-            <select
-              value={selectedSpeaker}
-              onChange={async (e) => {
-                try {
-                  await selectSpeaker(e.target.value)
-                  success('Speakers updated')
-                } catch (_err) {
-                  error('Failed to change speakers')
-                  logger.error('Failed to change speakers:', _err)
-                }
-              }}
-              className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition"
-            >
-              <option value="">Default Speakers</option>
-              {devices.speakers.map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.label}</option>)}
-            </select>
-            <DeviceTester deviceId={selectedSpeaker} type="speaker" />
-          </SettingRow>
+          <TileGroup title="Your stuff" drawerKey={stuffDrawers[openTile] ? openTile : null} drawer={stuffDrawers[openTile] || null}>
+            <SettingTile drawer open={openTile === 'library'} onClick={() => toggleTile('library')} icon={Library} label="Library" color="#f472b6" value={`${libraryCount}`} />
+            <SettingTile drawer open={openTile === 'posts'} onClick={() => toggleTile('posts')} icon={Megaphone} label="My posts" color="#c084fc" value={`${myPosts.shoutouts.length + myPosts.reviews.length}`} />
+            <SettingTile drawer open={openTile === 'uploads'} onClick={() => toggleTile('uploads')} icon={Upload} label="Uploads" color="#34d399" value={loadingUploads && userUploads.length === 0 ? '…' : `${userUploads.length}`} />
+            <SettingTile drawer open={openTile === 'artists'} onClick={() => toggleTile('artists')} icon={Mic2} label="Artists & Bands" color="#e879f9" value={`${myArtists.length}`} />
+            {hasAboutYou && <SettingTile drawer open={openTile === 'about'} onClick={() => toggleTile('about')} icon={Sparkles} label="About you" color="#a78bfa" value="Hosts" />}
+            {hasLocation && <SettingTile drawer open={openTile === 'location'} onClick={() => toggleTile('location')} icon={MapPin} label="Location" color="#4ade80" value={shortPlace(user?.location) || user?.timezone || '…'} />}
+          </TileGroup>
 
-          <SettingRow
-            icon={Smartphone}
-            label="Auto-switch playback to the device I open"
-            color="text-blue-400"
-            headerContent={
-              <ToggleChip
-                on={settingsState.autoClaimOnOpen !== false}
-                onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })}
-                activeClassName="bg-blue-500 text-white"
-                label="Auto-switch playback to the device I open"
-              />
-            }
-          />
+          <TileGroup title="Display">
+            <SettingTile cycle on icon={Image} label="Visual quality" color={VISUAL_QUALITY_COLOR[settingsState.visualQuality] || '#a78bfa'} value={VISUAL_QUALITY_LABELS[settingsState.visualQuality] || 'HIGH'} hint="Background visual effects. LOW saves battery on phones." onClick={() => handleSetVisualQuality(nextOf(VISUAL_QUALITIES, settingsState.visualQuality))} />
+            <SettingTile on={!!settingsState.videoClipsEnabled} icon={Video} label="Video clips" color="#f472b6" value={settingsState.videoClipsEnabled ? 'ON' : 'OFF'} hint="Video clips in visuals and shared videos (uses more bandwidth)" onClick={handleToggleVideoClips} />
+            {tiltNeedsPermission && <SettingTile on={!!tiltEnabled} icon={Smartphone} label="Tilt effects" color="#38bdf8" value={tiltEnabled ? 'ON' : 'OFF'} hint="Artwork moves as you tilt your phone. Your phone will ask for motion access." onClick={() => void enableTiltEffects(!tiltEnabled)} />}
+            <SettingTile on={!!settingsState.fpsEnabled} icon={Gauge} label="FPS counter" color="#60a5fa" value={settingsState.fpsEnabled ? 'ON' : 'OFF'} hint="Show the frame rate" onClick={handleToggleFpsEnabled} />
+          </TileGroup>
 
-          <SettingRow icon={Music} label="Audio Quality" headerContent={null}>
-            <select value={settingsState.audioQuality} onChange={(e) => handleAudioQualityChange(e.target.value)} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
-              <option value="auto">Auto</option>
-              <option value="256k">Premium (256kbps)</option>
-              <option value="192k">Standard (192kbps)</option>
-              <option value="128k">Economy (128kbps)</option>
-            </select>
-          </SettingRow>
-
-          <SettingRow
-            icon={Radio}
-            label="Sounds"
-            headerContent={
-              <div className="flex gap-1">
-                {SOUND_MODES.map(mode => (
-                  <button
-                    key={mode.id}
-                    onClick={() => handleSetSoundMode(mode)}
-                    className={`ui-press px-2 py-1 rounded text-xs font-medium whitespace-nowrap transition ${soundMode === mode ? SOUND_MODE_ACTIVE_CLASS[mode.id] : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                  >
-                    {mode.short}
-                  </button>
-                ))}
-              </div>
-            }
-          />
-        </ExpandSection>
-
-        <RadioModeSettings className="p-4 md:p-6 border-b border-gray-800" />
-
-        {(user?.location || user?.timezone || user?.weather_description) && (
-          <ExpandSection
-            className="p-4 md:p-6 border-b border-gray-800"
-            open={locationExpanded}
-            onToggle={setLocationExpanded}
-            icon={MapPin}
-            iconClassName="text-green-400"
-            title="Location & Environment"
-            contentClassName="space-y-3 pl-2"
-          >
-            {user?.location && <div className="flex items-center gap-2 text-sm"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user.location}</span></div>}
-            {user?.timezone && <div className="flex items-center gap-2 text-sm"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user.timezone}</span></div>}
-            {user?.weather_description && <div className="flex items-center gap-2 text-sm"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user.weather_description}</span></div>}
-          </ExpandSection>
-        )}
-
-        <ExpandSection
-          className="p-4 md:p-6 border-b border-gray-800"
-          open={storageExpanded}
-          onToggle={setStorageExpanded}
-          icon={Settings}
-          iconClassName="text-cyan-400"
-          title="Storage & Performance"
-          contentClassName="space-y-3 pl-2"
-        >
-          <SettingRow
-            icon={audioState.isOnline ? Wifi : WifiOff}
-            label="Network Status"
-            color={audioState.isOnline ? getNetworkQualityColor() : "text-red-500"}
-            headerContent={
-              <span className="text-xs font-medium" style={{ color: audioState.isOnline ? getNetworkQualityColor() : getNetworkPoor() }}>{audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'}</span>
-            }
-          />
-
-          <SettingRow
-            icon={TrendingDown}
-            label="Data Saver Mode"
-            color="text-green-400"
-            headerContent={
-              <button onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.dataSaverMode ? 'ON' : 'OFF'}</button>
-            }
-          />
-
-          <SettingRow
-            icon={Gauge}
-            label="FPS Counter"
-            color="text-blue-400"
-            headerContent={
-              <button onClick={handleToggleFpsEnabled} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.fpsEnabled ? 'ON' : 'OFF'}</button>
-            }
-          />
+          <TileGroup title="Data & storage" drawerKey={openTile === 'storage' ? 'storage' : null} drawer={openTile === 'storage' ? storageDrawer : null}>
+            <SettingTile on={audioState.isOnline} icon={audioState.isOnline ? Wifi : WifiOff} label="Network" color={audioState.isOnline ? (getNetworkQualityColor() || '#4ade80') : '#f87171'} value={audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'} hint="Your connection right now" />
+            <SettingTile on={!!settingsState.dataSaverMode} icon={TrendingDown} label="Data saver" color="#4ade80" value={settingsState.dataSaverMode ? 'ON' : 'OFF'} hint="Use less mobile data" onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} />
+            <SettingTile on={!!downloadState?.isEnabled} busy={!!downloadState?.isDownloading} icon={Download} label="Downloads" color="#c084fc" value={downloadState?.isEnabled ? 'ON' : 'OFF'} hint="Download music in the background so it plays offline" onClick={handleToggleBackgroundDownloads} />
+            <SettingTile drawer open={openTile === 'storage'} onClick={() => toggleTile('storage')} icon={HardDrive} label="Storage" color="#22d3ee" value={formatBytes(storageInfo.usedBytes)} />
+          </TileGroup>
 
           {(user?.is_admin || user?.usage_stats_visible) && (
-            <SettingRow
-              icon={DollarSign}
-              label="AI Usage"
-              color="text-violet-400"
-              headerContent={
-                <button onClick={openUsageModal} className="ui-press px-3 py-1 rounded text-xs font-medium transition bg-violet-500/30 text-violet-200 border border-violet-500/50">VIEW</button>
-              }
-            >
-              <div className="text-xs text-gray-400">
-                {user?.is_admin ? 'What PLAiR spends on AI, per listener, with projections' : 'Your AI usage this month'}
-              </div>
-            </SettingRow>
+            <TileGroup title="Admin">
+              <SettingTile icon={DollarSign} label="AI usage" color="#a78bfa" value="View" hint={user?.is_admin ? 'What PLAiR spends on AI, per listener, with projections' : 'Your AI usage this month'} onClick={openUsageModal} />
+              {user?.is_admin && <SettingTile on={!!settingsState.costTickerEnabled} icon={DollarSign} label="Cost ticker" color="#a78bfa" value={settingsState.costTickerEnabled ? 'ON' : 'OFF'} hint="Live AI cost ticker" onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} />}
+            </TileGroup>
           )}
 
-          {user?.is_admin && (
-            <SettingRow
-              icon={DollarSign}
-              label="Cost Ticker"
-              color="text-violet-400"
-              headerContent={
-                <button onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.costTickerEnabled ? 'bg-violet-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.costTickerEnabled ? 'ON' : 'OFF'}</button>
-              }
-            />
-          )}
-
-          <SettingRow
-            icon={Image}
-            label="Visual Quality"
-            color="text-purple-400"
-            headerContent={
-              <div className="flex gap-1">
-                <button
-                  onClick={() => handleSetVisualQuality('high')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'high' ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  HIGH
-                </button>
-                <button
-                  onClick={() => handleSetVisualQuality('medium')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'medium' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  MID
-                </button>
-                <button
-                  onClick={() => handleSetVisualQuality('low')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'low' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
-                >
-                  LOW
-                </button>
-              </div>
-            }
-          >
-            <div className="text-xs text-gray-400">
-              Controls background visual effects intensity. Use LOW for better battery life on mobile devices.
-            </div>
-          </SettingRow>
-
-          {tiltNeedsPermission && (
-            <SettingRow
-              icon={Smartphone}
-              label="Tilt Effects"
-              color="text-sky-400"
-              headerContent={
-                <button onClick={() => void enableTiltEffects(!tiltEnabled)} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${tiltEnabled ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{tiltEnabled ? 'ON' : 'OFF'}</button>
-              }
-            >
-              <div className="text-xs text-gray-400">
-                Artwork moves as you tilt your phone. Your phone will ask for motion access.
-              </div>
-            </SettingRow>
-          )}
-
-          <SettingRow
-            icon={Video}
-            label="Video Clips"
-            color="text-pink-400"
-            headerContent={
-              <button onClick={handleToggleVideoClips} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.videoClipsEnabled ? 'ON' : 'OFF'}</button>
-            }
-          >
-            <div className="text-xs text-gray-400">
-              Video clips in visuals and shared videos (uses more bandwidth)
-            </div>
-          </SettingRow>
-
-          <SettingRow
-            icon={Download}
-            label="Background Downloads"
-            color="text-purple-400"
-            headerContent={
-              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${downloadState?.isEnabled ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{downloadState?.isEnabled ? 'ON' : 'OFF'}</button>
-            }
-          >
-            {downloadState?.isEnabled && (
-              <div className="text-xs text-gray-400 space-y-1">
-                {downloadState.isDownloading && (
-                  <div className="flex items-center gap-2">
-                    <Loader2 size={12} className="animate-spin text-purple-400" />
-                    <span>Downloading: {downloadState.currentTrackTitle}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span>Today: {formatBytes(downloadState.dailyDownloadedBytes)} / {formatBytes(downloadState.dailyLimit)}</span>
-                  {downloadState.downloadedCount > 0 && <span>{downloadState.downloadedCount} tracks downloaded</span>}
-                </div>
-              </div>
-            )}
-          </SettingRow>
-
-          <div className="bg-white/5 p-3 rounded-lg">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2"><HardDrive size={14} className="text-blue-400" /><label className="text-xs font-semibold text-gray-300">Local Storage</label></div>
-              <span className="text-xs text-gray-400">{formatBytes(storageInfo.usedBytes)} / {formatBytes(storageInfo.maxBytes)}</span>
-            </div>
-            <div className="w-full bg-gray-700 rounded-full h-2 mb-2 overflow-hidden">
-              <div className={`h-2 w-full origin-left transition-[transform,background-color] duration-base ${storageInfo.usedPercentage > 80 ? 'bg-red-500' : storageInfo.usedPercentage > 60 ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{ transform: `scaleX(${Math.min(storageInfo.usedPercentage, 100) / 100})` }} />
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-gray-400">{storageInfo.trackCount} tracks cached</span>
-              {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
-            </div>
-            <Expandable open={showCachedTracks && storageInfo.trackCount > 0} innerClassName="pt-3">
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {storageInfo.tracks.map(track => (
-                  <div key={track.trackId} className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
-                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onPlayTrack(track.trackId)}>
-                      <div className="text-xs font-medium truncate">{track.metadata?.generation_params?.title || track.metadata?.title || 'Untitled'}</div>
-                      <div className="text-xs text-gray-500 truncate">{formatBytes(track.size)} • {track.bitrate}</div>
-                    </div>
-                    <button onClick={() => handleDeleteCachedTrack(track.trackId)} className="ui-press transition p-1 hover:bg-red-500/20 rounded"><Trash2 size={12} className="text-gray-400 hover:text-red-500" /></button>
-                  </div>
-                ))}
-              </div>
-            </Expandable>
-            {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
-          </div>
-
-          <div className="bg-white/5 p-3 rounded-lg">
-            <div className="flex items-center gap-2 mb-2"><Database size={14} className="text-purple-400" /><label className="text-xs font-semibold text-gray-300">Data Usage</label></div>
-            <div className="space-y-1">
-              <div className="flex justify-between text-xs"><span className="text-gray-400">Session:</span><span className="text-gray-300">{formatBytes(dataUsage.sessionDownloaded)}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-gray-400">Total:</span><span className="text-gray-300">{formatBytes(dataUsage.totalDownloaded)}</span></div>
-            </div>
-          </div>
-        </ExpandSection>
-
-        {!loading && (
-          <ExpandSection
-            className="p-4 md:p-6 border-b border-gray-800"
-            open={libraryExpanded}
-            onToggle={setLibraryExpanded}
-            icon={Library}
-            iconClassName="text-pink-400"
-            title="My Library"
-            meta={
-              <span className="text-xs text-gray-400">
-                ({filteredLikedTracks.length + filteredSuperLikedTracks.length + filteredBannedTracks.length + filteredLikedShoutouts.length + filteredSuperLikedShoutouts.length + filteredBannedShoutouts.length})
-              </span>
-            }
-            contentClassName="space-y-6 pl-2"
-          >
-            <PreferenceList title="Liked Tracks" items={filteredLikedTracks} icon={Heart} iconColor="text-pink-500" expanded={expandedLiked} onToggleExpand={setExpandedLiked} emptyMessage="No liked tracks yet"
-              renderItem={(track) => <TrackItem key={track.id} track={track} icon={Heart} iconColor="text-pink-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
-
-            <PreferenceList title="Super Liked Tracks" items={filteredSuperLikedTracks} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLiked} onToggleExpand={setExpandedSuperLiked} emptyMessage="No super liked tracks yet"
-              renderItem={(track) => <TrackItem key={track.id} track={track} icon={Star} iconColor="text-yellow-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
-
-            <PreferenceList title="Banned Tracks" items={filteredBannedTracks} icon={Ban} iconColor="text-red-500" expanded={expandedBanned} onToggleExpand={setExpandedBanned} emptyMessage="No banned tracks"
-              renderItem={(track) => <TrackItem key={track.id} track={track} icon={Ban} iconColor="text-red-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
-
-            <PreferenceList title="Liked Shoutouts" items={filteredLikedShoutouts} icon={Heart} iconColor="text-pink-500" expanded={expandedLikedShoutouts} onToggleExpand={setExpandedLikedShoutouts} emptyMessage="No liked shoutouts yet"
-              renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Heart} iconColor="text-pink-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
-
-            <PreferenceList title="Super Liked Shoutouts" items={filteredSuperLikedShoutouts} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLikedShoutouts} onToggleExpand={setExpandedSuperLikedShoutouts} emptyMessage="No super liked shoutouts yet"
-              renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Star} iconColor="text-yellow-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
-
-            <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} emptyMessage="No banned shoutouts"
-              renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Ban} iconColor="text-red-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
-          </ExpandSection>
-        )}
-
-        {!loading && isAuthenticated && (
-          <ExpandSection
-            className="p-4 md:p-6 border-b border-gray-800"
-            open={postsExpanded}
-            onToggle={setPostsExpanded}
-            icon={Megaphone}
-            iconClassName="text-purple-400"
-            title="My Posts"
-            meta={<span className="text-xs text-gray-400">({myPosts.shoutouts.length + myPosts.reviews.length})</span>}
-            contentClassName="space-y-6 pl-2"
-          >
-            <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} emptyMessage="You haven't posted a shoutout yet"
-              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
-
-            <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} emptyMessage="You haven't reviewed a song yet"
-              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
-          </ExpandSection>
-        )}
-
-        {isAuthenticated && (
-          <ExpandSection
-            className="p-4 md:p-6 border-b border-gray-800"
-            open={artistsExpanded}
-            onToggle={setArtistsExpanded}
-            icon={Mic2}
-            iconClassName="text-fuchsia-400"
-            title="Artists & Bands"
-            meta={myArtists.length > 0 && (
-              <span className="text-xs text-gray-400">({myArtists.length})</span>
-            )}
-            contentClassName="space-y-3 pl-2"
-          >
-            <p className="text-xs text-gray-400">Your uploads are credited to these names. Pick one when you upload.</p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newArtistName}
-                onChange={(e) => setNewArtistName(e.target.value)}
-                placeholder="Add a band or artist"
-                maxLength={80}
-                aria-label="New band or artist name"
-                className={`${ARTIST_INPUT_CLASS} flex-1 min-w-0`}
-                enterKeyHint="done"
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleAddArtist() }}
-              />
-              <button
-                onClick={handleAddArtist}
-                disabled={addingArtist || !newArtistName.trim()}
-                className="ui-press px-3 py-2 rounded-lg text-sm font-medium bg-fuchsia-600 hover:bg-fuchsia-700 text-white flex items-center gap-1.5 disabled:opacity-50 transition"
-              >
-                {addingArtist ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                Add
-              </button>
-            </div>
-
-            {loadingArtists && myArtists.length === 0 ? (
-              <div className="ui-fade-in flex items-center justify-center py-6">
-                <Loader2 size={20} className="animate-spin text-gray-400" />
-              </div>
-            ) : myArtists.length === 0 ? (
-              <p className="ui-fade-in text-sm text-gray-400">No artists yet. Uploads use your username until you add one.</p>
-            ) : (
-              <div className="ui-fade-in space-y-2">
-                {myArtists.map(artist => (
-                  <ArtistProfileItem
-                    key={artist.id}
-                    artist={artist}
-                    onSave={handleSaveArtist}
-                    onDelete={handleDeleteArtist}
-                    isDeleting={deletingArtistId === artist.id}
-                  />
-                ))}
-              </div>
-            )}
-          </ExpandSection>
-        )}
-
-        <ExpandSection
-          className="p-4 md:p-6 border-b border-gray-800"
-          open={uploadsExpanded}
-          onToggle={setUploadsExpanded}
-          icon={Upload}
-          iconClassName="text-emerald-400"
-          title="My Uploads"
-          meta={userUploads.length > 0 && (
-            <span className="text-xs text-gray-400">({userUploads.length})</span>
-          )}
-          contentClassName="space-y-4 pl-2"
-        >
-          <button
-            onClick={openUploadModal}
-            className="ui-press-soft w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center justify-center gap-2 transition font-medium"
-          >
-            <Upload size={18} />
-            Upload Your Music
-          </button>
-
-          {loadingUploads ? (
-            <div className="ui-fade-in flex items-center justify-center py-8">
-              <Loader2 size={24} className="animate-spin text-gray-400" />
-            </div>
-          ) : userUploads.length === 0 ? (
-            <div className="ui-fade-in text-center py-6">
-              <Music size={32} className="mx-auto text-gray-600 mb-2" />
-              <p className="text-sm text-gray-400">No uploads yet</p>
-              <p className="text-xs text-gray-500 mt-1">Upload your music and we&apos;ll analyze it with AI</p>
-            </div>
-          ) : (
-            <div className="ui-fade-in space-y-2">
-              {userUploads.map(track => (
-                <UploadedTrackItem
-                  key={track.id}
-                  track={track}
-                  onPlayTrack={onPlayTrack}
-                  onEditUpload={openEditTrack}
-                  onDeleteUpload={handleDeleteUpload}
-                  isDeleting={deletingUploadId === track.id}
-                />
-              ))}
-            </div>
-          )}
-        </ExpandSection>
-
-        <AccountSettings onLogout={onLogout} />
-
-        {user?.tier === 'premium' ? (
-          <div className="p-4 md:p-6 border-b border-gray-800">
-            <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
-              <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">PLAiR Premium</h3></div>
-              {generationUsage && (
-                <p className="text-sm text-gray-300 mb-1">{generationUsage.remaining} of {generationUsage.limit} AI generations left this {generationUsage.period}</p>
-              )}
-              {periodEnd && !Number.isNaN(periodEnd.getTime()) && (
-                <p className="text-xs text-gray-400 mb-1">Current period ends {periodEnd.toLocaleDateString()}</p>
-              )}
-              {billingStatus?.status === 'past_due' && (
-                <p className="text-xs text-red-400 mb-1">Your last payment failed. Update your payment method to keep Premium.</p>
-              )}
-              {billingStatus?.has_billing_account && (
-                <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-3 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">
-                  {billingBusy ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />} Manage subscription
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="p-4 md:p-6 border-b border-gray-800">
-            <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
-              <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">Upgrade to Premium</h3></div>
-              <p className="text-sm text-gray-300 mb-3">Get ~100 AI tracks per month and support development!</p>
-              <button onClick={handleUpgradeToPremium} disabled={billingBusy} className="ui-press-soft w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2 disabled:opacity-60" style={{ background: getPremiumGradient() }}>
-                {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <span>🚀</span>} Upgrade to Premium - {priceLabel}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="p-4 md:p-6">
-          <button onClick={onLogout} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg flex items-center justify-center gap-2 transition text-sm">
-            <LogOut size={16} /> Logout
-          </button>
+          <AccountSettings
+            onLogout={onLogout}
+            openTile={openTile}
+            onToggleTile={toggleTile}
+            leadingTiles={<SettingTile drawer open={openTile === 'premium'} onClick={() => toggleTile('premium')} icon={Crown} label="Premium" color="#fbbf24" on={isPremium} value={isPremium ? 'PRO' : 'Free'} />}
+            extraDrawers={{ premium: premiumDrawer }}
+          />
         </div>
       </Scroller>
     </div>
