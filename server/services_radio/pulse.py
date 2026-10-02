@@ -17,7 +17,7 @@ from database.connection import AsyncSessionLocal
 from database.models import ArtistBiography, PlayEvent, User
 from models_global import run_on_gpu_executor
 from service_registry import services
-from services import log_service
+from services import listener_plays, log_service
 from services.listener_request_service import daypart
 from services.task_utils import spawn
 from services_radio import area_signals, geo, local_knowledge, place_memory
@@ -38,6 +38,10 @@ KIND_TREND = "trend"
 KIND_TRACK = "track"
 KIND_REVIEW = "review"
 PLACED_KINDS = frozenset(("event", "place", "news", "community"))
+LISTENING_TOP = 8
+LISTENING_NOTE = ("most_loved ranks their liked and super-liked tracks by rating plus how often they listen through; "
+                  "most_played is what they have listened to most, rated or not. listens = played at least halfway, "
+                  "skips = cut short.")
 ALL_KINDS = (KIND_EVENT, KIND_PLACE, KIND_NEWS, KIND_WEATHER, KIND_AREA, KIND_ARTIST, KIND_COMMUNITY, KIND_CHART,
              KIND_TREND, KIND_TRACK, KIND_REVIEW)
 WHEN_VALUES = ("now", "today", "tonight", "tomorrow", "weekend", "week", "month")
@@ -1418,7 +1422,32 @@ class Pulse:
             notes = compact_listener_notes(listener.user)
             if notes:
                 context["notes"] = notes
+        context.update(await self._listening(listener))
         return {k: v for k, v in context.items() if v not in (None, "", [])}
+
+    @staticmethod
+    async def _listening(listener: PulseListener) -> dict:
+        catalog = services.catalog_service
+        if catalog is None:
+            return {}
+
+        def label(track_id: str) -> Optional[str]:
+            track = catalog.get_track(track_id)
+            return log_service.track_label(track) if track else None
+
+        rated = await listener_plays.ratings(listener.user_id)
+        plays = await listener_plays.track_plays(listener.user_id, listener.session_id)
+        loved = await listener_plays.loved_tracks(listener.user_id, listener.session_id)
+        most_played = sorted(plays.items(), key=lambda item: item[1].listens, reverse=True)
+        return {
+            "favorites": {"super_likes": sum(1 for r in rated.values() if r == "super_like"),
+                          "likes": sum(1 for r in rated.values() if r == "like")} if rated else None,
+            "most_loved": [{"track": label(item.track_id), **listener_plays.brief(item.rating, item.plays)}
+                           for item in loved[:LISTENING_TOP] if label(item.track_id)],
+            "most_played": [{"track": label(track_id), **listener_plays.brief(rated.get(track_id), stats)}
+                            for track_id, stats in most_played[:LISTENING_TOP] if stats.listens and label(track_id)],
+            "listening_note": LISTENING_NOTE if plays else None,
+        }
 
 
 def _where_entry(listener: PulseListener, data: Any) -> dict:

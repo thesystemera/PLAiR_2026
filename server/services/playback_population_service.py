@@ -1,6 +1,6 @@
 import random
 from typing import Dict, List, Optional, Any, Set
-from services import log_service
+from services import listener_plays, log_service
 from services.user_data_cache_service import user_data_cache
 from services.analytics_service import analytics_service
 
@@ -137,7 +137,7 @@ class PlaybackPopulationService:
 
         if is_playlist_mode(radio_mode):
             new_tracks = await self._fill_playlist(
-                radio_mode, needed, prefs, existing_ids, session_id,
+                radio_mode, needed, prefs, existing_ids, session_id, user_id,
             )
         else:
             new_tracks = await self._fill_seed(
@@ -209,13 +209,14 @@ class PlaybackPopulationService:
         prefs: Dict,
         existing_ids: Set[str],
         session_id: str,
+        user_id: Optional[int],
     ) -> List[Dict]:
         if mode.startswith("top_hits_"):
             return await self._fill_top_hits(mode, needed, prefs["bans"], existing_ids, session_id)
         if mode == "favorites":
-            return self._fill_favorites(needed, prefs, existing_ids, session_id)
+            return await self._fill_favorites(needed, prefs, existing_ids, session_id, user_id)
         if mode == "discovery":
-            return await self._fill_discovery(needed, prefs, existing_ids, session_id)
+            return await self._fill_discovery(needed, prefs, existing_ids, session_id, user_id)
         return []
 
     async def _fill_top_hits(
@@ -251,39 +252,25 @@ class PlaybackPopulationService:
         log_service.detail(f"{log_service.who(session_id)}: added {len(new_tracks)} tracks from {period} top hits", "playback")
         return new_tracks
 
-    def _fill_favorites(
+    async def _fill_favorites(
         self, needed: int, prefs: Dict,
-        existing_ids: Set[str], session_id: str,
+        existing_ids: Set[str], session_id: str, user_id: Optional[int],
     ) -> List[Dict]:
-        likes = list(prefs["likes"])
-        super_likes = list(prefs["super_likes"])
-        banned_ids = prefs["bans"]
-
-        weighted_pool = super_likes * 3 + likes
-        valid = [tid for tid in weighted_pool if tid not in existing_ids and tid not in banned_ids]
+        loved = await listener_plays.loved_tracks(user_id, session_id)
+        weights = {item.track_id: item.weight for item in loved
+                   if item.track_id not in existing_ids and item.track_id not in prefs["bans"]
+                   and self.catalog and self.catalog.get_track(item.track_id)}
 
         new_tracks = []
-        attempts = 0
-        while len(new_tracks) < needed and attempts < 100 and valid:
-            attempts += 1
-            chosen_id = random.choice(valid)
-            valid = [x for x in valid if x != chosen_id]
-
-            if chosen_id in existing_ids:
-                continue
-
-            track = self.catalog.get_track(chosen_id) if self.catalog else None
-            if track:
-                new_tracks.append(track)
-                existing_ids.add(chosen_id)
-
-        random.shuffle(new_tracks)
+        for chosen_id in listener_plays.weighted_pick(weights, needed):
+            new_tracks.append(self.catalog.get_track(chosen_id))
+            existing_ids.add(chosen_id)
         log_service.detail(f"{log_service.who(session_id)}: favorites added {len(new_tracks)}/{needed} tracks", "playback")
         return new_tracks
 
     async def _fill_discovery(
         self, needed: int, prefs: Dict,
-        existing_ids: Set[str], session_id: str,
+        existing_ids: Set[str], session_id: str, user_id: Optional[int],
     ) -> List[Dict]:
         likes = list(prefs["likes"])
         super_likes = list(prefs["super_likes"])
@@ -298,7 +285,7 @@ class PlaybackPopulationService:
             else:
                 target_discovery += 1
 
-        favorites_added = self._fill_favorites(target_favs, prefs, existing_ids, session_id)
+        favorites_added = await self._fill_favorites(target_favs, prefs, existing_ids, session_id, user_id)
 
         if len(favorites_added) < target_favs:
             target_discovery += target_favs - len(favorites_added)

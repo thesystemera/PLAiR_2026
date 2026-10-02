@@ -8,6 +8,7 @@ from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
 from services_radio.tts_stream_planner import spoken_text
 from services.catalog_vocals import vocals_of
+from services import listener_plays
 from services.task_utils import spawn
 from database.models import User
 from services import log_service
@@ -23,8 +24,8 @@ SEARCH_CATEGORY_PREFIXES = {
     "theme": "Theme",
     "vocal": "Vocal",
     "lyrics": "Lyrics",
-    "description": "",
 }
+LOVED_PICKS = 5
 NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
 FIND_TAKES_PER_SONG = 3
 CANDIDATE_SOUND_CHARS = 140
@@ -32,6 +33,14 @@ FIND_NOTE = ("Candidates from the PLAiR catalog, closest first; nothing is playi
              "one that best fits what the listener described with search_and_play track_id and say who it is. If "
              "none fits, look up by name the real artists or songs you know fit the clues; if the station still "
              "doesn't have it, play the nearest and say so. Never read ids aloud.")
+LOVED_LIST_NOTE = ("The listener's own tracks, the ones they love most first: their rating plus how often they "
+                   "listen all the way through rather than skip. Nothing is playing yet: play your pick with "
+                   "search_and_play track_id. Never read ids aloud.")
+LOVED_PLAY_NOTE = ("A weighted shuffle of the listener's own tracks: the ones they love most (their rating, plus how "
+                   "often they listen all the way through rather than skip) come up most often. 'picks' shows each "
+                   "one's listens and skips.")
+YOURS_NOTE = ("'yours' is this listener's own history with a track: their rating (like or super_like), listens "
+              "(played at least halfway), skips (cut short) and when they last played it.")
 
 SEED_MODE_DISPLAY = {
     "mood": "mood",
@@ -213,15 +222,53 @@ class CommandExecutorService:
         key = re.sub(r"[^a-z0-9 ]", "", name.lower()).strip()
         return key[4:] if key.startswith("the ") else key
 
+    def _sings(self, track_id, vocals):
+        track = self.catalog_service.get_track(track_id)
+        return bool(track) and (not vocals or vocals_of(track) == vocals)
+
+    async def _loved_ids(self, session_dict, within, banned_ids, vocals=None, skip=()):
+        loved = await listener_plays.loved_tracks(session_dict.get('user_id'), session_dict.get('session_id'), within)
+        return [item for item in loved
+                if item.track_id not in banned_ids and item.track_id not in skip and self._sings(item.track_id, vocals)]
+
+    async def _yours(self, session_dict, track_ids):
+        rated = await listener_plays.ratings(session_dict.get('user_id'))
+        plays = await listener_plays.track_plays(session_dict.get('user_id'), session_dict.get('session_id'), track_ids)
+        return {track_id: listener_plays.brief(rated.get(track_id), plays.get(track_id)) for track_id in track_ids
+                if rated.get(track_id) or track_id in plays}
+
+    async def execute_play_loved(self, session_dict, within, play, vocals=None):
+        session_id = session_dict.get('session_id')
+        banned_ids, only_ids = await self._search_scope(session_dict, within)
+        if not only_ids:
+            return self._empty_scope(within)
+        current = self._resolve_track_id(session_id, "current") if session_id else None
+        loved = {item.track_id: item for item in await self._loved_ids(session_dict, within, banned_ids, vocals,
+                                                                       skip={current})}
+        if not loved:
+            return {"status": "no_results", "within": within,
+                    "note": "None of the listener's own tracks fit that (the one playing now is left out). Say so, "
+                            "and offer to search the whole catalog."}
+        picks = listener_plays.weighted_pick({track_id: item.weight for track_id, item in loved.items()}, LOVED_PICKS)
+        result = await self._queue_tracks(session_dict, picks, play, [], [], set(loved), within)
+        result["picks"] = [{"track": self._track_label(track_id),
+                            **listener_plays.brief(loved[track_id].rating, loved[track_id].plays)} for track_id in picks]
+        result["note"] = LOVED_PLAY_NOTE
+        return result
+
     async def find_tracks(self, session_dict, query, within=None, how_many=8, starts_with=None, vocals=None):
         banned_ids, only_ids = await self._search_scope(session_dict, within)
         if only_ids is not None and not only_ids:
             return self._empty_scope(within)
-        pool = len(self.catalog_service.tracks) if starts_with else how_many * FIND_TAKES_PER_SONG
-        track_ids, entry, missing = await self._search_track_ids(query, banned_ids, only_ids, n_results=pool,
-                                                                 vocals=vocals)
+        missing = None
+        if query:
+            pool = len(self.catalog_service.tracks) if starts_with else how_many * FIND_TAKES_PER_SONG
+            track_ids, entry, missing = await self._search_track_ids(query, banned_ids, only_ids, n_results=pool,
+                                                                     vocals=vocals)
+        else:
+            track_ids = [item.track_id for item in await self._loved_ids(session_dict, within, banned_ids, vocals)]
         if starts_with:
-            by_title = query.startswith(f"{SEARCH_CATEGORY_PREFIXES['song_title']}: ")
+            by_title = (query or "").startswith(f"{SEARCH_CATEGORY_PREFIXES['song_title']}: ")
             track_ids = [track_id for track_id in track_ids if self._starts_with(track_id, starts_with, by_title)]
         candidates, seen = [], set()
         for candidate in map(self._candidate, track_ids):
@@ -234,7 +281,14 @@ class CommandExecutorService:
         if not candidates:
             return {"status": "no_results", "query": query, "starts_with": starts_with,
                     "note": "Nothing in the catalog came close. Try other words, another name or no letter filter."}
-        result = {"status": "ok", "query": query, "note": FIND_NOTE, "items": candidates}
+        yours = await self._yours(session_dict, [candidate["track_id"] for candidate in candidates])
+        for candidate in candidates:
+            if candidate["track_id"] in yours:
+                candidate["yours"] = yours[candidate["track_id"]]
+        result = {"status": "ok", "query": query, "note": FIND_NOTE if query else LOVED_LIST_NOTE,
+                  "items": candidates}
+        if yours:
+            result["yours"] = YOURS_NOTE
         if starts_with:
             result["starts_with"] = starts_with
         if only_ids is not None:
@@ -263,11 +317,14 @@ class CommandExecutorService:
         play_first = False
         per_query = []
         missing = []
+        current = self._resolve_track_id(session_id, "current") if session_id else None
 
         for query, play in searches:
             if not query:
                 continue
-            track_ids, entry, missed = await self._search_track_ids(query, banned_ids, only_ids, vocals=vocals)
+            smart = ": " not in query
+            skip = banned_ids | {current} if smart and current else banned_ids
+            track_ids, entry, missed = await self._search_track_ids(query, skip, only_ids, vocals=vocals)
             if missed:
                 missing.append(missed)
             labels = {self._track_label(track_id) for track_id in tracks_to_add}
@@ -438,7 +495,7 @@ class CommandExecutorService:
             "now_playing": self._track_label(self._resolve_track_id(session_id, "current"))
         }
 
-    RATING_PREFERENCES = {"like": "like", "superstar": "super_like", "ban": "ban"}
+    RATINGS = ("like", "super_like", "clear", "ban")
 
     async def _note(self, session_dict, message, kind="info"):
         user_id = session_dict.get('user_id')
@@ -458,7 +515,7 @@ class CommandExecutorService:
 
         if not user_id or not session_id:
             return {"status": "refused", "reason": "Only signed-in listeners can rate tracks"}
-        if rating != "dislike" and rating not in self.RATING_PREFERENCES:
+        if rating not in self.RATINGS:
             return {"status": "error", "reason": f"Unknown rating '{rating}'"}
 
         track_id = self._resolve_track_id(session_id, target) if target else None
@@ -468,18 +525,18 @@ class CommandExecutorService:
 
         broadcast = services.websocket_service.broadcast_preference_change if services.websocket_service else None
         async with self.async_session_maker() as db:
-            if rating == "dislike":
+            if rating == "clear":
                 await preferences_service.remove_track_preference(
                     int(user_id), track_id, db, playback_service=self.playback_service, broadcast_callback=broadcast)
             else:
                 await preferences_service.set_track_preference(
-                    int(user_id), track_id, self.RATING_PREFERENCES[rating], db,
+                    int(user_id), track_id, rating, db,
                     playback_service=self.playback_service, broadcast_callback=broadcast)
 
         track_name = self._track_label(track_id) or "this track"
-        await self._note(session_dict, {"like": f"Liked {track_name}", "superstar": f"Added {track_name} to your favorites",
+        await self._note(session_dict, {"like": f"Liked {track_name}", "super_like": f"Super-liked {track_name}",
                                         "ban": f"Banned {track_name}",
-                                        "dislike": f"Removed preference for {track_name}"}[rating])
+                                        "clear": f"Cleared your rating of {track_name}"}[rating])
         return {"status": "ok", "rating": rating, "track": track_name}
 
     async def execute_shoutout_preference(self, session_dict, rating, shoutout_id=None):
@@ -493,7 +550,7 @@ class CommandExecutorService:
         user_id = session_dict.get('user_id')
         if not user_id or not session_id or self.user_content_service is None:
             return {"status": "refused", "reason": "Only signed-in listeners can rate shoutouts"}
-        if rating != "dislike" and rating not in self.RATING_PREFERENCES:
+        if rating not in self.RATINGS:
             return {"status": "error", "reason": f"Unknown rating '{rating}'"}
 
         own = f"{user_id}_"
@@ -513,19 +570,19 @@ class CommandExecutorService:
         broadcast = services.websocket_service.broadcast_preference_change if services.websocket_service else None
         try:
             async with self.async_session_maker() as db:
-                if rating == "dislike":
+                if rating == "clear":
                     await preferences_service.remove_shoutout_preference(int(user_id), shoutout_id, db,
                                                                          broadcast_callback=broadcast)
                 else:
                     await preferences_service.set_shoutout_preference(
-                        int(user_id), shoutout_id, self.RATING_PREFERENCES[rating], db, broadcast_callback=broadcast)
+                        int(user_id), shoutout_id, rating, db, broadcast_callback=broadcast)
         except ValueError as e:
             return {"status": "refused", "reason": str(e)}
 
         label = f"{kind_of(post)} from {community_on_air.speaker(post)}"
-        await self._note(session_dict, {"like": f"Liked the {label}", "superstar": f"Super-liked the {label}",
+        await self._note(session_dict, {"like": f"Liked the {label}", "super_like": f"Super-liked the {label}",
                                         "ban": f"Banned the {label}",
-                                        "dislike": f"Removed your rating of the {label}"}[rating])
+                                        "clear": f"Cleared your rating of the {label}"}[rating])
         return {"status": "ok", "rating": rating, "rated": label, "said": community_on_air.text_of(post)[:160]}
 
     async def save_community_item(self, session_dict, kind: str, text: str = "", parent_id=None, track_id=None):
@@ -788,16 +845,16 @@ class CommandExecutorService:
             await self.sio.emit('conversation_update', {'bot_response': gpt_response, 'message_type': 'shoutouts'},
                                 room=session_id)
 
-    async def execute_seed_radio(self, session_dict, mode, target="current"):
+    async def execute_seed_radio(self, session_dict, category, target="current"):
         session_id = session_dict.get('session_id')
         user_id = session_dict.get('user_id')
 
         if not session_id:
             return {"status": "error", "reason": "No active playback session"}
 
-        mode_display = SEED_MODE_DISPLAY.get(mode)
+        mode_display = SEED_MODE_DISPLAY.get(category)
         if not mode_display:
-            return {"status": "error", "reason": f"Unknown seed mode '{mode}'"}
+            return {"status": "error", "reason": f"Unknown seed category '{category}'"}
 
         track_id = self._resolve_track_id(session_id, target)
         if not track_id:
@@ -810,7 +867,7 @@ class CommandExecutorService:
         log_service.detail(f"[COMMAND EXECUTOR] Seeding radio based on {track_name} ({mode_display})", "commands")
 
         seeded = await self.playback_service.seed_radio(
-            session_id, category=mode, track_id=None if target == "current" else track_id, user_id=user_id)
+            session_id, category=category, track_id=None if target == "current" else track_id, user_id=user_id)
 
         if not seeded:
             if self.broadcast_playback_state_callback:
@@ -835,7 +892,7 @@ class CommandExecutorService:
 
         return {
             "status": "ok",
-            "mode": mode,
+            "category": category,
             "seed_track": track_name,
             "up_next": self._upcoming_labels(session_id)
         }

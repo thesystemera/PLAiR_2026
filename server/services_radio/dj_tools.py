@@ -10,7 +10,7 @@ from config.settings import settings
 from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
-from services import listener_filters
+from services import listener_filters, listener_plays
 from services.catalog_vocals import FILTERABLE_VOCALS
 from services_radio import talk_clock
 from services_radio.talk_clock import DEFAULT_DEPTH
@@ -22,7 +22,8 @@ from services_radio.dj_command_executor import (
 )
 
 SEARCH_CATEGORIES = list(SEARCH_CATEGORY_PREFIXES.keys())
-SEED_MODES = list(SEED_MODE_DISPLAY.keys())
+SEED_CATEGORIES = list(SEED_MODE_DISPLAY.keys())
+RATINGS = ["like", "super_like", "clear", "ban"]
 PLAYLISTS = list(PLAYLIST_DISPLAY.keys())
 TRACK_TARGETS = ["current", "previous", "next"]
 RATING_TARGETS = TRACK_TARGETS + ["shoutout"]
@@ -78,20 +79,25 @@ UNTRUSTED_NODE_KEYS = {
 
 FAILED_STATUSES = {"refused", "error", "no_results", "not_found", "no_lyrics", "scrapped"}
 FAILED_ACTION_NOTE = "This did NOT happen. Don't pretend it did - tell the listener honestly, in character."
+INVALID_CALL_NOTE = ("Your call was malformed, so it never ran: nothing was searched, played or saved, and this says "
+                     "nothing about what the station or the listener has. Fix the arguments as the reason says "
+                     "('accepts' lists them) and call it again.")
 
 WEATHER_PERIODS = ["current", "today", "tomorrow", "week"]
 SEARCH_SCOPES = list(listener_filters.SEARCH_SCOPES)
+LOVED_SCOPES = set(listener_plays.SCOPES)
 WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
-          "description": "Where to look for tracks: catalog (everything, the default), favourites (only tracks this "
-                         "listener has liked or super-liked) or super_likes (only their super-likes). Use "
-                         "favourites when they ask for something of their own: 'one of my favourites', 'that song "
-                         "I liked', or a description of a track they know they have liked."}
+          "description": "Where to look for tracks: catalog (everything, the default), favorites (the tracks this "
+                         "listener has liked or super-liked) or super_likes (only their super-likes). Use favorites "
+                         "or super_likes when they ask for something of their own: 'one of my favorites', 'my super "
+                         "likes', 'that song I liked'. With no query it takes the listener's own tracks as they "
+                         "are, the ones they love most (rating plus how often they listen through) first."}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
 VOCALS = list(FILTERABLE_VOCALS)
 VOCALS_PARAM = {"type": "string", "enum": VOCALS,
                 "description": "Optional hard filter on who sings: instrumental (no vocals at all), male, female, or "
                                "duet (male and female voices). Use it when the listener asks for it ('no lyrics', "
-                               "'a female singer', 'a boy-girl duet')."}
+                               "'a female singer', 'a boy-girl duet'). How the singing sounds is the category vocal."}
 FIND_DEFAULT = 8
 FIND_MAX = 15
 STARTS_WITH_MAX_CHARS = 20
@@ -227,9 +233,11 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "name": "listener_context",
         "cost": "memory",
         "summary": "what the station knows about this listener",
-        "description": "What the station knows about THIS listener: local time, city and neighbourhood, favourite "
-                       "genres and artists, interests and notes from past chats. Use it to personalise a reply, never "
-                       "to recite it.",
+        "description": "What the station knows about THIS listener: local time, city and neighbourhood, favorite "
+                       "genres and artists, interests and notes from past chats, and their listening: how many likes "
+                       "and super likes they have, the tracks they love most and the ones they have listened to most "
+                       "(with listens, skips and when they last played them). Use it to personalise a reply and to "
+                       "pick for them, never to recite it.",
         "parameters": _schema({}),
     },
     {
@@ -256,11 +264,16 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "picked: pass its track_id (from find_tracks, what_aired or pulse_search). When the listener "
                        "is trying to pin down one particular song or band from clues rather than asking for a vibe, "
                        "don't play the closest match blind: look with find_tracks first, then play the one that fits "
-                       "here by track_id. Typical patterns: mode 'play' for the main request, 'queue' for extras; "
-                       "find_tracks, then search_and_play(track_id=..., mode='play').",
+                       "here by track_id. (3) Play the listener's own tracks: within favorites or super_likes and no "
+                       "query plays a shuffle of them in which the ones they love most (rating plus how often they "
+                       "listen through rather than skip) come up most often; add a query to search inside them "
+                       "instead. Typical patterns: mode 'play' for the main request, 'queue' for extras; "
+                       "find_tracks, then search_and_play(track_id=..., mode='play'); \"play my super likes\" is "
+                       "search_and_play(within='super_likes', mode='play').",
         "parameters": _schema({
             "query": _string("What to search for, in the listener's own words: 'Nine Inch Nails', 'melancholic', "
-                             "'something dreamy with TR-808 drums'. Leave out when you pass track_id."),
+                             "'something dreamy with TR-808 drums'. Required, except with track_id, or with within "
+                             "favorites / super_likes to play their own tracks as they are."),
             "mode": _enum(["play", "queue"], "play = start it now; queue = add it after the current track."),
             "track_id": _string("A track you picked, by its id from find_tracks, what_aired or pulse_search: plays "
                                 "exactly that track instead of searching."),
@@ -268,7 +281,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search. Or pin one field: "
                                                  "song_title, primary_artist, similar_artists, primary_genre, "
                                                  "secondary_genres (sub-genres/tags), mood, style (production), "
-                                                 "theme (lyrical subject), vocal (delivery), lyrics."),
+                                                 "theme (lyrical subject), vocal (how the singing sounds: raspy, "
+                                                 "falsetto, rapped; who sings is the vocals filter), lyrics."),
             "within": WITHIN,
         }, ["mode"]),
     },
@@ -286,10 +300,14 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "real artists or songs fit the clues, then in the same step call find_tracks once with the "
                        "clues and once for each likely name (category primary_artist or song_title). The pick is "
                        "yours: play the best fit with search_and_play track_id, the way a DJ would, without asking "
-                       "the listener to confirm.",
+                       "the listener to confirm. Each candidate the listener knows carries 'yours': their rating, how "
+                       "often they listened through or skipped it, and when they last played it. With within "
+                       "favorites or super_likes and no query it lists the listener's own tracks, the ones they love "
+                       "most first.",
         "parameters": _schema({
             "query": _string("The listener's clues in their own words, or a name to check: '90s band with a male "
-                             "and a female singer', 'Sonic Youth'."),
+                             "and a female singer', 'Sonic Youth'. Required, except with within favorites / "
+                             "super_likes to list their own tracks."),
             "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search over the clues. "
                                                  "primary_artist or song_title to check a name; or one other field "
                                                  "as in search_and_play."),
@@ -300,7 +318,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                                    "is filtered, so use it when the listener remembers how the name starts."),
             "how_many": {"type": "number", "description": f"How many candidates: {FIND_DEFAULT} by default, up to "
                                                           f"{FIND_MAX}."},
-        }, ["query"]),
+        }),
     },
     {
         "name": "playback_control",
@@ -328,31 +346,35 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "balanced mix): the track playing now by default, or the previous or next one. Use it for "
                        "'more like this', or to steer from a sound the listener just heard.",
         "parameters": _schema({
-            "mode": _enum(SEED_MODES, "Aspect of the track to match."),
+            "category": _enum(SEED_CATEGORIES, "Aspect of the track to match, the same categories as the search "
+                                               "('all' for a balanced mix)."),
             "target": _enum(TRACK_TARGETS, "Which track to build from: current (default), previous or next."),
             "track_id": TRACK_ID,
-        }, ["mode"]),
+        }, ["category"]),
     },
     {
         "name": "play_playlist",
         "cost": "memory",
         "requires": "favorites and discovery need a signed-in listener",
         "summary": "switch to favorites, discovery or top hits",
-        "description": "Switch to a playlist: the listener's favorites, discovery (favorites plus similar new "
-                       "tracks), or the station's top hits (all time, this week, today). Suits broad asks that don't "
-                       "name an artist or sound.",
+        "description": "Switch the station to a playlist that keeps going: the listener's favorites (their likes "
+                       "and super likes, the ones they love most coming up most often), discovery (favorites plus "
+                       "similar new tracks), or the station's top hits (all time, this week, today). Suits broad "
+                       "asks that don't name an artist or sound. For a few of their super likes only, use "
+                       "search_and_play within super_likes.",
         "parameters": _schema({"name": _enum(PLAYLISTS, "Playlist to play.")}, ["name"]),
     },
     {
         "name": "rate_track",
         "cost": "memory",
-        "requires": "signed-in listener; ban and dislike need the listener's own negative words",
-        "summary": "like, superstar, clear or ban a track or a shoutout",
+        "requires": "signed-in listener; ban and clear need the listener's own words asking for it",
+        "summary": "like, super_like, clear or ban a track or a shoutout",
         "description": "Record the listener's rating of a track, or of another listener's shoutout, reply or "
-                       "review: like (enjoys it), superstar (an all-time favourite), dislike (clears any rating), "
-                       "ban (never play it again). The result names what was rated.",
+                       "review, the same ratings as the app's buttons: like (enjoys it), super_like (an all-time "
+                       "favorite), clear (takes their rating off), ban (never play it again). Liked and super-liked "
+                       "tracks make up the listener's favorites. The result names what was rated.",
         "parameters": _schema({
-            "rating": _enum(["like", "superstar", "dislike", "ban"], "Rating to record."),
+            "rating": _enum(RATINGS, "Rating to record."),
             "target": _enum(RATING_TARGETS, "What to rate: the track playing now, the previous one, the next one, "
                                             "or shoutout (a listener's post)."),
             "track_id": TRACK_ID,
@@ -532,6 +554,18 @@ def tool_catalog() -> str:
 
 
 TOOLS_BY_NAME = {tool["name"]: tool for tool in TOOL_REGISTRY}
+
+
+def accepted_arguments(name: str) -> Dict[str, str]:
+    tool = TOOLS_BY_NAME.get(name) or {}
+    properties = (tool.get("parameters") or {}).get("properties") or {}
+    required = set((tool.get("parameters") or {}).get("required") or ())
+    accepted = {}
+    for key, spec in properties.items():
+        options = spec.get("enum") or (spec.get("items") or {}).get("enum")
+        shape = " | ".join(options) if options else spec.get("type", "string")
+        accepted[key] = f"{shape} ({'required' if key in required else 'optional'})"
+    return accepted
 DJ_FUNCTION_DECLARATIONS = [_declaration(tool) for tool in TOOL_REGISTRY]
 TOOL_COSTS = {tool["name"]: tool["cost"] for tool in TOOL_REGISTRY}
 
@@ -718,23 +752,23 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
     if name == "search_and_play":
         if args.get("track_id"):
             return _brace("play" if args["mode"] == "play" else "cue", "track", value=args["track_id"])
-        return _brace("play" if args["mode"] == "play" else "cue", args["category"],
+        return _brace("play" if args["mode"] == "play" else "cue", args.get("category") or "",
                       args["within"] if args.get("within") != "catalog" else "", args.get("vocals") or "",
-                      value=args["query"])
+                      value=args.get("query"))
     if name == "find_tracks":
-        return _brace("find", args["category"], args["within"] if args.get("within") != "catalog" else "",
+        return _brace("find", args.get("category") or "", args["within"] if args.get("within") != "catalog" else "",
                       args.get("vocals") or "", f"starts with {args['starts_with']}" if args.get("starts_with") else "",
-                      value=args["query"])
+                      value=args.get("query"))
     if name == "playback_control":
         action = args["action"]
         if action == "seek":
             return _brace("seek", value=f"{args['position_s']:g}s")
         if action == "remove":
             return _brace("remove", value=args.get("title") or "next")
-        return _brace({"next": "next", "previous": "previous", "pause": "mute", "resume": "activate"}.get(action, action))
+        return _brace(action)
     if name == "seed_radio":
         return _brace("play", "seed", _target(args["target"]) if args["target"] != "current" else "",
-                      value=args["mode"])
+                      value=args["category"])
     if name == "move_playback":
         return _brace("move_playback", value=args.get("device") or "list devices")
     if name == "radio_settings":
@@ -906,14 +940,17 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         track_id = (text("track_id") or "").split(":")[-1]
         if track_id and not _TRACK_ID.match(track_id):
             raise ValueError("'track_id' must be a track id from find_tracks, what_aired or pulse_search")
-        return {"category": choice("category", SEARCH_CATEGORIES, "description"),
-                "query": text("query", required=not track_id), "track_id": track_id or None,
+        within = choice("within", SEARCH_SCOPES, "catalog")
+        return {"category": choice("category", SEARCH_CATEGORIES) if args.get("category") else None,
+                "query": text("query", required=not track_id and within not in LOVED_SCOPES),
+                "track_id": track_id or None,
                 "vocals": choice("vocals", VOCALS) if args.get("vocals") else None,
-                "mode": choice("mode", ["play", "queue"], "play"),
-                "within": choice("within", SEARCH_SCOPES, "catalog")}
+                "mode": choice("mode", ["play", "queue"], "play"), "within": within}
     if name == "find_tracks":
-        return {"query": text("query", True), "category": choice("category", SEARCH_CATEGORIES, "description"),
-                "within": choice("within", SEARCH_SCOPES, "catalog"),
+        within = choice("within", SEARCH_SCOPES, "catalog")
+        return {"query": text("query", required=within not in LOVED_SCOPES),
+                "category": choice("category", SEARCH_CATEGORIES) if args.get("category") else None,
+                "within": within,
                 "starts_with": (text("starts_with") or "")[:STARTS_WITH_MAX_CHARS] or None,
                 "vocals": choice("vocals", VOCALS) if args.get("vocals") else None,
                 "how_many": int(number("how_many", FIND_DEFAULT, FIND_MAX))}
@@ -928,7 +965,7 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"action": action, "title": text("title")}
         return {"action": action}
     if name == "seed_radio":
-        return {"mode": choice("mode", SEED_MODES), "target": track_target()}
+        return {"category": choice("category", SEED_CATEGORIES), "target": track_target()}
     if name == "move_playback":
         return {"device": text("device")}
     if name == "radio_settings":
@@ -959,7 +996,7 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         if shoutout_id and not _PARENT_ID.match(shoutout_id):
             raise ValueError("shoutout_id must look like '<userId>_<timestamp>', or be left out")
         target = "shoutout" if shoutout_id else track_target(allowed=RATING_TARGETS)
-        return {"rating": choice("rating", ["like", "superstar", "dislike", "ban"]), "target": target,
+        return {"rating": choice("rating", RATINGS), "target": target,
                 "shoutout_id": (shoutout_id or None) if target == "shoutout" else None}
     if name == "get_news":
         category = args.get("category")
@@ -1000,7 +1037,7 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> Optional[str]:
     if ctx.calls_made >= settings.DJ_TOOL_MAX_CALLS_PER_TURN:
         return "That's the limit of tool calls for one turn: work with what you already have."
-    if args.get("within") in ("favourites", "super_likes") and not ctx.user_id:
+    if args.get("within") in LOVED_SCOPES and not ctx.user_id:
         return "Only signed-in listeners have liked tracks to search; search the whole catalog instead."
     if name == "pulse_search" and args.get("mine") and not ctx.user_id:
         return "Only signed-in listeners have posts of their own."
@@ -1079,7 +1116,8 @@ class DJToolRuntime:
         except ValueError as e:
             self.ctx.records.append({"name": name, "args": raw_args, "status": "invalid", "reason": str(e)})
             await self._flash(name, raw_args or {}, "failed", f"bad arguments: {e}"[:80])
-            return {"status": "error", "reason": str(e)}
+            return {"status": "invalid_call", "reason": str(e), "accepts": accepted_arguments(name),
+                    "note": INVALID_CALL_NOTE}
 
         refusal = authorize_tool_call(name, args, self.ctx)
         self.ctx.calls_made += 1
@@ -1271,7 +1309,9 @@ class DJToolRuntime:
 
     @staticmethod
     def _catalog_query(args) -> str:
-        prefix = SEARCH_CATEGORY_PREFIXES[args["category"]]
+        if not args.get("query"):
+            return ""
+        prefix = SEARCH_CATEGORY_PREFIXES.get(args.get("category") or "")
         return f"{prefix}: {args['query']}" if prefix else args["query"].replace(": ", " ")
 
     async def _search_and_play(self, args):
@@ -1279,6 +1319,9 @@ class DJToolRuntime:
             if args.get("track_id"):
                 return await self.executor.execute_play_ids(self.session_dict, [args["track_id"]],
                                                             args["mode"] == "play")
+            if not args.get("query"):
+                return await self.executor.execute_play_loved(self.session_dict, args["within"],
+                                                              args["mode"] == "play", vocals=args.get("vocals"))
             return await self.executor.execute_searches(self.session_dict,
                                                         [(self._catalog_query(args), args["mode"] == "play")],
                                                         within=args.get("within"), vocals=args.get("vocals"))
@@ -1295,7 +1338,7 @@ class DJToolRuntime:
 
     async def _seed_radio(self, args):
         async with self.ctx.playback_lock:
-            return await self.executor.execute_seed_radio(self.session_dict, args["mode"], args["target"])
+            return await self.executor.execute_seed_radio(self.session_dict, args["category"], args["target"])
 
     async def _move_playback(self, args):
         async with self.ctx.playback_lock:

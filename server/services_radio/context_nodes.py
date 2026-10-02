@@ -196,9 +196,9 @@ async def get_station_capabilities_detailed(**_) -> str:
 
         "ENGAGEMENT:\n"
         "- Like - Mark tracks/content you enjoy, improves recommendations\n"
-        "- Superstar - Deep emotional connection, tracks that define your taste\n"
-        "- Dislike - Reduce recommendations for similar content\n"
-        "- Ban - Permanently exclude tracks and similar content from playback\n\n"
+        "- Super Like - Deep emotional connection, tracks that define your taste\n"
+        "- Clear - Take a like, super like or ban off again\n"
+        "- Ban - Never play that track again\n\n"
 
         "TEMPORAL & LOCATION MODIFIERS:\n"
         "- Time: Today, Tomorrow, This Week, Earlier, Later, Current\n"

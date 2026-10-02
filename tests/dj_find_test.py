@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import track_search_probe as probe  # noqa: E402
 from config.settings import settings  # noqa: E402
 from service_registry import services  # noqa: E402
-from services import log_service  # noqa: E402
+from services import listener_plays, log_service  # noqa: E402
 from services.llm_router import LLM_DJ  # noqa: E402
 from services_radio import context_nodes  # noqa: E402,F401
 from services_radio.context_node_registry import node_registry  # noqa: E402
@@ -39,6 +39,9 @@ SYSTEM_NODES = ['core_dj_identity', 'station_capabilities', 'format_channels', '
                 'guidelines_critical', 'guidelines_internal_dialogue', 'instruction_dj_tools', 'tool_guidance',
                 'station_recent_airings', 'studio_clock', 'city_pulse']
 
+SUPER_LIKES = "one of their super likes"
+SIGNED_IN_USER = 1
+
 SCENARIOS = [
     ("Can we listen, I'm trying to find a band, this is like a 90s band, male, female singer, I think it started "
      "with S, um, yeah.", "Sonic Youth"),
@@ -48,6 +51,8 @@ SCENARIOS = [
      "name. Put them on.", "Pixies"),
     ("Play something by the guy who did Windowlicker.", "Aphex Twin"),
     ("Play me something dreamy and slow.", None),
+    ("What about something for my favourites? Like, uh, my super likes or like, what should I do like this or "
+     "something?", SUPER_LIKES),
 ]
 
 
@@ -68,6 +73,22 @@ class FakePlayback:
 class FakeSio:
     async def emit(self, *args, **kwargs):
         return None
+
+
+class FakeDB:
+    def add(self, *args):
+        return None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def __getattr__(self, name):
+        async def nothing(*args, **kwargs):
+            return None
+        return nothing
 
 
 def recorded_turn(turn_id):
@@ -96,12 +117,15 @@ async def main():
     hits = 0
     for listener_text, expected in picked:
         print(f"\n== {listener_text[:90]}  (want {expected or 'a fitting vibe'})", flush=True)
+        signed_in = expected == SUPER_LIKES
+        wanted = set(await listener_plays.ratings(SIGNED_IN_USER, "super_likes")) if signed_in else set()
         for _ in range(runs):
             playback = FakePlayback()
-            executor = CommandExecutorService(None, None, None, None, None, None, None, None, None, FakeSio(), None,
+            executor = CommandExecutorService(None, None, None, None, None, None, None, None, None, FakeSio(), FakeDB,
                                          search, playback, services.catalog_service)
-            ctx = DJTurnContext(session_dict={"session_id": f"guest_{uuid.uuid4()}", "user_id": None},
-                                transcription=listener_text, origin="text")
+            session = ({"session_id": str(SIGNED_IN_USER), "user_id": SIGNED_IN_USER} if signed_in
+                       else {"session_id": f"guest_{uuid.uuid4()}", "user_id": None})
+            ctx = DJTurnContext(session_dict=session, transcription=listener_text, origin="text")
             runtime = DJToolRuntime(executor, ctx)
             result = await services.ai_service.run_gemini_tool_turn(
                 system_instruction=system_prompt, user_message=f"{head}[LISTENER TXT] {listener_text}",
@@ -112,7 +136,10 @@ async def main():
             played = playback.played[-1] if playback.played else None
             track = services.catalog_service.get_track(played) if played else None
             artists = " / ".join(log_service.track_artists(track)) if track else ""
-            ok = expected is None and bool(played) or bool(expected and expected.lower() in artists.lower())
+            if signed_in:
+                ok = played in wanted
+            else:
+                ok = expected is None and bool(played) or bool(expected and expected.lower() in artists.lower())
             hits += ok
             calls = "; ".join(f"{c['name']}({', '.join(f'{k}={v}' for k, v in c['args'].items() if k != '_done_with')})"
                               for c in result.get("tool_calls") or [])

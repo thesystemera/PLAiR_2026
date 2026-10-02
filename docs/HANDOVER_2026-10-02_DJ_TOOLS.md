@@ -71,6 +71,19 @@ Earlier turns in the same session:
    this hour?", "Workout music, they said..." when nobody said it). 3 of 4 replies then spent lines on "my bad, I
    blurted". Owner accepted the impulse note design on 2026-10-02 ("good enough"); raise it, don't change it unasked.
 
+## Done (2 Oct, evening, owner approved)
+
+- Findings 1-4 fixed. One name per concept: `favorites`, `super_like`, `clear`, seed `category`; `description` no
+  longer offered or logged. `search_and_play` / `find_tracks` take `within` favorites / super_likes with no query.
+  Malformed calls return `invalid_call` + `accepts`. The smart search skips the playing track.
+- Owner's addition: favorites and super likes are weighted by the listener's own listens and skips
+  (`services/listener_plays.py`, also the favorites playlist), and the DJ sees them (`yours` on candidates,
+  `listener_context` most_loved / most_played). On user 1 the heavily skipped super likes drop to ~0.3 weight, the
+  most-listened reach ~15.
+- Test: `tests/dj_find_test.py 2 1025bb91d723 6` (the failing turn, signed in as user 1, playback faked): 2 of 2
+  played a super like in 2 rounds.
+- Still open: findings 5 (speech recognition, junk shoutout) and 6 (impulses).
+
 ## State of the repo
 
 - Everything from this session is committed and pushed (last: `a41674a` vocals field). PLAiR restarted 17:10 NZ,

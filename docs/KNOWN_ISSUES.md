@@ -18,7 +18,13 @@ anything else is carried over as written.
 
 ## 2. DJ turn: bugs and things to watch
 
-- **Top priority (2 Oct): DJ tools don't speak one language.** "Play my super likes" failed: `search_and_play` declares only `mode` required but the code demands `query`; no tool plays super likes as a whole; favorites/favourites, superstar/super_likes, vocal/vocals, two meanings of `mode`. Full logs, findings and the plan: `docs/HANDOVER_2026-10-02_DJ_TOOLS.md`.
+- **Fixed 2 Oct: DJ tools didn't speak one language.** "Play my super likes" now works
+  (`search_and_play(within=super_likes)` with no query, 2 of 2 test turns as user 1); one name per concept
+  (`favorites`, `super_like`, `clear`, seed `category`); malformed calls return `invalid_call` with the accepted
+  arguments; the smart search skips the track already playing; favorites and super likes are weighted by the
+  listener's own listens and skips (`services/listener_plays.py`), and the DJ sees those counts. Still open from the
+  same handover: speech recognition outdoors, the junk shoutout from 05:19 UTC (delete once the owner agrees), and
+  ill-fitting impulses. Details: `docs/HANDOVER_2026-10-02_DJ_TOOLS.md`.
 
 - **Fixed 1 Oct, not yet live: the DJ's fallback model failed every follow-up round.** gemini-3.5-flash-lite
   answers 400 INVALID_ARGUMENT to a thinking budget of 0 (even on a plain prompt) and accepts 1, which uses no

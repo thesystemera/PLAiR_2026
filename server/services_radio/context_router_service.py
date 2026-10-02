@@ -501,7 +501,7 @@ Set needs_tools=false only for banter, greetings, opinions and questions the con
 tool_plan is a bare numbered list of function-call steps with <placeholders> for values, never invented values.
 GOOD: ["1. pulse_search(query=<kind of music>, kinds=[event], when=weekend)", "2. pulse_detail(item_id=<best match>)"]
 GOOD: ["1. pulse_search(query=<allergy topic>, kinds=[area, weather])"]
-GOOD: ["1. playback_control(action=next)"], ["1. rate_track(rating=like, target=current)", "2. seed_radio(mode=mood)"]
+GOOD: ["1. playback_control(action=next)"], ["1. rate_track(rating=like, target=current)", "2. seed_radio(category=mood)"]
 GOOD: ["1. search_and_play(category=primary_artist, query=<artist>, mode=play)"]
 BAD: ["Look up jazz gigs"] (not a function call), ["pulse_search(query='Blue Note Friday 9pm')"] (invented value)
 Leave tool_plan empty when needs_tools is false.
