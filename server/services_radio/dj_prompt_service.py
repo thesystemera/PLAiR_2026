@@ -145,7 +145,6 @@ class DJPromptService:
             'interactive_tools': {
                 'required_nodes': [
                     'core_dj_identity',
-                    'station_capabilities',
                     'format_channels',
                     'format_tone',
                     'format_performance_tags_guide',
@@ -897,10 +896,10 @@ class DJPromptService:
         log_service.gpt(f"Interactive Tools: Prompt System: {system_prompt}")
 
         aired = " / ".join(filter(None, (plain_talk(text) for text in session_dict.get('on_air') or [])))
-        on_air_note = (f"[ON AIR JUST NOW] You blurted this out on air before you'd properly taken in the message: "
-                       f"\"{aired}\". If it fits, carry on from it naturally. If it missed, own it like any DJ who spoke "
-                       "too soon (a quick 'hang on, scratch that' or a laugh at yourselves) and get to what they "
-                       "actually said. Don't repeat it.\n\n") if aired else ""
+        on_air_note = (f"[ON AIR JUST NOW] While the message was coming in, you two were thinking out loud to each "
+                       f"other on a hot mic: \"{aired}\". That was just you, not the listener and not an answer: no "
+                       "need to mention, correct or apologise for it. Don't repeat it; answer what the listener "
+                       "actually said.\n\n") if aired else ""
         user_message = f"{live_context}\n\n{on_air_note}[LISTENER TXT] {transcription}" if live_context else \
             f"{on_air_note}[LISTENER TXT] {transcription}"
         log_service.gpt(f"Interactive Tools: Prompt User: {user_message}")

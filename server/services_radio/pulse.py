@@ -500,23 +500,26 @@ class MusicNode(KnowledgeNode):
         only = await scope_ids(q.listener.user_id, q.within)
         tracks = await search.search(q.text, n_results=q.per_kind, use_ai_analysis=q.use_ai,
                                      banned_ids=banned, only_ids=only)
-        items = []
+        items, seen = [], set()
         for track in tracks:
             score = float(track.get("similarity_score") or 0.0)
             params = track.get("generation_params") or {}
             tags = track.get("derived_tags") or {}
             title = params.get("title") or "Untitled"
-            artist = params.get("artist_name") or ""
+            artist = (log_service.track_artists(track) or [""])[0]
+            if (title.lower(), artist.lower()) in seen:
+                continue
+            seen.add((title.lower(), artist.lower()))
             details = [tags.get("primary_genre") or ""]
-            if tags.get("inspired_artist"):
+            if tags.get("inspired_artist") and tags["inspired_artist"] != artist:
                 details.append(f"in the style of {tags['inspired_artist']}")
             if only is not None and tags.get("vocal_style_keywords"):
-                details.append("vocals: " + ", ".join(tags["vocal_style_keywords"][:5]))
+                details.append("vocal style: " + ", ".join(tags["vocal_style_keywords"][:5]))
             items.append(PulseItem(
                 id=f"track:{track.get('id')}", kind=KIND_TRACK, title=f"{title} by {artist}" if artist else title,
                 text=", ".join(d for d in details if d),
                 source="the listener's liked tracks" if only is not None else "PLAiR catalog", score=score,
-                payload={"track_id": track.get("id"), "play_hint": "search_and_play with its title to play it"}))
+                payload={"track_id": track.get("id"), "play_hint": "search_and_play with this track_id plays it"}))
         return items
 
 
@@ -1414,7 +1417,7 @@ class Pulse:
             "city": listener.region.name if listener.region else (location.city or None),
             "neighbourhood": location.description or location.place or None,
             "top_genres": list(listener.taste.genres)[:6],
-            "favourite_artists": sorted(listener.taste.artists)[:8],
+            "favorite_artists": sorted(listener.taste.artists)[:8],
             "interests": sorted(listener.taste.interests)[:6],
             "signed_in": bool(listener.user_id),
         }

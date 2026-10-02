@@ -46,7 +46,8 @@ class NodeSelection(BaseModel):
     )
     needs_tools: bool = Field(
         default=False,
-        description="True only when the hosts must look something up, or search the catalog, before they can reply well"
+        description="True when the hosts must find something out or make something happen (play, skip, rate, save, "
+                    "a segment); false only for banter, greetings, opinions and questions the context nodes answer"
     )
     tool_plan: List[str] = Field(
         default_factory=list,
@@ -60,7 +61,7 @@ class NodeSelection(BaseModel):
     pulse_kinds: List[str] = Field(
         default_factory=list,
         description="Which kinds of station knowledge could help with this message (event, place, news, weather, "
-                    "area, artist, track, community, chart, trend); empty when none"
+                    "area, artist, track, community, review, chart, trend); empty when none"
     )
     pulse_near_me: bool = Field(default=False, description="True when the listener wants things near them or local")
     pulse_when: str = Field(default="", description="Time window if the message has one: now, today, tonight, "
@@ -410,69 +411,25 @@ Return the selected nodes in order of importance, needs_tools, and the tool_plan
 
         return f"""You are the "Producer" for PLAiR.fm's dynamic context system.
 
-Your job is to analyze user input and select ONLY the context nodes needed to respond effectively.
+The hosts' standing instructions (identity, format, guidelines, tools) are always included. Your first job is to
+choose, from the context nodes below, the ones the reply to this message could use.
 
 Available Nodes:
 {available_nodes}
 
-CRITICAL RULES:
-1. FORMATTING NODES (always select these core structure nodes):
-   - "core_dj_identity" - ALWAYS include first (required for tone/personality)
-   - "station_capabilities" - ALWAYS include
-   - "format_channels" - ALWAYS include (critical [BROADCAST]/[TXT] rules)
-   - "format_tone" - ALWAYS include (language style)
-   - "format_performance_tags_guide" - ALWAYS include (required for structuring responses)
-   - "guidelines_critical" - Include when listener requests info/services
-   - "guidelines_general" - ALWAYS include
-   - "guidelines_internal_dialogue" - ALWAYS include
-   - "format_roles_detailed" - OPTIONAL but use often (detailed DJ personalities)
-   - "format_station_characteristics" - OPTIONAL but use often (station vibe)
-   - "format_dialogue_examples" - OPTIONAL (example dialogue when needed)
-
-2. CONTENT NODES (select GENEROUSLY based on relevance):
-   - Be GENEROUS - err on the side of including MORE context
-   - Token cost is LOW, so prefer more context over less
-   - Consider the user's intent:
-     * Simple greetings/commands → 10-14 nodes total (formatting + basic content + conversation + track basics)
-     * Questions about current track → 14-20 nodes total (formatting + full track info + conversation + user context)
-     * Complex queries → 20-28 nodes total (formatting + comprehensive context)
-
-3. DEFAULT INCLUSIONS (nearly always include):
-   - "conversation_recent" or "conversation_last_turn" - CRITICAL for context continuity
-   - "user_basic" - Almost always relevant
-   - For ANY track mention: include "track_title_artist", "track_style_description", "track_release_date"
-   - For music discussions: include "user_favorite_artists" and "user_persona"
-   - When in doubt, ADD the node rather than exclude it
-
-4. COST OPTIMIZATION:
-   - Prioritize LOW and MEDIUM cost nodes
-   - MEDIUM cost nodes are fine to include liberally
-   - Only avoid HIGH cost nodes if truly unnecessary
-   - Order nodes by importance (most critical first)
+CONTEXT NODES:
+- Nearly always: "conversation_last_turn" (or "conversation_recent" when the message builds on more than the last
+  exchange) and "user_basic".
+- Any mention of a track: "track_title_artist", "track_style_description", "track_release_date" (and more track
+  nodes for questions about the song). Music requests and discussions: "user_favorite_artists" and "user_persona".
+- When in doubt, include the node: context is cheap. Order them most important first.
 
 Examples:
-
-User: "Hey guys, who are we listening to right now?"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_style_description", "track_release_date", "track_audio_features_full", "conversation_last_turn", "user_basic", "user_persona"]
-Reasoning: "Track inquiry - include core formatting + roles for DJ banter + full track context + conversation history + user context"
-
-User: "Skip this track"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_station_characteristics", "queue_next_track", "queue_next_details", "track_title_artist", "conversation_last_turn", "user_basic", "user_favorite_artists"]
-Reasoning: "Playback command - core formatting + station vibe + what's next + current track + conversation + user taste"
-
-User: "Tell me about this song"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "track_title_artist", "track_release_date", "track_style_description", "track_vocal_info", "track_audio_features_full", "track_lyrics_preview", "conversation_recent", "user_basic", "user_persona", "user_favorite_artists"]
-Reasoning: "Broad question about song - core formatting + roles for personality + comprehensive track info + conversation + user profile"
-
-User: "What's the weather like?"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_critical", "guidelines_general", "guidelines_internal_dialogue", "weather_current", "user_basic", "conversation_last_turn", "station_current_show"]
-Reasoning: "Non-music service request - core formatting + critical guidelines + weather + conversation continuity + show context"
-
-User: "Play something upbeat"
-Selected: ["core_dj_identity", "station_capabilities", "format_channels", "format_tone", "format_performance_tags_guide", "guidelines_general", "guidelines_internal_dialogue", "format_roles_detailed", "user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
-Reasoning: "Music request - core formatting + roles for personality + user taste profile + current context + conversation history"
-
-Remember: Your goal is EFFICIENCY. Only select what's needed, nothing more.
+"Hey guys, who are we listening to right now?" -> ["track_title_artist", "track_style_description", "track_release_date", "track_audio_features_full", "conversation_last_turn", "user_basic", "user_persona"]
+"Skip this track" -> ["track_title_artist", "queue_next_track", "queue_next_details", "conversation_last_turn", "user_basic", "user_favorite_artists"]
+"Tell me about this song" -> ["track_title_artist", "track_release_date", "track_style_description", "track_vocal_info", "track_audio_features_full", "track_lyrics_preview", "conversation_recent", "user_basic", "user_persona", "user_favorite_artists"]
+"What's the weather like?" -> ["weather_current", "user_basic", "conversation_last_turn", "station_current_show"]
+"Play something upbeat" -> ["user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
 
 TOOL PLANNING (needs_tools + tool_plan):
 The studio tools the hosts can use, with what each does, its parameters, cost and requirements:

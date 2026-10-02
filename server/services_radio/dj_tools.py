@@ -83,15 +83,16 @@ INVALID_CALL_NOTE = ("Your call was malformed, so it never ran: nothing was sear
                      "nothing about what the station or the listener has. Fix the arguments as the reason says "
                      "('accepts' lists them) and call it again.")
 
-WEATHER_PERIODS = ["current", "today", "tomorrow", "week"]
+WEATHER_PERIODS = ["now", "today", "tomorrow", "week"]
+WEATHER_SERVICE_PERIODS = {"now": "current"}
 SEARCH_SCOPES = list(listener_filters.SEARCH_SCOPES)
 LOVED_SCOPES = set(listener_plays.SCOPES)
+WITHIN_TEXT = ("Where to look for tracks: catalog (everything, the default), favorites (the tracks this listener has "
+               "liked or super-liked) or super_likes (only their super likes). Use favorites or super_likes when they "
+               "ask for something of their own: 'one of my favorites', 'my super likes', 'that song I liked'.")
 WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
-          "description": "Where to look for tracks: catalog (everything, the default), favorites (the tracks this "
-                         "listener has liked or super-liked) or super_likes (only their super-likes). Use favorites "
-                         "or super_likes when they ask for something of their own: 'one of my favorites', 'my super "
-                         "likes', 'that song I liked'. With no query it takes the listener's own tracks as they "
-                         "are, the ones they love most (rating plus how often they listen through) first."}
+          "description": f"{WITHIN_TEXT} Leave the query out to use their own tracks as a whole."}
+PULSE_WITHIN = {"type": "string", "enum": SEARCH_SCOPES, "description": WITHIN_TEXT}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
 VOCALS = list(FILTERABLE_VOCALS)
 VOCALS_PARAM = {"type": "string", "enum": VOCALS,
@@ -159,9 +160,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "query": _string("What to look up, in plain words, e.g. 'jazz', 'late night pizza', 'All Blacks', "
                              "'Radiohead'. Empty to browse what's on hand."),
             "kinds": {"type": "array", "items": _enum(PULSE_KINDS, "Kind of knowledge."),
-                      "description": "Optional: limit to these kinds (event, place, news, weather, area, artist, "
-                                     "track, community, review, chart, trend). Leave empty to search "
-                                     "everything."},
+                      "description": "Optional: limit to these kinds (community = listener shoutouts). Leave empty "
+                                     "to search everything."},
             "when": _enum(PULSE_WHEN, "Optional time window for events and weather."),
             "near_me": {"type": "boolean",
                         "description": "Local only: gigs, places, news and shoutouts near the listener, from their "
@@ -169,7 +169,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "max_age_days": {"type": "number", "description": "Only shoutouts and news from the last N days."},
             "sort": _enum(PULSE_SORT, "relevance (default), newest (latest shoutouts/news), soonest (next events), "
                                       "nearest."),
-            "within": WITHIN,
+            "within": PULSE_WITHIN,
             "mine": {"type": "boolean",
                      "description": "Only this listener's own posts: their shoutouts, replies and reviews, newest "
                                     "first. Signed-in listeners only."},
@@ -253,27 +253,22 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "name": "search_and_play",
         "cost": "memory",
         "summary": "play or queue music: search and play in one step, or play a track you picked by its id",
-        "description": "Plays music. Two ways to use it. (1) Search and play in one step, when any good match will "
-                       "do or the listener names exactly what they want: a mood, genre or vibe ('something dreamy', "
-                       "'jazz'), or an artist or song by name. When they want one particular band or song they can "
-                       "only describe, use find_tracks first instead. The search is the station's smart search, the same one the app's "
-                       "search box uses: it works out which aspects the words mean (genre, mood, style, vocals, "
-                       "theme, lyrics, artist) and weighs them; name a category to pin one field (primary_artist or "
-                       "song_title for an exact name, which also says plainly when the catalog doesn't have it). "
-                       "It plays the closest match straight away, unseen. (2) Play a specific track you have already "
-                       "picked: pass its track_id (from find_tracks, what_aired or pulse_search). When the listener "
-                       "is trying to pin down one particular song or band from clues rather than asking for a vibe, "
-                       "don't play the closest match blind: look with find_tracks first, then play the one that fits "
-                       "here by track_id. (3) Play the listener's own tracks: within favorites or super_likes and no "
-                       "query plays a shuffle of them in which the ones they love most (rating plus how often they "
-                       "listen through rather than skip) come up most often; add a query to search inside them "
-                       "instead. Typical patterns: mode 'play' for the main request, 'queue' for extras; "
-                       "find_tracks, then search_and_play(track_id=..., mode='play'); \"play my super likes\" is "
-                       "search_and_play(within='super_likes', mode='play').",
+        "description": "Plays music, three ways. (1) Search and play in one step, when any good match will do or the "
+                       "listener names exactly what they want: a mood, genre or vibe ('something dreamy', 'jazz'), or "
+                       "an artist or song by name. This is the app's own smart search: it works out which aspects the "
+                       "words mean and weighs them; a category pins one field (primary_artist or song_title for an "
+                       "exact name, which also says plainly when the catalog doesn't have it). It plays the closest "
+                       "match straight away, unseen. (2) Play a track you picked: pass its track_id (from find_tracks, "
+                       "what_aired or pulse_search). When the listener can only describe the one band or song they "
+                       "mean, look with find_tracks first and play your pick this way. (3) Play the listener's own "
+                       "tracks: within favorites or super_likes and no query plays a shuffle of them in which the ones "
+                       "they love most (their rating plus how often they listen through rather than skip) come up "
+                       "most often; add a query to search inside them instead. mode 'play' for the main request, "
+                       "'queue' for extras.",
         "parameters": _schema({
             "query": _string("What to search for, in the listener's own words: 'Nine Inch Nails', 'melancholic', "
                              "'something dreamy with TR-808 drums'. Required, except with track_id, or with within "
-                             "favorites / super_likes to play their own tracks as they are."),
+                             "favorites / super_likes to play their own tracks as a whole."),
             "mode": _enum(["play", "queue"], "play = start it now; queue = add it after the current track."),
             "track_id": _string("A track you picked, by its id from find_tracks, what_aired or pulse_search: plays "
                                 "exactly that track instead of searching."),
@@ -301,9 +296,8 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "clues and once for each likely name (category primary_artist or song_title). The pick is "
                        "yours: play the best fit with search_and_play track_id, the way a DJ would, without asking "
                        "the listener to confirm. Each candidate the listener knows carries 'yours': their rating, how "
-                       "often they listened through or skipped it, and when they last played it. With within "
-                       "favorites or super_likes and no query it lists the listener's own tracks, the ones they love "
-                       "most first.",
+                       "often they listened through or skipped it, and when they last played it. Within favorites or "
+                       "super_likes and no query, it lists the listener's own tracks, the ones they love most first.",
         "parameters": _schema({
             "query": _string("The listener's clues in their own words, or a name to check: '90s band with a male "
                              "and a female singer', 'Sonic Youth'. Required, except with within favorites / "
@@ -518,8 +512,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     },
 ]
 DONE_WITH = {"type": "object", "additionalProperties": {"type": "string"},
-             "description": "Earlier tool results you have finished using this turn: {tool_name: what you took from "
-                            "it in a few words}. The studio then drops them from your context."}
+             "description": "Earlier results you're done with: {tool_name: what you took from it}."}
 
 
 def _tool_notes(tool: Dict[str, Any]) -> str:
@@ -1004,12 +997,12 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "category": choice("category", NEWS_CATEGORIES) if category else None,
                 "query": text("query")}
     if name == "get_weather":
-        when = args.get("when") or ["current"]
+        when = args.get("when") or ["now"]
         when = [when] if isinstance(when, str) else list(when)
         periods = list(dict.fromkeys(str(period).strip().lower() for period in when if str(period).strip()))
         if not periods or any(period not in WEATHER_PERIODS for period in periods):
             raise ValueError(f"'when' must be one or more of {', '.join(WEATHER_PERIODS)}")
-        return {"when": periods}
+        return {"when": [WEATHER_SERVICE_PERIODS.get(period, period) for period in periods]}
     if name == "get_events":
         when = choice("when", ["today", "tonight", "tomorrow", "weekend", "week", "month"], "month")
         return {"when": {"tonight": "today", "weekend": "week"}.get(when, when), "query": text("query")}

@@ -102,7 +102,7 @@ class ContextNodeRegistry:
 
     def get_menu_for_ai(self) -> str:
         menu_items = []
-        for key in sorted(self._descriptions.keys()):
+        for key in sorted(name for name in self._descriptions if not self.is_system(name)):
             desc = self._descriptions[key]
             cost = self._costs[key].upper()
             menu_items.append(f"- {key}: {desc} [{cost}]")

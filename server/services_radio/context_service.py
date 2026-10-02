@@ -359,10 +359,7 @@ async def _format_track(track: Dict, audio_features_service) -> Dict:
                  track.get('generation_params', {}).get('title') or
                  track.get('title', 'N/A'))
 
-        artist = (track.get('generation_params', {}).get('artist_name') or
-                  track.get('track_info', {}).get('artist') or
-                  track.get('user_request', {}).get('original_text') or
-                  'AI Generated')
+        artist = (log_service.track_artists(track) or ['AI Generated'])[0]
         if track.get('is_ai_generated') is False:
             artist = f"{artist} (independent human artist, uploaded to PLAiR)"
 

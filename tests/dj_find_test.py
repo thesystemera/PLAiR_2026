@@ -33,7 +33,7 @@ from services_radio.dj_prompt_helper_service import assemble_prompt  # noqa: E40
 from services_radio.dj_tools import (READ_TOOLS, SEGMENT_TOOLS, DJToolRuntime, DJTurnContext,  # noqa: E402
                                      declarations_for)
 
-SYSTEM_NODES = ['core_dj_identity', 'station_capabilities', 'format_channels', 'format_tone',
+SYSTEM_NODES = ['core_dj_identity', 'format_channels', 'format_tone',
                 'format_meta_tags_guide', 'format_meta_tag_examples', 'format_roles_detailed',
                 'format_station_characteristics', 'format_dialogue_examples', 'guidelines_general',
                 'guidelines_critical', 'guidelines_internal_dialogue', 'instruction_dj_tools', 'tool_guidance',
