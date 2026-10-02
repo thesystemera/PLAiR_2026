@@ -41,10 +41,9 @@ def ai_artist(track: Dict[str, Any], tracks: Optional[Dict[str, Dict[str, Any]]]
               known: Optional[Dict[str, str]] = None, depth: int = 0) -> Tuple[Optional[str], str]:
     params = track.get("generation_params") or {}
     derived = track.get("derived_tags") or {}
-    if name_like(derived.get("inspired_artist")):
-        return derived["inspired_artist"].strip(), "already set"
     for value, source in ((params.get("artist_name"), "artist name"),
-                          ((track.get("track_info") or {}).get("artist"), "track info")):
+                          ((track.get("track_info") or {}).get("artist"), "track info"),
+                          (derived.get("inspired_artist"), "inspired artist")):
         if name_like(value):
             return value.strip(), source
     request = track.get("user_request")
@@ -62,6 +61,26 @@ def ai_artist(track: Dict[str, Any], tracks: Optional[Dict[str, Dict[str, Any]]]
     if similar:
         return similar[0].strip(), "first similar artist"
     return None, "nothing to go on"
+
+
+def credit_settled(track: Dict[str, Any]) -> bool:
+    names = (((track.get("generation_params") or {}).get("artist_name")),
+             ((track.get("track_info") or {}).get("artist")),
+             ((track.get("derived_tags") or {}).get("inspired_artist")))
+    return name_like(names[0]) and all(isinstance(n, str) and n.strip() == names[0].strip() for n in names)
+
+
+def settle_ai_credit(track: Dict[str, Any], tracks: Optional[Dict[str, Dict[str, Any]]] = None,
+                     known: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], str, bool]:
+    if not is_ai_track(track) or credit_settled(track):
+        return (track.get("generation_params") or {}).get("artist_name"), "settled", False
+    artist, source = ai_artist(track, tracks, known)
+    if not artist:
+        return None, source, False
+    track.setdefault("generation_params", {})["artist_name"] = artist
+    track.setdefault("track_info", {})["artist"] = artist
+    track.setdefault("derived_tags", {})["inspired_artist"] = artist
+    return artist, source, True
 
 
 def search_artist_text(track: Dict[str, Any]) -> str:

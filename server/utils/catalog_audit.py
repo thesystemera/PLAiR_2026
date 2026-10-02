@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services import log_service
+from services.catalog_credit import credit_settled
 from services.catalog_database_service import CatalogDatabaseService
 from services.catalog_vocals import VOCALS, settled_vocals
 
@@ -49,6 +50,8 @@ def audit(tracks: dict) -> dict:
             flag("no artist at all", track)
         if not human and _blank(derived.get("inspired_artist")):
             flag("AI track without inspired_artist", track)
+        if not human and not credit_settled(track):
+            flag("AI track whose artist_name, track_info.artist and inspired_artist differ", track)
         if human and _blank(params.get("artist_name")):
             flag("upload without an artist credit", track)
         if track.get("is_ai_generated") not in (True, False, None):

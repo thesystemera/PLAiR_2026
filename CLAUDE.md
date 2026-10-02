@@ -759,7 +759,7 @@ Design doc: `docs/CITY_PULSE.md`. All open work, bugs and owner decisions are in
 - `server/services/human_music_upload_service.py` - Upload pipeline (validation, transcoding, mastering, catalog integration, edits)
 - `server/services/artist_profile_service.py` + `routers/artists.py` - artist/band profiles (`artist_profiles` table)
 
-**AI track credits are compulsory:** every AI track has `derived_tags.inspired_artist` (`services/catalog_credit.py`: the credit, then the artist in the original request, then the first similar artist; the enrichment requires it, the Asset Doctor repairs it). The search's artist category reads the credit and the inspired-by artist. Audit the catalog with `server/utils/catalog_audit.py`.
+**AI track credits are compulsory and one name:** an AI track's artist is the artist it was inspired by, and it is shown as the artist. `generation_params.artist_name`, `track_info.artist` and `derived_tags.inspired_artist` always hold the same name (`services/catalog_credit.settle_ai_credit`: the requested artist, then the inspired-by artist, then the artist in the original request, then the first similar artist). Enrichment settles it on every new track, the Asset Doctor repairs any drift, `server/utils/backfill_artist_credit.py` fixes the catalog in bulk (run 3 Oct: 1,340 tracks). Every view reads `generation_params.artist_name`. Audit the catalog with `server/utils/catalog_audit.py`.
 
 **Key Principle:** Human tracks are stored in the same `tracks` table with `is_ai_generated=0`. They use identical metadata schemas, playback systems, and discovery pipelines as AI tracks.
 

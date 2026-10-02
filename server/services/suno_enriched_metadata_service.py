@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from services import log_service
 from services.base_service import SingletonService
-from services.catalog_credit import ai_artist, is_ai_track, name_like
+from services.catalog_credit import ai_artist, is_ai_track, name_like, settle_ai_credit
 from services.catalog_vocals import VOCALS, settled_vocals
 from services.llm_router import LLM_BACKGROUND
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
@@ -251,10 +251,11 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
             stated = result.get("vocals") if result.get("vocals") in VOCALS else "unknown"
             enriched["derived_tags"]["vocals"] = settled_vocals(enriched) or stated
             if is_ai_track(enriched) and not name_like(result.get("inspired_artist")):
-                artist, source = ai_artist({**enriched, "derived_tags": {**result, "inspired_artist": None}})
-                enriched["derived_tags"]["inspired_artist"] = artist
+                enriched["derived_tags"]["inspired_artist"] = None
+                artist, source = ai_artist(enriched)
                 log_service.warning(f"Enrichment gave {metadata.get('id')} no inspired artist; "
                                     f"using {artist!r} ({source})")
+            settle_ai_credit(enriched)
 
             log_service.success(f"Enriched: {metadata.get('id')} → {result['primary_genre']}")
 

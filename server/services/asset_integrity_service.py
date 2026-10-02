@@ -21,7 +21,7 @@ from services import log_service
 from services.user_content_database_service import kind_of, sting_file
 from services import usage_tracking
 from services import track_asset_stages as stages
-from services.catalog_credit import ai_artist, is_ai_track, known_artists, name_like
+from services.catalog_credit import ai_artist, credit_settled, is_ai_track, known_artists, settle_ai_credit
 from services.catalog_vocals import VOCALS, settled_vocals
 from services.task_utils import spawn
 from services.audio_transcoding_service import FFPROBE_EXE_PATH, FFMPEG_CWD
@@ -395,7 +395,7 @@ class AssetIntegrityService:
         genre = (derived.get("primary_genre") or "").strip()
         if not genre or genre.lower() == "unknown":
             missing.append("derived_tags.primary_genre")
-        if is_ai_track(metadata) and not name_like(derived.get("inspired_artist")):
+        if is_ai_track(metadata) and not credit_settled(metadata):
             missing.append(INSPIRED_ARTIST_FIELD)
         if derived.get("vocals") not in VOCALS:
             missing.append(VOCALS_FIELD)
@@ -1036,12 +1036,11 @@ class AssetIntegrityService:
         if INSPIRED_ARTIST_FIELD in missing:
             catalog = self._svc("catalog")
             tracks = catalog.tracks if catalog is not None else {}
-            artist, source = ai_artist(metadata, tracks, known_artists(tracks))
-            if artist:
-                metadata.setdefault("derived_tags", {})["inspired_artist"] = artist
+            artist, source, settled = settle_ai_credit(metadata, tracks, known_artists(tracks))
+            if settled:
                 missing.remove(INSPIRED_ARTIST_FIELD)
                 changed = True
-                log_service.info(f"[Asset doctor] {track_id}: inspired artist set to {artist!r} ({source})")
+                log_service.info(f"[Asset doctor] {track_id}: artist credit set to {artist!r} ({source})")
 
         if VOCALS_FIELD in missing:
             derived = metadata.setdefault("derived_tags", {})
@@ -1070,6 +1069,9 @@ class AssetIntegrityService:
                         not metadata.get("generation_params", {}).get("style_canonical"):
                     metadata.setdefault("generation_params", {})["style_canonical"] = enriched["generation_params"]["style_canonical"]
                 changed = True
+
+        if INSPIRED_ARTIST_FIELD in missing and settle_ai_credit(metadata)[2]:
+            changed = True
 
         if VOCALS_FIELD in missing and metadata.get("derived_tags", {}).get("vocals") not in VOCALS:
             metadata["derived_tags"]["vocals"] = "unknown"
