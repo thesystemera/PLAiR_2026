@@ -562,7 +562,7 @@ class Settings:
     SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "true").lower() == "true"
     SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "true").lower() == "true"
     SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "false").lower() == "true"
-    SONIC_MASTER_CHUNK_OVERLAP_S: float = float(os.getenv("SONIC_MASTER_CHUNK_OVERLAP_S", "5"))
+    SONIC_MASTER_CHUNK_OVERLAP_S: float = float(os.getenv("SONIC_MASTER_CHUNK_OVERLAP_S", "15"))
     SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
