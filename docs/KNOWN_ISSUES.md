@@ -215,6 +215,14 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   taught removed events and a forbidden pattern, and `CLAUDE.md` sections 2, 3, 6 and 16 cover the subject.
 - Decided: the community editor's feedback wording stays as it is (written for the DJs, shown as is in the app).
 
+## Done on 1-2 Oct 2026 (crossfades)
+
+- Crossfades are planned per pair of songs from both songs' loudness and lyric timing (`crossfade_plan.py`):
+  1.5-5 s overlap from the outro fade and intro build, never over full-level vocals, equal-power fades with
+  their own timing, and the ON AIR edge glow in the incoming song's colour while it runs. The plan used to reach
+  the client only with the next state change, so most fades had been the generic 3 s one; it is now sent when it
+  is made. Owner listened on air 2 Oct: works well. Details: `CLAUDE.md` section 6.
+
 ## Where things are kept
 
 - Old Orpheus voice caches: `D:\tts_candidates\orpheus_clip_backup`. Engine candidates, bake-off WAVs and purged
