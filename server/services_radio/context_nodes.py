@@ -1703,8 +1703,9 @@ async def get_tool_guidance(route: Optional[dict] = None, **_) -> str:
     return (
         "PRODUCER NOTE - tools that may help with this message (options, not orders; fill each <placeholder> from "
         f"the listener's words):\n{steps}\n"
-        "You're the hosts, so you decide. If the CITY PULSE block already answers it, just answer. Once results are "
-        "back, the lookup is done: perform the reply with those facts."
+        "You're the hosts, so you decide. If the CITY PULSE block already answers a question, just answer; a request "
+        "for music gets played, the way a DJ would. Once results are back, the lookup is done: perform the reply with "
+        "those facts."
     )
 
 
