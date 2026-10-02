@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../lib/api'
-import { passkeyLogin, passkeySignup } from '../lib/passkeys'
+import { passkeyLogin, passkeySignup, upgradeToPasskey } from '../lib/passkeys'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { useUISelector } from './UIStateContext'
@@ -263,8 +263,10 @@ export const AuthProvider = ({ children }) => {
 
   const login = useCallback(async (username, password) => {
     const data = await api.login(username, password)
-    return startSession(data)
-  }, [startSession])
+    const session = await startSession(data)
+    void upgradeToPasskey().then(added => { if (added) void revalidate('refresh') })
+    return session
+  }, [startSession, revalidate])
 
   const register = useCallback(async (username, password) => {
     const data = await api.register(username, password)

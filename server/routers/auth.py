@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from services import log_service
-from services import auth_service
+from services import auth_service, passkey_service
 from database import get_db, User, WeatherData
 from service_registry import services
 from routers.deps import get_current_user, enforce_auth_rate_limit
@@ -104,6 +104,7 @@ async def get_me(
         "shoutout_interests": user.shoutout_interests,
         "profile_picture": user.profile_picture,
         "has_password": bool(user.password_hash),
+        "passkey_count": await passkey_service.count_for(db, int(user.id)),  # type: ignore
         "location": user.location,
         "timezone": user.timezone,
         "weather_description": weather_data.description if weather_data else None,

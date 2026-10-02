@@ -283,8 +283,8 @@ class API {
     return this._routeRequest('getPasskeys', [], () => this._sendJson('GET', '/auth/passkeys'))
   }
 
-  async addPasskeyOptions() {
-    return this._routeRequest('addPasskeyOptions', [], () => this._sendJson('POST', '/auth/passkeys/options', {}))
+  async addPasskeyOptions(auto = false) {
+    return this._routeRequest('addPasskeyOptions', [auto], () => this._sendJson('POST', `/auth/passkeys/options${auto ? '?auto=true' : ''}`, {}))
   }
 
   async addPasskey(requestId, credential) {

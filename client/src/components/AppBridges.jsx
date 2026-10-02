@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CloudOff } from 'lucide-react'
+import { CloudOff, Fingerprint } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
@@ -10,6 +10,8 @@ import { useStorage } from '../contexts/StorageContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
+import { addPasskey, passkeyCancelled, passkeysSupported } from '../lib/passkeys'
+import { safeStorage } from '../lib/safeStorage'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -283,6 +285,82 @@ export function DeviceLinkBridge() {
     if (isAuthenticated) void approve(code)
     else toastInfo('Sign in on this phone first, then scan the code again', 6000)
   }, [approve, code, isAuthenticated, loading, toastInfo])
+
+  return null
+}
+
+const PASSKEY_NOTICE = 'passkey-offer'
+const PASSKEY_OFFER_DELAY_MS = 4000
+
+export function PasskeyOffer() {
+  const { user, refreshUser } = useAuth()
+  const { showNotice, hideNotice, toastSuccess, toastError } = useUISelector(state => ({
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+    toastSuccess: state.toastSuccess,
+    toastError: state.toastError,
+  }))
+  const [dismissed, setDismissed] = useState(() => safeStorage.get('passkeyOfferDismissed') === 'true')
+  const [busy, setBusy] = useState(false)
+  const wanted = !!user && user.passkey_count === 0 && !dismissed && passkeysSupported()
+
+  const actionsRef = useRef(null)
+  useEffect(() => {
+    actionsRef.current = {
+      accept: async () => {
+        setBusy(true)
+        try {
+          await addPasskey()
+          await refreshUser()
+          toastSuccess('Done. Next time just use Windows Hello, Face ID or your fingerprint.')
+        } catch (err) {
+          if (!passkeyCancelled(err)) toastError(err.message || 'Could not set it up')
+        } finally {
+          setBusy(false)
+        }
+      },
+      dismiss: () => {
+        safeStorage.set('passkeyOfferDismissed', 'true')
+        setDismissed(true)
+      },
+    }
+  })
+
+  useEffect(() => {
+    if (!wanted) {
+      hideNotice(PASSKEY_NOTICE)
+      return undefined
+    }
+    const timer = setTimeout(() => showNotice({
+      key: PASSKEY_NOTICE,
+      sticky: true,
+      dismissible: false,
+      priority: 3,
+      tone: 'info',
+      icon: Fingerprint,
+      text: 'Sign in with your face or fingerprint?',
+      content: (
+        <>
+          <button
+            onClick={() => actionsRef.current?.accept()}
+            disabled={busy}
+            className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
+          >
+            {busy ? '…' : 'Turn on'}
+          </button>
+          <button
+            onClick={() => actionsRef.current?.dismiss()}
+            className="ui-press rounded-full px-2 py-0.5 text-[11px] font-semibold text-white/70 hover:text-white"
+          >
+            Not now
+          </button>
+        </>
+      ),
+    }), PASSKEY_OFFER_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [wanted, busy, showNotice, hideNotice])
+
+  useEffect(() => () => hideNotice(PASSKEY_NOTICE), [hideNotice])
 
   return null
 }

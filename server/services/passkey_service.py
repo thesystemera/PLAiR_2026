@@ -118,11 +118,11 @@ async def signup_options(db: AsyncSession, username: str, origin: Optional[str])
     return {"request_id": key, "options": json.loads(options_to_json(options))}
 
 
-async def add_options(db: AsyncSession, user: User, origin: Optional[str]) -> dict:
+async def add_options(db: AsyncSession, user: User, origin: Optional[str], auto: bool = False) -> dict:
     rp_id, expected_origin = relying_party(origin)
     existing = (await db.execute(select(Passkey.credential_id).where(Passkey.user_id == user.id))).scalars().all()
     options = _creation_options(rp_id, _user_handle(int(user.id)), str(user.username), list(existing))  # type: ignore
-    key = _remember("add", options.challenge, rp_id, expected_origin, user_id=int(user.id))  # type: ignore
+    key = _remember("add", options.challenge, rp_id, expected_origin, user_id=int(user.id), auto=auto)  # type: ignore
     return {"request_id": key, "options": json.loads(options_to_json(options))}
 
 
@@ -133,6 +133,7 @@ def _verified_registration(entry: dict, credential: dict) -> Any:
             expected_challenge=entry["challenge"],
             expected_rp_id=entry["rp_id"],
             expected_origin=entry["origin"],
+            require_user_presence=not entry.get("auto"),
         )
     except Exception as exc:
         log_service.warning(f"Passkey registration rejected: {exc}")
@@ -220,6 +221,11 @@ def describe(passkey: Passkey) -> dict:
         "created_at": passkey.created_at.isoformat() if passkey.created_at else None,  # type: ignore
         "last_used_at": passkey.last_used_at.isoformat() if passkey.last_used_at else None,  # type: ignore
     }
+
+
+async def count_for(db: AsyncSession, user_id: int) -> int:
+    rows = await db.execute(select(Passkey.id).where(Passkey.user_id == user_id))
+    return len(rows.all())
 
 
 async def list_for(db: AsyncSession, user_id: int) -> list[dict]:

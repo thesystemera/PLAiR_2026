@@ -80,10 +80,11 @@ async def list_passkeys(current_user: User = Depends(get_current_user), db: Asyn
 
 
 @router.post("/api/auth/passkeys/options")
-async def add_passkey_options(request: Request, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def add_passkey_options(request: Request, auto: bool = False, current_user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db)):
     user = _require(current_user)
     try:
-        return await passkey_service.add_options(db, user, request.headers.get("origin"))
+        return await passkey_service.add_options(db, user, request.headers.get("origin"), auto)
     except passkey_service.PasskeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

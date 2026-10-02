@@ -26,6 +26,17 @@ export async function passkeySignup(username) {
   return api.passkeySignup(requestId, credential)
 }
 
+export async function upgradeToPasskey() {
+  if (!passkeysSupported()) return null
+  try {
+    const { request_id: requestId, options } = await api.addPasskeyOptions(true)
+    const credential = await startRegistration({ optionsJSON: options, useAutoRegister: true })
+    return await api.addPasskey(requestId, credential)
+  } catch {
+    return null
+  }
+}
+
 export async function addPasskey() {
   const { request_id: requestId, options } = await api.addPasskeyOptions()
   try {
