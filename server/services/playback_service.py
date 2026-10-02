@@ -39,6 +39,15 @@ class PlaybackService(SingletonService):
             except Exception as e:
                 log_service.error(f"[PlaybackService] Idle session eviction failed: {e}")
 
+    def drop_session(self, session_id: str) -> None:
+        state = self.sessions.pop(session_id, None)
+        self._last_access.pop(session_id, None)
+        self.session_callbacks.pop(session_id, None)
+        self._broadcast_callbacks.pop(session_id, None)
+        fill_task = getattr(state, "_fill_task", None)
+        if fill_task is not None and not fill_task.done():
+            fill_task.cancel()
+
     def evict_idle_sessions(self, is_connected: Callable[[str], bool], max_idle_s: float) -> int:
         now = time.time()
         evicted = 0
@@ -48,13 +57,7 @@ class PlaybackService(SingletonService):
                 continue
             if now - self._last_access.get(session_id, now) < max_idle_s:
                 continue
-            state = self.sessions.pop(session_id, None)
-            self._last_access.pop(session_id, None)
-            self.session_callbacks.pop(session_id, None)
-            self._broadcast_callbacks.pop(session_id, None)
-            fill_task = getattr(state, "_fill_task", None)
-            if fill_task is not None and not fill_task.done():
-                fill_task.cancel()
+            self.drop_session(session_id)
             evicted += 1
         for session_id in list(self._last_access.keys()):
             if session_id not in self.sessions:

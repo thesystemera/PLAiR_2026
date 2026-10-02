@@ -105,6 +105,9 @@ class AnnouncerService:
         log_service.announcer(f"🎙️ Announcer monitoring session {session_id}")
         self.session_tasks[session_id] = []
 
+    async def forget_session(self, session_id: str):
+        await self._cleanup_session(session_id)
+
     async def _cleanup_session(self, session_id: str):
         if session_id in self.session_tasks:
             for task in self.session_tasks[session_id]:

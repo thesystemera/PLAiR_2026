@@ -220,6 +220,10 @@ class Settings:
     CORS_ORIGINS: list = [o.strip() for o in os.getenv("CORS_ORIGINS", "https://plair.live,https://www.plair.live").split(",") if o.strip()]
 
     PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "https://plair.live").rstrip("/")
+    PASSKEY_RP_HOSTS: frozenset = frozenset(
+        h.strip().lower() for h in os.getenv("PASSKEY_RP_HOSTS", "plair.live,localhost").split(",") if h.strip()
+    )
+    DEVICE_LINK_TTL_S: int = int(os.getenv("DEVICE_LINK_TTL_S", "300"))
     ENABLE_API_DOCS: bool = os.getenv("ENABLE_API_DOCS", "false").lower() == "true"
     ADMIN_USER_IDS: frozenset = frozenset(
         int(uid) for uid in os.getenv("ADMIN_USER_IDS", "1").split(",") if uid.strip().isdigit()

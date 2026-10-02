@@ -114,6 +114,10 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
         await asyncio.to_thread(verify_password, password, _dummy_password_hash())
         log_service.warning(f"Login failed: User '{username}' not found")
         return None
+    if not user.password_hash:
+        await asyncio.to_thread(verify_password, password, _dummy_password_hash())
+        log_service.warning(f"Login failed: '{username}' signs in with a passkey and has no password")
+        return None
     if not await asyncio.to_thread(verify_password, password, user.password_hash):
         log_service.warning(f"Login failed: Invalid password for user '{username}'")
         return None

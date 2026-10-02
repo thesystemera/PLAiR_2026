@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../lib/api'
+import { passkeyLogin, passkeySignup } from '../lib/passkeys'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { useUISelector } from './UIStateContext'
@@ -270,6 +271,16 @@ export const AuthProvider = ({ children }) => {
     return startSession(data)
   }, [startSession])
 
+  const loginWithPasskey = useCallback(async () => {
+    const data = await passkeyLogin()
+    return startSession(data)
+  }, [startSession])
+
+  const registerWithPasskey = useCallback(async (username) => {
+    const data = await passkeySignup(username)
+    return startSession(data)
+  }, [startSession])
+
   const logout = useCallback(() => {
     clearSession()
   }, [clearSession])
@@ -290,10 +301,13 @@ export const AuthProvider = ({ children }) => {
     sessionExpiredCount,
     login,
     register,
+    loginWithPasskey,
+    registerWithPasskey,
+    startSession,
     logout,
     refreshUser,
     handleSessionInfo
-  }), [user, token, sessionKey, loading, sessionExpiredCount, login, register, logout, refreshUser, handleSessionInfo])
+  }), [user, token, sessionKey, loading, sessionExpiredCount, login, register, loginWithPasskey, registerWithPasskey, startSession, logout, refreshUser, handleSessionInfo])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

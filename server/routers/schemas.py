@@ -39,6 +39,20 @@ class LoginRequest(BaseModel):
     username: str = Field(..., max_length=100)
     password: str = Field(..., max_length=256)
 
+class PasskeySignupOptionsRequest(BaseModel):
+    username: str = Field(..., max_length=100)
+
+class PasskeyFinishRequest(BaseModel):
+    request_id: str = Field(..., max_length=64)
+    credential: dict
+
+class DeviceLinkPollRequest(BaseModel):
+    code: str = Field(..., max_length=16)
+    poll_key: str = Field(..., max_length=64)
+
+class SetPasswordRequest(BaseModel):
+    password: str = Field(..., max_length=256)
+
 class PreferenceRequest(BaseModel):
     preference_type: str
 

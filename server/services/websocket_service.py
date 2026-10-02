@@ -137,6 +137,12 @@ class WebSocketService:
         except Exception:
             pass
 
+    def close_session(self, session_id: str) -> int:
+        connections = list(self._connections.get(session_id, {}).items())
+        for device_id, ws in connections:
+            self._evict(session_id, device_id, ws)
+        return len(connections)
+
     def _evict(self, session_id: str, device_id: str, ws: WebSocket):
         current = self._connections.get(session_id, {}).get(device_id)
         if current is ws:

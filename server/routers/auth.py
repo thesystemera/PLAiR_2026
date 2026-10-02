@@ -103,6 +103,7 @@ async def get_me(
         "profile": user.profile,
         "shoutout_interests": user.shoutout_interests,
         "profile_picture": user.profile_picture,
+        "has_password": bool(user.password_hash),
         "location": user.location,
         "timezone": user.timezone,
         "weather_description": weather_data.description if weather_data else None,

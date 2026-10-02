@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, RotateCcw, MessageSquareX, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -22,6 +22,7 @@ import { Scroller } from './Scroller'
 import { ExpandSection, Expandable, ExpandChevron } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
+import { AccountSettings } from './AccountSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
@@ -612,7 +613,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [locationExpanded, setLocationExpanded] = useState(() => safeStorage.get('userPanel_location') === 'true')
   const [libraryExpanded, setLibraryExpanded] = useState(() => safeStorage.get('userPanel_library') === 'true')
   const [storageExpanded, setStorageExpanded] = useState(() => safeStorage.get('userPanel_storage') === 'true')
-  const [dataManagementExpanded, setDataManagementExpanded] = useState(() => safeStorage.get('userPanel_dataManagement') === 'true')
   const [uploadsExpanded, setUploadsExpanded] = useState(() => safeStorage.get('userPanel_uploads') === 'true')
   const [postsExpanded, setPostsExpanded] = useState(() => safeStorage.get('userPanel_posts') === 'true')
   const [artistsExpanded, setArtistsExpanded] = useState(() => safeStorage.get('userPanel_artists') === 'true')
@@ -671,11 +671,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     safeStorage.set('userPanel_location', String(locationExpanded))
     safeStorage.set('userPanel_library', String(libraryExpanded))
     safeStorage.set('userPanel_storage', String(storageExpanded))
-    safeStorage.set('userPanel_dataManagement', String(dataManagementExpanded))
     safeStorage.set('userPanel_uploads', String(uploadsExpanded))
     safeStorage.set('userPanel_posts', String(postsExpanded))
     safeStorage.set('userPanel_artists', String(artistsExpanded))
-  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, dataManagementExpanded, uploadsExpanded, postsExpanded, artistsExpanded])
+  }, [profilePersonaExpanded, audioDevicesExpanded, locationExpanded, libraryExpanded, storageExpanded, uploadsExpanded, postsExpanded, artistsExpanded])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -881,29 +880,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }
 
-  const handleProfilePictureDelete = async () => {
-    const confirmed = await showConfirm({
-      title: 'Delete Profile Picture?',
-      message: 'Are you sure you want to delete your profile picture?',
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'danger'
-    })
-    if (!confirmed) return
-    try {
-      const result = await api.deleteProfilePicture()
-      if (!result.ok) {
-        error('Delete failed')
-        return
-      }
-      await profilePictureCache.invalidate(user?.id)
-      await refreshUser()
-      success('Profile picture deleted')
-    } catch (err) {
-      error(err.message || 'Failed to delete profile picture')
-    }
-  }
-
   const handleRemovePreference = useCallback(async (type, id) => {
     try { await removePreference(type, id) }
     catch (_err) { logger.error('Failed to remove preference:', _err) }
@@ -1019,38 +995,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }
 
-  const handleDeleteConversationHistory = async () => {
-    const confirmed = await showConfirm({
-      title: 'Delete Conversation History?',
-      message: 'Are you sure you want to delete all conversation history? This action cannot be undone.',
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'danger'
-    })
-    if (!confirmed) return
-    try { await api.deleteConversationHistory(); success('Conversation history deleted') }
-    catch (_err) {
-      error('Failed to delete conversation history')
-      logger.error('Failed to delete conversation history:', _err)
-    }
-  }
-
-  const handleResetPersona = async () => {
-    const confirmed = await showConfirm({
-      title: 'Reset Persona & Profile?',
-      message: 'This will reset your DJ persona and clear all learned preferences. This action cannot be undone.',
-      confirmText: 'Reset',
-      cancelText: 'Cancel',
-      variant: 'danger'
-    })
-    if (!confirmed) return
-    try { await api.resetPersona(); await refreshUser(); success('Persona reset successfully') }
-    catch (_err) {
-      error('Failed to reset persona')
-      logger.error('Failed to reset persona:', _err)
-    }
-  }
-
   const handleUpgradeToPremium = async () => {
     if (billingBusy) return
     setBillingBusy(true)
@@ -1132,22 +1076,25 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       <PanelHeader
         title={
           <div className="flex items-center gap-3 flex-1 min-w-0">
-            <div className="relative group">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingProfilePicture}
+              className="ui-tap relative flex-shrink-0 rounded-full"
+              aria-label={profilePictureUrl ? 'Change profile photo' : 'Add a profile photo'}
+            >
               {profilePictureUrl ? (
-                <img decoding="async" src={profilePictureUrl} alt={user?.username} className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+                <img decoding="async" src={profilePictureUrl} alt={user?.username} className="w-10 h-10 rounded-full object-cover" />
               ) : (
-                <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: getUserAvatarGradient(), color: 'white' }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: getUserAvatarGradient(), color: 'white' }}>
                   <UserIcon size={20} />
                 </div>
               )}
-              <div className="absolute inset-0 bg-black/60 rounded-full opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
-                <button onClick={() => fileInputRef.current?.click()} disabled={uploadingProfilePicture} className="ui-press p-1 text-white hover:text-purple-300 transition">
-                  {uploadingProfilePicture ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
-                </button>
-                {profilePictureUrl && <button onClick={handleProfilePictureDelete} className="ui-press p-1 text-white hover:text-red-400 transition"><Trash2 size={16} /></button>}
-              </div>
+              <span className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-white/20 flex items-center justify-center text-white">
+                {uploadingProfilePicture ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
+              </span>
               <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/gif" onChange={handleProfilePictureUpload} className="hidden" />
-            </div>
+            </button>
             <div className="flex-1 min-w-0">
               {isEditingUsername ? (
                 <div className="flex items-center gap-2">
@@ -1654,22 +1601,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           )}
         </ExpandSection>
 
-        <ExpandSection
-          className="p-4 md:p-6 border-b border-gray-800"
-          open={dataManagementExpanded}
-          onToggle={setDataManagementExpanded}
-          icon={Trash2}
-          iconClassName="text-red-400"
-          title="Data Management"
-          contentClassName="space-y-3 pl-2"
-        >
-          <button onClick={handleDeleteConversationHistory} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
-            <MessageSquareX size={16} /> Delete Conversation History
-          </button>
-          <button onClick={handleResetPersona} className="ui-press-soft w-full px-4 py-2 bg-white/5 hover:bg-yellow-500/20 text-gray-400 hover:text-yellow-400 rounded-lg flex items-center justify-center gap-2 transition text-sm">
-            <RotateCcw size={16} /> Reset Persona & Profile
-          </button>
-        </ExpandSection>
+        <AccountSettings onLogout={onLogout} />
 
         {user?.tier === 'premium' ? (
           <div className="p-4 md:p-6 border-b border-gray-800">

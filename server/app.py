@@ -96,7 +96,7 @@ from service_registry import services
 from services.task_utils import spawn
 from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts, artists,
                      conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
-                     client_log)
+                     client_log, account)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -663,6 +663,7 @@ app.add_middleware(RequestGuardMiddleware)
 app.include_router(stripe_router, prefix="/api/stripe", tags=["stripe"])
 app.include_router(system.router)
 app.include_router(auth.router)
+app.include_router(account.router)
 app.include_router(playback.router)
 app.include_router(catalog.router)
 app.include_router(share.router)

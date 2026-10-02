@@ -80,6 +80,12 @@ class AnalyticsService(SingletonService):
         if len(self.event_buffer) >= 50 and (self._flush_task is None or self._flush_task.done()):
             self._flush_task = spawn(safe_background_task(self._flush_events(), "analytics_flush"), name="analytics_flush")
 
+    async def forget_listener(self, user_id: int, session_id: str):
+        async with self.buffer_lock:
+            kept = [e for e in self.event_buffer if e.get("user_id") != user_id and e.get("session_id") != session_id]
+            self.event_buffer.clear()
+            self.event_buffer.extend(kept)
+
     async def _flush_events(self):
         async with self.buffer_lock:
             if not self.event_buffer:

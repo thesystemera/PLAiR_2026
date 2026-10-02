@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CloudOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
@@ -8,6 +8,8 @@ import { useArtwork, useUISelector, useUIStateGetter, uiState } from '../context
 import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
+import { useAuth } from '../contexts/AuthContext'
+import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -255,6 +257,32 @@ export function UploadNotice() {
         if (!watched()) success('Your upload is live', 6000, 'top', key)
       })
   }, [getUIState, publishContentUpdate, errorToast, info, success]))
+
+  return null
+}
+
+function takeLinkCode() {
+  const url = new URL(window.location.href)
+  const code = url.searchParams.get('link')
+  if (!code) return null
+  url.searchParams.delete('link')
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+  return code
+}
+
+export function DeviceLinkBridge() {
+  const { isAuthenticated, loading } = useAuth()
+  const toastInfo = useUISelector(state => state.toastInfo)
+  const approve = useDeviceLinkApproval()
+  const [code] = useState(takeLinkCode)
+  const handledRef = useRef(false)
+
+  useEffect(() => {
+    if (!code || loading || handledRef.current) return
+    handledRef.current = true
+    if (isAuthenticated) void approve(code)
+    else toastInfo('Sign in on this phone first, then scan the code again', 6000)
+  }, [approve, code, isAuthenticated, loading, toastInfo])
 
   return null
 }

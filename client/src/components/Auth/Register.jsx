@@ -1,15 +1,19 @@
 import { useState, useMemo } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useUISelector } from '../../contexts/UIStateContext'
-import { X, Eye, EyeOff } from 'lucide-react'
+import { X, Eye, EyeOff, Fingerprint, KeyRound, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { GLASS } from '../../lib/themeManager'
 import { PRESETS } from '../../lib/motion'
+import { passkeyCancelled, passkeysSupported } from '../../lib/passkeys'
+import { Expandable } from '../Motion'
 import './auth-background.css'
 
 const AUTH_OVERLAY_SAFE_STYLE = { paddingTop: 'max(0.75rem, var(--safe-top))', paddingBottom: 'max(0.75rem, var(--safe-bottom))', paddingLeft: 'max(0.75rem, var(--safe-left))', paddingRight: 'max(0.75rem, var(--safe-right))' }
 
 export default function Register({ onClose, onSwitchToLogin }) {
+  const canPasskey = passkeysSupported()
+  const [usePassword, setUsePassword] = useState(!canPasskey)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -17,7 +21,7 @@ export default function Register({ onClose, onSwitchToLogin }) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const { register } = useAuth()
+  const { register, registerWithPasskey } = useAuth()
   const { toastSuccess, toastError } = useUISelector(state => ({ toastSuccess: state.toastSuccess, toastError: state.toastError }))
   const success = toastSuccess
   const errorToast = toastError
@@ -41,9 +45,35 @@ export default function Register({ onClose, onSwitchToLogin }) {
     return { score, label: 'Strong', color: 'bg-green-500' }
   }, [password])
 
+  const handlePasskey = async () => {
+    setError('')
+    if (username.trim().length < 3) {
+      setError('Username must be at least 3 characters')
+      return
+    }
+    setLoading(true)
+    try {
+      const data = await registerWithPasskey(username.trim())
+      success(`Welcome, ${data?.user?.username || username}! Your account has been created.`)
+      onClose()
+    } catch (err) {
+      if (!passkeyCancelled(err)) {
+        const errorMessage = err.message || 'Could not create the passkey'
+        setError(errorMessage)
+        errorToast(errorMessage)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
+    if (!usePassword) {
+      await handlePasskey()
+      return
+    }
 
     if (password !== confirmPassword) {
       const errorMsg = 'Passwords do not match'
@@ -86,7 +116,7 @@ export default function Register({ onClose, onSwitchToLogin }) {
 
         <div className="flex items-center gap-3 mb-6">
           <img src="/images/plair_icon_192.png" alt="" className="w-12 h-12 rounded-xl" />
-          <h2 className="text-2xl font-bold">Create Account</h2>
+          <h2 className="text-2xl font-bold">Create account</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -107,69 +137,73 @@ export default function Register({ onClose, onSwitchToLogin }) {
             )}
           </div>
 
-          <div>
-            <label className="block text-sm mb-2">Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-                required
-                minLength={6}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
-                aria-label={showPassword ? "Hide password" : "Show password"}
-              >
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
-            </div>
-            {password && (
-              <div className="mt-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="flex-1 h-1 bg-zinc-700 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full w-full origin-left transition-[transform,background-color] duration-base ${passwordStrength.color}`}
-                      style={{ transform: `scaleX(${passwordStrength.score / 5})` }}
-                    />
-                  </div>
-                  <span className="text-xs text-zinc-400">{passwordStrength.label}</span>
+          <Expandable open={usePassword}>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm mb-2">Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    required={usePassword}
+                    minLength={6}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
                 </div>
-                <p className="text-xs text-zinc-500">
-                  Use 8+ characters with uppercase, lowercase, numbers & symbols
-                </p>
+                {password && (
+                  <div className="mt-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="flex-1 h-1 bg-zinc-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full w-full origin-left transition-[transform,background-color] duration-base ${passwordStrength.color}`}
+                          style={{ transform: `scaleX(${passwordStrength.score / 5})` }}
+                        />
+                      </div>
+                      <span className="text-xs text-zinc-400">{passwordStrength.label}</span>
+                    </div>
+                    <p className="text-xs text-zinc-500">
+                      Use 8+ characters with uppercase, lowercase, numbers & symbols
+                    </p>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div>
-            <label className="block text-sm mb-2">Confirm Password</label>
-            <div className="relative">
-              <input
-                type={showConfirmPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-                required
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
-                aria-label={showConfirmPassword ? "Hide password" : "Show password"}
-              >
-                {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
+              <div>
+                <label className="block text-sm mb-2">Confirm Password</label>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full px-4 py-2 pr-12 bg-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    required={usePassword}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
+                {confirmPassword && password !== confirmPassword && (
+                  <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
+                )}
+              </div>
             </div>
-            {confirmPassword && password !== confirmPassword && (
-              <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
-            )}
-          </div>
+          </Expandable>
 
           {error && (
             <div className="text-red-500 text-sm">{error}</div>
@@ -178,10 +212,21 @@ export default function Register({ onClose, onSwitchToLogin }) {
           <button
             type="submit"
             disabled={loading}
-            className="ui-press-soft w-full py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg disabled:opacity-50"
+            className="ui-press-soft w-full py-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {loading ? 'Creating account...' : 'Create Account'}
+            {usePassword ? null : loading ? <Loader2 size={20} className="animate-spin" /> : <Fingerprint size={20} />}
+            {loading ? 'Creating account...' : usePassword ? 'Create account' : 'Create with passkey'}
           </button>
+          {canPasskey && (
+            <button
+              type="button"
+              onClick={() => { setUsePassword(!usePassword); setError('') }}
+              className="ui-press w-full flex items-center justify-center gap-2 text-sm text-zinc-400 hover:text-white"
+            >
+              {usePassword ? <><Fingerprint size={14} /> Use a passkey instead</> : <><KeyRound size={14} /> Use a password instead</>}
+            </button>
+          )}
+          {!usePassword && <p className="text-xs text-zinc-500 text-center">No password to remember: Windows Hello, Face ID or your fingerprint signs you in.</p>}
         </form>
 
         <p className="mt-4 text-sm text-zinc-400 text-center">

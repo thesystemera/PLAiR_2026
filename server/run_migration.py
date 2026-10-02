@@ -60,6 +60,15 @@ def migrate_users_table(conn):
         else:
             print(f"  [OK] {col_name} already exists")
 
+    nullable = conn.execute(text("""
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'password_hash'
+    """)).scalar()
+    if nullable == "NO":
+        conn.execute(text("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"))
+        conn.commit()
+        print("  [CHANGED] password_hash is optional (passkey-only accounts)")
+
 
 def main():
     print("PLAiR Database Migration")

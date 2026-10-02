@@ -476,3 +476,21 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         await user_data_cache.invalidate_user(int(user.id))
     log_service.info(f"[Stripe] Handled {event_type} {event_id}")
     return JSONResponse({"status": "success"})
+
+
+async def close_billing_for_deleted_account(user: User) -> None:
+    customer_id = user.stripe_customer_id
+    subscription_id = user.stripe_subscription_id
+    if not customer_id and not subscription_id:
+        return
+    if not settings.STRIPE_SECRET_KEY:
+        raise RuntimeError("Billing is not available right now, so the subscription can't be cancelled")
+    try:
+        if customer_id:
+            await _stripe(stripe.Customer.delete, customer_id)
+        else:
+            await _stripe(stripe.Subscription.cancel, subscription_id)
+    except stripe.InvalidRequestError as e:
+        if getattr(e, "code", None) != "resource_missing":
+            raise
+    log_service.info(f"[Stripe] Closed billing for deleted account {log_service.who(user_id=user.id)}")

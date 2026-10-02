@@ -248,6 +248,77 @@ class API {
     })
   }
 
+  async _sendJson(method, path, body) {
+    const res = await this._fetch(`${API_BASE}${path}`, {
+      method,
+      headers: this.getHeaders(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    if (!res.ok) {
+      const detail = await res.json().then(data => data?.detail).catch(() => null)
+      const error = new Error(typeof detail === 'string' ? detail : 'Request failed')
+      error.status = res.status
+      throw error
+    }
+    return res.json()
+  }
+
+  async passkeyLoginOptions() {
+    return this._routeRequest('passkeyLoginOptions', [], () => this._sendJson('POST', '/auth/passkey/login/options', {}))
+  }
+
+  async passkeyLogin(requestId, credential) {
+    return this._routeRequest('passkeyLogin', [requestId, credential], () => this._sendJson('POST', '/auth/passkey/login', { request_id: requestId, credential }))
+  }
+
+  async passkeySignupOptions(username) {
+    return this._routeRequest('passkeySignupOptions', [username], () => this._sendJson('POST', '/auth/passkey/signup/options', { username }))
+  }
+
+  async passkeySignup(requestId, credential) {
+    return this._routeRequest('passkeySignup', [requestId, credential], () => this._sendJson('POST', '/auth/passkey/signup', { request_id: requestId, credential }))
+  }
+
+  async getPasskeys() {
+    return this._routeRequest('getPasskeys', [], () => this._sendJson('GET', '/auth/passkeys'))
+  }
+
+  async addPasskeyOptions() {
+    return this._routeRequest('addPasskeyOptions', [], () => this._sendJson('POST', '/auth/passkeys/options', {}))
+  }
+
+  async addPasskey(requestId, credential) {
+    return this._routeRequest('addPasskey', [requestId, credential], () => this._sendJson('POST', '/auth/passkeys', { request_id: requestId, credential }))
+  }
+
+  async deletePasskey(passkeyId) {
+    return this._routeRequest('deletePasskey', [passkeyId], () => this._sendJson('DELETE', `/auth/passkeys/${encodeURIComponent(passkeyId)}`))
+  }
+
+  async setPassword(password) {
+    return this._routeRequest('setPassword', [password], () => this._sendJson('PUT', '/auth/password', { password }))
+  }
+
+  async startDeviceLink() {
+    return this._routeRequest('startDeviceLink', [], () => this._sendJson('POST', '/auth/link/start', {}))
+  }
+
+  async pollDeviceLink(code, pollKey) {
+    return this._routeRequest('pollDeviceLink', [code, pollKey], () => this._sendJson('POST', '/auth/link/poll', { code, poll_key: pollKey }))
+  }
+
+  async describeDeviceLink(code) {
+    return this._routeRequest('describeDeviceLink', [code], () => this._sendJson('GET', `/auth/link/${encodeURIComponent(code)}`))
+  }
+
+  async approveDeviceLink(code) {
+    return this._routeRequest('approveDeviceLink', [code], () => this._sendJson('POST', `/auth/link/${encodeURIComponent(code)}/approve`, {}))
+  }
+
+  async deleteAccount() {
+    return this._routeRequest('deleteAccount', [], () => this._sendJson('DELETE', '/auth/account'))
+  }
+
   async getMe() {
     return this._routeRequest('getMe', [], async () => {
       const res = await this._fetch(`${API_BASE}/auth/me`, {
