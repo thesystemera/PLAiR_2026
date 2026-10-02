@@ -557,16 +557,16 @@ class Settings:
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "fp32").lower()
-    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
-    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "Give the mix more shine and sparkle.")
-    SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "true").lower() == "true"
-    SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "true").lower() == "true"
-    SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "false").lower() == "true"
+    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "50"))
+    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, clean and dynamic with rich full harmonics")
+    SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
+    SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "false").lower() == "true"
+    SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "true").lower() == "true"
     SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
-    SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "true").lower() == "true"
+    SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
     BANDWIDTH_STAGE: str = os.getenv("BANDWIDTH_STAGE", "apollo").lower()
-    SEPARATION_MODEL: str = os.getenv("SEPARATION_MODEL", "demucs").lower()
+    SEPARATION_MODEL: str = os.getenv("SEPARATION_MODEL", "roformer").lower()
     QUALITY_SCORER: str = os.getenv("QUALITY_SCORER", "").lower()
 
     MAX_PARALLEL_CPU_WORKERS: int = 16

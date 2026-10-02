@@ -32,7 +32,7 @@ class AudioMasterService(SingletonService):
         self.target_lufs = MASTER_TARGET_LUFS
         self.true_peak_ceiling_db = TRUE_PEAK_CEILING_DBTP
         self.use_perceptual_weighting = True
-        self.master_wet_mix = 0.75
+        self.master_wet_mix = 1.0
         self._initialized = True
 
     def configure(self, target_lufs: float = None, use_perceptual_weighting: bool = None, master_wet_mix: float = None):  # type: ignore

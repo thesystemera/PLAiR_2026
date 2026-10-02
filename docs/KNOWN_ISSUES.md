@@ -124,9 +124,16 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 - **Test on a real iPhone:** device checklist and airplane-mode checklist in `docs/MOBILE_LAUNCH_READINESS.md`.
   Open there: DJ voice on iPhone, screen-locked playback, crossfades.
 - **Stripe live mode** when ready (test mode today).
-- **Listen and decide:** the music beds, the stings and the "Play Air" pronunciation, and whether to run the
-  catalog re-master (`server/utils/reprocess_catalog_audio.py`, not yet run; A/B set first). "Park Bench
-  Philosophy" (e86b6267…) needs a re-master from intermediates. FlashSR has no licence: keep Apollo.
+- **Listen and decide:** the music beds, the stings and the "Play Air" pronunciation.
+- **Music chain signed off by ear (owner, 2 Oct):** Apollo -> RoFormer vocal split -> ClearVoice
+  MossFormer2_SR_48K alone on the vocal, level-matched (the speech denoiser and envelope warp dulled singing) ->
+  SonicMaster with the owner's original prompt, 50 steps, 50/50, blend compensation on (above 2 kHz its output
+  has ~0 coherence with the input, so a plain 50/50 lost 3 dB) -> master EQ at 100%. RoFormer is ~3.5x slower
+  than Demucs (0.45 vs 0.13 s per audio second). Still to do: the catalog re-master as a background job that
+  renders only with no listeners online and free VRAM (the live station uses 18-21 GB of the P6000; a render
+  next to it starved Whisper on 2 Oct), and the master's notch finder, which always cuts the 4 biggest
+  spectral peaks even when they are the song's own notes. "Park Bench Philosophy" (e86b6267…) needs a
+  re-master from intermediates. FlashSR has no licence: keep Apollo.
 - Done since they were listed (checked): nginx gzip and `/ws` without an access log are applied; DeepSeek is
   topped up (no errors on 30 Sep); everything is committed and pushed.
 

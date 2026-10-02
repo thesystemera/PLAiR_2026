@@ -75,7 +75,7 @@ from services.audio_master_service import AudioMasterService, MASTER_TARGET_LUFS
 from services.audio_transcoding_service import AudioTranscodingService  # noqa: E402
 
 DURATION_TOLERANCE_S = 0.5
-SUNO_MASTER_WET = 0.75
+SUNO_MASTER_WET = 1.0
 LOUD_SOURCE_LUFS = -12.0
 LOUD_SOURCE_MASTERING_BLEND_MAX = 35
 DEFAULT_STATE_PATH = settings.LOGS_DIR.parent / "reprocess_catalog_state.json"
@@ -86,6 +86,8 @@ AB_VARIANTS = {
     "fixed_master": {"description": "Existing SonicMaster WAV through the fixed mastering chain (CPU)", "from": "master"},
     "full_default": {"description": "Full chain with the new defaults (fp32, 20 steps, aligned + conditioned chunks, "
                                     "template prompt, compensated blend, true-peak master)", "from": "apollo"},
+    "owner_prompt": {"description": "New defaults with the original free-text SonicMaster prompt (no template)",
+                     "from": "apollo", "sonic": {"templates": False, "prompt": LEGACY_SONIC["prompt"]}},
     "steps_10": {"description": "New defaults with 10 SonicMaster steps", "from": "apollo", "sonic": {"steps": 10}},
     "steps_50": {"description": "New defaults with 50 SonicMaster steps", "from": "apollo", "sonic": {"steps": 50}},
     "legacy_sonic": {"description": "Old SonicMaster settings (fp16, 50 steps, old prompt, per-chunk RMS match) with the "
