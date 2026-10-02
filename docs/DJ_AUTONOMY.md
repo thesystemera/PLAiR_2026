@@ -44,7 +44,7 @@ Strongest first, by what we can get today:
 4. **Listening behaviour.** Skips, volume changes, sessions that start at the same time each day (commute, study
    block), and devices (car Bluetooth, headphones, desktop).
 5. **Body signals (long term, the 2010 goal).** Heart rate and workout state from a watch through Health Connect
-   (Android) or HealthKit (iOS). Native app only, always opt-in.
+   (Android) or HealthKit (iOS). Native app only.
 
 ## How the DJs would act on it
 
@@ -62,11 +62,13 @@ Strongest first, by what we can get today:
   (`audio_features_service`), plus vector categories for mood and style. Walking or running cadence can be
   matched to tempo; study or wind-down to low energy and few vocals.
 
-## Privacy
+## Opting in
 
-- Off by default and explained when switched on; each signal (movement, wearable) has its own opt-in.
-- Work out the activity on the device where possible, and send the server only the label ("walking, outdoors"),
-  never a raw track of positions. Same rule as `geo.Where`: a listener's own coordinates are never stored.
+- One opt-in, explained once. After that the station uses everything it can: exact position and movement,
+  where you are (the gym, the beach, a friend's place), your routines and, later, your watch. Knowing where you
+  are is the point of the app; it should feel like magic, not ask again.
+- The data stays between the listener and their station: never shown to other listeners (public shoutouts
+  already carry only a place label, `public_shoutout()`).
 - The listener can see what the station thinks they're doing, and correct it.
 
 ## Open questions
