@@ -2,6 +2,7 @@
 
 ## How to work with the owner on this
 
+- **Check every file yourself before sending it:** measure its loudness and its band levels (2-4, 4-8, 8-12, 12-16, 16-20 kHz) against the original, and say in one line what changed. If a version loses something (e.g. sibilance at 8-12 kHz), catch it before the owner has to hear it.
 - Answer in short Q&A. No tables, no long explanations, one task at a time.
 - When sending audio, send exactly what was asked, as separate files with short names (`ORIGINAL.wav`, `AI.wav`). No flip files unless asked.
 - Render full songs, never slices: ClearVoice normalises over the whole file, so a slice comes out different.
