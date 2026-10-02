@@ -1,7 +1,7 @@
 import json
 import aiofiles
 import aiofiles.os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Literal, Optional, List
 from pathlib import Path
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from services import log_service
 from services.base_service import SingletonService
 from services.catalog_credit import ai_artist, is_ai_track, name_like
+from services.catalog_vocals import VOCALS, settled_vocals
 from services.llm_router import LLM_BACKGROUND
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
 from config import settings
@@ -42,6 +43,10 @@ class DerivedTags(BaseModel):
     vocal_style_keywords: List[str] = Field(
         default_factory=list,
         description="Technical vocal production terms"
+    )
+
+    vocals: Literal["instrumental", "male", "female", "duet", "unknown"] = Field(
+        description="Who sings: instrumental, male, female, duet (male and female voices) or unknown"
     )
 
     similar_artists: List[str] = Field(
@@ -129,6 +134,7 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
         prompt = gen_params.get("prompt", "")
         title = gen_params.get("title", track_info.get("title", ""))
         instrumental = gen_params.get("instrumental", False)
+        vocal_gender = {"m": "Male", "f": "Female"}.get(gen_params.get("vocal_gender"), "Not set")
         original_request = user_request.get("original_text", "")
         target_artist = gen_params.get("artist_name") or user_request.get("artist_name") or ""
 
@@ -140,6 +146,7 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
 **Style Description**: {style}
 **Creative Prompt**: {prompt}
 **Instrumental**: {"Yes" if instrumental else "No"}
+**Vocal Gender**: {vocal_gender}
 
 ---
 
@@ -170,7 +177,12 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
    - Look for bracketed technical notes like [Low Pitch Shifted Vocals]
    - Empty array if instrumental
 
-7. **similar_artists**: 4-6 artists with similar style/genre
+7. **vocals**: Who sings: instrumental, male, female, duet (male and female voices) or unknown
+   - Instrumental if Instrumental is Yes; the Vocal Gender if it is set
+   - Otherwise from the style description and prompt (e.g. "male and female vocals", "[duet]", "her voice")
+   - unknown when the text doesn't say
+
+8. **similar_artists**: 4-6 artists with similar style/genre
    - Base on primary/secondary genres and mood
    - Ensure stylistic consistency with the track
    - Examples: For "Dark Swedish Synth-Pop" → ["Fever Ray", "Austra", "Ladytron"]
@@ -236,6 +248,8 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
 
             enriched["derived_tags"] = result
             enriched["derived_tags"]["enriched_at"] = datetime.now(timezone.utc).isoformat()
+            stated = result.get("vocals") if result.get("vocals") in VOCALS else "unknown"
+            enriched["derived_tags"]["vocals"] = settled_vocals(enriched) or stated
             if is_ai_track(enriched) and not name_like(result.get("inspired_artist")):
                 artist, source = ai_artist({**enriched, "derived_tags": {**result, "inspired_artist": None}})
                 enriched["derived_tags"]["inspired_artist"] = artist

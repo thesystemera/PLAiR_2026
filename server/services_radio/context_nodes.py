@@ -22,6 +22,7 @@ from services_radio import dj_bank_sources
 from services_radio.dj_prompt_helper_service import wrap_untrusted
 from services_radio import area_signals
 from services import log_service
+from services.catalog_vocals import VOCALS_TEXT
 from database.models import User
 from config.settings import settings
 
@@ -879,22 +880,15 @@ async def get_track_style_description(current_track: Optional[Dict] = None, **_)
 
 @node_registry.register(
     "track_vocal_info",
-    "Vocal characteristics (instrumental, gender)",
+    "Who sings (instrumental, male, female, duet)",
     cost="low"
 )
 async def get_track_vocal_info(current_track: Optional[Dict] = None, **_) -> str:
     if not current_track or current_track.get('name') == 'N/A':
         return ""
 
-    is_instrumental = current_track.get('instrumental', False)
-    if is_instrumental:
-        return "Vocals: Instrumental (no vocals)"
-
-    vocal_gender = current_track.get('vocal_gender', '').strip()
-    if vocal_gender:
-        return f"Vocals: {vocal_gender}"
-
-    return ""
+    vocals = VOCALS_TEXT.get(current_track.get('vocals'))
+    return f"Vocals: {vocals}" if vocals else ""
 
 @node_registry.register(
     "track_lyrics_preview",

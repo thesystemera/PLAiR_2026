@@ -28,8 +28,7 @@ async def semantic_search(
     results = await services.vector_search_service.search(
         query=request.query,
         n_results=request.n_results or 10,
-        instrumental=request.instrumental,
-        vocal_gender=request.vocal_gender,
+        vocals=request.vocals,
         use_ai_analysis=use_ai_analysis,
         banned_ids=banned_ids if banned_ids else None
     )

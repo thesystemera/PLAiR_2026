@@ -22,6 +22,7 @@ from services.user_content_database_service import kind_of, sting_file
 from services import usage_tracking
 from services import track_asset_stages as stages
 from services.catalog_credit import ai_artist, is_ai_track, known_artists, name_like
+from services.catalog_vocals import VOCALS, settled_vocals
 from services.task_utils import spawn
 from services.audio_transcoding_service import FFPROBE_EXE_PATH, FFMPEG_CWD
 from database.pg_pool import get_pooled_connection
@@ -46,8 +47,9 @@ SHOUTOUT_DURATION_TOLERANCE_S = 1.0
 FEATURE_KEYS = ("duration", "tempo", "beats", "loudness_segments", "crossfade_points")
 REQUIRED_DERIVED_LISTS = ("mood_keywords", "video_search_terms")
 INSPIRED_ARTIST_FIELD = "derived_tags.inspired_artist"
+VOCALS_FIELD = "derived_tags.vocals"
 REPAIRABLE_METADATA_FIELDS = ("duration", "derived_tags", "derived_tags.primary_genre", "derived_tags.mood_keywords",
-                              INSPIRED_ARTIST_FIELD)
+                              INSPIRED_ARTIST_FIELD, VOCALS_FIELD)
 BACKFILL_METADATA_FIELDS = ("derived_tags.video_search_terms",)
 MAX_REPORT_ISSUES = 500
 FFPROBE_TIMEOUT_S = 30
@@ -395,6 +397,8 @@ class AssetIntegrityService:
             missing.append("derived_tags.primary_genre")
         if is_ai_track(metadata) and not name_like(derived.get("inspired_artist")):
             missing.append(INSPIRED_ARTIST_FIELD)
+        if derived.get("vocals") not in VOCALS:
+            missing.append(VOCALS_FIELD)
         for name in REQUIRED_DERIVED_LISTS:
             value = derived.get(name)
             if name == "video_search_terms" and not value:
@@ -812,7 +816,7 @@ class AssetIntegrityService:
                 fillable_tags = [f for f in fields if f.startswith("derived_tags") and f in self._repairable_metadata_fields()]
                 can_fill_tags = bool(fillable_tags) and self._svc("enriched_metadata") is not None
                 can_fill_artist = INSPIRED_ARTIST_FIELD in fields and ai_artist(subject.metadata)[0] is not None
-                if not (can_fill_duration or can_fill_tags or can_fill_artist):
+                if not (can_fill_duration or can_fill_tags or can_fill_artist or VOCALS_FIELD in fields):
                     return "fields need manual edit or the enrichment service"
         if check.key == "db_flags" and subject.db is None and not subject.info.get("master_wav"):
             return "master WAV missing"
@@ -1039,6 +1043,14 @@ class AssetIntegrityService:
                 changed = True
                 log_service.info(f"[Asset doctor] {track_id}: inspired artist set to {artist!r} ({source})")
 
+        if VOCALS_FIELD in missing:
+            derived = metadata.setdefault("derived_tags", {})
+            derived.pop("vocals", None)
+            if settled_vocals(metadata):
+                derived["vocals"] = settled_vocals(metadata)
+                missing.remove(VOCALS_FIELD)
+                changed = True
+
         derived_missing = [m for m in missing if m.startswith("derived_tags") and m in self._repairable_metadata_fields()]
         enrichment = self._svc("enriched_metadata")
         if derived_missing and enrichment is not None:
@@ -1058,6 +1070,10 @@ class AssetIntegrityService:
                         not metadata.get("generation_params", {}).get("style_canonical"):
                     metadata.setdefault("generation_params", {})["style_canonical"] = enriched["generation_params"]["style_canonical"]
                 changed = True
+
+        if VOCALS_FIELD in missing and metadata.get("derived_tags", {}).get("vocals") not in VOCALS:
+            metadata["derived_tags"]["vocals"] = "unknown"
+            changed = True
 
         if not changed:
             raise RuntimeError("nothing could be filled in")

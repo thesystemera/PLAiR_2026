@@ -4,19 +4,19 @@ from typing import Dict, Any
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
 from services.catalog_credit import search_artist_text
+from services.catalog_vocals import VOCALS_TEXT, vocals_of
 
 
 VOCAL_WORD = re.compile(r"\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b", re.I)
 SENTENCE_BREAK = re.compile(r"[.\n]+")
-WHO_SINGS = {"m": "male vocals", "f": "female vocals"}
 VOCAL_TEXT_MAX_CHARS = 400
 
 
 @lru_cache(maxsize=8192)
-def _vocal_text(instrumental: bool, vocal_gender: str, style_text: str, keywords: str) -> str:
-    if instrumental:
-        return ", ".join(part for part in ("instrumental, no vocals", keywords) if part)
-    parts = [WHO_SINGS.get(vocal_gender, "")]
+def _vocal_text(vocals: str, style_text: str, keywords: str) -> str:
+    if vocals == "instrumental":
+        return ", ".join(part for part in (VOCALS_TEXT["instrumental"], keywords) if part)
+    parts = [VOCALS_TEXT.get(vocals, "")]
     parts += [sentence.strip(" ,;:") for sentence in SENTENCE_BREAK.split(style_text) if VOCAL_WORD.search(sentence)]
     parts.append(keywords)
     return ". ".join(dict.fromkeys(part for part in parts if part))[:VOCAL_TEXT_MAX_CHARS]
@@ -118,7 +118,7 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         theme_text = (derived_tags.get("lyrical_interpretation") or "")[:300]
         lyrics_text = (params.get("prompt") or "")[:200]
         vocal_keywords = derived_tags.get("vocal_style_keywords") or []
-        vocal_text = self._vocal_text(params, style_text,
+        vocal_text = self._vocal_text(track, style_text,
                                       ', '.join(vocal_keywords) if isinstance(vocal_keywords, list) else "")
 
         return {
@@ -135,5 +135,5 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         }
 
     @staticmethod
-    def _vocal_text(params: Dict[str, Any], style_text: str, keywords: str) -> str:
-        return _vocal_text(bool(params.get("instrumental")), params.get("vocal_gender") or "", style_text, keywords)
+    def _vocal_text(track: Dict[str, Any], style_text: str, keywords: str) -> str:
+        return _vocal_text(vocals_of(track), style_text, keywords)

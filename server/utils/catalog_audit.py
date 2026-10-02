@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services import log_service
 from services.catalog_database_service import CatalogDatabaseService
+from services.catalog_vocals import VOCALS, settled_vocals
 
 LIST_FIELDS = ("secondary_genres", "mood_keywords", "vocal_style_keywords", "similar_artists")
 EXAMPLES = 4
@@ -62,8 +63,10 @@ def audit(tracks: dict) -> dict:
         if not isinstance(params.get("instrumental"), bool):
             flag(f"instrumental is {type(params.get('instrumental')).__name__}, not true/false", track)
         instrumental = params.get("instrumental") is True
-        if not instrumental and params.get("vocal_gender") not in ("m", "f"):
-            flag("sung track without vocal_gender m/f", track)
+        if derived.get("vocals") not in VOCALS:
+            flag("no derived_tags.vocals", track)
+        elif settled_vocals(track) not in (None, derived.get("vocals")):
+            flag("derived_tags.vocals disagrees with instrumental/vocal_gender", track)
         if not instrumental and _blank(params.get("prompt")):
             flag("sung track without lyrics", track)
         if not instrumental and _blank(derived.get("lyrical_interpretation")):

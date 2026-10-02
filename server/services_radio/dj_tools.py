@@ -11,6 +11,7 @@ from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
 from services import listener_filters
+from services.catalog_vocals import FILTERABLE_VOCALS
 from services_radio import talk_clock
 from services_radio.talk_clock import DEFAULT_DEPTH
 from services_radio.dj_command_executor import (
@@ -86,10 +87,11 @@ WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
                          "favourites when they ask for something of their own: 'one of my favourites', 'that song "
                          "I liked', or a description of a track they know they have liked."}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
-VOCALS = ["instrumental", "male", "female"]
+VOCALS = list(FILTERABLE_VOCALS)
 VOCALS_PARAM = {"type": "string", "enum": VOCALS,
-                "description": "Optional hard filter on who sings: instrumental (no vocals at all), male or female "
-                               "vocals. Use it when the listener asks for it ('no lyrics', 'a female singer')."}
+                "description": "Optional hard filter on who sings: instrumental (no vocals at all), male, female, or "
+                               "duet (male and female voices). Use it when the listener asks for it ('no lyrics', "
+                               "'a female singer', 'a boy-girl duet')."}
 FIND_DEFAULT = 8
 FIND_MAX = 15
 STARTS_WITH_MAX_CHARS = 20

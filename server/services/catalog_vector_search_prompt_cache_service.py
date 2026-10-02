@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from services.base_prompt_cache_service import BasePromptCacheService
 from config import settings
@@ -34,13 +34,10 @@ class QueryIntentAnalysis(BaseModel):
         default=None,
         description="Brief explanation of the analysis (optional, for debugging)"
     )
-    instrumental: Optional[bool] = Field(
+    vocals: Optional[Literal["instrumental", "male", "female", "duet"]] = Field(
         default=None,
-        description="true only when they want no vocals or lyrics; false only when they want singing; else null"
-    )
-    vocal_gender: Optional[str] = Field(
-        default=None,
-        description="'m' or 'f' only when they ask for male or female vocals; else null"
+        description="Only when the words ask for it: instrumental (no vocals/lyrics), male, female, or duet (male "
+                    "and female voices); else null"
     )
 
 class CatalogVectorSearchPromptCacheService(BasePromptCacheService):
@@ -50,7 +47,7 @@ class CatalogVectorSearchPromptCacheService(BasePromptCacheService):
     log_channel = "vector_music"
     analysis_model = QueryIntentAnalysis
     weights_model = CategoryWeights
-    filter_fields = ("instrumental", "vocal_gender")
+    filter_fields = ("vocals",)
 
     def _json_cache_dir(self):
         return settings.QUERY_CACHE_DIR
@@ -93,8 +90,8 @@ Important Instructions:
 - **Sum to 1.0:** Weights must sum to exactly 1.0.
 - **Cleaned Query:** Remove prefixes like "Genre:" or "Play". Keep natural language if relevant.
 - **Confidence:** Rate 0.0-1.0 based on query clarity.
-- **Filters:** instrumental and vocal_gender are hard filters; set them only when the words ask for it ("no lyrics",
-  "instrumental", "female vocals", "a male singer"), otherwise leave them null.
+- **Vocals:** a hard filter; set it only when the words ask for it ("no lyrics" or "instrumental" -> instrumental,
+  "a female singer" -> female, "male vocals" -> male, "a boy-girl duet" -> duet), otherwise leave it null.
 
 Examples of Logic:
 - If user asks "Play 'Midnight City'", heavily weight `song_title`.

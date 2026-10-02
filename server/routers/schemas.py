@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -17,8 +17,7 @@ class QueueAddRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., max_length=1000)
     n_results: Optional[int] = Field(10, ge=1, le=100)
-    instrumental: Optional[bool] = None
-    vocal_gender: Optional[str] = None
+    vocals: Optional[Literal["instrumental", "male", "female", "duet", "unknown"]] = None
     use_ai_analysis: Optional[bool] = False
 
 class ShoutoutSearchRequest(BaseModel):

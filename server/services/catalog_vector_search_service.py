@@ -3,9 +3,8 @@ import re
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from services import log_service
+from services.catalog_vocals import VOCALS, vocals_of
 from services.semantic_source import SemanticSearch
-
-VOCAL_GENDERS = ("m", "f")
 
 
 class CatalogVectorSearchService:
@@ -21,11 +20,10 @@ class CatalogVectorSearchService:
             self,
             query: Union[str, List[str]],
             n_results: int = 10,
-            instrumental: Optional[bool] = None,
-            vocal_gender: Optional[str] = None,
             use_ai_analysis: bool = False,
             banned_ids: Optional[set] = None,
-            only_ids: Optional[set] = None
+            only_ids: Optional[set] = None,
+            vocals: Optional[str] = None
     ) -> List[Dict[str, Any]]:
 
         if not self.catalog or not self.catalog.tracks:
@@ -49,15 +47,9 @@ class CatalogVectorSearchService:
             log_service.detail(f"🔍 Searching: '{query}'", "vector_music")
             intent_category, query_weights, cleaned_query, understood = await self._intent(query, use_ai_analysis)
             log_service.detail(f"  📊 Category weights: {query_weights}", "vector_music")
-            if instrumental is None and isinstance(understood.get("instrumental"), bool):
-                instrumental = understood["instrumental"]
-            if vocal_gender is None and understood.get("vocal_gender") in VOCAL_GENDERS:
-                vocal_gender = understood["vocal_gender"]
-            if instrumental is True:
-                vocal_gender = None
-            if instrumental is not None or vocal_gender is not None:
-                log_service.detail(f"  🎚️ Filters: instrumental={instrumental} vocal_gender={vocal_gender}",
-                                   "vector_music")
+            wanted = next((v for v in (vocals, understood.get("vocals")) if v in VOCALS), None)
+            if wanted:
+                log_service.detail(f"  🎚️ Vocals filter: {wanted}", "vector_music")
 
             hidden = self.catalog.hidden_ids if self.catalog is not None else set()
 
@@ -68,10 +60,7 @@ class CatalogVectorSearchService:
                     return False
                 if track.get("id") in hidden:
                     return False
-                params = track.get("generation_params", {})
-                if instrumental is not None and params.get("instrumental", False) != instrumental:
-                    return False
-                if vocal_gender is not None and vocal_gender != "none" and params.get("vocal_gender") != vocal_gender:
+                if wanted and vocals_of(track) != wanted:
                     return False
                 return True
 
@@ -110,8 +99,7 @@ class CatalogVectorSearchService:
             if ai_analysis:
                 log_service.detail(f"🤖 AI Intent: {ai_analysis.intent_category} "
                                    f"(confidence: {ai_analysis.confidence:.2f})", "vector_music")
-                filters = {"instrumental": getattr(ai_analysis, "instrumental", None),
-                           "vocal_gender": getattr(ai_analysis, "vocal_gender", None)}
+                filters = {"vocals": getattr(ai_analysis, "vocals", None)}
                 return (ai_analysis.intent_category, ai_analysis.category_weights.model_dump(),
                         ai_analysis.cleaned_query, filters)
             log_service.warning("AI analysis failed, falling back to keyword detection")

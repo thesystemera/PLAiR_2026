@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database.models import User, TrackPreference, PreferenceType, WeatherData
 from services import log_service
+from services.catalog_vocals import vocals_of
 from services_radio.external_news_service import resolve_country, resolve_city
 from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver
@@ -371,8 +372,6 @@ async def _format_track(track: Dict, audio_features_service) -> Dict:
         lyrics_preview = full_lyrics[:500] + '...' if len(full_lyrics) > 500 else full_lyrics
 
         instrumental = track.get('generation_params', {}).get('instrumental', False)
-        vocal_gender_code = track.get('generation_params', {}).get('vocal_gender', '')
-        vocal_gender = 'Male' if vocal_gender_code == 'm' else 'Female' if vocal_gender_code == 'f' else ''
 
         duration_ms = track.get('track_info', {}).get('duration', 0)
         duration_seconds = duration_ms // 1000 if duration_ms else track.get('duration_seconds', 0)
@@ -390,7 +389,7 @@ async def _format_track(track: Dict, audio_features_service) -> Dict:
             'duration_seconds': duration_seconds,
             'release_date': release_date_formatted,
             'instrumental': instrumental,
-            'vocal_gender': vocal_gender,
+            'vocals': vocals_of(track),
             'style_description': style_description,
             'lyrics_preview': lyrics_preview,
             'audio_features': audio_features,

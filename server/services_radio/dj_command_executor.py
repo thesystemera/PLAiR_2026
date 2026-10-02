@@ -7,6 +7,7 @@ from services_radio import listener_location as location_resolver
 from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
 from services_radio.tts_stream_planner import spoken_text
+from services.catalog_vocals import vocals_of
 from services.task_utils import spawn
 from database.models import User
 from services import log_service
@@ -25,8 +26,6 @@ SEARCH_CATEGORY_PREFIXES = {
     "description": "",
 }
 NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
-VOCAL_GENDERS = {"m": "male", "f": "female"}
-VOCALS_FILTER = {"instrumental": (True, None), "male": (None, "m"), "female": (None, "f")}
 FIND_TAKES_PER_SONG = 3
 CANDIDATE_SOUND_CHARS = 140
 FIND_NOTE = ("Candidates from the PLAiR catalog, closest first; nothing is playing yet. The pick is yours: play the "
@@ -160,15 +159,13 @@ class CommandExecutorService:
 
     async def _search_track_ids(self, query, banned_ids, only_ids, n_results=5, vocals=None):
         log_service.detail(f"[COMMAND EXECUTOR] Category search: {query}", "commands")
-        instrumental, vocal_gender = VOCALS_FILTER.get(vocals, (None, None))
         results = await self.vector_search_service.search(
             query=query,
             n_results=n_results,
             use_ai_analysis=": " not in query,
             banned_ids=banned_ids if banned_ids else None,
             only_ids=only_ids,
-            instrumental=instrumental,
-            vocal_gender=vocal_gender
+            vocals=vocals
         )
         track_ids = [track["id"] for track in results]
         prefix, _, value = query.partition(": ")
@@ -199,10 +196,7 @@ class CommandExecutorService:
             "genre": derived.get("primary_genre") or "",
             "sound": style.split(". ")[0][:CANDIDATE_SOUND_CHARS],
         }
-        if params.get("instrumental"):
-            candidate["vocals"] = "instrumental"
-        elif params.get("vocal_gender") in VOCAL_GENDERS:
-            candidate["vocals"] = VOCAL_GENDERS[params["vocal_gender"]]
+        candidate["vocals"] = vocals_of(track)
         return candidate
 
     def _starts_with(self, track_id, prefix, by_title):

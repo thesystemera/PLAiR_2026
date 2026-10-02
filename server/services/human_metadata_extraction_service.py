@@ -12,6 +12,7 @@ from google.genai import types
 
 from services import log_service
 from services.base_service import SingletonService
+from services.catalog_vocals import from_settings
 from services.youtube_clip_service import VIDEO_SEARCH_TERMS_PROMPT
 from config import settings
 from services.ai_service import build_gemini_http_options
@@ -396,6 +397,7 @@ Output ONLY valid JSON with your analysis, no other text.""")
                 "mood_keywords": extracted.get("mood_keywords", []),
                 "lyrical_interpretation": extracted.get("lyrical_interpretation"),
                 "vocal_style_keywords": extracted.get("vocal_style_keywords", []),
+                "vocals": from_settings(extracted.get("instrumental"), extracted.get("vocal_gender")) or "unknown",
                 "similar_artists": extracted.get("similar_artists", []),
                 "video_search_terms": extracted.get("video_search_terms", []),
                 "enriched_at": now,

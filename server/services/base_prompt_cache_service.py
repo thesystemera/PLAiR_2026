@@ -238,7 +238,8 @@ class BasePromptCacheService(SingletonService):
         return analysis
 
     def _usable(self, cached: Dict) -> bool:
-        return not self.filter_fields or cached.get("filters") is not None
+        filters = cached.get("filters")
+        return not self.filter_fields or (filters is not None and all(name in filters for name in self.filter_fields))
 
     def _filters_of(self, analysis) -> Optional[Dict[str, Any]]:
         if not self.filter_fields:

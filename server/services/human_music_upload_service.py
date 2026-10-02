@@ -22,6 +22,7 @@ from services.asset_integrity_service import asset_integrity_service
 from services import audio_fingerprint
 from services.track_asset_stages import coerce_bool as _coerce_bool
 from services.base_service import SingletonService
+from services.catalog_vocals import settled_vocals
 from services.audio_headroom import mix_stems_to_file
 from services.audio_master_service import MASTER_TARGET_LUFS
 from config import settings
@@ -1222,6 +1223,8 @@ class HumanMusicUploadService(SingletonService):
             track["transcribed_lyrics"] = lyrics or None
             params["prompt"] = lyrics
             params["instrumental"] = not lyrics
+            if not lyrics or tags.get("vocals") in (None, "instrumental"):
+                tags["vocals"] = settled_vocals(track) or "unknown"
         if "visibility" in updates:
             if updates["visibility"] not in VISIBILITIES:
                 return False, "Visibility must be public, unlisted or private"
