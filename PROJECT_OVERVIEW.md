@@ -10,13 +10,14 @@
 
 ## Executive Summary
 
-PLAiR.fm is a next-generation music streaming platform designed for **user-uploaded human music**, combining traditional radio functionality with advanced AI capabilities, real-time audio processing, and multi-device synchronization. Unlike conventional streaming services, PLAiR features an AI DJ that controls playback, engages in natural conversations, and curates personalized music experiences using semantic vector search and machine learning.
+PLAiR (Personalized Localized Adaptive Interactive Radio) is a geo-social radio station; what that means is defined once, in "What PLAiR is" at the top of `CLAUDE.md`. This document is the technical overview: an AI DJ that controls playback, talks with the listener and curates their station with semantic vector search, over a catalog of AI-generated and user-uploaded human music, with real-time audio processing and multi-device sync.
 
 **Origin Story:** PLAiR was originally a Spotify-powered app that was [killed on November 27, 2024](https://www.theverge.com/2024/12/5/24311523/spotify-locked-down-apis-developers) when Spotify suddenly shut down critical API access (Related Artists, Recommendations, Audio Features, Playlists) with zero warning - the day before Thanksgiving. Rather than give up, we rebuilt from scratch with a critical lesson learned: **Own your infrastructure.**
 
 **Platform Vision:** The current system is 100% independent - no reliance on Spotify or any platform that could shut us down. The AI-generated catalog served as **bootstrap training data** to develop the 10-dimensional semantic classification system. With the technology now proven, the platform is ready to onboard user-uploaded content from real human artists - something we couldn't do while dependent on Spotify's APIs.
 
 **Key Differentiators vs. Spotify:**
+- Knows where the listener is and what's on nearby (City Pulse: gigs, places, news, local shoutouts)
 - Real-time AI DJ with personality and voice synthesis
 - Semantic music discovery using vector embeddings (vs. collaborative filtering)
 - User-generated content (shoutouts) with speech enhancement

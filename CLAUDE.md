@@ -2,9 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## What PLAiR is
+
+**PLAiR = Personalized Localized Adaptive Interactive Radio.** A geo-social radio station: every listener gets their own station with two AI hosts, and it knows where they are and what's around them. Each letter is a design rule:
+
+- **Personalized:** one station per listener, shaped by their likes, bans, skips and what they tell the hosts.
+- **Localized:** it knows where you are and what's on near you: gigs, places, news, weather and other listeners' shoutouts (City Pulse, section 15). Geo-social means people in a walkable city finding where to hang out and finding their friends nearby, many of them without a car.
+- **Adaptive:** the music follows what you're doing and the time of day. The goal is DJs with the authority to change the music themselves from your activity (`docs/DJ_AUTONOMY.md`).
+- **Interactive:** listeners talk to the hosts by voice or text and the hosts act through tools (section 5); listeners talk to each other through shoutouts, replies and reviews that go on air (section 17).
+- **Radio:** it runs like a real station: hosts, between-track talk, stings, time checks, talk breaks.
+
+**Location is the point.** After one opt-in the station uses the listener's exact position and movement. Other listeners only ever see an area: the suburb or neighbourhood ("Eden Terrace") or a distance (about 500 m, close enough to meet on foot), never a home or exact address. The code rules that keep coordinates out of public items (`public_shoutout()`, no listener coordinates in a `Where`) hold that line; they don't mean the station should know less.
+
+**Independent by design:** the first PLAiR ran on Spotify's APIs and died when Spotify closed them in Nov 2024, so everything is in-house now: catalog (AI and human uploads), semantic search, audio pipeline, voices. The story is in `PROJECT_OVERVIEW.md`.
+
 ## Project Overview
 
-AI Radio (PLAiR.fm) is a geo-social radio station. **PLAiR = Personalized Localized Adaptive Interactive Radio**: every letter is the design (made for you, knows where you are, adapts to what you're doing, talks back). It is a station made for each listener that knows where they are, and a way for people in a city to find where to hang out and find their friends nearby (other listeners see an area or a ~500 m distance, never a home address; `docs/DJ_AUTONOMY.md`). Technically it is a full-stack music streaming application with an AI DJ that controls playback, manages playlists, and interacts with users via voice/text. The system features real-time audio processing, WebSocket-based state synchronization, and advanced audio engine capabilities including dual-buffer crossfading.
+Technically, PLAiR is a full-stack music streaming application with an AI DJ that controls playback, manages playlists, and interacts with users via voice/text. The system features real-time audio processing, WebSocket-based state synchronization, and advanced audio engine capabilities including dual-buffer crossfading.
 
 **Architecture:** React + Vite frontend, FastAPI backend, PostgreSQL (SQLAlchemy async + psycopg2), WebSocket for real-time updates, Google Gemini (`google-genai`) as the LLM, local Chatterbox-Turbo TTS engine (`tts_chatterbox/`) for DJ voices.
 

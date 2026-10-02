@@ -10,9 +10,8 @@ think for themselves: they ask, the DJs play a few tracks, and the queue drifts 
 running. The goal is a mode where the DJs have the authority to change the music on their own, because they know
 what the listener is doing: walking, cycling, driving, studying, at the beach, at a party, winding down at night.
 
-**PLAiR is a geo-social app** (Personalized Localized Adaptive Interactive Radio). It's about people in a city getting to know where to hang out and finding their
-friends nearby. In a 15-minute walkable city, where not everyone has a car, that means knowing where people are to
-within a few hundred metres. Location isn't a side feature to minimise; it's what the station is built on.
+This plan is the **Adaptive** in Personalized Localized Adaptive Interactive Radio (what PLAiR is: top of
+`CLAUDE.md`).
 
 This is the owner's original 2010 thesis: music chosen by the activity you're in, with heart rate from a wearable
 as the long-term signal. Part of the work is finding out how much of it still holds up today.
@@ -66,15 +65,12 @@ Strongest first, by what we can get today:
   (`audio_features_service`), plus vector categories for mood and style. Walking or running cadence can be
   matched to tempo; study or wind-down to low energy and few vocals.
 
-## Opting in and sharing
+## Opting in
 
-- **One opt-in, explained once.** After that the station uses everything it can for that listener: exact
-  position and movement, where you are (the gym, the beach, a friend's place), your routines and, later, your
-  watch. It should feel like magic, not ask again.
-- **The station knows exactly; other people see roughly.** What other listeners see of you is the area: the
-  suburb or neighbourhood ("Eden Terrace"), or how close you are (within about 500 m). Close enough to meet up on
-  foot. Never your home or your exact address. This fits the existing spatial standard (`geo.Where` scopes:
-  spot, street, neighbourhood, city; public shoutouts already show only the label and scope).
+- One opt-in, explained once. After that the station uses everything it can for that listener: exact position
+  and movement, where you are (the gym, the beach, a friend's place), your routines and, later, your watch. It
+  should feel like magic, not ask again. What other listeners see follows the sharing rule in `CLAUDE.md`
+  ("Location is the point").
 - The listener can see what the station thinks they're doing, and correct it.
 
 ## Open questions

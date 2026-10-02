@@ -4,6 +4,7 @@ Agent guidance for this repository lives in **[CLAUDE.md](CLAUDE.md)** — read 
 
 Non-negotiables, in brief:
 
+- **What we're building:** PLAiR = Personalized Localized Adaptive Interactive Radio, a geo-social radio station. Read "What PLAiR is" at the top of CLAUDE.md first.
 - **Stack:** React + Vite client (`client/`), FastAPI backend (`server/`), PostgreSQL 18 (port 5433, 4 databases), Google Gemini via `google-genai`, local Chatterbox-Turbo TTS engine (`tts_chatterbox/`; ElevenLabs and Orpheus are retired). Config comes from the repo-root `.env`.
 - **Frontend state:** engines report to `UIStateContext` via `reportEngineStatus()`; components read state and never prop-drill it. Use `api.js` for backend calls, `safeStorage` for localStorage, `useWebSocketSubscribe()` for socket events, `useViewport()` for responsive state.
 - **Playback:** backend `playback_state.py` is the source of truth; never auto-advance when `active_device_id` is set; devices default to inactive and activate only on an exact `active_device_id === deviceId` match.

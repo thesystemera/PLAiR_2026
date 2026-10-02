@@ -12,7 +12,7 @@ Published version: https://claude.ai/artifact/1BNkXZQA9snyL9iwTaeciT
 
 ## 1. Why this exists
 
-PLAiR is a social radio station as much as a music app. Spotify and the rest are disconnected from where you live; PLAiR is meant to feel like your city's station, with hosts who know what's on this weekend, what the neighbourhood is saying in its shoutouts, and what the scene is into right now.
+PLAiR is a geo-social radio station as much as a music app (this brief is the **Localized** in its name; see "What PLAiR is" in `CLAUDE.md`). Spotify and the rest are disconnected from where you live; PLAiR is meant to feel like your city's station, with hosts who know what's on this weekend, what the neighbourhood is saying in its shoutouts, and what the scene is into right now.
 
 Today the DJs can reach some of that, but only on demand and one API call at a time. Every consumer fetches for itself, nothing is shared between listeners in the same city, and the between-track announcer rarely has anything to say beyond the track names.
 

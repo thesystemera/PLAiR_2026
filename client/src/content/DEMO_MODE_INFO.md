@@ -2,7 +2,7 @@
 
 ## AI-Powered Music Discovery
 
-PLAiR is a music platform with an AI DJ that curates, discovers, and talks about music in real-time. The catalog mixes AI-generated tracks with **music uploaded by real artists**.
+PLAiR (Personalized Localized Adaptive Interactive Radio) is your own radio station that knows your city: AI DJs that pick the music, talk with you in real time and know what's on around you. The catalog mixes AI-generated tracks with **music uploaded by real artists**.
 
 ---
 
