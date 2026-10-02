@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI Radio (PLAiR.fm) is a geo-social radio station: a station made for each listener that knows where they are, and a way for people in a city to find where to hang out and find their friends nearby (other listeners see an area or a ~500 m distance, never a home address; `docs/DJ_AUTONOMY.md`). Technically it is a full-stack music streaming application with an AI DJ that controls playback, manages playlists, and interacts with users via voice/text. The system features real-time audio processing, WebSocket-based state synchronization, and advanced audio engine capabilities including dual-buffer crossfading.
+AI Radio (PLAiR.fm) is a geo-social radio station. **PLAiR = Personalized Localized Adaptive Interactive Radio**: every letter is the design (made for you, knows where you are, adapts to what you're doing, talks back). It is a station made for each listener that knows where they are, and a way for people in a city to find where to hang out and find their friends nearby (other listeners see an area or a ~500 m distance, never a home address; `docs/DJ_AUTONOMY.md`). Technically it is a full-stack music streaming application with an AI DJ that controls playback, manages playlists, and interacts with users via voice/text. The system features real-time audio processing, WebSocket-based state synchronization, and advanced audio engine capabilities including dual-buffer crossfading.
 
 **Architecture:** React + Vite frontend, FastAPI backend, PostgreSQL (SQLAlchemy async + psycopg2), WebSocket for real-time updates, Google Gemini (`google-genai`) as the LLM, local Chatterbox-Turbo TTS engine (`tts_chatterbox/`) for DJ voices.
 

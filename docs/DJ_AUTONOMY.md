@@ -10,7 +10,7 @@ think for themselves: they ask, the DJs play a few tracks, and the queue drifts 
 running. The goal is a mode where the DJs have the authority to change the music on their own, because they know
 what the listener is doing: walking, cycling, driving, studying, at the beach, at a party, winding down at night.
 
-**PLAiR is a geo-social app.** It's about people in a city getting to know where to hang out and finding their
+**PLAiR is a geo-social app** (Personalized Localized Adaptive Interactive Radio). It's about people in a city getting to know where to hang out and finding their
 friends nearby. In a 15-minute walkable city, where not everyone has a car, that means knowing where people are to
 within a few hundred metres. Location isn't a side feature to minimise; it's what the station is built on.
 
