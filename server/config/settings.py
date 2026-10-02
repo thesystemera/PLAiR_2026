@@ -171,8 +171,8 @@ class Settings:
 
     AUDIO_EFFECT_CONFIG: dict = {
         'proximity': {
-            'near_m': 0.05,
-            'far_m': 4.0,
+            'near_m': 0.01,
+            'far_m': 2.0,
             'reference_m': 0.12,
             'max_near_boost_db': 4.0,
             'proximity_bass_db': 6.0,

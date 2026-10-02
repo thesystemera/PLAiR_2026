@@ -72,13 +72,16 @@ class DJPromptSystemService:
         lead_name, cohost_name = lead.title(), cohost.title()
         system_prompt = (
             f"{show_style}\n\n"
-            "YOUR JOB: the instant reaction, overheard. A listener's message (NOW) has just landed in the studio and "
-            f"the audience catches the hosts reacting to it between themselves, a sneak behind the scenes: "
+            "YOUR JOB: the hot mic moment. A listener's message (NOW) has just landed in the studio and the mics are "
+            "still live: the audience catches the hosts off guard, candid, saying what they'd never say straight to "
+            "the listener, their real character, a bit cheekier, a bit more honest. They react between themselves: "
             f"'oh, text from Eden Terrace', '{cohost_name}, they want gigs', a laugh, before the proper reply. So:\n"
             "1. The hosts talk to each other about the message and its sender in the third person, in the tone of "
             "the conversation so far (EARLIER). Never speak to the listener directly.\n"
             "2. Don't answer, give facts or promise specifics.\n"
-            "3. They're turned to each other, away from the mics: mic-proximity between 0.4 and 0.7.\n"
+            "3. Hot mic, not off mic: they move like people at a live desk, leaning back or turned to each other "
+            "(0.4 to 0.7), then drifting right back onto the mic (0.1 to 0.3) for a mutter or a laugh. Vary the "
+            "mic-proximity within the script; never hold one distance.\n"
             f"4. [BROADCAST] channel. {lead_name} speaks first; {cohost_name} may chip in or talk over. FOUR to TEN "
             "spoken words in total, at most one reaction and one room sound.\n"
             + self._avoid_block(avoid) +
@@ -102,8 +105,9 @@ class DJPromptSystemService:
         lead_name = lead.title()
         system_prompt = (
             f"{show_style}\n\n"
-            "YOUR JOB: interludes, overheard. A listener's message is being worked on and the studio has gone quiet. "
-            "The audience catches the hosts behind the scenes, talking to each other while they dig. Write a "
+            "YOUR JOB: interludes on a hot mic. A listener's message is being worked on and the studio has gone "
+            "quiet, but the mics are live: the audience catches the hosts behind the scenes, candid, talking to each "
+            "other while they dig. Write a "
             "SEQUENCE of tiny bits of radio theatre that play one after another as the wait drags on, each building "
             "on the one before:\n"
             "#1 OPENING: what they're digging into, casual.\n"
@@ -115,8 +119,8 @@ class DJPromptSystemService:
             "WHAT THE HOSTS ARE DOING, in plain words (never tool or system names).\n"
             "- The hosts talk to each other about the sender in the third person; never to the listener.\n"
             "- Never give the answer, facts or numbers; they're still working on it.\n"
-            "- They're turned away from the mics, busy at the desk: mic-proximity between 0.4 and 0.7, with room "
-            "sounds of what they're doing.\n"
+            "- Hot mic: busy at the desk, drifting between the mic (0.1 to 0.3) and leaning away (0.4 to 0.7) as "
+            "they work; vary the mic-proximity within each beat, with room sounds of what they're doing.\n"
             f"- [BROADCAST] channel. {lead_name} opens; the other host can react or talk over. Each beat is FIVE "
             "to TWELVE spoken words in total, both hosts together.\n"
             + self._avoid_block(avoid) +
