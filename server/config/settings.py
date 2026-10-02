@@ -550,7 +550,7 @@ class Settings:
     ROFORMER_MODEL_DIR: Path = Path(os.getenv("ROFORMER_MODEL_DIR", str(BASE_DIR / "models" / "roformer")))
     ROFORMER_MODEL_FILENAME: str = os.getenv("ROFORMER_MODEL_FILENAME", "vocals_mel_band_roformer.ckpt")
     ROFORMER_CONFIG_FILENAME: str = os.getenv("ROFORMER_CONFIG_FILENAME", "vocals_mel_band_roformer.yaml")
-    ROFORMER_NUM_OVERLAP: int = int(os.getenv("ROFORMER_NUM_OVERLAP", "4"))
+    ROFORMER_NUM_OVERLAP: int = int(os.getenv("ROFORMER_NUM_OVERLAP", "2"))
 
     AUDIOBOX_AESTHETICS_DIR: Path = Path(os.getenv("AUDIOBOX_AESTHETICS_DIR", str(BASE_DIR / "models" / "audiobox_aesthetics")))
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
@@ -562,6 +562,7 @@ class Settings:
     SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "true").lower() == "true"
     SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "true").lower() == "true"
     SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "false").lower() == "true"
+    SONIC_MASTER_CHUNK_OVERLAP_S: float = float(os.getenv("SONIC_MASTER_CHUNK_OVERLAP_S", "5"))
     SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))

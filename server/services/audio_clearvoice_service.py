@@ -10,6 +10,7 @@ import gc
 import numpy as np
 from clearvoice import ClearVoice
 from clearvoice.networks import SpeechModel
+from clearvoice.utils import decode as clearvoice_decode
 from services import log_service
 from services.base_service import SingletonService
 from config.settings import BASE_DIR
@@ -19,7 +20,47 @@ from services.audio_headroom import write_float_wav
 SR_RATE = 48000
 MIN_MEASURABLE_LUFS = -70.0
 
+SR_WINDOW_BATCH = 16
+
 SpeechModel.get_free_gpu = lambda self: torch.cuda.current_device()
+_unbatched_sr_decode = clearvoice_decode.decode_one_audio_mossformer2_sr_48k
+
+
+def _batched_sr_decode(model, device, inputs, args):
+    signal_in = inputs[0, :]
+    if signal_in.shape[0] <= args.sampling_rate * args.one_time_decode_length:
+        return _unbatched_sr_decode(model, device, inputs, args)
+    window = int(args.sampling_rate * args.decode_window)
+    stride = int(window * 0.75)
+    t = signal_in.shape[0]
+    if t < window:
+        signal_in = np.concatenate([signal_in, np.zeros(window - t)], 0)
+    elif t < window + stride:
+        signal_in = np.concatenate([signal_in, np.zeros(window + stride - t)], 0)
+    elif (t - window) % stride != 0:
+        signal_in = np.concatenate([signal_in, np.zeros(t - (t - window) // stride * stride)], 0)
+    audio = torch.from_numpy(signal_in).type(torch.FloatTensor)
+    t = audio.shape[0]
+    outputs = torch.from_numpy(np.zeros(t))
+    give_up = (window - stride) // 2
+    starts = list(range(0, t - window + 1, stride))
+    for first in range(0, len(starts), SR_WINDOW_BATCH):
+        group = starts[first:first + SR_WINDOW_BATCH]
+        segments = torch.stack([audio[s:s + window] for s in group])
+        mel = clearvoice_decode.get_mel(segments, args)
+        generated = model[1](model[0](mel.to(device))).squeeze(1).cpu()
+        offset = window - generated.shape[-1]
+        for row, start in enumerate(group):
+            out = generated[row]
+            if start == 0:
+                outputs[start:start + window - give_up] = out[:-give_up + offset]
+            else:
+                out = out[-window:]
+                outputs[start + give_up:start + window - give_up] = out[give_up:-give_up + offset]
+    return clearvoice_decode.bandwidth_sub(signal_in, outputs.numpy())
+
+
+clearvoice_decode.decode_one_audio_mossformer2_sr_48k = _batched_sr_decode
 
 class AudioClearVoiceService(SingletonService):
     def __init__(self):

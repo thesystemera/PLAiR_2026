@@ -234,7 +234,8 @@ class SonicMasterService(SingletonService):
             chunk_samples = self.chunk_duration * self.fs
             if settings.SONIC_MASTER_ALIGN_CHUNKS:
                 chunk_samples = (chunk_samples // VAE_HOP_SAMPLES) * VAE_HOP_SAMPLES
-            stride_samples = chunk_samples // 2
+            overlap_samples = min(int(settings.SONIC_MASTER_CHUNK_OVERLAP_S * self.fs), chunk_samples // 2)
+            stride_samples = chunk_samples - overlap_samples
             model_dtype = torch.float16 if self._half else torch.float32
             conditioning_samples = min(CONDITIONING_SECONDS * self.fs, chunk_samples)
             prev_cond_latent = None
@@ -242,12 +243,18 @@ class SonicMasterService(SingletonService):
             output_buffer = torch.zeros_like(audio)
             weight_buffer = torch.zeros_like(audio)
 
-            window = torch.hann_window(chunk_samples).to(audio.device)
-            window = window.unsqueeze(0).repeat(2, 1)
+            if overlap_samples * 2 >= chunk_samples:
+                window = torch.hann_window(chunk_samples)
+            else:
+                ramp = 0.5 * (1 - torch.cos(torch.pi * (torch.arange(overlap_samples) + 0.5) / overlap_samples))
+                window = torch.ones(chunk_samples)
+                window[:overlap_samples] = ramp
+                window[-overlap_samples:] = ramp.flip(0)
+            window = window.to(audio.device).unsqueeze(0).repeat(2, 1)
 
             num_chunks = int(np.ceil(total_samples / stride_samples))
 
-            log_service.upscaling(f"SonicMaster: Processing {num_chunks} chunks with 50% overlap...")
+            log_service.upscaling(f"SonicMaster: Processing {num_chunks} chunks, {overlap_samples / self.fs:.1f}s crossfade")
 
             for chunk_idx in range(num_chunks):
                 start_idx = chunk_idx * stride_samples
