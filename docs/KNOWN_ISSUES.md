@@ -127,7 +127,7 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 - **Listen and decide:** the music beds, the stings and the "Play Air" pronunciation.
 - **Music chain signed off by ear (owner, 2 Oct):** Apollo -> RoFormer vocal split -> ClearVoice
   MossFormer2_SR_48K alone on the vocal, level-matched (the speech denoiser and envelope warp dulled singing) ->
-  SonicMaster with the owner's original prompt, 50 steps, 50/50, blend compensation on (above 2 kHz its output
+  SonicMaster with the owner's original prompt (no template), 20 steps, 50/50, blend compensation on (above 2 kHz its output
   has ~0 coherence with the input, so a plain 50/50 lost 3 dB) -> master EQ at 100%. RoFormer is ~3.5x slower
   than Demucs (0.45 vs 0.13 s per audio second). Still to do: the catalog re-master as a background job that
   renders only with no listeners online and free VRAM (the live station uses 18-21 GB of the P6000; a render
