@@ -34,6 +34,14 @@ class QueryIntentAnalysis(BaseModel):
         default=None,
         description="Brief explanation of the analysis (optional, for debugging)"
     )
+    instrumental: Optional[bool] = Field(
+        default=None,
+        description="true only when they want no vocals or lyrics; false only when they want singing; else null"
+    )
+    vocal_gender: Optional[str] = Field(
+        default=None,
+        description="'m' or 'f' only when they ask for male or female vocals; else null"
+    )
 
 class CatalogVectorSearchPromptCacheService(BasePromptCacheService):
     table_name = "query_intent_cache"
@@ -42,6 +50,7 @@ class CatalogVectorSearchPromptCacheService(BasePromptCacheService):
     log_channel = "vector_music"
     analysis_model = QueryIntentAnalysis
     weights_model = CategoryWeights
+    filter_fields = ("instrumental", "vocal_gender")
 
     def _json_cache_dir(self):
         return settings.QUERY_CACHE_DIR
@@ -84,6 +93,8 @@ Important Instructions:
 - **Sum to 1.0:** Weights must sum to exactly 1.0.
 - **Cleaned Query:** Remove prefixes like "Genre:" or "Play". Keep natural language if relevant.
 - **Confidence:** Rate 0.0-1.0 based on query clarity.
+- **Filters:** instrumental and vocal_gender are hard filters; set them only when the words ask for it ("no lyrics",
+  "instrumental", "female vocals", "a male singer"), otherwise leave them null.
 
 Examples of Logic:
 - If user asks "Play 'Midnight City'", heavily weight `song_title`.

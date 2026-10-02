@@ -5,6 +5,9 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from services import log_service
 from services.semantic_source import SemanticSearch
 
+VOCAL_GENDERS = ("m", "f")
+
+
 class CatalogVectorSearchService:
 
     def __init__(self, vector_db_service, catalog_service=None, prompt_cache_service=None):
@@ -44,8 +47,17 @@ class CatalogVectorSearchService:
 
         try:
             log_service.detail(f"🔍 Searching: '{query}'", "vector_music")
-            intent_category, query_weights, cleaned_query = await self._intent(query, use_ai_analysis)
+            intent_category, query_weights, cleaned_query, understood = await self._intent(query, use_ai_analysis)
             log_service.detail(f"  📊 Category weights: {query_weights}", "vector_music")
+            if instrumental is None and isinstance(understood.get("instrumental"), bool):
+                instrumental = understood["instrumental"]
+            if vocal_gender is None and understood.get("vocal_gender") in VOCAL_GENDERS:
+                vocal_gender = understood["vocal_gender"]
+            if instrumental is True:
+                vocal_gender = None
+            if instrumental is not None or vocal_gender is not None:
+                log_service.detail(f"  🎚️ Filters: instrumental={instrumental} vocal_gender={vocal_gender}",
+                                   "vector_music")
 
             hidden = self.catalog.hidden_ids if self.catalog is not None else set()
 
@@ -92,16 +104,19 @@ class CatalogVectorSearchService:
             log_service.error(f"Traceback: {traceback.format_exc()}")
             return []
 
-    async def _intent(self, query: str, use_ai_analysis: bool) -> Tuple[str, Dict[str, float], str]:
+    async def _intent(self, query: str, use_ai_analysis: bool) -> Tuple[str, Dict[str, float], str, Dict[str, Any]]:
         if use_ai_analysis and self.prompt_cache_service:
             ai_analysis = await self.prompt_cache_service.analyze_query(query)
             if ai_analysis:
                 log_service.detail(f"🤖 AI Intent: {ai_analysis.intent_category} "
                                    f"(confidence: {ai_analysis.confidence:.2f})", "vector_music")
-                return ai_analysis.intent_category, ai_analysis.category_weights.model_dump(), ai_analysis.cleaned_query
+                filters = {"instrumental": getattr(ai_analysis, "instrumental", None),
+                           "vocal_gender": getattr(ai_analysis, "vocal_gender", None)}
+                return (ai_analysis.intent_category, ai_analysis.category_weights.model_dump(),
+                        ai_analysis.cleaned_query, filters)
             log_service.warning("AI analysis failed, falling back to keyword detection")
         intent, weights, cleaned = self._detect_query_intent(query)
-        return intent, weights, cleaned if cleaned.strip() else query
+        return intent, weights, cleaned if cleaned.strip() else query, {}
 
     def _search_by_track_ids_sync(self, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
         conn = self.catalog._get_connection()

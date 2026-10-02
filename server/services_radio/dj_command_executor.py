@@ -26,6 +26,7 @@ SEARCH_CATEGORY_PREFIXES = {
 }
 NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
 VOCAL_GENDERS = {"m": "male", "f": "female"}
+VOCALS_FILTER = {"instrumental": (True, None), "male": (None, "m"), "female": (None, "f")}
 FIND_TAKES_PER_SONG = 3
 CANDIDATE_SOUND_CHARS = 140
 FIND_NOTE = ("Candidates from the PLAiR catalog, closest first; nothing is playing yet. The pick is yours: play the "
@@ -157,14 +158,17 @@ class CommandExecutorService:
                 "note": "This listener hasn't liked any tracks yet, so there is nothing to search there. Say so, "
                         "and offer to search the whole catalog."}
 
-    async def _search_track_ids(self, query, banned_ids, only_ids, n_results=5):
+    async def _search_track_ids(self, query, banned_ids, only_ids, n_results=5, vocals=None):
         log_service.detail(f"[COMMAND EXECUTOR] Category search: {query}", "commands")
+        instrumental, vocal_gender = VOCALS_FILTER.get(vocals, (None, None))
         results = await self.vector_search_service.search(
             query=query,
             n_results=n_results,
             use_ai_analysis=": " not in query,
             banned_ids=banned_ids if banned_ids else None,
-            only_ids=only_ids
+            only_ids=only_ids,
+            instrumental=instrumental,
+            vocal_gender=vocal_gender
         )
         track_ids = [track["id"] for track in results]
         prefix, _, value = query.partition(": ")
@@ -215,12 +219,13 @@ class CommandExecutorService:
         key = re.sub(r"[^a-z0-9 ]", "", name.lower()).strip()
         return key[4:] if key.startswith("the ") else key
 
-    async def find_tracks(self, session_dict, query, within=None, how_many=8, starts_with=None):
+    async def find_tracks(self, session_dict, query, within=None, how_many=8, starts_with=None, vocals=None):
         banned_ids, only_ids = await self._search_scope(session_dict, within)
         if only_ids is not None and not only_ids:
             return self._empty_scope(within)
         pool = len(self.catalog_service.tracks) if starts_with else how_many * FIND_TAKES_PER_SONG
-        track_ids, entry, missing = await self._search_track_ids(query, banned_ids, only_ids, n_results=pool)
+        track_ids, entry, missing = await self._search_track_ids(query, banned_ids, only_ids, n_results=pool,
+                                                                 vocals=vocals)
         if starts_with:
             by_title = query.startswith(f"{SEARCH_CATEGORY_PREFIXES['song_title']}: ")
             track_ids = [track_id for track_id in track_ids if self._starts_with(track_id, starts_with, by_title)]
@@ -253,7 +258,7 @@ class CommandExecutorService:
                     "note": "No catalog track has that id. Use a track_id from find_tracks, what_aired or pulse_search."}
         return await self._queue_tracks(session_dict, known, play, [], [], None, None)
 
-    async def execute_searches(self, session_dict, searches, within=None):
+    async def execute_searches(self, session_dict, searches, within=None, vocals=None):
         session_id = session_dict.get('session_id')
 
         banned_ids, only_ids = await self._search_scope(session_dict, within)
@@ -268,7 +273,7 @@ class CommandExecutorService:
         for query, play in searches:
             if not query:
                 continue
-            track_ids, entry, missed = await self._search_track_ids(query, banned_ids, only_ids)
+            track_ids, entry, missed = await self._search_track_ids(query, banned_ids, only_ids, vocals=vocals)
             if missed:
                 missing.append(missed)
             labels = {self._track_label(track_id) for track_id in tracks_to_add}

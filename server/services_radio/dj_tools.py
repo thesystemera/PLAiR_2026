@@ -86,6 +86,10 @@ WITHIN = {"type": "string", "enum": SEARCH_SCOPES,
                          "favourites when they ask for something of their own: 'one of my favourites', 'that song "
                          "I liked', or a description of a track they know they have liked."}
 PLAY_TOOLS = {"search_and_play", "playback_control", "seed_radio", "play_playlist"}
+VOCALS = ["instrumental", "male", "female"]
+VOCALS_PARAM = {"type": "string", "enum": VOCALS,
+                "description": "Optional hard filter on who sings: instrumental (no vocals at all), male or female "
+                               "vocals. Use it when the listener asks for it ('no lyrics', 'a female singer')."}
 FIND_DEFAULT = 8
 FIND_MAX = 15
 STARTS_WITH_MAX_CHARS = 20
@@ -258,6 +262,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "mode": _enum(["play", "queue"], "play = start it now; queue = add it after the current track."),
             "track_id": _string("A track you picked, by its id from find_tracks, what_aired or pulse_search: plays "
                                 "exactly that track instead of searching."),
+            "vocals": VOCALS_PARAM,
             "category": _enum(SEARCH_CATEGORIES, "Optional. Leave out for the smart search. Or pin one field: "
                                                  "song_title, primary_artist, similar_artists, primary_genre, "
                                                  "secondary_genres (sub-genres/tags), mood, style (production), "
@@ -287,6 +292,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                                                  "primary_artist or song_title to check a name; or one other field "
                                                  "as in search_and_play."),
             "within": WITHIN,
+            "vocals": VOCALS_PARAM,
             "starts_with": _string("Optional: only artists whose name starts with these letters, e.g. 'S' (a leading "
                                    "'The' is ignored); with category song_title, titles instead. The whole catalog "
                                    "is filtered, so use it when the listener remembers how the name starts."),
@@ -711,10 +717,12 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         if args.get("track_id"):
             return _brace("play" if args["mode"] == "play" else "cue", "track", value=args["track_id"])
         return _brace("play" if args["mode"] == "play" else "cue", args["category"],
-                      args["within"] if args.get("within") != "catalog" else "", value=args["query"])
+                      args["within"] if args.get("within") != "catalog" else "", args.get("vocals") or "",
+                      value=args["query"])
     if name == "find_tracks":
         return _brace("find", args["category"], args["within"] if args.get("within") != "catalog" else "",
-                      f"starts with {args['starts_with']}" if args.get("starts_with") else "", value=args["query"])
+                      args.get("vocals") or "", f"starts with {args['starts_with']}" if args.get("starts_with") else "",
+                      value=args["query"])
     if name == "playback_control":
         action = args["action"]
         if action == "seek":
@@ -898,12 +906,14 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("'track_id' must be a track id from find_tracks, what_aired or pulse_search")
         return {"category": choice("category", SEARCH_CATEGORIES, "description"),
                 "query": text("query", required=not track_id), "track_id": track_id or None,
+                "vocals": choice("vocals", VOCALS) if args.get("vocals") else None,
                 "mode": choice("mode", ["play", "queue"], "play"),
                 "within": choice("within", SEARCH_SCOPES, "catalog")}
     if name == "find_tracks":
         return {"query": text("query", True), "category": choice("category", SEARCH_CATEGORIES, "description"),
                 "within": choice("within", SEARCH_SCOPES, "catalog"),
                 "starts_with": (text("starts_with") or "")[:STARTS_WITH_MAX_CHARS] or None,
+                "vocals": choice("vocals", VOCALS) if args.get("vocals") else None,
                 "how_many": int(number("how_many", FIND_DEFAULT, FIND_MAX))}
     if name == "playback_control":
         action = choice("action", PLAYBACK_ACTIONS)
@@ -1269,12 +1279,12 @@ class DJToolRuntime:
                                                             args["mode"] == "play")
             return await self.executor.execute_searches(self.session_dict,
                                                         [(self._catalog_query(args), args["mode"] == "play")],
-                                                        within=args.get("within"))
+                                                        within=args.get("within"), vocals=args.get("vocals"))
 
     async def _find_tracks(self, args):
         return await self.executor.find_tracks(self.session_dict, self._catalog_query(args),
                                                within=args.get("within"), how_many=args["how_many"],
-                                               starts_with=args.get("starts_with"))
+                                               starts_with=args.get("starts_with"), vocals=args.get("vocals"))
 
     async def _playback_control(self, args):
         async with self.ctx.playback_lock:

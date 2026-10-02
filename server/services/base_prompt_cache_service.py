@@ -24,6 +24,7 @@ class BasePromptCacheService(SingletonService):
     log_channel: str = ""
     analysis_model: Type[BaseModel]
     weights_model: Type[BaseModel]
+    filter_fields: Tuple[str, ...] = ()
 
     def __init__(self):
         if getattr(self, '_initialized', False):
@@ -77,6 +78,7 @@ class BasePromptCacheService(SingletonService):
                 last_used REAL
             )
         ''')
+        c.execute(f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS filters_json TEXT")
         conn.commit()
         conn.close()
 
@@ -102,7 +104,7 @@ class BasePromptCacheService(SingletonService):
         conn = self._get_connection()
         c = conn.cursor()
         c.execute("SELECT query_hash, query_text, embedding, intent_category, weights_json, "
-                  "confidence, cleaned_query, reasoning, created_at, times_reused, last_used "
+                  "confidence, cleaned_query, reasoning, created_at, times_reused, last_used, filters_json "
                   f"FROM {self.table_name}")
 
         rows = c.fetchall()
@@ -110,7 +112,7 @@ class BasePromptCacheService(SingletonService):
 
         for row in rows:
             query_hash, query_text, embedding_blob, intent_category, weights_json, \
-                confidence, cleaned_query, reasoning, created_at, times_reused, last_used = row
+                confidence, cleaned_query, reasoning, created_at, times_reused, last_used, filters_json = row
 
             embedding = np.frombuffer(bytes(embedding_blob), dtype=np.float32)
             weights = json.loads(weights_json)
@@ -125,7 +127,8 @@ class BasePromptCacheService(SingletonService):
                 "reasoning": reasoning,
                 "created_at": created_at,
                 "times_reused": times_reused,
-                "last_used": last_used
+                "last_used": last_used,
+                "filters": json.loads(filters_json) if filters_json else None
             }
 
         elapsed = time.perf_counter() - start_time
@@ -178,7 +181,7 @@ class BasePromptCacheService(SingletonService):
 
         self._log(f"🧠 Checking Intent Cache for: '{query}'")
 
-        if use_cache and query_hash in self.query_cache:
+        if use_cache and query_hash in self.query_cache and self._usable(self.query_cache[query_hash]):
             cached = self.query_cache[query_hash]
             self._update_cache_stats(query_hash, "exact")
             self.exact_hits += 1
@@ -197,6 +200,8 @@ class BasePromptCacheService(SingletonService):
             best_similarity = 0.0
 
             for cache_hash, cached in self.query_cache.items():
+                if not self._usable(cached):
+                    continue
                 similarity = float(np.dot(query_embedding, cached["embedding"]))
                 if similarity > best_similarity:
                     best_similarity = similarity
@@ -232,13 +237,22 @@ class BasePromptCacheService(SingletonService):
 
         return analysis
 
+    def _usable(self, cached: Dict) -> bool:
+        return not self.filter_fields or cached.get("filters") is not None
+
+    def _filters_of(self, analysis) -> Optional[Dict[str, Any]]:
+        if not self.filter_fields:
+            return None
+        return {name: getattr(analysis, name, None) for name in self.filter_fields}
+
     def _cached_to_analysis(self, cached: Dict):
         return self.analysis_model(
             intent_category=cached["intent_category"],
             category_weights=self.weights_model(**cached["weights"]),
             cleaned_query=cached["cleaned_query"],
             confidence=cached["confidence"],
-            reasoning=cached.get("reasoning")
+            reasoning=cached.get("reasoning"),
+            **(cached.get("filters") or {})
         )
 
     def _update_cache_stats(self, query_hash: str, _match_type: str):
@@ -286,17 +300,26 @@ class BasePromptCacheService(SingletonService):
             "reasoning": analysis.reasoning,
             "created_at": current_time,
             "times_reused": 0,
-            "last_used": current_time
+            "last_used": current_time,
+            "filters": self._filters_of(analysis)
         }
 
         params = (query_hash, query, query_embedding.tobytes(), analysis.intent_category,
                   weights_json, analysis.confidence, analysis.cleaned_query,
                   analysis.reasoning, current_time, 0, current_time)
+        filters = self._filters_of(analysis)
 
         def _insert():
             conn = self._get_connection()
             try:
                 self._insert_cache_row(conn, params)
+                if filters is not None:
+                    c = conn.cursor()
+                    c.execute(f"UPDATE {self.table_name} SET intent_category = %s, weights_json = %s, confidence = %s, "
+                              "cleaned_query = %s, reasoning = %s, filters_json = %s WHERE query_hash = %s",
+                              (analysis.intent_category, weights_json, analysis.confidence, analysis.cleaned_query,
+                               analysis.reasoning, json.dumps(filters), query_hash))
+                    conn.commit()
             finally:
                 conn.close()
 
