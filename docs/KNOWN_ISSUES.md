@@ -173,6 +173,10 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 7. Large jobs
 
+- **DJ autonomy: the station knows what you're up to** (owner, 2 Oct; `docs/DJ_AUTONOMY.md`). A DJ mode where
+  the hosts change the music themselves from the listener's activity (what they say, time and place, movement,
+  later heart rate from a watch), and requests that keep steering the station instead of fading back after a few
+  tracks. Owner's 2010 thesis; needs the native app for movement and wearables.
 - **Depth-map upscaling** (owner, 1 Oct). No written plan yet.
 - **Chatterbox headroom.** S3Gen re-reads each voice's 10 s reference on every call. Options: a CUDA graph for
   the flow estimator (~28%), overlapping the vocoder with token generation, a shorter reference (changes the
