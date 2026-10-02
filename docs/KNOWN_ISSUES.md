@@ -18,6 +18,8 @@ anything else is carried over as written.
 
 ## 2. DJ turn: bugs and things to watch
 
+- **Top priority (2 Oct): DJ tools don't speak one language.** "Play my super likes" failed: `search_and_play` declares only `mode` required but the code demands `query`; no tool plays super likes as a whole; favorites/favourites, superstar/super_likes, vocal/vocals, two meanings of `mode`. Full logs, findings and the plan: `docs/HANDOVER_2026-10-02_DJ_TOOLS.md`.
+
 - **Fixed 1 Oct, not yet live: the DJ's fallback model failed every follow-up round.** gemini-3.5-flash-lite
   answers 400 INVALID_ARGUMENT to a thinking budget of 0 (even on a plain prompt) and accepts 1, which uses no
   thinking tokens; 2.5-flash and 3.5-flash accept 0. It had nothing to do with history or thought signatures.
