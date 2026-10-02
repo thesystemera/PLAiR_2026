@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff, Crown, VolumeX } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff, Crown, VolumeX, Bell, Wand2, Gem, Feather, BatteryCharging, SlidersHorizontal, Radio, Monitor, UserCog, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -27,12 +27,27 @@ import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
 
-const SOUND_MODE_COLOR = { both: '#4ade80', dj: '#38bdf8', ping: '#fbbf24', off: '#f87171' }
+const SOUND_MODE_STATE = {
+  both: { icon: Headphones, color: '#4ade80' },
+  dj: { icon: Mic2, color: '#38bdf8' },
+  ping: { icon: Bell, color: '#fbbf24' },
+  off: { icon: VolumeX, color: '#f87171' },
+}
+const AUDIO_QUALITY_STATE = {
+  auto: { icon: Wand2, color: '#c084fc' },
+  '256k': { icon: Gem, color: '#fbbf24' },
+  '192k': { icon: Music, color: '#60a5fa' },
+  '128k': { icon: Feather, color: '#4ade80' },
+}
+const VISUAL_QUALITY_STATE = {
+  high: { icon: Sparkles, color: '#c084fc' },
+  medium: { icon: Image, color: '#fbbf24' },
+  low: { icon: BatteryCharging, color: '#4ade80' },
+}
 const AUDIO_QUALITIES = ['auto', '256k', '192k', '128k']
 const AUDIO_QUALITY_LABELS = { auto: 'Auto', '256k': '256k', '192k': '192k', '128k': '128k' }
 const VISUAL_QUALITIES = ['high', 'medium', 'low']
 const VISUAL_QUALITY_LABELS = { high: 'HIGH', medium: 'MID', low: 'LOW' }
-const VISUAL_QUALITY_COLOR = { high: '#c084fc', medium: '#fbbf24', low: '#4ade80' }
 const LIBRARY_KINDS = [{ id: 'track', label: 'Tracks' }, { id: 'shoutout', label: 'Shoutouts' }]
 const LIBRARY_RATINGS = [
   { id: 'liked', label: 'Liked', icon: Heart, color: 'text-pink-500' },
@@ -564,7 +579,7 @@ const OwnPostItem = memo(function OwnPostItem({ post, icon, iconColor, onPlay, o
 
 export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTrack, onReloadTrackQuality }) {
   const { isAuthenticated, user, refreshUser } = useAuth()
-  const { getPreferences, removePreference, isPending } = usePreferences()
+  const { getPreferences, removePreference, isPending, radioMode } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
   const {
@@ -623,6 +638,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [libraryRating, setLibraryRating] = useState('liked')
 
   const [openTile, setOpenTile] = useState(() => safeStorage.get('userPanel_openTile') || null)
+  const [openGroup, setOpenGroup] = useState(() => safeStorage.get('userPanel_openGroup') || null)
+  const toggleGroup = useCallback((key) => setOpenGroup(prev => (prev === key ? null : key)), [])
   const toggleTile = useCallback((key) => setOpenTile(prev => (prev === key ? null : key)), [])
   const [myArtists, setMyArtists] = useState([])
   const [loadingArtists, setLoadingArtists] = useState(false)
@@ -672,6 +689,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     if (openTile) safeStorage.set('userPanel_openTile', openTile)
     else safeStorage.remove('userPanel_openTile')
   }, [openTile])
+
+  useEffect(() => {
+    if (openGroup) safeStorage.set('userPanel_openGroup', openGroup)
+    else safeStorage.remove('userPanel_openGroup')
+  }, [openGroup])
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1269,6 +1291,76 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     </div>
   )
 
+  const soundState = SOUND_MODE_STATE[soundMode?.id] || SOUND_MODE_STATE.both
+  const audioQualityState = AUDIO_QUALITY_STATE[settingsState.audioQuality] || AUDIO_QUALITY_STATE.auto
+  const visualQualityState = VISUAL_QUALITY_STATE[settingsState.visualQuality] || VISUAL_QUALITY_STATE.high
+  const showAdmin = !!(user?.is_admin || user?.usage_stats_visible)
+
+  const groupContent = {
+    listening: (
+      <TileGroup nested drawerKey={listeningDrawers[openTile] ? openTile : null} drawer={listeningDrawers[openTile] || null}>
+        <SettingTile drawer open={openTile === 'mic'} onClick={() => toggleTile('mic')} icon={Mic2} label="Microphone" color="#60a5fa" value={deviceName(devices.microphones, selectedMicrophone)} />
+        <SettingTile drawer open={openTile === 'speakers'} onClick={() => toggleTile('speakers')} icon={Volume2} label="Speakers" color="#60a5fa" value={deviceName(devices.speakers, selectedSpeaker)} />
+        <SettingTile cycle on icon={Music} label="Audio quality" color="#c084fc" state={audioQualityState} value={AUDIO_QUALITY_LABELS[settingsState.audioQuality] || 'Auto'} hint="Streaming quality. Auto follows your connection." onClick={() => handleAudioQualityChange(nextOf(AUDIO_QUALITIES, settingsState.audioQuality))} />
+        <SettingTile cycle on={soundMode?.id !== 'off'} icon={Headphones} label="Sounds" color="#4ade80" state={soundState} value={soundMode?.short || 'DJ+PING'} hint="DJ voice and notification pings" onClick={() => handleSetSoundMode(nextOf(SOUND_MODES, soundMode))} />
+        <SettingTile on={settingsState.autoClaimOnOpen !== false} icon={Smartphone} label="Auto-switch" color="#60a5fa" value={settingsState.autoClaimOnOpen !== false ? 'ON' : 'OFF'} hint="Move playback to the device you open" onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })} />
+      </TileGroup>
+    ),
+    radio: <RadioModeSettings nested />,
+    stuff: (
+      <TileGroup nested drawerKey={stuffDrawers[openTile] ? openTile : null} drawer={stuffDrawers[openTile] || null}>
+        <SettingTile drawer open={openTile === 'library'} onClick={() => toggleTile('library')} icon={Library} label="Library" color="#f472b6" value={`${libraryCount}`} />
+        <SettingTile drawer open={openTile === 'posts'} onClick={() => toggleTile('posts')} icon={Megaphone} label="My posts" color="#c084fc" value={`${myPosts.shoutouts.length + myPosts.reviews.length}`} />
+        <SettingTile drawer open={openTile === 'uploads'} onClick={() => toggleTile('uploads')} icon={Upload} label="Uploads" color="#34d399" value={loadingUploads && userUploads.length === 0 ? '…' : `${userUploads.length}`} />
+        <SettingTile drawer open={openTile === 'artists'} onClick={() => toggleTile('artists')} icon={Mic2} label="Artists & Bands" color="#e879f9" value={`${myArtists.length}`} />
+        {hasAboutYou && <SettingTile drawer open={openTile === 'about'} onClick={() => toggleTile('about')} icon={Sparkles} label="About you" color="#a78bfa" value="Hosts" />}
+        {hasLocation && <SettingTile drawer open={openTile === 'location'} onClick={() => toggleTile('location')} icon={MapPin} label="Location" color="#4ade80" value={shortPlace(user?.location) || user?.timezone || '…'} />}
+      </TileGroup>
+    ),
+    display: (
+      <TileGroup nested>
+        <SettingTile cycle on icon={Image} label="Visual quality" color="#c084fc" state={visualQualityState} value={VISUAL_QUALITY_LABELS[settingsState.visualQuality] || 'HIGH'} hint="Background visual effects. LOW saves battery on phones." onClick={() => handleSetVisualQuality(nextOf(VISUAL_QUALITIES, settingsState.visualQuality))} />
+        <SettingTile on={!!settingsState.videoClipsEnabled} icon={Video} label="Video clips" color="#f472b6" value={settingsState.videoClipsEnabled ? 'ON' : 'OFF'} hint="Video clips in visuals and shared videos (uses more bandwidth)" onClick={handleToggleVideoClips} />
+        {tiltNeedsPermission && <SettingTile on={!!tiltEnabled} icon={Smartphone} label="Tilt effects" color="#38bdf8" value={tiltEnabled ? 'ON' : 'OFF'} hint="Artwork moves as you tilt your phone. Your phone will ask for motion access." onClick={() => void enableTiltEffects(!tiltEnabled)} />}
+        <SettingTile on={!!settingsState.fpsEnabled} icon={Gauge} label="FPS counter" color="#60a5fa" value={settingsState.fpsEnabled ? 'ON' : 'OFF'} hint="Show the frame rate" onClick={handleToggleFpsEnabled} />
+      </TileGroup>
+    ),
+    data: (
+      <TileGroup nested drawerKey={openTile === 'storage' ? 'storage' : null} drawer={openTile === 'storage' ? storageDrawer : null}>
+        <SettingTile on={audioState.isOnline} icon={audioState.isOnline ? Wifi : WifiOff} label="Network" color={audioState.isOnline ? (getNetworkQualityColor() || '#4ade80') : '#f87171'} value={audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'} hint="Your connection right now" />
+        <SettingTile on={!!settingsState.dataSaverMode} icon={TrendingDown} label="Data saver" color="#4ade80" value={settingsState.dataSaverMode ? 'ON' : 'OFF'} hint="Use less mobile data" onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} />
+        <SettingTile on={!!downloadState?.isEnabled} busy={!!downloadState?.isDownloading} icon={Download} label="Downloads" color="#c084fc" value={downloadState?.isEnabled ? 'ON' : 'OFF'} hint="Download music in the background so it plays offline" onClick={handleToggleBackgroundDownloads} />
+        <SettingTile drawer open={openTile === 'storage'} onClick={() => toggleTile('storage')} icon={HardDrive} label="Storage" color="#22d3ee" value={formatBytes(storageInfo.usedBytes)} />
+      </TileGroup>
+    ),
+    admin: showAdmin ? (
+      <TileGroup nested>
+        <SettingTile icon={DollarSign} label="AI usage" color="#a78bfa" value="View" hint={user?.is_admin ? 'What PLAiR spends on AI, per listener, with projections' : 'Your AI usage this month'} onClick={openUsageModal} />
+        {user?.is_admin && <SettingTile on={!!settingsState.costTickerEnabled} icon={DollarSign} label="Cost ticker" color="#a78bfa" value={settingsState.costTickerEnabled ? 'ON' : 'OFF'} hint="Live AI cost ticker" onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} />}
+      </TileGroup>
+    ) : null,
+    account: (
+      <AccountSettings
+        nested
+        onLogout={onLogout}
+        openTile={openTile}
+        onToggleTile={toggleTile}
+        leadingTiles={<SettingTile drawer open={openTile === 'premium'} onClick={() => toggleTile('premium')} icon={Crown} label="Premium" color="#fbbf24" on={isPremium} value={isPremium ? 'PRO' : 'Free'} />}
+        extraDrawers={{ premium: premiumDrawer }}
+      />
+    ),
+  }
+
+  const groups = [
+    { key: 'listening', label: 'Listening', icon: SlidersHorizontal, color: '#60a5fa', on: soundMode?.id !== 'off', value: soundMode?.short || 'DJ+PING', state: soundState },
+    { key: 'radio', label: 'Radio', icon: Radio, color: '#f87171', on: !!radioMode.enabled, value: radioMode.enabled ? 'ON AIR' : 'OFF' },
+    { key: 'stuff', label: 'Your stuff', icon: Library, color: '#f472b6', on: libraryCount + userUploads.length > 0, value: `${libraryCount} saved` },
+    { key: 'display', label: 'Display', icon: Monitor, color: '#c084fc', on: true, value: VISUAL_QUALITY_LABELS[settingsState.visualQuality] || 'HIGH', state: visualQualityState },
+    { key: 'data', label: 'Data', icon: HardDrive, color: '#22d3ee', on: audioState.isOnline, value: formatBytes(storageInfo.usedBytes) },
+    showAdmin && { key: 'admin', label: 'Admin', icon: ShieldCheck, color: '#a78bfa', on: !!settingsState.costTickerEnabled, value: 'Costs' },
+    { key: 'account', label: 'Account', icon: UserCog, color: '#fbbf24', on: isPremium, value: isPremium ? 'PRO' : 'Free' },
+  ].filter(Boolean)
+
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col h-full relative">
@@ -1342,54 +1434,23 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       />
 
       <Scroller className="flex-1">
-        <div className="p-3 md:p-4 space-y-3">
-          <TileGroup title="Listening" drawerKey={listeningDrawers[openTile] ? openTile : null} drawer={listeningDrawers[openTile] || null}>
-            <SettingTile drawer open={openTile === 'mic'} onClick={() => toggleTile('mic')} icon={Mic2} label="Microphone" color="#60a5fa" value={deviceName(devices.microphones, selectedMicrophone)} />
-            <SettingTile drawer open={openTile === 'speakers'} onClick={() => toggleTile('speakers')} icon={Volume2} label="Speakers" color="#60a5fa" value={deviceName(devices.speakers, selectedSpeaker)} />
-            <SettingTile cycle on icon={Music} label="Audio quality" color="#c084fc" value={AUDIO_QUALITY_LABELS[settingsState.audioQuality] || 'Auto'} hint="Streaming quality. Auto follows your connection." onClick={() => handleAudioQualityChange(nextOf(AUDIO_QUALITIES, settingsState.audioQuality))} />
-            <SettingTile cycle on={soundMode?.id !== 'off'} icon={soundMode?.id === 'off' ? VolumeX : Headphones} label="Sounds" color={SOUND_MODE_COLOR[soundMode?.id] || '#4ade80'} value={soundMode?.short || 'DJ+PING'} hint="DJ voice and notification pings" onClick={() => handleSetSoundMode(nextOf(SOUND_MODES, soundMode))} />
-            <SettingTile on={settingsState.autoClaimOnOpen !== false} icon={Smartphone} label="Auto-switch" color="#60a5fa" value={settingsState.autoClaimOnOpen !== false ? 'ON' : 'OFF'} hint="Move playback to the device you open" onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })} />
+        <div className="p-3 md:p-4">
+          <TileGroup drawerKey={openGroup && groupContent[openGroup] ? openGroup : null} drawer={openGroup ? groupContent[openGroup] || null : null}>
+            {groups.map(group => (
+              <SettingTile
+                key={group.key}
+                drawer
+                open={openGroup === group.key}
+                onClick={() => toggleGroup(group.key)}
+                icon={group.icon}
+                label={group.label}
+                color={group.color}
+                on={group.on}
+                value={group.value}
+                state={group.state}
+              />
+            ))}
           </TileGroup>
-
-          <RadioModeSettings />
-
-          <TileGroup title="Your stuff" drawerKey={stuffDrawers[openTile] ? openTile : null} drawer={stuffDrawers[openTile] || null}>
-            <SettingTile drawer open={openTile === 'library'} onClick={() => toggleTile('library')} icon={Library} label="Library" color="#f472b6" value={`${libraryCount}`} />
-            <SettingTile drawer open={openTile === 'posts'} onClick={() => toggleTile('posts')} icon={Megaphone} label="My posts" color="#c084fc" value={`${myPosts.shoutouts.length + myPosts.reviews.length}`} />
-            <SettingTile drawer open={openTile === 'uploads'} onClick={() => toggleTile('uploads')} icon={Upload} label="Uploads" color="#34d399" value={loadingUploads && userUploads.length === 0 ? '…' : `${userUploads.length}`} />
-            <SettingTile drawer open={openTile === 'artists'} onClick={() => toggleTile('artists')} icon={Mic2} label="Artists & Bands" color="#e879f9" value={`${myArtists.length}`} />
-            {hasAboutYou && <SettingTile drawer open={openTile === 'about'} onClick={() => toggleTile('about')} icon={Sparkles} label="About you" color="#a78bfa" value="Hosts" />}
-            {hasLocation && <SettingTile drawer open={openTile === 'location'} onClick={() => toggleTile('location')} icon={MapPin} label="Location" color="#4ade80" value={shortPlace(user?.location) || user?.timezone || '…'} />}
-          </TileGroup>
-
-          <TileGroup title="Display">
-            <SettingTile cycle on icon={Image} label="Visual quality" color={VISUAL_QUALITY_COLOR[settingsState.visualQuality] || '#a78bfa'} value={VISUAL_QUALITY_LABELS[settingsState.visualQuality] || 'HIGH'} hint="Background visual effects. LOW saves battery on phones." onClick={() => handleSetVisualQuality(nextOf(VISUAL_QUALITIES, settingsState.visualQuality))} />
-            <SettingTile on={!!settingsState.videoClipsEnabled} icon={Video} label="Video clips" color="#f472b6" value={settingsState.videoClipsEnabled ? 'ON' : 'OFF'} hint="Video clips in visuals and shared videos (uses more bandwidth)" onClick={handleToggleVideoClips} />
-            {tiltNeedsPermission && <SettingTile on={!!tiltEnabled} icon={Smartphone} label="Tilt effects" color="#38bdf8" value={tiltEnabled ? 'ON' : 'OFF'} hint="Artwork moves as you tilt your phone. Your phone will ask for motion access." onClick={() => void enableTiltEffects(!tiltEnabled)} />}
-            <SettingTile on={!!settingsState.fpsEnabled} icon={Gauge} label="FPS counter" color="#60a5fa" value={settingsState.fpsEnabled ? 'ON' : 'OFF'} hint="Show the frame rate" onClick={handleToggleFpsEnabled} />
-          </TileGroup>
-
-          <TileGroup title="Data & storage" drawerKey={openTile === 'storage' ? 'storage' : null} drawer={openTile === 'storage' ? storageDrawer : null}>
-            <SettingTile on={audioState.isOnline} icon={audioState.isOnline ? Wifi : WifiOff} label="Network" color={audioState.isOnline ? (getNetworkQualityColor() || '#4ade80') : '#f87171'} value={audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'} hint="Your connection right now" />
-            <SettingTile on={!!settingsState.dataSaverMode} icon={TrendingDown} label="Data saver" color="#4ade80" value={settingsState.dataSaverMode ? 'ON' : 'OFF'} hint="Use less mobile data" onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} />
-            <SettingTile on={!!downloadState?.isEnabled} busy={!!downloadState?.isDownloading} icon={Download} label="Downloads" color="#c084fc" value={downloadState?.isEnabled ? 'ON' : 'OFF'} hint="Download music in the background so it plays offline" onClick={handleToggleBackgroundDownloads} />
-            <SettingTile drawer open={openTile === 'storage'} onClick={() => toggleTile('storage')} icon={HardDrive} label="Storage" color="#22d3ee" value={formatBytes(storageInfo.usedBytes)} />
-          </TileGroup>
-
-          {(user?.is_admin || user?.usage_stats_visible) && (
-            <TileGroup title="Admin">
-              <SettingTile icon={DollarSign} label="AI usage" color="#a78bfa" value="View" hint={user?.is_admin ? 'What PLAiR spends on AI, per listener, with projections' : 'Your AI usage this month'} onClick={openUsageModal} />
-              {user?.is_admin && <SettingTile on={!!settingsState.costTickerEnabled} icon={DollarSign} label="Cost ticker" color="#a78bfa" value={settingsState.costTickerEnabled ? 'ON' : 'OFF'} hint="Live AI cost ticker" onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} />}
-            </TileGroup>
-          )}
-
-          <AccountSettings
-            onLogout={onLogout}
-            openTile={openTile}
-            onToggleTile={toggleTile}
-            leadingTiles={<SettingTile drawer open={openTile === 'premium'} onClick={() => toggleTile('premium')} icon={Crown} label="Premium" color="#fbbf24" on={isPremium} value={isPremium ? 'PRO' : 'Free'} />}
-            extraDrawers={{ premium: premiumDrawer }}
-          />
         </div>
       </Scroller>
     </div>

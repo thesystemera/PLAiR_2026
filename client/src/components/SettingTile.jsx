@@ -5,12 +5,12 @@ import './SettingTile.css'
 
 const HintContext = createContext(null)
 
-export function TileGroup({ title, meta, drawerKey = null, drawer = null, footer = null, children, className = '' }) {
+export function TileGroup({ title, meta, drawerKey = null, drawer = null, footer = null, nested = false, children, className = '' }) {
   const [hint, setHint] = useState('')
   const open = !!drawerKey && !!drawer
 
   return (
-    <section className={`tile-group ${className}`}>
+    <section className={`${nested ? 'tile-group-nested' : 'tile-group'} ${className}`}>
       {title && (
         <div className="tile-group-title">
           <span>{title}</span>
@@ -39,6 +39,7 @@ export function SettingTile({
   cycle = false,
   drawer = false,
   danger = false,
+  state = null,
   busy = false,
   disabled = false,
   hint = '',
@@ -52,14 +53,20 @@ export function SettingTile({
     cycle && 'is-cycle has-label-pad',
     drawer && 'is-drawer has-label-pad',
     danger && 'is-danger',
+    state && 'has-state',
   ].filter(Boolean).join(' ')
+  const StateIcon = state?.icon
+  const style = {
+    ...(danger ? {} : { '--tile-color': color }),
+    ...(state?.color ? { '--state-color': state.color } : {}),
+  }
   const showHint = () => { if (hint) setHint?.(hint) }
 
   return (
     <button
       type="button"
       className={classes}
-      style={danger ? undefined : { '--tile-color': color }}
+      style={style}
       onClick={(event) => { showHint(); onClick?.(event) }}
       onPointerEnter={showHint}
       onFocus={showHint}
@@ -69,6 +76,7 @@ export function SettingTile({
       aria-label={value ? `${label}: ${value}` : label}
       title={hint || undefined}
     >
+      {StateIcon && <span className="setting-tile-state" aria-hidden="true"><StateIcon strokeWidth={1.5} /></span>}
       <span className="setting-tile-label">{label}</span>
       <span className="setting-tile-icon">
         {busy ? <Loader2 size={28} className="animate-spin" /> : Icon && <Icon size={30} strokeWidth={1.75} />}

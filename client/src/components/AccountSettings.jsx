@@ -19,7 +19,7 @@ const passkeyDetail = (passkey) => {
   return passkey.created_at ? `Added ${formatTimeAgo(passkey.created_at)}` : 'Added'
 }
 
-export function AccountSettings({ onLogout, openTile, onToggleTile, leadingTiles = null, extraDrawers = {} }) {
+export function AccountSettings({ onLogout, openTile, onToggleTile, leadingTiles = null, extraDrawers = {}, nested = false }) {
   const { user, refreshUser } = useAuth()
   const { showConfirm } = useDialog()
   const { toastSuccess, toastError } = useUISelector(state => ({ toastSuccess: state.toastSuccess, toastError: state.toastError }))
@@ -251,7 +251,7 @@ export function AccountSettings({ onLogout, openTile, onToggleTile, leadingTiles
   )
 
   return (
-    <TileGroup title="Account" drawerKey={drawers[openTile] ? openTile : null} drawer={drawers[openTile] || null}>
+    <TileGroup nested={nested} title={nested ? null : 'Account'} drawerKey={drawers[openTile] ? openTile : null} drawer={drawers[openTile] || null}>
       {leadingTiles}
       {drawerTile('passkeys', { icon: Fingerprint, label: 'Passkeys', color: '#fbbf24', value: passkeys === null ? '…' : passkeys.length ? `${passkeys.length}` : 'Add one' })}
       {drawerTile('link', { icon: QrCode, label: 'Link device', color: '#38bdf8', value: 'Code' })}

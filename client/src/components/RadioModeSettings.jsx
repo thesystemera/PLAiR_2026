@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react'
-import { Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock, MessageSquareText, Music } from 'lucide-react'
+import { Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer, Clock, MessageSquareText, Music, User, Bot } from 'lucide-react'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { SettingTile, TileGroup, nextOf } from './SettingTile'
@@ -13,14 +13,14 @@ const SEGMENTS = [
 ]
 
 const MUSIC_SOURCE_OPTIONS = [
-  { id: 'both', label: 'Both' },
-  { id: 'human', label: 'Human' },
-  { id: 'ai', label: 'AI' },
+  { id: 'both', label: 'Both', icon: Music, color: '#34d399' },
+  { id: 'human', label: 'Human', icon: User, color: '#fbbf24' },
+  { id: 'ai', label: 'AI', icon: Bot, color: '#a78bfa' },
 ]
 
 const onOff = (on) => (on ? 'ON' : 'OFF')
 
-export const RadioModeSettings = memo(function RadioModeSettings({ className = '' }) {
+export const RadioModeSettings = memo(function RadioModeSettings({ className = '', nested = false }) {
   const { radioMode, radioOptions, radioModeSaving, updateRadioMode } = usePreferences()
   const { ttsMuted, offlineMode, toastSuccess } = useUISelector(state => ({
     ttsMuted: state.settingsState.ttsMuted,
@@ -38,7 +38,7 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
   const intervals = radioOptions?.feature_intervals_min || [15, 20, 30]
   const stingsOutside = radioOptions?.stings_outside_radio_mode !== false
   const musicSource = radioMode.music_source || 'both'
-  const musicLabel = MUSIC_SOURCE_OPTIONS.find(option => option.id === musicSource)?.label || 'Both'
+  const musicOption = MUSIC_SOURCE_OPTIONS.find(option => option.id === musicSource) || MUSIC_SOURCE_OPTIONS[0]
   const reviewsOn = radioMode.reviews !== false
   const notes = [
     ttsMuted && radioMode.enabled ? 'DJ voice is muted, so breaks are paused.' : null,
@@ -48,7 +48,8 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
   return (
     <TileGroup
       className={className}
-      title="Radio"
+      nested={nested}
+      title={nested ? null : 'Radio'}
       footer={notes.length > 0 && <p className="tile-hint text-amber-300/90">{notes.join(' ')}</p>}
     >
       <SettingTile
@@ -101,7 +102,8 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
         color="#34d399"
         cycle
         on
-        value={musicLabel}
+        value={musicOption.label}
+        state={{ icon: musicOption.icon, color: musicOption.color }}
         disabled={radioModeSaving}
         hint="Play human-made music, AI music, or both, everywhere on the station"
         onClick={() => updateRadioMode({ music_source: nextOf(MUSIC_SOURCE_OPTIONS.map(option => option.id), musicSource) })}
