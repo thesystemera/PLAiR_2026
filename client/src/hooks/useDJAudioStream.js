@@ -161,7 +161,8 @@ function useDJAudioStream() {
     if (data?.unique_id) {
       playerRef.current?.handleEnd(data.unique_id, {
         complete: data.complete !== false,
-        durationS: typeof data.duration_s === 'number' ? data.duration_s : null
+        durationS: typeof data.duration_s === 'number' ? data.duration_s : null,
+        talkEndS: typeof data.talk_end_s === 'number' ? data.talk_end_s : null
       })
     }
   }, []))

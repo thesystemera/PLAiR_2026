@@ -106,12 +106,14 @@ export class DJStreamPlayer {
     this._onPause = () => this._handlePause()
     this._onEnded = () => this._handleEnded()
     this._onError = () => this._handleElementError()
+    this._onTimeUpdate = () => this._checkTalkEnd()
     if (element) {
       element.addEventListener('play', this._onPlay)
       element.addEventListener('playing', this._onPlaying)
       element.addEventListener('pause', this._onPause)
       element.addEventListener('ended', this._onEnded)
       element.addEventListener('error', this._onError)
+      element.addEventListener('timeupdate', this._onTimeUpdate)
     }
   }
 
@@ -184,6 +186,7 @@ export class DJStreamPlayer {
       staged,
       complete: false,
       durationS: null,
+      talkEndS: null,
     })
     if (staged) {
       this._trimStaged(streamId)
@@ -247,10 +250,15 @@ export class DJStreamPlayer {
     })
   }
 
-  handleEnd(streamId, { complete = true, durationS = null } = {}) {
+  handleEnd(streamId, { complete = true, durationS = null, talkEndS = null } = {}) {
     const stream = this.streams.get(streamId)
     if (!stream || stream.ended) return
     stream.ended = true
+    stream.talkEndS = Number.isFinite(talkEndS) && talkEndS > 0 ? talkEndS : null
+    if (this.cur?.id === streamId) {
+      this.cur.talkEndS = stream.talkEndS
+      this._checkTalkEnd()
+    }
     if (stream.staged) {
       stream.complete = complete !== false && stream.chunks.length > 0
       stream.durationS = Number.isFinite(durationS) && durationS > 0 ? durationS : null
@@ -371,6 +379,7 @@ export class DJStreamPlayer {
       this.element.removeEventListener('pause', this._onPause)
       this.element.removeEventListener('ended', this._onEnded)
       this.element.removeEventListener('error', this._onError)
+      this.element.removeEventListener('timeupdate', this._onTimeUpdate)
     }
     this._detachElement()
     this.onSpeakingChange = null
@@ -455,6 +464,8 @@ export class DJStreamPlayer {
     this.cur = {
       id: stream.id,
       durationS: stream.durationS || null,
+      talkEndS: stream.talkEndS || null,
+      talkOver: false,
       gen,
       mediaSource,
       sourceBuffer: null,
@@ -654,7 +665,15 @@ export class DJStreamPlayer {
     cur.lastProgressAt = this.env.now()
     this._clearHandoff()
     if (this.output && !this.output.isActive) this.output.activate()
-    this._setSpeaking(true)
+    if (!cur.talkOver) this._setSpeaking(true)
+  }
+
+  _checkTalkEnd() {
+    const cur = this.cur
+    if (!cur || cur.stopping || cur.talkOver || !cur.talkEndS || !this.element) return
+    if ((this.element.currentTime || 0) < cur.talkEndS) return
+    cur.talkOver = true
+    this._setSpeaking(false)
   }
 
   _handlePause() {

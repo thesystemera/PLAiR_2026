@@ -108,6 +108,7 @@ class LiveStreamEncoder:
         self.first_audio_at: Optional[float] = None
         self.fed_seconds = 0.0
         self.blip_seconds = 0.0
+        self.talk_end_s: Optional[float] = None
         self._intro_done = False
         self._held: List[Tuple[AudioSegment, Dict]] = []
         self.chunks_emitted = 0
@@ -279,7 +280,9 @@ class LiveStreamEncoder:
     def _blip_out(self):
         blip = station_blips.pick(self.blips, "out")
         if blip is not None and self._held:
-            self._resplit(station_blips.mix_out(self._held_audio(), blip), 0)
+            held = self._held_audio()
+            self.talk_end_s = round(self.fed_seconds + station_blips.speech_bounds(held)[1] / 1000.0, 3)
+            self._resplit(station_blips.mix_out(held, blip), 0)
 
     async def _release(self, keep_ms: int):
         while self._held and self._held_ms() - len(self._held[0][0]) >= keep_ms:
@@ -354,5 +357,6 @@ class LiveStreamEncoder:
             'tts_type': self.tts_type,
             'unique_id': self.stream_id,
             'complete': complete,
-            'duration_s': round(self.fed_seconds, 3)
+            'duration_s': round(self.fed_seconds, 3),
+            'talk_end_s': self.talk_end_s
         }, room=self.room)
