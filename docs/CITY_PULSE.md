@@ -29,6 +29,7 @@ The longer-term aim is a station that is genuinely alive: a cached, vectorised, 
 
 ## 2. Principles
 
+- **International or nothing (owner's rule, 3 Oct 2026).** PLAiR is for any city in the world, not Auckland. Every source must either work in every country (open web search, schema.org / iCal pages, global APIs like Google's) or come through a general web search. No adapters for platforms that only cover one country or region (Eventfinda, Skiddle, a council's own feed, ...), and no code or settings written for one city. If such a site matters, the general harvester has to find and read it like any other page. Auckland is only the test city.
 - **Gather once per city, target per listener.** A fetch serves everyone in the region. Personalisation happens at read time, locally, without an LLM call per listener.
 - **Consumers read, collectors fetch.** The announcer, DJ, tools and agents never call Ticketmaster or Google directly. They query the store; the store decides whether anything needs refreshing.
 - **Everything is an item.** A gig, a café, a headline, a shoutout, a weather change and a trivia fact share one schema, so one query can mix them.
@@ -526,7 +527,7 @@ Ticketmaster covers big venues only (Auckland: 160 events across 13 venues). The
 
 **What is still open (research, 3 Oct 2026):**
 - **Closed or useless for discovery:** Facebook events (closed since 2018), Instagram (hashtags only, App Review, 24 h), Threads (App Review), LinkedIn (own events only), X (pay per read), Reddit (approval needed since Nov 2025), Eventbrite API search (removed 2020), Meetup (Pro only), Humanitix and Luma (own events only), Songkick (paid licence), Bandsintown (artists only).
-- **Open APIs worth a direct adapter later:** Eventfinda (NZ/AU/SG/AT, geo radius search, 1 request/s), Skiddle (UK, geo), SeatGeek (US).
+- **Regional platforms (Eventfinda NZ/AU, Skiddle UK, SeatGeek US):** no adapters, by the rule in section 2. Their public pages are read by the harvester like any other site when discovery finds them.
 - **Search APIs:** Google Custom Search is closed to new customers and shuts down 1 Jan 2027, and Bing's is retired. Brave Search ($5 per 1,000, own index; check its storage clause) is the pick if news search alone isn't enough.
 
 ### Freshness and upkeep
