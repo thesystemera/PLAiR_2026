@@ -204,7 +204,8 @@ Refresh intervals are starting points; the scheduler only refreshes regions with
 
 | Collector | Source | Refresh | Cost | Status | Terms |
 |---|---|---|---|---|---|
-| Events | Ticketmaster Discovery | 6–12 h | free tier | building | Link back to Ticketmaster for tickets. |
+| Events | Ticketmaster Discovery | 6–12 h | free tier | built | Link back to Ticketmaster for tickets. |
+| Grassroots events | The web, found through Google News searches and venue websites from place memory (see "Event harvester" in section 15) | 6 h per city; known calendars every 2 days | DeepSeek only for pages without structured data, ~12 pages per run | built 3 Oct 2026 | robots.txt honoured; link back to the page the event came from. |
 | Places | Google Places API (New) | weekly | ~$0.032 / search | needs key | Place IDs can be kept; most other fields have caching limits, so details are refreshed within Google's window. |
 | News | Google News RSS (country edition, NATION/WORLD sections, the city's geo feed), each story linked to its publisher and read once for a short summary | hourly per active region; links and summaries in the background, no LLM | ~$0.0015 / ranking, once per pull, on first use | built | Headlines plus a short summary (publisher description + opening sentences), with attribution. International by construction. Sites that block us (RNZ) get no summary. |
 | Weather | OpenWeatherMap + local sun maths | hourly | free tier | persisted | Sunrise, sunset and moon computed locally. |
@@ -508,6 +509,25 @@ Every collector that scrapes or reads pages goes through one layer, `services/we
 - **LLM work is DeepSeek.** Enrichment that isn't answering a listener right now (ranking, tagging, placing stories) runs on the `LLM_BACKGROUND` chain (DeepSeek, Gemini only as fallback). That includes tool-using agents: Radio Mode's For You agent runs its tool loop on DeepSeek (`ai_service.run_tool_turn`, OpenAI-style function calling, measured 14 s for an 18-call feature), with the Gemini tool loop as fallback. Only the live DJ turn stays on Gemini.
 
 Adding a source means one site policy (or the default page policy), a store with identity rules, and a background worker that reads through `web_fetch`.
+
+### Event harvester (built 3 Oct 2026)
+
+Ticketmaster covers big venues only (Auckland: 160 events across 13 venues). The harvester (`services_radio/event_harvest.py`, collector `web_events`) finds the gigs, markets, fun runs, blood drives, workshops and exhibitions that make a city a community. It works the same way in every city, with no code per site.
+
+- **Discover.** Every 6 h per active city it runs a few of `EVENT_HARVEST_QUERIES` (`{city} events this weekend`, `{city} live music gig`, `{city} fun run`, `{city} blood donation drive`, ...; they rotate, `EVENT_HARVEST_QUERIES_PER_RUN`), plus the city's hot event topics, through the news store (`NewsService.search_items`). Pulls are stored, links resolved and articles read as normal news. Venue websites from `place_cache` are added too (`EVENT_HARVEST_VENUES_PER_RUN`).
+- **Read, cheapest first.** Each page goes through `web_fetch` (polite, robots.txt, conditional GET):
+  1. schema.org Event JSON-LD (free; Eventbrite city pages give ~60 events with coordinates);
+  2. iCal feeds linked from the page (`.ics`, `webcal:`);
+  3. the WordPress "The Events Calendar" REST feed when the site runs it (`/wp-json/tribe/events/v1/events`);
+  4. only then one DeepSeek call on the page text (`LLM_BACKGROUND`, `EVENT_HARVEST_LLM_PAGES_PER_RUN`). A "what's on this weekend" article gave 30 events.
+- **Remember sources** (`event_sources`). A page that yields 3+ events, a calendar or a venue's events page becomes a source that is re-read every `EVENT_SOURCE_REFRESH_S` (2 days). After `EVENT_SOURCE_MAX_EMPTY_READS` empty reads it rests for 30 days. Articles are read once. Venue homepages without events give their "events / what's on / calendar" link one hop deep. Discovery is paid once; the re-reads keep the stream going.
+- **Store as events.** Items go into `regional_items` (source `web`, id = title + local day, so the same gig from two pages is one item; events Ticketmaster already has are skipped). Events beyond `PULSE_CITY_RADIUS_KM` are dropped. Venues without coordinates are geocoded (`geo.resolver`, cached per phrase, `EVENT_HARVEST_GEOCODES_PER_RUN`), and only street-level answers are kept. The DJs, the announcer and `pulse_search` see them with no changes.
+- **Probe:** `tests/event_harvest_probe.py [--city --country --tz --lat --lon] [--url PAGE]` reads real pages and prints what would be kept. It saves nothing and makes at most `--llm` DeepSeek calls.
+
+**What is still open (research, 3 Oct 2026):**
+- **Closed or useless for discovery:** Facebook events (closed since 2018), Instagram (hashtags only, App Review, 24 h), Threads (App Review), LinkedIn (own events only), X (pay per read), Reddit (approval needed since Nov 2025), Eventbrite API search (removed 2020), Meetup (Pro only), Humanitix and Luma (own events only), Songkick (paid licence), Bandsintown (artists only).
+- **Open APIs worth a direct adapter later:** Eventfinda (NZ/AU/SG/AT, geo radius search, 1 request/s), Skiddle (UK, geo), SeatGeek (US).
+- **Search APIs:** Google Custom Search is closed to new customers and shuts down 1 Jan 2027, and Bing's is retired. Brave Search ($5 per 1,000, own index; check its storage clause) is the pick if news search alone isn't enough.
 
 ### Freshness and upkeep
 

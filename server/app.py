@@ -61,6 +61,7 @@ from services_radio import pulse as pulse_kb
 from services.listener_request_service import ListenerRequestPromptCache, ListenerRequestStore,     ListenerRequestVectorDatabaseService
 from services.semantic_source import SemanticSearch
 from services_radio import local_knowledge
+from services_radio import event_harvest
 from services_radio import area_signals
 from services_radio import talk_clock
 from services_radio.area_geocode import ReverseGeocodeSignal
@@ -464,7 +465,8 @@ async def lifespan(_app: FastAPI):
     regional_kb.set_regional_knowledge(regional_kb.RegionalKnowledgeService(
         regional_kb.RegionalKnowledgeStore(AsyncSessionLocal),
         [regional_kb.TicketmasterEventsCollector(events_service), regional_kb.GooglePlacesCollector(location_service),
-         regional_kb.GoogleNewsCollector(news_service)],
+         regional_kb.GoogleNewsCollector(news_service),
+         event_harvest.WebEventsCollector(AsyncSessionLocal, news_service, ai_service)],
         embedder=text_embedder
     ))
     if settings.PULSE_ENABLED:

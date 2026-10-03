@@ -332,6 +332,28 @@ class RegionalItem(Base):
     __table_args__ = (UniqueConstraint("region_key", "source", "external_id", name="uq_regional_items_source_id"),)
 
 
+class EventSource(Base):
+    __tablename__ = "event_sources"
+
+    url_key = Column(String, primary_key=True)
+    url = Column(String, nullable=False)
+    region_key = Column(String, nullable=False, index=True)
+    kind = Column(String, nullable=False)
+    found_via = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="new")
+    method = Column(String, nullable=False, default="")
+    events_found = Column(Integer, nullable=False, default=0)
+    events_total = Column(Integer, nullable=False, default=0)
+    reads = Column(Integer, nullable=False, default=0)
+    empty_reads = Column(Integer, nullable=False, default=0)
+    etag = Column(String, nullable=True)
+    last_modified = Column(String, nullable=True)
+    content_hash = Column(String, nullable=True)
+    first_seen_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
+    next_read_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class PlaceCache(Base):
     __tablename__ = "place_cache"
 

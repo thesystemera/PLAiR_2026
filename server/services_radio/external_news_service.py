@@ -679,6 +679,19 @@ class NewsService:
                 await asyncio.sleep(PREFETCH_GAP_S)
         return fetched
 
+    async def search_items(self, query: str, country: Optional[str], region_key: Optional[str] = None) -> list:
+        if not self.store_enabled:
+            return []
+        country = (country or settings.NEWS_DEFAULT_COUNTRY).upper()
+        kind, query_norm, fetch_query = self.classify(query)
+        if kind != KIND_SEARCH:
+            return []
+        pull, _ = await self._get_pull(kind, query_norm, fetch_query, country, "7d", region_key)
+        if pull is None:
+            return []
+        items = await self.store.items(pull.item_ids)
+        return [items[i] for i in pull.item_ids if i in items]
+
     async def mark_aired(self, subject: Optional[str], articles) -> None:
         if not self.store_enabled or not subject:
             return

@@ -409,7 +409,28 @@ class Settings:
     REGIONAL_PLACES_RADIUS_M: int = int(os.getenv("REGIONAL_PLACES_RADIUS_M", "15000"))
     REGIONAL_PLACE_ID_RETENTION_DAYS: int = int(os.getenv("REGIONAL_PLACE_ID_RETENTION_DAYS", "180"))
     REGIONAL_PLACE_LOOKUPS_PER_HOUR: int = int(os.getenv("REGIONAL_PLACE_LOOKUPS_PER_HOUR", "20"))
-    REGIONAL_MAX_ITEMS_PER_KIND: int = int(os.getenv("REGIONAL_MAX_ITEMS_PER_KIND", "400"))
+    REGIONAL_MAX_ITEMS_PER_KIND: int = int(os.getenv("REGIONAL_MAX_ITEMS_PER_KIND", "800"))
+    EVENT_HARVEST_ENABLED: bool = os.getenv("EVENT_HARVEST_ENABLED", "true").lower() == "true"
+    EVENT_HARVEST_REFRESH_S: int = int(os.getenv("EVENT_HARVEST_REFRESH_S", str(6 * 3600)))
+    EVENT_HARVEST_QUERIES: tuple = tuple(q.strip() for q in os.getenv(
+        "EVENT_HARVEST_QUERIES",
+        "{city} events this weekend|{city} live music gig|{city} gig guide|{city} festival|{city} market|"
+        "{city} community event|{city} fun run|{city} exhibition opening|{city} charity fundraiser|"
+        "{city} blood donation drive|{city} free event|{city} workshop").split("|") if q.strip())
+    EVENT_HARVEST_QUERIES_PER_RUN: int = int(os.getenv("EVENT_HARVEST_QUERIES_PER_RUN", "4"))
+    EVENT_HARVEST_PAGES_PER_RUN: int = int(os.getenv("EVENT_HARVEST_PAGES_PER_RUN", "40"))
+    EVENT_HARVEST_VENUES_PER_RUN: int = int(os.getenv("EVENT_HARVEST_VENUES_PER_RUN", "10"))
+    EVENT_HARVEST_LLM_PAGES_PER_RUN: int = int(os.getenv("EVENT_HARVEST_LLM_PAGES_PER_RUN", "12"))
+    EVENT_HARVEST_LLM_CHARS: int = int(os.getenv("EVENT_HARVEST_LLM_CHARS", "8000"))
+    EVENT_HARVEST_GEOCODES_PER_RUN: int = int(os.getenv("EVENT_HARVEST_GEOCODES_PER_RUN", "30"))
+    EVENT_HARVEST_READ_PARALLEL: int = int(os.getenv("EVENT_HARVEST_READ_PARALLEL", "4"))
+    EVENT_SOURCE_REFRESH_S: int = int(os.getenv("EVENT_SOURCE_REFRESH_S", str(2 * 86400)))
+    EVENT_SOURCE_RETRY_S: int = int(os.getenv("EVENT_SOURCE_RETRY_S", str(30 * 86400)))
+    EVENT_SOURCE_MAX_EMPTY_READS: int = int(os.getenv("EVENT_SOURCE_MAX_EMPTY_READS", "3"))
+    EVENT_SOURCE_SKIP_HOSTS: tuple = tuple(h.strip().lower() for h in os.getenv(
+        "EVENT_SOURCE_SKIP_HOSTS",
+        "facebook.com,instagram.com,linktr.ee,twitter.com,x.com,tiktok.com,youtube.com,google.com,"
+        "goo.gl,maps.app.goo.gl,ticketmaster.com").split(",") if h.strip())
     REGIONAL_READ_CACHE_S: int = int(os.getenv("REGIONAL_READ_CACHE_S", "600"))
     REGIONAL_CITY_MATCH_KM: float = float(os.getenv("REGIONAL_CITY_MATCH_KM", "60"))
     REGIONAL_ACTIVE_GUEST_MAX_AGE_S: int = int(os.getenv("REGIONAL_ACTIVE_GUEST_MAX_AGE_S", str(24 * 3600)))
