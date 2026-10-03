@@ -584,7 +584,7 @@ class AnnouncerService:
                 log_service.announcer(f"🎙️ [{session_id[:8]}] ❌ Session state is None, cancelling")
                 return False
             current_progress = session_state.get_simulated_progress()
-            current_track = (session_state.current_track or None).get('id')
+            current_track = (session_state.current_track or {}).get('id')
             is_playing = session_state.is_playing
             last_skip_reason = session_state.last_skip_reason
 
