@@ -146,6 +146,7 @@ class SunoServiceOrchestrator(SingletonService):
         self.lane1_queue: Optional[asyncio.Queue] = None
         self.lane2_queue: Optional[asyncio.Queue] = None
         self.lane3_queue: Optional[asyncio.Queue] = None
+        self.bandwidth_queue: Optional[asyncio.Queue] = None
         self.lane4_queue: Optional[asyncio.Queue] = None
         self.lane5_queue: Optional[asyncio.Queue] = None
         self.lane6_queue: Optional[asyncio.Queue] = None
@@ -200,6 +201,7 @@ class SunoServiceOrchestrator(SingletonService):
         self.lane1_queue = asyncio.Queue(maxsize=LANE_BUFFER)
         self.lane2_queue = asyncio.Queue(maxsize=LANE_BUFFER)
         self.lane3_queue = asyncio.Queue(maxsize=LANE_BUFFER)
+        self.bandwidth_queue = asyncio.Queue(maxsize=LANE_BUFFER)
         self.lane4_queue = asyncio.Queue(maxsize=LANE_BUFFER)
         self.lane5_queue = asyncio.Queue(maxsize=LANE_BUFFER)
         self.lane6_queue = asyncio.Queue(maxsize=LANE_BUFFER)
@@ -210,7 +212,8 @@ class SunoServiceOrchestrator(SingletonService):
         log_service.suno("\n📊 Highway Configuration:")
         log_service.suno("  Lane 1 (Decode):      1 worker  (CPU)")
         log_service.suno("  Lane 2 (Separation):  1 worker  (GPU/VRAM)")
-        log_service.suno("  Lane 3 (Vocal+Apollo):1 worker  (GPU/VRAM)")
+        log_service.suno("  Lane 3 (Vocals):      1 worker  (GPU/VRAM)")
+        log_service.suno("  Lane 3b (Apollo+EQ):  1 worker  (GPU/VRAM)")
         log_service.suno("  Lane 4 (SonicMaster): 1 worker  (GPU/VRAM)")
         log_service.suno("  Lane 5 (Whisper):     1 worker  (GPU/VRAM)")
         log_service.suno(f"  Lane 6 (CPU Pool):    {cpu_workers} workers (CPU)")
@@ -221,7 +224,8 @@ class SunoServiceOrchestrator(SingletonService):
         self.consumer_tasks = [
             asyncio.create_task(self._lane1_consumer(), name="Lane1-Decode"),
             asyncio.create_task(self._lane2_consumer(), name="Lane2-Separation"),
-            asyncio.create_task(self._lane3_consumer(), name="Lane3-VocalApollo"),
+            asyncio.create_task(self._lane3_consumer(), name="Lane3-Vocals"),
+            asyncio.create_task(self._bandwidth_consumer(), name="Lane3b-ApolloEQ"),
             asyncio.create_task(self._lane4_consumer(), name="Lane4-SonicMaster"),
             asyncio.create_task(self._lane5_consumer(), name="Lane5-Whisper"),
             asyncio.create_task(self._lane6_consumer(), name="Lane6-CPUPool"),
@@ -331,13 +335,14 @@ class SunoServiceOrchestrator(SingletonService):
             await self.lane4_queue.put(job)
 
         elif state == PipelineState.READY_FOR_BANDWIDTH:
-            log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (Apollo)")
+            log(f"🚀 [{track_id[:8]}] Resuming at Lane 3b (Apollo)")
             vocal_mix = settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav"
             if vocal_mix.exists():
                 job.vocal_mix_path = vocal_mix
                 job.vocals_complete = True
             job.decoded_wav_path = settings.DECODED_WAV_DIR / f"{track_id}.wav"
-            await self.lane3_queue.put(job)
+            assert self.bandwidth_queue is not None
+            await self.bandwidth_queue.put(job)
 
         elif state == PipelineState.READY_FOR_VOCALS:
             log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (Vocal restoration)")
@@ -610,8 +615,8 @@ class SunoServiceOrchestrator(SingletonService):
     async def _lane3_consumer(self):
         assert self.lane3_queue is not None
         lane3_queue = self.lane3_queue
-        lane4_queue = self.lane4_queue
-        log_service.suno("Lane 3 (Vocal restoration + Apollo) consumer started")
+        bandwidth_queue = self.bandwidth_queue
+        log_service.suno("Lane 3 (Vocal restoration) consumer started")
         while self.running:
             job: Optional[TrackJob] = None
             try:
@@ -620,20 +625,10 @@ class SunoServiceOrchestrator(SingletonService):
                 if self._skip_if_cancelled(job, "Lane 3"):
                     lane3_queue.task_done()
                     continue
-                log_service.suno(f"[Lane 3] [{job.track_id[:8]}] Vocal restoration + Apollo...")
+                log_service.suno(f"[Lane 3] [{job.track_id[:8]}] Vocal restoration...")
                 await self._restore_vocals(job)
-                result = await self._restore_bandwidth(job)
-                if result:
-                    job.apollo_complete = True
-                    job.apollo_wav_path = result
-                    _clear_cuda_cache()
-                    log_service.suno(f"[Lane 3] [{job.track_id[:8]}] Complete -> Lane 4")
-                    assert lane4_queue is not None
-                    await lane4_queue.put(job)
-                else:
-                    log_service.error(f"[Lane 3] [{job.track_id[:8]}] Apollo FAILED")
-                    job.failed = True
-
+                assert bandwidth_queue is not None
+                await bandwidth_queue.put(job)
                 lane3_queue.task_done()
                 await asyncio.sleep(0.05)
             except asyncio.CancelledError:
@@ -643,6 +638,43 @@ class SunoServiceOrchestrator(SingletonService):
                 if job is not None:
                     job.failed = True
                 lane3_queue.task_done()
+                await asyncio.sleep(0.05)
+
+    async def _bandwidth_consumer(self):
+        assert self.bandwidth_queue is not None
+        bandwidth_queue = self.bandwidth_queue
+        lane4_queue = self.lane4_queue
+        log_service.suno("Lane 3b (Apollo + corrective EQ) consumer started")
+        while self.running:
+            job: Optional[TrackJob] = None
+            try:
+                job = await bandwidth_queue.get()
+                assert job is not None
+                if self._skip_if_cancelled(job, "Lane 3b"):
+                    bandwidth_queue.task_done()
+                    continue
+                log_service.suno(f"[Lane 3b] [{job.track_id[:8]}] Apollo + corrective EQ...")
+                result = await self._restore_bandwidth(job)
+                if result:
+                    job.apollo_complete = True
+                    job.apollo_wav_path = result
+                    _clear_cuda_cache()
+                    log_service.suno(f"[Lane 3b] [{job.track_id[:8]}] Complete -> Lane 4")
+                    assert lane4_queue is not None
+                    await lane4_queue.put(job)
+                else:
+                    log_service.error(f"[Lane 3b] [{job.track_id[:8]}] Apollo FAILED")
+                    job.failed = True
+
+                bandwidth_queue.task_done()
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log_service.error(f"[Lane 3b] Error: {str(e)}")
+                if job is not None:
+                    job.failed = True
+                bandwidth_queue.task_done()
                 await asyncio.sleep(0.05)
 
     async def _lane4_consumer(self):
@@ -707,6 +739,11 @@ class SunoServiceOrchestrator(SingletonService):
                 assert job is not None
                 if self._skip_if_cancelled(job, "Lane 5"):
                     job.lyrics_complete = True
+                    lane5_queue.task_done()
+                    continue
+                if (settings.LYRIC_TIMESTAMPS_DIR / f"{job.track_id}.json").exists():
+                    job.lyrics_complete = True
+                    self._notify_asset_doctor(job)
                     lane5_queue.task_done()
                     continue
                 log_service.suno(f"[Lane 5] [{job.track_id[:8]}] Whisper processing...")

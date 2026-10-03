@@ -16,6 +16,10 @@ def is_hidden_track(metadata: Optional[Dict]) -> bool:
     return (metadata or {}).get("visibility", "public") in ("unlisted", "private")
 
 
+def station_recency(metadata: Dict) -> str:
+    return metadata.get("catalog_added_at") or metadata.get("created_at", "")
+
+
 class CatalogDatabaseService(SingletonService):
     def __init__(self):
         if getattr(self, '_initialized', False):
@@ -95,7 +99,7 @@ class CatalogDatabaseService(SingletonService):
         track_ids = [tid for tid in track_ids if tid in tracks]
         known = set(track_ids)
         track_ids.extend(tid for tid in tracks if tid not in known)
-        track_ids.sort(key=lambda tid: tracks[tid].get("created_at", ""), reverse=True)
+        track_ids.sort(key=lambda tid: station_recency(tracks[tid]), reverse=True)
         self._pending_adds = {}
         self._pending_removes = set()
         self.tracks = tracks
@@ -225,7 +229,7 @@ class CatalogDatabaseService(SingletonService):
                 else:
                     updated_count += 1
 
-        track_ids.sort(key=lambda tid: tracks[tid].get("created_at", ""), reverse=True)
+        track_ids.sort(key=lambda tid: station_recency(tracks[tid]), reverse=True)
 
         log_service.catalog(
             f"📊 Sync complete: {len(tracks)} total | +{added_count} new | ~{updated_count} updated | -{len(removed_ids)} removed")
@@ -376,7 +380,7 @@ class CatalogDatabaseService(SingletonService):
                          key=lambda tid: (self.tracks[tid].get("derived_tags", {}).get("primary_genre") or "zzz").lower(),
                          reverse=reverse)
         elif sort_by != "created_at":
-            ids = sorted(ids, key=lambda tid: self.tracks[tid].get("created_at", ""), reverse=reverse)
+            ids = sorted(ids, key=lambda tid: station_recency(self.tracks[tid]), reverse=reverse)
 
         return [self.tracks[tid] for tid in ids[skip:skip + limit]], filtered_total
 

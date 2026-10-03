@@ -20,6 +20,7 @@ class AudioApolloService(SingletonService):
     MODEL_ARGS = {"sr": 44100, "win": 20, "feature_dim": 256, "layer": 6}
     CHUNK_SECONDS = 20
     OVERLAP_SECONDS = 2
+    BATCH = 1
 
     def checkpoint(self) -> Optional[Path]:
         checkpoints = list(settings.APOLLO_CHECKPOINTS_DIR.glob("*.bin")) + list(
@@ -99,57 +100,38 @@ class AudioApolloService(SingletonService):
                 "num_chunks": num_chunks
             }
 
-            enhanced_chunks = []
-
+            chunks = []
             for chunk_idx in range(num_chunks):
                 start_idx = chunk_idx * hop_samples
-                end_idx = min(start_idx + chunk_samples, padded_length)
-
-                chunk = audio_padded[:, start_idx:end_idx]
-
-                pad_amount = 0
-                if chunk.shape[1] < chunk_samples:
-                    pad_amount = chunk_samples - chunk.shape[1]
+                chunk = audio_padded[:, start_idx:min(start_idx + chunk_samples, padded_length)]
+                pad_amount = chunk_samples - chunk.shape[1]
+                if pad_amount > 0:
                     chunk = np.pad(chunk, ((0, 0), (0, pad_amount)), mode='reflect')
-                    was_padded = True
-                else:
-                    was_padded = False
+                chunks.append((chunk, pad_amount))
 
-                waveform = torch.from_numpy(chunk).float().unsqueeze(0)
+            outputs = []
+            for first in range(0, len(chunks), self.BATCH):
+                group = chunks[first:first + self.BATCH]
+                waveform = torch.from_numpy(np.stack([c for c, _ in group])).float()
                 if self.device == "cuda":
                     waveform = waveform.cuda()
-
                 with torch.no_grad():
-                    enhanced_chunk = self.model(waveform)
+                    enhanced = self.model(waveform).cpu().numpy()
+                for row, (_, pad_amount) in enumerate(group):
+                    out = enhanced[row].reshape(channels, -1)
+                    outputs.append(out[:, :-pad_amount] if pad_amount > 0 else out)
+                del waveform, enhanced
 
-                enhanced_chunk = enhanced_chunk.squeeze(0).cpu().numpy()
-
-                if was_padded:
-                    enhanced_chunk = enhanced_chunk[:, :-pad_amount]
-
+            enhanced_chunks = []
+            fade_samples = overlap_samples
+            curve = 0.5 * (1 - np.cos(np.linspace(0, np.pi, fade_samples)))
+            for chunk_idx, enhanced_chunk in enumerate(outputs):
                 if chunk_idx > 0:
-                    fade_samples = overlap_samples
-
-                    curve = 0.5 * (1 - np.cos(np.linspace(0, np.pi, fade_samples)))
-                    fade_in = curve
-                    fade_out = 1.0 - curve
-
-                    for ch in range(channels):
-                        prev_tail = enhanced_chunks[-1][ch, -fade_samples:]
-                        curr_head = enhanced_chunk[ch, :fade_samples]
-
-                        blended = prev_tail * fade_out + curr_head * fade_in
-
-                        enhanced_chunks[-1][ch, -fade_samples:] = blended
-                        enhanced_chunk[ch, :fade_samples] = blended
-
+                    blended = enhanced_chunks[-1][:, -fade_samples:] * (1.0 - curve) + enhanced_chunk[:, :fade_samples] * curve
                     enhanced_chunks[-1] = enhanced_chunks[-1][:, :-fade_samples]
-
+                    enhanced_chunk = enhanced_chunk.copy()
+                    enhanced_chunk[:, :fade_samples] = blended
                 enhanced_chunks.append(enhanced_chunk)
-
-                del waveform, enhanced_chunk
-                if self.device == "cuda":
-                    torch.cuda.empty_cache()
 
             enhanced_padded = np.concatenate(enhanced_chunks, axis=1)
 

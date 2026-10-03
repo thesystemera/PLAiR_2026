@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
                                                  "on a chosen GPU, in a process of its own")
     parser.add_argument("--gpu", type=int, default=1, help="PCI-ordered GPU index (1 = Quadro RTX 6000)")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N tracks")
-    parser.add_argument("--in-flight", type=int, default=3, help="Tracks inside the lanes at once")
+    parser.add_argument("--in-flight", type=int, default=4, help="Tracks inside the lanes at once")
     parser.add_argument("--dry-run", action="store_true", help="List what would run")
     return parser.parse_args()
 
@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio  # noqa: E402
 import json  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 import psycopg2  # noqa: E402
 
@@ -63,6 +64,15 @@ def remove_intermediates(track_id: str):
     shutil.rmtree(settings.DEMUCS_STEMS_DIR / track_id, ignore_errors=True)
 
 
+def mark_added(track_id: str):
+    path = settings.CATALOG_DIR / "metadata" / f"{track_id}.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["catalog_added_at"] = datetime.now(timezone.utc).isoformat()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 async def main():
     ids, rank = backlog()
     if ARGS.limit:
@@ -85,6 +95,7 @@ async def main():
         while pending and len(running) < ARGS.in_flight:
             track_id = pending.pop(0)
             stash_stale_intermediates(track_id, backup)
+            mark_added(track_id)
             metadata = json.loads((settings.CATALOG_DIR / "metadata" / f"{track_id}.json").read_text(encoding="utf-8"))
             job = TrackJob(track_id=track_id, mp3_path=settings.CATALOG_DIR / "mp3" / f"{track_id}.mp3",
                            metadata=metadata, defer_catalog_reload=True)

@@ -26,6 +26,7 @@ SUNO_SONIC_SETTINGS = {
     "fs": 44100,
 }
 VAE_HOP_SAMPLES = 2048
+FAST_FP16_MIN_CAPABILITY = 7
 CONDITIONING_SECONDS = 10
 PROMPT_TEMPLATES = (
     (("shine", "sparkle", "bright", "treble", "dull"), "Give the mix more shine and sparkle."),
@@ -205,7 +206,11 @@ class SonicMasterService(SingletonService):
 
     @property
     def _half(self) -> bool:
-        return self.precision == "fp16" and self.device == "cuda"
+        if self.device != "cuda":
+            return False
+        if self.precision == "auto":
+            return torch.cuda.get_device_capability()[0] >= FAST_FP16_MIN_CAPABILITY
+        return self.precision == "fp16"
 
     def _match_rms(self, source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         source_rms = torch.sqrt(torch.mean(source ** 2))
