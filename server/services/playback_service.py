@@ -3,6 +3,7 @@ import time
 from typing import Dict, List, Optional, Any, Callable
 from config import settings
 from services import log_service
+from services import playback_snapshots
 from services.base_service import SingletonService
 from services.playback_state import PlaybackState
 from services.playback_population_service import PlaybackPopulationService
@@ -20,12 +21,23 @@ class PlaybackService(SingletonService):
         self._broadcast_callbacks: Dict[str, Callable] = {}
         self._last_access: Dict[str, float] = {}
         self._eviction_task: Optional[asyncio.Task] = None
+        self._snapshot_task: Optional[asyncio.Task] = None
+        self._saved_snapshots: Dict[str, Dict[str, Any]] = {}
 
         self._initialized = True
 
     async def initialize(self):
         if self._eviction_task is None or self._eviction_task.done():
             self._eviction_task = asyncio.create_task(self._evict_idle_sessions_loop())
+        if self._snapshot_task is None or self._snapshot_task.done():
+            self._snapshot_task = asyncio.create_task(self._save_snapshots_loop())
+        try:
+            pruned = await playback_snapshots.prune(settings.PLAYBACK_SNAPSHOT_KEEP_DAYS)
+            if pruned:
+                log_service.system(f"[PlaybackService] Pruned {pruned} saved stations unused for "
+                                   f"{settings.PLAYBACK_SNAPSHOT_KEEP_DAYS} days")
+        except Exception as e:
+            log_service.error(f"[PlaybackService] Pruning saved stations failed: {e}")
         log_service.system("PlaybackService initialized - multi-session support enabled")
 
     async def _evict_idle_sessions_loop(self):
@@ -39,8 +51,26 @@ class PlaybackService(SingletonService):
             except Exception as e:
                 log_service.error(f"[PlaybackService] Idle session eviction failed: {e}")
 
+    async def _save_snapshots_loop(self):
+        while True:
+            await asyncio.sleep(settings.PLAYBACK_SNAPSHOT_INTERVAL_S)
+            await self.save_snapshots()
+
+    async def save_snapshots(self):
+        changed = {}
+        for session_id, state in list(self.sessions.items()):
+            snap = playback_snapshots.snapshot(state)
+            if snap is not None and snap != self._saved_snapshots.get(session_id):
+                changed[session_id] = snap
+        try:
+            await playback_snapshots.save(changed)
+            self._saved_snapshots.update(changed)
+        except Exception as e:
+            log_service.throttled("playback_snapshot_save", f"[PlaybackService] Saving stations failed: {e}")
+
     def drop_session(self, session_id: str) -> None:
         state = self.sessions.pop(session_id, None)
+        self._saved_snapshots.pop(session_id, None)
         self._last_access.pop(session_id, None)
         self.session_callbacks.pop(session_id, None)
         self._broadcast_callbacks.pop(session_id, None)
@@ -235,12 +265,35 @@ class PlaybackService(SingletonService):
         async with state.init_lock:
             await self._initialize_new_session_unlocked(state, session_id, user_id)
 
+    async def _restore_session(self, state: PlaybackState, session_id: str, user_id: Optional[int], notify) -> bool:
+        try:
+            saved = await playback_snapshots.load(session_id)
+        except Exception as e:
+            log_service.error(f"[PlaybackService] Loading the saved station for {log_service.who(session_id)} failed: {e}")
+            return False
+        if not saved or not self.catalog or not playback_snapshots.restore(state, saved, self.catalog):
+            return False
+        self._saved_snapshots[session_id] = saved
+        log_service.playback(
+            f"{log_service.who(session_id)}: station restored ({saved.get('radio_mode')}), "
+            f"{log_service.track_label(state.current_track)} at {log_service.clock(state.progress_ms)} "
+            f"({len(state.queue)} queued, {'playing' if saved.get('is_playing') else 'paused'})")
+        if saved.get("is_playing"):
+            await state.play(user_id=user_id, notify_callback=notify)
+        else:
+            await notify(state.get_state())
+            state._spawn_background_fill(user_id, notify)
+        return True
+
     async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str, user_id: Optional[int]):
         async def notify(snapshot):
             await self._notify_session_change(session_id, snapshot)
 
         if len(state.queue) > 0:
             log_service.detail(f"[PlaybackService] {log_service.who(session_id)} already initialized", "playback")
+            return
+
+        if await self._restore_session(state, session_id, user_id, notify):
             return
 
         if self.catalog and self.catalog.tracks:

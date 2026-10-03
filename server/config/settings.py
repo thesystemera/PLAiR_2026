@@ -34,6 +34,7 @@ class Settings:
     AUDIO_DIR: Path = CATALOG_DIR / "mp3"
     ARTWORK_DIR: Path = CATALOG_DIR / "artwork"
     ARTWORK_ENRICHED_DIR: Path = CATALOG_DIR / "artwork_enriched"
+    DECODED_WAV_DIR: Path = CATALOG_DIR / "decoded_wav"
     WAV_DIR: Path = CATALOG_DIR / "apollo_wav"
     UPSCALED_WAV_DIR: Path = CATALOG_DIR / "audiosr_wav"
     SONIC_WAV_DIR: Path = CATALOG_DIR / "sonic_wav"
@@ -213,6 +214,7 @@ class Settings:
 
     APOLLO_DIR: Path = BASE_DIR / "server" / "Apollo"
     APOLLO_CHECKPOINTS_DIR: Path = APOLLO_DIR / "checkpoints"
+    VOCAL_APOLLO_CHECKPOINT: Path = APOLLO_DIR / "vocal" / "apollo_vocal_lew.bin"
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_DAYS", "7"))
@@ -263,6 +265,8 @@ class Settings:
     GPU_IDLE_UNLOAD_MINUTES: float = float(os.getenv("GPU_IDLE_UNLOAD_MINUTES", "10"))
 
     PLAYBACK_SESSION_IDLE_TIMEOUT_S: int = int(os.getenv("PLAYBACK_SESSION_IDLE_TIMEOUT_S", "7200"))
+    PLAYBACK_SNAPSHOT_INTERVAL_S: float = float(os.getenv("PLAYBACK_SNAPSHOT_INTERVAL_S", "15"))
+    PLAYBACK_SNAPSHOT_KEEP_DAYS: int = int(os.getenv("PLAYBACK_SNAPSHOT_KEEP_DAYS", "30"))
     WS_MAX_CONNECTIONS_PER_SESSION: int = int(os.getenv("WS_MAX_CONNECTIONS_PER_SESSION", "8"))
 
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -560,14 +564,15 @@ class Settings:
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
+    SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "false").lower() == "true"
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "fp32").lower()
-    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
+    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "50"))
     SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, clean and dynamic with rich full harmonics")
-    SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "true").lower() == "true"
-    SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "true").lower() == "true"
-    SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "false").lower() == "true"
+    SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
+    SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "false").lower() == "true"
+    SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "true").lower() == "true"
     SONIC_MASTER_CHUNK_OVERLAP_S: float = float(os.getenv("SONIC_MASTER_CHUNK_OVERLAP_S", "15"))
-    SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
+    SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "false").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
     BANDWIDTH_STAGE: str = os.getenv("BANDWIDTH_STAGE", "apollo").lower()
@@ -759,6 +764,7 @@ class Settings:
         cls.AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         cls.ARTWORK_DIR.mkdir(parents=True, exist_ok=True)
         cls.ARTWORK_ENRICHED_DIR.mkdir(parents=True, exist_ok=True)
+        cls.DECODED_WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.UPSCALED_WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.SONIC_WAV_DIR.mkdir(parents=True, exist_ok=True)

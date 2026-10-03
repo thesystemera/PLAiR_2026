@@ -476,6 +476,14 @@ class AiredTalk(Base):
     aired_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False, index=True)
 
 
+class PlaybackSnapshot(Base):
+    __tablename__ = "playback_snapshots"
+
+    session_id = Column(String, primary_key=True)
+    state = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False, index=True)
+
+
 class NewsAired(Base):
     __tablename__ = "news_aired"
 

@@ -35,7 +35,7 @@ export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
       return false
     }
     if (option.id === 'favorites' || option.id === 'discovery') {
-      return true
+      return isAuthenticated
     }
     return !(!hasArtist && (option.id === 'primary_artist' || option.id === 'similar_artists'));
   })
@@ -59,8 +59,6 @@ export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
         <div className={`grid gap-3 ${isMobile ? 'grid-cols-3' : 'grid-cols-1 sm:grid-cols-2'}`}>
           {availableCategories.map((option) => {
             const metadata = getCategoryMetadata(option.id)
-            const requiresAuth = option.id === 'favorites' || option.id === 'discovery'
-            const isDisabled = requiresAuth && !isAuthenticated
 
             return (
               <ModalOptionButton
@@ -70,7 +68,6 @@ export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
                 iconColor={metadata.color}
                 title={option.label}
                 description={option.description}
-                isDisabled={isDisabled}
                 isMobile={isMobile}
               />
             )

@@ -47,7 +47,7 @@ class PlaybackState:
         self.is_playing = False
         self.progress_ms = 0
         self.last_update_time = None
-        self.radio_mode = 'top_hits_week'
+        self.radio_mode = 'top_hits_all'
 
         self._auto_filled_track_ids = set()
         self.active_device_id = None
@@ -501,7 +501,7 @@ class PlaybackState:
                 self._auto_filled_track_ids.clear()
             self.progress_ms = 0
             self.last_update_time = None
-            self.radio_mode = 'top_hits_week'
+            self.radio_mode = 'top_hits_all'
             log_service.playback(f"{self._who(device_id)}: playback stopped, queue cleared")
             if notify_callback:
                 await notify_callback(self.get_state())

@@ -213,7 +213,7 @@ async def lifespan(_app: FastAPI):
     human_music_upload_service.attach_services(
         apollo_service=orchestrator.apollo,
         demucs_service=orchestrator.demucs,
-        clearvoice_service=orchestrator.clearvoice
+        vocal_enhancer=orchestrator.vocal_enhancer
     )
 
     services.prompt_service = prompt_service = MusicPromptService(ai_service)
@@ -614,6 +614,7 @@ async def lifespan(_app: FastAPI):
 
     log_service.system("Shutting down...")
 
+    await playback_service.save_snapshots()
     await announcer_service.stop()
     await radio_mode_service.stop()
     await sting_service.stop()

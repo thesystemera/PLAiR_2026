@@ -142,6 +142,8 @@ This is the **most critical file** on the backend. All playback state lives here
 - `_auto_fill_queue()` - Fills queue based on `self.radio_mode`
 - `get_state()` - Returns current state (includes `activeSeedMode`)
 
+**Stations survive restarts:** each session's station (mode, queue, current track, position, playing/paused, last 10 history, auto-filled ids) is saved to `playback_snapshots` (ai_radio DB, `services/playback_snapshots.py`) every `PLAYBACK_SNAPSHOT_INTERVAL_S` (15 s) when it changed, and on shutdown. A new session (after a restart or the 2 h idle eviction) restores it first (`PlaybackService._restore_session`, logged "station restored"); only a listener with no saved station starts on the all-time top hits (`top_hits_all`). Rows unused for `PLAYBACK_SNAPSHOT_KEEP_DAYS` (30) are pruned at boot; account deletion removes the row.
+
 **Critical Rule for `_playback_loop`:**
 When `active_device_id` is set, the frontend controls playback timing. Backend should NOT auto-advance tracks when progress reaches end. See `docs/archive/CROSSFADE_RACE_CONDITION_FIX.md` for details.
 

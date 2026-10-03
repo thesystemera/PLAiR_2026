@@ -7,7 +7,7 @@ from sqlalchemy import delete, or_, update
 from config import settings
 from database import AsyncSessionLocal, User
 from database.models import (
-    AIUsageDaily, AIUsageEvent, AiredTalk, ArtistProfile, Conversation, NewsAired, Passkey, PlayEvent,
+    AIUsageDaily, AIUsageEvent, AiredTalk, ArtistProfile, Conversation, NewsAired, Passkey, PlaybackSnapshot, PlayEvent,
     ShoutoutAnalytics, ShoutoutPreference, TrackAnalytics, TrackPreference, UserDevice, UserRadioSettings,
     WeatherData,
 )
@@ -113,6 +113,7 @@ async def _delete_rows(user_id: int, session_id: str, track_ids: list[str]) -> N
         await db.execute(delete(Conversation).where(Conversation.user_id == user_id))
         await db.execute(delete(WeatherData).where(WeatherData.user_id == user_id))
         await db.execute(delete(UserRadioSettings).where(UserRadioSettings.user_id == user_id))
+        await db.execute(delete(PlaybackSnapshot).where(PlaybackSnapshot.session_id == session_id))
         await db.execute(delete(ShoutoutPreference).where(or_(
             ShoutoutPreference.user_id == user_id, ShoutoutPreference.shoutout_id.like(post_prefix, escape="\\"))))
         await db.execute(delete(ShoutoutAnalytics).where(ShoutoutAnalytics.shoutout_id.like(post_prefix, escape="\\")))
