@@ -32,6 +32,8 @@ Backlog: `server/utils/process_backlog.py [--rerender]` runs on the RTX 6000 in 
 
 ## Rejected (measured)
 
+3-4 Oct additions: De-limiter (Jeon 2023; Suno barely hits a limiter, peak-to-loudness 14.3 -> 14.4 dB), a 2-8 kHz expander on the music stem (5.7 -> 7.6 dB depth on the stem, only +0.7 dB after Apollo + SonicMaster; inaudible), a low-band transient lift (no measurable change). Measured "squash" signature of Suno: 2-8 kHz drops only ~5 dB between hits vs 7-8.5 dB in the neighbouring bands; bass crest ~6.7 dB. Our chain-3 masters score DR 10-11 vs Suno's 8.1.
+
 ClearVoice SE (gates), ClearVoice SR/cvsr (cuts 8-16 kHz on singing), the February ClearVoice chain (same), Smule Renaissance, BigVGAN, baicai vocal Apollo, HRAudioWizard, DTT-BSR (gates gaps/harmonies), BABE-2 (dull, 10 min per 6 s), rvq-artifact-remover (notchy DSP), AudioDelossifier 192k/256k (61 dB below the music = nothing), our own resonance suppressor (two versions, artifacts on quiet tails), AudioSR (cutoff replacement like cvsr). Suno's own Remaster/Advanced Split: owner won't use them.
 
 ## Open ideas
