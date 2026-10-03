@@ -769,6 +769,8 @@ class SunoServiceOrchestrator(SingletonService):
                     log_service.error(f"[Lane 5] [{job.track_id[:8]}] Whisper error: {str(e)}")
                     job.lyrics_complete = True
 
+                if job.lane6_finished and job.is_complete() and not job.catalog_ready:
+                    await self._register_to_catalog(job)
                 self._notify_asset_doctor(job)
                 _clear_cuda_cache()
                 lane5_queue.task_done()
