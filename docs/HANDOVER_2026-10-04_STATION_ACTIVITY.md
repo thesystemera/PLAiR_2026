@@ -1,62 +1,52 @@
-# Handover 2026-10-04: songs pass with nothing from the station
+# Handover 2026-10-04: let the station use its spaces like a DJ
 
-Owner's ask: between any two songs (that end on their own) something should air: the hosts, a talk break, or at
-least the computer voice (time check, ID, city line). Mid-song quiet stretches (the lyric-free part two-thirds in)
-should also carry the odd computer drop. The listener can opt out; by default the station should feel alive. All the
-systems are meant to work together: if the hosts don't take a gap, another one does.
+## The owner's picture (agreed 2026-10-04)
 
-Read `CLAUDE.md` sections 12 (stings, drops) and 15 (Radio Mode) first. Code: `announcer_service.py`
-(`on_playback_state_update`, `_schedule_announcement_for_transition`, `_schedule_sting_for_transition`,
-`_fill_now`, `_schedule_midtrack_sting`), `sting_service.py` (`plan_between_tracks`, `plan_midtrack`, `_gate`, `play`),
-`sting_schedule.py` (`decide_between_tracks`, `decide_midtrack`), `radio_mode_service.blocks_announcer`.
+Every song has spaces the station already knows about: lyric-free quiet stretches inside the song (often around two
+thirds in) and the crossfade gap into the next song, each with a length. A DJ works those spaces: the hosts take the
+change between songs when they have something to say; the computer voice (time check, station ID, city line, or just
+a sting) takes any space that fits, mid-song included, and picks what to say by how long the space is. The hosts and
+the computer can go back to back; the owner likes that. The only sense of restraint is "has the station said anything
+lately", so it doesn't clutter. No stacks of timers, probability rolls and special cases. The listener can opt out.
 
-## Evidence (owner listening, 2026-10-03 23:24 to 2026-10-04 00:37, about 75 minutes)
+## Where it is today (the rule stack to replace)
 
-Aired: 7 hosts' lines between songs, 3 talk breaks, **1** computer/sting (a musical hit). Eight time checks were
-planned; **none aired**. The 43 song-change plans (`plan for the next song change` lines, playback category):
+Read `CLAUDE.md` sections 12 and 15. Code: `announcer_service.py` (`on_playback_state_update`,
+`_analyze_transition`, `_get_quiet_segments`, `_lyric_gaps`, `_schedule_announcement_for_transition`,
+`_schedule_sting_for_transition`, `_fill_now`, `_schedule_midtrack_sting`, `_schedule_review_sting`),
+`sting_service.py` (`plan_between_tracks`, `plan_midtrack`, `_gate`, `play`, `build`), `sting_schedule.py`,
+`sting_types.py` (each kind's `min_window_s`), `radio_mode_service.blocks_announcer`.
 
-| outcome | count |
-|---|---|
-| hosts' turn, held by min_gap (10-15 min since the last sting) | 8 |
-| time check planned | 8 |
-| hosts' turn (announcer_turn) | 6 |
-| held: "a Radio Mode break holds it" | 8 |
-| held: "the hosts are speaking" / "mid-conversation" | 10 |
-| other (window too short, ID, musical) | 3 |
+- Everything is decided the moment a song starts. The "who's busy" gate (`sting_service._gate`: hosts speaking,
+  conversation in the last 30 s, Radio Mode break lined up or aired in the last 90 s) is read then, usually while the
+  previous announcement or a talk break is still airing, and the verdict stands for the whole song.
+- Mid-song computer drops: Radio Mode only, at most every 20 min (`STINGS_MIDTRACK_MIN_INTERVAL_S`), a 35 % roll
+  (`STINGS_MIDTRACK_PROBABILITY`), none within 120 s of a sting, a quiet stretch of 4 s or more in 20-80 % of the
+  song, and the review sting goes first.
+- Between songs: a separate rule set (short gap or every 4th change, 10-15 min since the last sting, time checks every
+  15-30 min), the hosts' turn otherwise, and a fill only when the hosts' line fails outright.
+- Air-time drops log on the `announcer` category (off), so they vanish without a trace.
 
-## Findings
+Evidence, owner listening 2026-10-03 23:24 to 00:37 (about 75 min): 7 hosts' lines between songs, 3 talk breaks,
+1 computer event (a musical hit). Eight time checks were planned and none aired; 18 of 43 song-change plans were held
+by "busy" conditions read at song start that were long gone when the change came.
 
-1. **Decided at the wrong moment.** Every song change is planned the moment the song *starts*
-   (`on_playback_state_update` -> pair changed). The gate (`sting_service._gate`: hosts speaking, conversation within
-   30 s, Radio Mode break lined up or aired in the last 90 s) is read at that moment, when the previous song's
-   announcement or a talk break is usually still airing. Minutes later, at the actual change, none of it is true, but
-   the decision stands. 18 of 43 plans were held by conditions that only existed at song start. `plan_midtrack` has
-   the same flaw, so mid-song drops are gated at song start too.
-2. **Rate limits stack up.** Between songs: a sting only on a short gap (<6 s) or every 4th break, and never within
-   10-15 min of the last one (`STINGS_MIN_GAP_S`/`MAX_GAP_S`). Time checks every 15-30 min. Mid-song drops: Radio
-   Mode only, at most every 20 min (`STINGS_MIDTRACK_MIN_INTERVAL_S`), 35 % chance, need 4 s lyric-free quiet in
-   20-80 % of the song, and none within 120 s of another sting. That ceiling is a few computer events an hour.
-3. **"The hosts' turn" has no safety net.** The fill (`_fill_now`) runs only when the hosts' line fails (timeout,
-   empty, `[N/A]`, error) or there is no quiet window. When the hosts are skipped for another reason (Radio Mode hold
-   at the trigger, window already passed, the turn decided at song start) nothing airs.
-4. **Air-time drops are invisible.** `sting_service.play` logs "dropped at air time (gate closed)" in the `announcer`
-   category, which is off. The time check planned at 23:47 for the 23:51 change vanished without a trace.
-5. Skips cancel the plan by design (a manual skip gets nothing; the front end has its record crackle). The owner
-   skips a lot, which hides how rarely a natural change gets something. Judge only changes where a song ended on
-   its own.
+## Shape of the rebuild (check with the owner before coding)
 
-## Suggested shape (agree with the owner first)
-
-- Plan at song start only *where* the gap is (the analysis is fine); **decide what airs just before the gap** with
-  the live state, in one place: Radio Mode break if due > hosts' line if eligible and the gap fits > computer voice
-  (time check if due, else ID or city line) > musical sting. A natural song change always gets one of them unless the
-  listener opted out or something already aired across that change.
-- One station-wide "last thing aired" clock instead of separate min gaps: if nothing aired for N minutes (owner's
-  feel: about 3), the next lyric-free mid-song gap of 4 s or more gets a computer drop (time check or ID). Retire the
-  35 % roll and the 20-minute floor, and include listeners outside Radio Mode, as stings already do between songs.
-- Log every air-time outcome on the playback category: `song change -> <what aired>` or `-> nothing (<why>)`.
-- Test with a listening session of natural song ends (no skips): every change should get something.
-
-Settings involved: `STINGS_MIN_GAP_S`, `STINGS_MAX_GAP_S`, `STINGS_ROTATION_N`, `STINGS_SHORT_WINDOW_S`,
-`STINGS_CONVERSATION_QUIET_S`, `RADIO_ANNOUNCER_QUIET_AFTER_S`, `STINGS_TIME_CHECK_MIN/MAX_INTERVAL_S`,
-`STINGS_MIDTRACK_*`, `STINGS_FILL_GAPS`.
+1. **One map per song.** When a song starts, list its spaces from what is already computed: the transition window
+   (`_analyze_transition`) and the mid-song quiet stretches (`_get_quiet_segments` + `_lyric_gaps` over the whole
+   song), each with start and length.
+2. **Fill each space when it arrives**, a moment before it, from the live state, in one place. The hosts get first
+   claim on the change between songs (and keep their own LLM lead time); otherwise the computer takes any space that
+   fits, choosing what fits the length (each `sting_types` kind already declares its `min_window_s`; a time check if
+   one is due, else an ID or city line, else a musical sting). Radio Mode breaks keep their slot. Nothing airs over the
+   hosts or a talk break, and a manual skip cancels the song's remaining spaces.
+3. **One knob for restraint:** time since the station last aired anything (hosts, computer, break), e.g.
+   `STATION_QUIET_TARGET_S` around 180. A space is used when the station has been quiet long enough, and always at a
+   natural song change. This replaces the min gaps, rotation, probability and midtrack interval settings; keep only
+   the time-check spacing so the clock isn't read out every few minutes.
+4. **Listeners outside Radio Mode** get the computer too (stings already do between songs); the stings preference
+   stays the opt-out.
+5. **One log line per space** on the playback category: `space at 2:14 (5.1 s) -> time check` or `-> nothing (why)`.
+6. Test with a listening session of songs that end on their own (no skips): every change and a fair share of the
+   quiet mid-song stretches should carry something, never on top of the hosts.
