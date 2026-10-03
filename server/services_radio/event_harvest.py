@@ -39,6 +39,7 @@ LLM_MIN_CHARS = 200
 LISTING_MIN_EVENTS = 3
 ARTICLE_DONE_S = 365 * 86400
 RETRY_SOON_S = 3600
+WAVES = 3
 SOURCE_KEEP_DAYS = 120
 LOCAL_SCOPES = {"spot", "street", "neighbourhood"}
 
@@ -366,9 +367,21 @@ def page_links(soup: BeautifulSoup, page: str, page_url: str, want_listing: bool
     return [(CALENDAR, url) for url in calendars] + [(LISTING, url) for url in listings]
 
 
-def _page_text(page: str, url: str) -> tuple[str, str]:
-    text = trafilatura.extract(page, url=url, include_tables=True, include_links=False, include_comments=False,
-                               favor_recall=True) or ""
+def _listing_text(page: str) -> str:
+    soup = BeautifulSoup(page, "lxml")
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "header", "footer", "form", "iframe"]):
+        tag.decompose()
+    root = soup.find("main") or soup.body or soup
+    lines = (" ".join(line.split()) for line in root.get_text("\n").splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _page_text(page: str, url: str, listing: bool) -> tuple[str, str]:
+    if listing:
+        text = _listing_text(page)
+    else:
+        text = trafilatura.extract(page, url=url, include_tables=True, include_links=False, include_comments=False,
+                                   favor_recall=True) or ""
     metadata = trafilatura.extract_metadata(page, default_url=url)
     published = (metadata.date or "") if metadata is not None else ""
     return text, published
@@ -423,9 +436,11 @@ def event_id(title: str, starts_at: datetime, zone) -> str:
     return hashlib.sha1(f"{' '.join(fold(title).split())}|{day}".encode()).hexdigest()[:20]
 
 
-def describe(event: FoundEvent, zone) -> str:
+def describe(event: FoundEvent, zone, now: datetime) -> str:
     local = event.starts_at.astimezone(zone)
     when = local.strftime("%a %d %b") + (local.strftime(" %H:%M") if event.timed else "")
+    if event.starts_at < now and event.ends_at:
+        when = "on now until " + event.ends_at.astimezone(zone).strftime("%a %d %b")
     head = ", ".join(p for p in (event.venue, when) if p)
     return (f"{head}. {event.description}" if event.description else head)[:200]
 
@@ -449,7 +464,6 @@ class WebEventsCollector(Collector):
             return []
         zone = zone_for(region)
         discovered = await self.discover(region)
-        due = await self._due(region.key, settings.EVENT_HARVEST_PAGES_PER_RUN)
         budget = {"llm": settings.EVENT_HARVEST_LLM_PAGES_PER_RUN, "geocode": settings.EVENT_HARVEST_GEOCODES_PER_RUN}
         gate = asyncio.Semaphore(settings.EVENT_HARVEST_READ_PARALLEL)
 
@@ -461,14 +475,23 @@ class WebEventsCollector(Collector):
                     log_service.warning(f"[EVENTS] read failed for {source.url}: {type(e).__name__}: {e}")
                     return PageRead("failed")
 
-        reads = await asyncio.gather(*(one(source) for source in due))
-        new_sources = []
-        for source, result in zip(due, reads):
-            for event in result.events:
-                event.url = event.url or source.url
-            await self._record(source, result)
-            new_sources += [(kind, url, source.url) for kind, url in result.links]
-        added = await self._add_sources(region.key, new_sources)
+        pages, added, reads = settings.EVENT_HARVEST_PAGES_PER_RUN, 0, []
+        for _ in range(WAVES):
+            due = await self._due(region.key, pages)
+            if not due:
+                break
+            wave = await asyncio.gather(*(one(source) for source in due))
+            new_sources = []
+            for source, result in zip(due, wave):
+                for event in result.events:
+                    event.url = event.url or source.url
+                await self._record(source, result)
+                new_sources += [(kind, url, source.url) for kind, url in result.links]
+            added += await self._add_sources(region.key, new_sources)
+            reads += wave
+            pages -= len(due)
+            if pages <= 0 or not new_sources:
+                break
         found = [event for result in reads for event in result.events]
         items = await self.to_items(region, zone, found, budget)
         methods: dict[str, int] = {}
@@ -476,7 +499,7 @@ class WebEventsCollector(Collector):
             if result.events:
                 methods[result.method] = methods.get(result.method, 0) + 1
         log_service.external(
-            f"[EVENTS] {region.name}: read {len(due)} pages, events from {sum(methods.values())} ("
+            f"[EVENTS] {region.name}: read {len(reads)} pages, events from {sum(methods.values())} ("
             + (", ".join(f"{n} {m}" for m, n in sorted(methods.items())) or "none") + f"), {len(items)} events kept, "
             f"{discovered + added} new sources")
         return items
@@ -490,17 +513,22 @@ class WebEventsCollector(Collector):
             chosen = [queries[(start + i) % len(queries)].format(city=region.name) for i in range(per_run)]
             chosen += [f"{region.name} {topic}" for topic in (await hot_topics(region, "events"))[:2]]
             for query in chosen:
-                try:
-                    stories = await self.news_service.search_items(query, region.country, region.key)
-                except Exception as e:
-                    log_service.warning(f"[EVENTS] news search failed for '{query}': {type(e).__name__}: {e}")
-                    continue
+                await self._search(query, region)
+            await self.news_service.resolve_pending()
+            for query in chosen:
                 added += await self._add_sources(region.key, [
-                    (ARTICLE, story.url, query) for story in stories
+                    (ARTICLE, story.url, query) for story in await self._search(query, region)
                     if story.url and not news_links.is_google(story.url)])
         added += await self._add_sources(region.key, [
             (VENUE, website, name) for name, website in await self._venues(region)])
         return added
+
+    async def _search(self, query: str, region: Region) -> list:
+        try:
+            return await self.news_service.search_items(query, region.country, region.key)
+        except Exception as e:
+            log_service.warning(f"[EVENTS] news search failed for '{query}': {type(e).__name__}: {e}")
+            return []
 
     async def _venues(self, region: Region) -> list[tuple[str, str]]:
         lat, lon = region.center
@@ -635,7 +663,7 @@ class WebEventsCollector(Collector):
         if budget["llm"] <= 0:
             result.status = "deferred"
             return result
-        text, published = await asyncio.to_thread(_page_text, page, final_url)
+        text, published = await asyncio.to_thread(_page_text, page, final_url, source.kind == LISTING)
         if len(text) < LLM_MIN_CHARS:
             return result
         budget["llm"] -= 1
@@ -691,7 +719,7 @@ class WebEventsCollector(Collector):
             tags = list(dict.fromkeys(t for t in event.tags if t))[:6]
             items.append(KnowledgeItem(
                 source=SOURCE, kind=KIND_EVENT, region_key=region.key, external_id=key, title=event.title,
-                text=describe(event, zone), tags=tags, starts_at=starts_at,
+                text=describe(event, zone, now), tags=tags, starts_at=starts_at,
                 expires_at=(event.ends_at or event.starts_at) + timedelta(hours=6), url=event.url[:2000],
                 attribution=_host(event.url) if event.url else "", latitude=event.lat, longitude=event.lon,
                 area=(event.address or event.venue)[:120],
