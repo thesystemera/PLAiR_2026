@@ -16,6 +16,7 @@ from config.settings import settings
 from services import log_service
 
 UPSCALE_RATE = 48000
+MIN_MODEL_SECONDS = 0.25
 
 
 class VoiceUpscaler:
@@ -57,7 +58,8 @@ class VoiceUpscaler:
         path = os.path.join(self._workdir, f"{uuid.uuid4().hex}.wav")
         try:
             with self._lock:
-                sf.write(path, wide, UPSCALE_RATE)
+                sf.write(path, np.pad(wide, (0, max(0, int(MIN_MODEL_SECONDS * UPSCALE_RATE) - len(wide)))),
+                         UPSCALE_RATE)
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     output = self._model(input_path=path, online_write=False)
         finally:
