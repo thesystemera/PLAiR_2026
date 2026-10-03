@@ -9,11 +9,17 @@
 - Render on the **RTX 6000** (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=1`), one model at a time, full songs. Profile a new model on 5 s first.
 - E: is nearly full: keep renders on D: (`D:\_audio_quality_scratch\`; `data/upscale_test_2026-10-03` is a junction to it).
 
-## Locked chain (live since 3 Oct, owner's sign-off)
+## Locked chain (master chain version 3, 3 Oct night)
 
-Suno MP3 -> decode (44.1 kHz float) -> RoFormer vocal/music split -> **Lew's vocal Apollo** on the vocal (`AudioVocalEnhanceService`, weights `server/Apollo/vocal/apollo_vocal_lew.bin`, from the HF space patriotyk/Apollo `apollo_vocal2.bin`; v1 or v2 unknown) -> remix -> **Apollo** (full-mix top fill) -> **corrective EQ** (`AudioMasterService.correct_audio`: 25 Hz rumble cut, notches only for stationary resonances, tone vs the commercial-master curve) -> **SonicMaster** 25% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right", old Feb chunking (no align/conditioning, per-chunk RMS match), blend compensation on -> **final leveler** (`master_audio(..., correct=False)`: -14 LUFS, true-peak limiter, up to 6 dB).
+Suno MP3 -> decode (44.1 kHz float) -> RoFormer vocal/music split -> **Lew's vocal Apollo** on the vocal (`AudioVocalEnhanceService`, weights `server/Apollo/vocal/apollo_vocal_lew.bin`) -> remix -> **Apollo** (full-mix top fill) -> **corrective EQ** (`AudioMasterService.correct_audio`: 25 Hz rumble cut, notches only for stationary resonances, tone vs the commercial-master curve) -> **SonicMaster** 33% wet, 20 steps, fp32 (`SONIC_MASTER_PRECISION=auto` would use fp16 on the RTX: 1.7x faster, a slightly different take), prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", Feb chunking, blend compensation on -> **final leveler** at **-16 LUFS** (Apple Music standard; true-peak -1.5 dBTP, limiter up to 6 dB).
 
-Orchestrator lanes: 1 decode, 2 separation, 3 vocals + Apollo + corrective EQ, 4 SonicMaster (`SONIC_MASTER_ENABLED`), 5 Whisper, 6 leveler/transcode. `reprocess_catalog_audio.py` follows the same order (`--from source`). Uploads keep their own order; their vocal enhancer is also Lew's Apollo.
+Station level -16 LUFS everywhere: masters, uploads, shoutouts; stings -18, station voice -20, beds -22; DJ hosts `DJ_VOICE_LEVEL_DB` -2 dB to keep the voice/music balance. `utils/relevel_catalog.py` moves older masters to -16 by gain only.
+
+Lanes: 1 decode, 2 separation, 3 vocals, 3b Apollo + corrective EQ, 4 SonicMaster (`SONIC_MASTER_ENABLED`), 5 Whisper (skipped when lyric timings exist), 6 leveler/transcode. Every master gets `master_chain_version` + `master_rendered_at` in its metadata.
+
+Master chain versions: 1 = Nov 2025 (Apollo first, Demucs, ClearVoice SE/SR chain, SonicMaster 50%, master -14 with the notch bug); 2 = the earlier 3 Oct renders (-14, 25%); 3 = above. Bump `MASTER_CHAIN_VERSION` whenever the sound changes.
+
+Backlog: `server/utils/process_backlog.py [--rerender]` runs on the RTX 6000 in its own process (log `data/logs/backlog.log`): Suno tracks without a master first, then (with `--rerender`) masters below the current version; super-likes, likes, then the rest; ~2.5 min per song (GPU-bound). The live backend picks finished songs up within a minute (`CATALOG_WATCH_INTERVAL_S`), and "Recent" sorts by `catalog_added_at`.
 
 ## Measured facts (3 Oct)
 
