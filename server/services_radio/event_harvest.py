@@ -9,14 +9,16 @@ from typing import Optional
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+import numpy as np
 import pytz
 import trafilatura
 from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+import models_global
 from config import settings
 from database.models import EventSource, PlaceCache, RegionalItem
 from services import log_service, usage_tracking, web_fetch
@@ -32,7 +34,8 @@ ARTICLE = "article"
 LISTING = "listing"
 CALENDAR = "calendar"
 VENUE = "venue"
-READ_ORDER = {CALENDAR: 0, LISTING: 1, ARTICLE: 2, VENUE: 3}
+LEAD = "lead"
+READ_ORDER = {CALENDAR: 0, LISTING: 1, ARTICLE: 2, LEAD: 3, VENUE: 4}
 USAGE = ("events", "page_read")
 FEATURE = "EventHarvest.extract"
 LLM_MIN_CHARS = 200
@@ -54,9 +57,15 @@ SCHEMA_KINDS = {"MusicEvent": "music", "SportsEvent": "sport", "TheaterEvent": "
                 "SocialEvent": "community", "SaleEvent": "market", "CourseInstance": "workshop"}
 EVENT_TYPE = re.compile(r"(Event|Festival)$")
 CALENDAR_HREF = re.compile(r"(\.ics(\?|$)|^webcal:|[?&](ical|ics)=1?|/ical/?$|format=ical)", re.IGNORECASE)
-EVENTS_LINK = re.compile(
-    r"\b(events?|gigs?|whats[-_ ]?on|what-s-on|calendar|programme|program|shows|line-?up|concerts?|agenda|"
-    r"veranstaltungen|evenements|eventos|eventi|kalender|upcoming)\b", re.IGNORECASE)
+NOT_CONTENT = re.compile(r"(login|log-in|signin|sign-in|signup|register|account|cart|checkout|basket|privacy|"
+                         r"terms|cookie|disclaimer|wp-admin|feed/?$|\.(pdf|jpe?g|png|gif|webp|svg|zip|mp3|mp4|docx?|"
+                         r"xlsx?)(\?|$))", re.IGNORECASE)
+EVENT_PROTOTYPES = (
+    "upcoming events", "what's on", "events calendar", "gig guide", "live music this week", "markets and fairs",
+    "farmers market", "community events", "workshops and classes", "festival programme", "exhibitions",
+    "shows and tickets", "things to do this weekend", "fun run", "fundraiser", "club nights", "library events",
+    "school holiday activities", "concerts", "meetups",
+)
 TRIBE_PATH = "/wp-json/tribe/events/v1/events"
 
 
@@ -75,6 +84,14 @@ class FoundEvent:
     url: str = ""
     people: list = field(default_factory=list)
     leads: list = field(default_factory=list)
+    repeats: str = ""
+
+
+@dataclass
+class Link:
+    kind: str
+    url: str
+    score: float = 1.0
 
 
 @dataclass
@@ -92,7 +109,12 @@ class PageEvent(BaseModel):
     title: str = Field(description="The event's name as a listener would say it")
     date: str = Field(description="Start date, YYYY-MM-DD")
     time: Optional[str] = Field(default=None, description="Start time, 24-hour HH:MM; null when the page gives none")
-    end_date: Optional[str] = Field(default=None, description="Last day, YYYY-MM-DD, for multi-day events; else null")
+    end_date: Optional[str] = Field(default=None, description="Last day, YYYY-MM-DD, for something that runs "
+                                                              "continuously over several days (a festival, an "
+                                                              "exhibition); null for repeating sessions")
+    repeats: Optional[str] = Field(default=None, description="How often it repeats, in a few words ('every Wednesday "
+                                                             "10am', 'first Sunday of the month'); null if it "
+                                                             "doesn't")
     venue: Optional[str] = Field(default=None, description="Venue or meeting point name")
     address: Optional[str] = Field(default=None, description="Where it is, written so a map search finds it: "
                                                               "venue, street, suburb, city")
@@ -110,7 +132,11 @@ SYSTEM = "You are a careful local events editor for a city radio station."
 
 
 def url_key(url: str) -> str:
-    return news_links.identity(url)
+    key = news_links.identity(url)
+    if "?" not in key:
+        return key
+    path, query = key.split("?", 1)
+    return f"{path}?{'&'.join(sorted(query.split('&')))}"
 
 
 def _host(url: str) -> str:
@@ -356,26 +382,74 @@ def parse_tribe(data: dict, zone) -> list[FoundEvent]:
     return events
 
 
-def page_links(soup: BeautifulSoup, page: str, page_url: str, want_listing: bool) -> list[tuple[str, str]]:
-    found, host = [], _host(page_url)
+def calendar_links(soup: BeautifulSoup, page: str, page_url: str) -> list[Link]:
+    found = []
     for tag in soup.find_all(["a", "link"], href=True):
         href = tag["href"].strip()
         if href.lower().startswith("webcal:"):
             href = "https:" + href[7:]
         target = urljoin(page_url, href)
-        if not target.startswith("http") or url_key(target) == url_key(page_url):
-            continue
-        if CALENDAR_HREF.search(href) or "text/calendar" in (tag.get("type") or ""):
-            found.append((CALENDAR, target))
-        elif want_listing and tag.name == "a" and _host(target) == host and (
-                EVENTS_LINK.search(urlsplit(target).path.replace("/", " ")) or EVENTS_LINK.search(tag.get_text(" "))):
-            found.append((LISTING, target.split("#", 1)[0]))
+        if target.startswith("http") and url_key(target) != url_key(page_url) and (
+                CALENDAR_HREF.search(href) or "text/calendar" in (tag.get("type") or "")):
+            found.append(target)
     if "tribe-events" in page or "/wp-json/tribe/" in page:
         root = f"{urlsplit(page_url).scheme}://{urlsplit(page_url).netloc}"
-        found.append((CALENDAR, f"{root}{TRIBE_PATH}?per_page=50"))
-    calendars = list(dict.fromkeys(url for kind, url in found if kind == CALENDAR))[:2]
-    listings = list(dict.fromkeys(url for kind, url in found if kind == LISTING))[:2]
-    return [(CALENDAR, url) for url in calendars] + [(LISTING, url) for url in listings]
+        found.append(f"{root}{TRIBE_PATH}?per_page=50")
+    return [Link(CALENDAR, url) for url in list(dict.fromkeys(found))[:2]]
+
+
+def candidate_links(soup: BeautifulSoup, page_url: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    own = url_key(page_url)
+    for tag in soup.find_all("a", href=True):
+        target = urljoin(page_url, tag["href"].strip()).split("#", 1)[0]
+        if not target.startswith("http") or NOT_CONTENT.search(target) or skipped_host(target):
+            continue
+        key = url_key(target)
+        if key == own or key in found:
+            continue
+        words = " ".join(re.split(r"[/_\-.?=&]+", urlsplit(target).path))
+        label = " ".join(f"{tag.get_text(' ')} {tag.get('title') or ''} {words}".split())[:200]
+        if label:
+            found[target] = label
+        if len(found) >= settings.EVENT_CRAWL_CANDIDATES_PER_PAGE:
+            break
+    return found
+
+
+def _encode(texts: list[str]) -> np.ndarray:
+    encoder = models_global.get_sentence_encoder(settings.SEMANTIC_ENCODER)
+    return np.asarray(encoder.encode(texts, normalize_embeddings=True), dtype=np.float32)
+
+
+class LinkScorer:
+    def __init__(self):
+        self._prototypes: Optional[np.ndarray] = None
+        self._memory: dict[str, float] = {}
+
+    async def scores(self, labels: list[str]) -> dict[str, float]:
+        if self._prototypes is None:
+            self._prototypes = await models_global.run_on_gpu_executor(_encode, list(EVENT_PROTOTYPES))
+        missing = [label for label in dict.fromkeys(labels) if label not in self._memory]
+        if missing:
+            vectors = await models_global.run_on_gpu_executor(_encode, missing)
+            for label, value in zip(missing, (vectors @ self._prototypes.T).max(axis=1)):
+                self._memory[label] = float(value)
+            if len(self._memory) > 50000:
+                self._memory = dict(list(self._memory.items())[-25000:])
+        return {label: self._memory[label] for label in labels}
+
+
+link_scorer = LinkScorer()
+
+
+def locality(url: str, label: str, region: Region) -> float:
+    bonus = 0.0
+    if region.country and _host(url).endswith("." + region.country.lower()):
+        bonus += 0.05
+    if region.name.lower() in f"{label} {url}".lower():
+        bonus += 0.05
+    return bonus
 
 
 def _listing_text(page: str) -> str:
@@ -409,7 +483,8 @@ def _prompt(region: Region, zone, title: str, published: str, text: str) -> str:
         "exhibitions, markets, festivals, fun runs, sports days, fundraisers, blood drives, workshops, talks, "
         "community meetings.\n"
         "- Only events that happen today or later. Work out relative dates ('this Saturday', 'next week') from the "
-        "publish date. For something that repeats ('every Sunday'), give the next date.\n"
+        "publish date. For something that repeats (a weekly book club, a Sunday market), give the next date as "
+        "the date and say how often in repeats; end_date is only for things that run continuously.\n"
         "- Leave out past events, online-only events, adverts, and anything without a date.\n"
         "- address: the most specific place the page gives, written so a map search finds it.\n"
         "- Use only what the page says. Return [] when there are none."
@@ -438,7 +513,8 @@ async def extract_with_llm(ai_service, region: Region, zone, title: str, publish
             title=title_text, starts_at=starts_at, ends_at=ends_at, timed=clock is not None,
             venue=_clean(card.get("venue"), 120), address=_clean(card.get("address"), 200), tags=tags,
             description=_clean(card.get("summary"), 240),
-            people=[_clean(p, 80) for p in card.get("people") or [] if _clean(p, 80)][:6]))
+            people=[_clean(p, 80) for p in card.get("people") or [] if _clean(p, 80)][:6],
+            repeats=_clean(card.get("repeats"), 60)))
     return events
 
 
@@ -450,7 +526,9 @@ def event_id(title: str, starts_at: datetime, zone) -> str:
 def describe(event: FoundEvent, zone, now: datetime) -> str:
     local = event.starts_at.astimezone(zone)
     when = local.strftime("%a %d %b") + (local.strftime(" %H:%M") if event.timed else "")
-    if event.starts_at < now and event.ends_at:
+    if event.repeats:
+        when = f"{event.repeats}, next {when}"
+    elif event.starts_at < now and event.ends_at:
         when = "on now until " + event.ends_at.astimezone(zone).strftime("%a %d %b")
     head = ", ".join(p for p in (event.venue, when) if p)
     return (f"{head}. {event.description}" if event.description else head)[:200]
@@ -497,7 +575,8 @@ class WebEventsCollector(Collector):
                 for event in result.events:
                     event.url = event.url or source.url
                 await self._record(source, result)
-                new_sources += [(kind, url, source.url) for kind, url in result.links]
+                new_sources += [(link.kind, link.url, source.url, link.score, (source.depth or 0) + 1)
+                                for link in result.links]
             added += await self._add_sources(region.key, new_sources)
             reads += wave
             pages -= len(due)
@@ -558,18 +637,30 @@ class WebEventsCollector(Collector):
                 EventSource.url_key.in_(list(candidates))))).scalars().all())
         return [candidates[key] for key in candidates if key not in known][:settings.EVENT_HARVEST_VENUES_PER_RUN]
 
-    async def _add_sources(self, region_key: str, sources: list[tuple[str, str, str]]) -> int:
+    async def _add_sources(self, region_key: str, sources: list[tuple]) -> int:
         now = datetime.now(timezone.utc)
         rows = {}
-        for kind, url, via in sources:
+        for kind, url, via, *rest in sources:
             if not url or not url.startswith("http") or skipped_host(url):
                 continue
+            score, depth = (rest + [1.0, 0])[:2] if rest else (1.0, 0)
             key = url_key(url)
             rows.setdefault(key, {"url_key": key, "url": url[:2000], "region_key": region_key, "kind": kind,
-                                  "found_via": (via or "")[:300], "next_read_at": now, "first_seen_at": now})
+                                  "found_via": (via or "")[:300], "score": float(score), "depth": int(depth),
+                                  "next_read_at": now, "first_seen_at": now})
         if not rows:
             return 0
         async with self.async_session_maker() as db:
+            leads = [row for row in rows.values() if row["kind"] == LEAD]
+            for host in {row["url_key"].split("/", 1)[0] for row in leads}:
+                known = (await db.execute(select(func.count()).select_from(EventSource).where(
+                    EventSource.region_key == region_key, EventSource.url_key.like(f"{host}%")))).scalar() or 0
+                room = max(0, settings.EVENT_CRAWL_PER_HOST - known)
+                for row in sorted((r for r in leads if r["url_key"].split("/", 1)[0] == host),
+                                  key=lambda r: -r["score"])[room:]:
+                    rows.pop(row["url_key"], None)
+            if not rows:
+                return 0
             result = await db.execute(pg_insert(EventSource).values(list(rows.values()))
                                       .on_conflict_do_nothing().returning(EventSource.url_key))
             added = len(result.all())
@@ -585,7 +676,7 @@ class WebEventsCollector(Collector):
             rows = (await db.execute(
                 select(EventSource).where(EventSource.region_key == region_key, EventSource.next_read_at <= now)
                 .order_by(EventSource.next_read_at).limit(limit * 3))).scalars().all()
-        rows = sorted(rows, key=lambda r: (READ_ORDER.get(r.kind, 9), r.next_read_at))
+        rows = sorted(rows, key=lambda r: (READ_ORDER.get(r.kind, 9), -(r.score or 0.0), r.next_read_at))
         return rows[:limit]
 
     async def _record(self, source: EventSource, result: PageRead) -> None:
@@ -598,12 +689,12 @@ class WebEventsCollector(Collector):
                     await db.commit()
             return
         kind = source.kind
-        if kind == ARTICLE and len(result.events) >= LISTING_MIN_EVENTS:
+        if (kind == ARTICLE and len(result.events) >= LISTING_MIN_EVENTS) or (kind == LEAD and result.events):
             kind = LISTING
         empty = 0 if result.events or result.status == "unchanged" else (source.empty_reads or 0) + 1
         if result.status in ("blocked", "disallowed"):
             wait = settings.EVENT_SOURCE_RETRY_S
-        elif kind == ARTICLE:
+        elif kind in (ARTICLE, LEAD):
             wait = ARTICLE_DONE_S
         elif empty >= settings.EVENT_SOURCE_MAX_EMPTY_READS or (kind == VENUE and not result.events):
             wait = settings.EVENT_SOURCE_RETRY_S
@@ -665,11 +756,15 @@ class WebEventsCollector(Collector):
         soup = await asyncio.to_thread(BeautifulSoup, page, "lxml")
         result.events = parse_json_ld(soup, zone, final_url)
         result.method = "json-ld" if result.events else ""
-        result.links = page_links(soup, page, final_url, want_listing=source.kind == VENUE and not result.events)
+        result.links = calendar_links(soup, page, final_url)
         leads = dict.fromkeys(url for event in result.events if self._local(event, region) for url in event.leads
                               if url_key(url) != url_key(final_url) and not skipped_host(url))
-        result.links += [(VENUE, url) for url in list(leads)[:LEADS_PER_PAGE]]
+        result.links += [Link(VENUE, url) for url in list(leads)[:LEADS_PER_PAGE]]
+        if (source.depth or 0) < settings.EVENT_CRAWL_MAX_DEPTH:
+            result.links += await self.follow(soup, final_url, region, {link.url for link in result.links})
         if result.events or source.kind == VENUE:
+            return result
+        if source.kind == LEAD and (source.score or 0.0) < settings.EVENT_CRAWL_LLM_MIN_SCORE:
             return result
         if source.content_hash == content_hash and source.method == "llm":
             result.status = "unchanged"
@@ -677,7 +772,7 @@ class WebEventsCollector(Collector):
         if budget["llm"] <= 0:
             result.status = "deferred"
             return result
-        text, published = await asyncio.to_thread(_page_text, page, final_url, source.kind == LISTING)
+        text, published = await asyncio.to_thread(_page_text, page, final_url, source.kind in (LISTING, LEAD))
         if len(text) < LLM_MIN_CHARS:
             return result
         budget["llm"] -= 1
@@ -685,6 +780,17 @@ class WebEventsCollector(Collector):
         result.events = await extract_with_llm(self.ai_service, region, zone, title, published, text)
         result.method = "llm"
         return result
+
+    @staticmethod
+    async def follow(soup: BeautifulSoup, page_url: str, region: Region, taken: set) -> list[Link]:
+        candidates = {url: label for url, label in candidate_links(soup, page_url).items() if url not in taken}
+        if not candidates:
+            return []
+        scores = await link_scorer.scores(list(candidates.values()))
+        ranked = sorted(((scores[label] + locality(url, label, region), url) for url, label in candidates.items()),
+                        reverse=True)
+        return [Link(LEAD, url, round(score, 3)) for score, url in ranked[:settings.EVENT_CRAWL_LINKS_PER_PAGE]
+                if score >= settings.EVENT_CRAWL_MIN_SCORE]
 
     @staticmethod
     def _local(event: FoundEvent, region: Region) -> bool:

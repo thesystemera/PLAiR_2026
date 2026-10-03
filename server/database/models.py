@@ -342,6 +342,8 @@ class EventSource(Base):
     found_via = Column(String, nullable=False, default="")
     status = Column(String, nullable=False, default="new")
     method = Column(String, nullable=False, default="")
+    score = Column(Float, nullable=False, default=1.0)
+    depth = Column(Integer, nullable=False, default=0)
     events_found = Column(Integer, nullable=False, default=0)
     events_total = Column(Integer, nullable=False, default=0)
     reads = Column(Integer, nullable=False, default=0)
