@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config import settings
@@ -89,6 +89,7 @@ def _as_result(row: PlaceCache, lat: float, lon: float) -> dict:
         "distance_m": round(distance_m(lat, lon, row.latitude, row.longitude)),
         "latitude": row.latitude,
         "longitude": row.longitude,
+        "details": json.loads(row.details) if row.details else {},
     }
 
 
@@ -179,13 +180,15 @@ async def remember(query: str, lat: float, lon: float, radius_m: float, results:
                     "price_level": r.get("price_level"),
                     "opening_hours": json.dumps(r["opening_hours"]) if r.get("opening_hours") else None,
                     "latitude": float(r["latitude"]), "longitude": float(r["longitude"]),
-                    "tags": json.dumps(tags), "fetched_at": now, "expires_at": expires,
+                    "tags": json.dumps(tags), "details": json.dumps(r["details"]) if r.get("details") else None,
+                    "fetched_at": now, "expires_at": expires,
                 })
             stmt = pg_insert(PlaceCache).values(rows)
             stmt = stmt.on_conflict_do_update(index_elements=["place_id"], set_={
                 column: stmt.excluded[column] for column in (
                     "name", "type", "address", "phone", "website", "rating", "rating_count", "price_level",
-                    "opening_hours", "latitude", "longitude", "tags", "fetched_at", "expires_at")})
+                    "opening_hours", "latitude", "longitude", "tags", "fetched_at", "expires_at")}
+                | {"details": func.coalesce(stmt.excluded.details, PlaceCache.details)})
             await db.execute(stmt)
             if norm:
                 await db.execute(pg_insert(PlaceSearch).values(

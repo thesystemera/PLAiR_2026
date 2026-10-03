@@ -20,12 +20,58 @@ FIELD_MASK = ",".join([
     "places.id", "places.displayName", "places.formattedAddress", "places.primaryTypeDisplayName", "places.rating",
     "places.userRatingCount", "places.priceLevel", "places.currentOpeningHours.openNow",
     "places.currentOpeningHours.weekdayDescriptions", "places.websiteUri", "places.nationalPhoneNumber",
-    "places.location",
+    "places.location", "places.types", "places.editorialSummary", "places.generativeSummary",
+    "places.reviewSummary", "places.businessStatus", "places.googleMapsUri", "places.addressComponents",
+    "places.regularOpeningHours.weekdayDescriptions", "places.accessibilityOptions", "places.parkingOptions",
+    "places.paymentOptions", *(f"places.{name}" for name in (
+        "liveMusic", "goodForChildren", "allowsDogs", "outdoorSeating", "servesVegetarianFood", "servesCocktails",
+        "servesBeer", "servesWine", "servesCoffee", "servesBreakfast", "servesBrunch", "servesLunch", "servesDinner",
+        "servesDessert", "goodForGroups", "goodForWatchingSports", "menuForChildren", "reservable", "takeout",
+        "delivery", "dineIn", "restroom")),
 ])
+FEATURES = {
+    "liveMusic": "live music", "goodForChildren": "good for kids", "allowsDogs": "dog friendly",
+    "outdoorSeating": "outdoor seating", "servesVegetarianFood": "vegetarian options", "servesCocktails": "cocktails",
+    "servesBeer": "beer", "servesWine": "wine", "servesCoffee": "coffee", "servesBreakfast": "breakfast",
+    "servesBrunch": "brunch", "servesLunch": "lunch", "servesDinner": "dinner", "servesDessert": "dessert",
+    "goodForGroups": "good for groups", "goodForWatchingSports": "shows sport", "menuForChildren": "kids menu",
+    "reservable": "takes bookings", "takeout": "takeaway", "delivery": "delivery", "restroom": "toilets",
+}
+GENERIC_TYPES = {"point_of_interest", "establishment", "food", "store", "premise", "political"}
 PRICE_LEVELS = {"PRICE_LEVEL_INEXPENSIVE": "$", "PRICE_LEVEL_MODERATE": "$$",
                 "PRICE_LEVEL_EXPENSIVE": "$$$", "PRICE_LEVEL_VERY_EXPENSIVE": "$$$$"}
 CACHE_TTL_SECONDS = 86400
 CACHE_MAX_ENTRIES = 200
+
+
+def _text(value) -> str:
+    while isinstance(value, dict):
+        value = value.get("text") or value.get("overview")
+    return " ".join(str(value or "").split())
+
+
+def place_details(place: dict) -> dict:
+    features = [label for key, label in FEATURES.items() if place.get(key) is True]
+    access = place.get("accessibilityOptions") or {}
+    if access.get("wheelchairAccessibleEntrance"):
+        features.append("wheelchair accessible")
+    parking = place.get("parkingOptions") or {}
+    if any(parking.get(k) for k in ("freeParkingLot", "freeStreetParking", "freeGarageParking")):
+        features.append("free parking")
+    elif any(parking.values()):
+        features.append("parking")
+    if (place.get("paymentOptions") or {}).get("acceptsCashOnly"):
+        features.append("cash only")
+    suburb = next((c.get("longText") for c in place.get("addressComponents") or []
+                   if set(c.get("types") or []) & {"sublocality_level_1", "neighborhood", "sublocality"}), None)
+    details = {
+        "summary": _text(place.get("editorialSummary")) or _text(place.get("generativeSummary")),
+        "review_summary": _text(place.get("reviewSummary")),
+        "types": [t.replace("_", " ") for t in place.get("types") or [] if t not in GENERIC_TYPES],
+        "features": features, "suburb": suburb, "status": place.get("businessStatus"),
+        "maps_url": place.get("googleMapsUri"),
+    }
+    return {k: v for k, v in details.items() if v}
 
 
 class LocationSearchUnavailable(Exception):
@@ -140,7 +186,9 @@ class LocationService:
 
         results = []
         for place in response.json().get("places", []):
-            hours = place.get("currentOpeningHours", {})
+            if place.get("businessStatus") == "CLOSED_PERMANENTLY":
+                continue
+            hours = place.get("currentOpeningHours") or place.get("regularOpeningHours") or {}
             results.append({
                 "place_id": place.get("id"),
                 "name": place.get("displayName", {}).get("text"),
@@ -155,6 +203,7 @@ class LocationService:
                 "price_level": PRICE_LEVELS.get(place.get("priceLevel", "")),
                 "latitude": place.get("location", {}).get("latitude"),
                 "longitude": place.get("location", {}).get("longitude"),
+                "details": place_details(place),
             })
 
         saving = place_memory.remember(query, float(location[0]), float(location[1]), radius, results)

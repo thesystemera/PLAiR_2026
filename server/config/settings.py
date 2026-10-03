@@ -403,7 +403,7 @@ class Settings:
     REGIONAL_PLACES_ENABLED: bool = os.getenv("REGIONAL_PLACES_ENABLED", "true").lower() == "true"
     REGIONAL_PLACES_REFRESH_S: int = int(os.getenv("REGIONAL_PLACES_REFRESH_S", str(14 * 86400)))
     REGIONAL_PLACES_CATEGORIES: tuple = tuple(
-        c.strip() for c in os.getenv("REGIONAL_PLACES_CATEGORIES", "cafe,bar,record store,live music venue,bookstore").split(",") if c.strip()
+        c.strip() for c in os.getenv("REGIONAL_PLACES_CATEGORIES", "cafe,bar,record store,live music venue,bookstore,library,community centre,farmers market,art gallery,event venue,theatre").split(",") if c.strip()
     )
     REGIONAL_PLACES_PER_CATEGORY: int = int(os.getenv("REGIONAL_PLACES_PER_CATEGORY", "10"))
     REGIONAL_PLACES_RADIUS_M: int = int(os.getenv("REGIONAL_PLACES_RADIUS_M", "15000"))

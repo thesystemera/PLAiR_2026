@@ -371,6 +371,7 @@ class PlaceCache(Base):
     latitude = Column(Float, nullable=False, index=True)
     longitude = Column(Float, nullable=False, index=True)
     tags = Column(Text, nullable=False, default="[]")
+    details = Column(Text, nullable=True)
     fetched_at = Column(DateTime(timezone=True), default=lambda: utc_now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
 

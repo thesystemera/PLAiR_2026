@@ -40,6 +40,7 @@ LISTING_MIN_EVENTS = 3
 ARTICLE_DONE_S = 365 * 86400
 RETRY_SOON_S = 3600
 WAVES = 3
+LEADS_PER_PAGE = 5
 SOURCE_KEEP_DAYS = 120
 LOCAL_SCOPES = {"spot", "street", "neighbourhood"}
 
@@ -73,6 +74,7 @@ class FoundEvent:
     description: str = ""
     url: str = ""
     people: list = field(default_factory=list)
+    leads: list = field(default_factory=list)
 
 
 @dataclass
@@ -224,9 +226,18 @@ def _ld_event(node: dict, zone, page_url: str) -> Optional[FoundEvent]:
             if name:
                 people.append(name)
     link = node.get("url") if isinstance(node.get("url"), str) else ""
+    leads = []
+    for holder in [location if isinstance(location, dict) else {}, *(
+            o for o in (node.get("organizer") if isinstance(node.get("organizer"), list) else [node.get("organizer")])
+            if isinstance(o, dict))]:
+        for key in ("url", "sameAs"):
+            value = holder.get(key)
+            for candidate in value if isinstance(value, list) else [value]:
+                if isinstance(candidate, str) and candidate.startswith("http"):
+                    leads.append(urljoin(page_url, candidate))
     return FoundEvent(title=title, starts_at=starts_at, ends_at=ends_at, timed=timed, venue=venue, address=address,
                       lat=lat, lon=lon, tags=tags, description=_clean(node.get("description"), 240),
-                      url=urljoin(page_url, link) if link else "", people=people[:6])
+                      url=urljoin(page_url, link) if link else "", people=people[:6], leads=leads)
 
 
 def parse_json_ld(soup: BeautifulSoup, zone, page_url: str) -> list[FoundEvent]:
@@ -655,6 +666,9 @@ class WebEventsCollector(Collector):
         result.events = parse_json_ld(soup, zone, final_url)
         result.method = "json-ld" if result.events else ""
         result.links = page_links(soup, page, final_url, want_listing=source.kind == VENUE and not result.events)
+        leads = dict.fromkeys(url for event in result.events if self._local(event, region) for url in event.leads
+                              if url_key(url) != url_key(final_url) and not skipped_host(url))
+        result.links += [(VENUE, url) for url in list(leads)[:LEADS_PER_PAGE]]
         if result.events or source.kind == VENUE:
             return result
         if source.content_hash == content_hash and source.method == "llm":
@@ -671,6 +685,11 @@ class WebEventsCollector(Collector):
         result.events = await extract_with_llm(self.ai_service, region, zone, title, published, text)
         result.method = "llm"
         return result
+
+    @staticmethod
+    def _local(event: FoundEvent, region: Region) -> bool:
+        return event.lat is None or event.lon is None or _haversine_km(
+            (event.lat, event.lon), region.center) <= settings.PULSE_CITY_RADIUS_KM
 
     async def _known_elsewhere(self, region: Region, zone) -> set:
         async with self.async_session_maker() as db:

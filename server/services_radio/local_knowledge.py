@@ -50,6 +50,7 @@ SELECT row_id AS rowid,
            'id', 'place:' || place_id, 'kind', 'place', 'place_id', place_id, 'title', name, 'type', type,
            'address', address, 'tags', tags::json, 'rating', rating, 'rating_count', rating_count,
            'price_level', price_level, 'hours', opening_hours::json, 'website', website, 'phone', phone,
+           'details', details::json,
            'fetched_at', fetched_at,
            'where', json_build_object('label', coalesce(address, name), 'lat', latitude, 'lon', longitude,
                                       'radius_m', 0, 'scope', 'spot')
@@ -164,13 +165,27 @@ def place_quality_text(item: Dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def place_about_text(item: Dict[str, Any]) -> str:
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    return ". ".join(part for part in (details.get("summary"), details.get("review_summary"),
+                                       ", ".join(details.get("features") or [])) if part)[:600]
+
+
+def place_area_text(item: Dict[str, Any]) -> str:
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    return ", ".join(part for part in (details.get("suburb"), item.get("address")) if part)
+
+
 class PlaceVectorDatabaseService(SemanticVectorDatabaseService):
     category_specs = (
-        Category("place_name", 0.30, field_text("title"), "The place's name"),
-        Category("place_type", 0.30, place_type_text, "What sort of place it is (cafe, cocktail bar, record store)"),
-        Category("place_area", 0.20, field_text("address"), "Where it is: street, suburb, city"),
-        Category("place_hours", 0.10, place_hours_text, "Opening hours: early, late night, weekends"),
-        Category("place_quality", 0.10, place_quality_text, "Rating and price: cheap, upmarket, well reviewed"),
+        Category("place_name", 0.25, field_text("title"), "The place's name"),
+        Category("place_type", 0.25, place_type_text, "What sort of place it is (cafe, cocktail bar, record store)"),
+        Category("place_about", 0.20, place_about_text,
+                 "What it's like and what it offers: live music, good for kids, dog friendly, outdoor seating, "
+                 "vegetarian, cocktails, wheelchair access"),
+        Category("place_area", 0.15, place_area_text, "Where it is: street, suburb, city"),
+        Category("place_hours", 0.075, place_hours_text, "Opening hours: early, late night, weekends"),
+        Category("place_quality", 0.075, place_quality_text, "Rating and price: cheap, upmarket, well reviewed"),
     )
     log_channel = "system"
     service_label = "Places"

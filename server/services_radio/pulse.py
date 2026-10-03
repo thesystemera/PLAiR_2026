@@ -356,27 +356,35 @@ class PlacesNode(KnowledgeNode):
 
     @staticmethod
     def _item(place_id: str, title: str, kind: str, rating, price, where: Optional[geo.Where], score: float,
-              website: Optional[str] = None) -> PulseItem:
+              website: Optional[str] = None, about: Optional[dict] = None) -> PulseItem:
+        about = about or {}
         details = [kind or ""]
         if rating:
             details.append(f"rated {rating}")
         if price:
             details.append(price)
-        return PulseItem(id=f"place:{place_id}", kind=KIND_PLACE, title=title or "",
-                         text=", ".join(d for d in details if d), source="Google Maps", score=score, where=where,
-                         payload={"website": website}, entities=[title or ""])
+        details += (about.get("features") or [])[:5]
+        text = ", ".join(d for d in details if d)
+        if about.get("summary"):
+            text = f"{text}. {about['summary']}"
+        return PulseItem(id=f"place:{place_id}", kind=KIND_PLACE, title=title or "", text=text[:300],
+                         source="Google Maps", score=score, where=where,
+                         payload={"website": website, **{k: about[k] for k in (
+                             "summary", "review_summary", "features", "suburb", "maps_url") if about.get(k)}},
+                         entities=[title or ""])
 
     @classmethod
     def _from_result(cls, result: dict, score: float) -> PulseItem:
         return cls._item(result["place_id"], result.get("name"), result.get("type"), result.get("rating"),
                          result.get("price_level"),
                          geo.from_row(result.get("address") or result.get("name"), result.get("latitude"),
-                                      result.get("longitude")), score, result.get("website"))
+                                      result.get("longitude")), score, result.get("website"), result.get("details"))
 
     @classmethod
     def _from_meta(cls, meta: Dict[str, Any], score: float) -> PulseItem:
         return cls._item(meta.get("place_id") or "", meta.get("title"), meta.get("type"), meta.get("rating"),
-                         meta.get("price_level"), geo.Where.from_dict(meta.get("where")), score, meta.get("website"))
+                         meta.get("price_level"), geo.Where.from_dict(meta.get("where")), score, meta.get("website"),
+                         meta.get("details") if isinstance(meta.get("details"), dict) else None)
 
     async def search(self, q: PulseQuery) -> list[PulseItem]:
         search = local_knowledge.place_search
