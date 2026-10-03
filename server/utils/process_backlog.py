@@ -13,6 +13,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0, help="Process at most N tracks")
     parser.add_argument("--in-flight", type=int, default=4, help="Tracks inside the lanes at once")
     parser.add_argument("--dry-run", action="store_true", help="List what would run")
+    parser.add_argument("--rerender", action="store_true",
+                        help="After the missing tracks, re-render masters made by an older chain version")
     return parser.parse_args()
 
 
@@ -32,13 +34,23 @@ import psycopg2  # noqa: E402
 from config import settings  # noqa: E402
 from services import log_service  # noqa: E402
 from services.log_service import start_log_worker, stop_worker  # noqa: E402
+from services import track_asset_stages as stages  # noqa: E402
 
 
 def backlog():
     mp3_dir = settings.CATALOG_DIR / "mp3"
     masters = {p.stem for p in settings.ENHANCED_WAV_DIR.glob("*.wav")}
-    ids = [p.stem for p in mp3_dir.glob("*.mp3")
-           if p.stem not in masters and (settings.CATALOG_DIR / "metadata" / f"{p.stem}.json").exists()]
+    ids, stale = [], []
+    for p in mp3_dir.glob("*.mp3"):
+        meta_path = settings.CATALOG_DIR / "metadata" / f"{p.stem}.json"
+        if not meta_path.exists():
+            continue
+        if p.stem not in masters:
+            ids.append(p.stem)
+        elif ARGS.rerender:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("uploaded_by_user_id") is None and (meta.get("master_chain_version") or 0) < settings.MASTER_CHAIN_VERSION:
+                stale.append(p.stem)
     with psycopg2.connect(settings.DATABASE_URL.replace("+asyncpg", "")) as conn, conn.cursor() as cur:
         cur.execute("select track_id, preference_type::text from track_preferences "
                     "where preference_type::text in ('SUPER_LIKE', 'LIKE')")
@@ -46,16 +58,16 @@ def backlog():
         for track_id, kind in cur.fetchall():
             rank[track_id] = min(rank.get(track_id, 2), 0 if kind == "SUPER_LIKE" else 1)
     ids.sort(key=lambda t: (rank.get(t, 2), t))
-    return ids, rank
+    stale.sort(key=lambda t: (rank.get(t, 2), t))
+    return ids + stale, rank, set(ids)
 
 
-def stash_stale_intermediates(track_id: str, backup: Path):
-    for folder in (settings.WAV_DIR, settings.VOCAL_ENHANCED_WAV_DIR, settings.SONIC_WAV_DIR):
-        stale = folder / f"{track_id}.wav"
-        if stale.exists():
-            target = backup / folder.name
-            target.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(stale), str(target / stale.name))
+def clear_previous_render(track_id: str):
+    for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.VOCAL_ENHANCED_WAV_DIR, settings.SONIC_WAV_DIR):
+        (folder / f"{track_id}.wav").unlink(missing_ok=True)
+    for bitrate in stages.OPUS_BITRATES:
+        stages.opus_path(track_id, bitrate).unlink(missing_ok=True)
+        stages.webm_path(track_id, bitrate).unlink(missing_ok=True)
 
 
 def remove_intermediates(track_id: str):
@@ -74,7 +86,7 @@ def mark_added(track_id: str):
 
 
 async def main():
-    ids, rank = backlog()
+    ids, rank, missing = backlog()
     if ARGS.limit:
         ids = ids[:ARGS.limit]
     print(f"Backlog: {len(ids)} tracks (super-liked {sum(rank.get(t) == 0 for t in ids)}, "
@@ -86,7 +98,6 @@ async def main():
     from services.suno_service_orchestrator import SunoServiceOrchestrator, TrackJob
     orchestrator = SunoServiceOrchestrator()
     await orchestrator.initialize()
-    backup = settings.CATALOG_DIR / "_audio_backups" / f"backlog_stale_{time.strftime('%Y%m%d_%H%M%S')}"
 
     pending, done, failed = list(ids), 0, 0
     running = []
@@ -94,8 +105,9 @@ async def main():
     while pending or running:
         while pending and len(running) < ARGS.in_flight:
             track_id = pending.pop(0)
-            stash_stale_intermediates(track_id, backup)
-            mark_added(track_id)
+            clear_previous_render(track_id)
+            if track_id in missing:
+                mark_added(track_id)
             metadata = json.loads((settings.CATALOG_DIR / "metadata" / f"{track_id}.json").read_text(encoding="utf-8"))
             job = TrackJob(track_id=track_id, mp3_path=settings.CATALOG_DIR / "mp3" / f"{track_id}.mp3",
                            metadata=metadata, defer_catalog_reload=True)

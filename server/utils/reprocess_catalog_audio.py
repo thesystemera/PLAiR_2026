@@ -551,6 +551,8 @@ def swap_in(plan: Dict[str, Any], staged: Dict[str, Path], backup_root: Path, ma
         live.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(new_file), str(live))
         manifest.append(entry)
+    if staged.get("master") is not None:
+        stages.stamp_master_version(track_id)
 
 
 def restore(backup_root: Path):

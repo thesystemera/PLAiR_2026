@@ -50,6 +50,7 @@ from services.suno_artwork_enrichment_service import ArtworkEnrichmentService
 from config import settings
 from services.task_utils import spawn
 from services.asset_integrity_service import asset_integrity_service
+from services import track_asset_stages as stages
 
 import torch
 
@@ -848,6 +849,7 @@ class SunoServiceOrchestrator(SingletonService):
             result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False)
             if result:
                 job.master_wav_path = result
+                await asyncio.to_thread(stages.stamp_master_version, job.track_id)
                 job.mastering_complete = True
                 if quality_scorer() is not None:
                     spawn(self._score_master(job), name=f"quality_score:{job.track_id[:8]}")

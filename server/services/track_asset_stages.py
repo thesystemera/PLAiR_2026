@@ -1,5 +1,8 @@
 import asyncio
+import json
+import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,6 +30,16 @@ def coerce_bool(value: Any) -> bool:
 
 def metadata_path(track_id: str) -> Path:
     return settings.METADATA_DIR / f"{track_id}.json"
+
+
+def stamp_master_version(track_id: str):
+    path = metadata_path(track_id)
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["master_chain_version"] = settings.MASTER_CHAIN_VERSION
+    metadata["master_rendered_at"] = datetime.now(timezone.utc).isoformat()
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp, path)
 
 
 def master_wav_path(track_id: str) -> Path:
