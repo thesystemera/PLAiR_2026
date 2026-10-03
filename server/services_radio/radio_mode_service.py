@@ -693,6 +693,10 @@ class RadioModeService:
             plan.ready_device_id = None
             await self._publish(sess, notify=False)
 
+    def break_lined_up(self, session_id: str) -> bool:
+        sess = self.sessions.get(session_id)
+        return bool(sess is not None and sess.prefs.enabled and sess.plan is not None)
+
     def blocks_announcer(self, session_id: str) -> bool:
         sess = self.sessions.get(session_id)
         if sess is None or not sess.prefs.enabled:

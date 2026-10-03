@@ -703,13 +703,8 @@ class Settings:
     STATION_PROCESS_MIX: float = float(os.getenv("STATION_PROCESS_MIX", "0.1"))
     STINGS_TARGET_LUFS: float = float(os.getenv("STINGS_TARGET_LUFS", "-18"))
     STINGS_BED_UNDER_VOICE_DB: float = float(os.getenv("STINGS_BED_UNDER_VOICE_DB", "-9"))
-    STINGS_SHORT_WINDOW_S: float = float(os.getenv("STINGS_SHORT_WINDOW_S", "6"))
     STINGS_MIN_WINDOW_S: float = float(os.getenv("STINGS_MIN_WINDOW_S", "1.5"))
-    STINGS_ROTATION_N: int = int(os.getenv("STINGS_ROTATION_N", "4"))
-    STINGS_MIN_GAP_S: float = float(os.getenv("STINGS_MIN_GAP_S", "600"))
-    STINGS_MAX_GAP_S: float = float(os.getenv("STINGS_MAX_GAP_S", "900"))
-    STINGS_FIRST_DELAY_S: float = float(os.getenv("STINGS_FIRST_DELAY_S", "240"))
-    STINGS_FILL_GAPS: bool = os.getenv("STINGS_FILL_GAPS", "true").lower() == "true"
+    STATION_QUIET_TARGET_S: float = float(os.getenv("STATION_QUIET_TARGET_S", "180"))
     BLIPS_ENABLED: bool = os.getenv("BLIPS_ENABLED", "true").lower() == "true"
     BLIPS_DIR: Path = Path(os.getenv("BLIPS_DIR") or str(CATALOG_DIR / "blips"))
     BLIPS_TARGET_LUFS: float = float(os.getenv("BLIPS_TARGET_LUFS", "-25"))
@@ -725,15 +720,10 @@ class Settings:
     STINGS_ID_NO_REPEAT: int = int(os.getenv("STINGS_ID_NO_REPEAT", "8"))
     STINGS_BREAK_LEAD_IN_PROBABILITY: float = float(os.getenv("STINGS_BREAK_LEAD_IN_PROBABILITY", "0.5"))
     STINGS_MIDTRACK_ENABLED: bool = os.getenv("STINGS_MIDTRACK_ENABLED", "true").lower() == "true"
-    STINGS_MIDTRACK_MIN_INTERVAL_S: float = float(os.getenv("STINGS_MIDTRACK_MIN_INTERVAL_S", "1200"))
-    STINGS_MIDTRACK_PROBABILITY: float = float(os.getenv("STINGS_MIDTRACK_PROBABILITY", "0.35"))
     STINGS_MIDTRACK_MIN_WINDOW_S: float = float(os.getenv("STINGS_MIDTRACK_MIN_WINDOW_S", "4"))
     STINGS_MIDTRACK_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_MAX_LEN_S", "2.5"))
-    STINGS_MIDTRACK_CLEAR_S: float = float(os.getenv("STINGS_MIDTRACK_CLEAR_S", "120"))
     STINGS_MIDTRACK_VOICE_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_VOICE_MAX_LEN_S", "4.5"))
     REVIEW_STINGS_ENABLED: bool = os.getenv("REVIEW_STINGS_ENABLED", "true").lower() == "true"
-    REVIEW_STINGS_PROBABILITY: float = float(os.getenv("REVIEW_STINGS_PROBABILITY", "0.7"))
-    REVIEW_STINGS_MIN_INTERVAL_S: float = float(os.getenv("REVIEW_STINGS_MIN_INTERVAL_S", "240"))
     REVIEW_STINGS_REPEAT_S: float = float(os.getenv("REVIEW_STINGS_REPEAT_S", "21600"))
     REVIEW_STINGS_MAX_LEN_S: float = float(os.getenv("REVIEW_STINGS_MAX_LEN_S", "6"))
     REVIEW_STINGS_DUCK_S: float = float(os.getenv("REVIEW_STINGS_DUCK_S", "1.5"))

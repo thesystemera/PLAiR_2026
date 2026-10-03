@@ -50,3 +50,13 @@ by "busy" conditions read at song start that were long gone when the change came
 5. **One log line per space** on the playback category: `space at 2:14 (5.1 s) -> time check` or `-> nothing (why)`.
 6. Test with a listening session of songs that end on their own (no skips): every change and a fair share of the
    quiet mid-song stretches should carry something, never on top of the hosts.
+
+## Done (2026-10-04, same night)
+
+Built as above: `announcer_service._schedule_song_spaces` / `_walk_spaces` / `_run_space` / `_offer_review`,
+`sting_service.offer_space`, `sting_schedule.choose`, `radio_mode_service.break_lined_up`, `STATION_QUIET_TARGET_S`.
+Retired: `STINGS_SHORT_WINDOW_S`, `STINGS_ROTATION_N`, `STINGS_MIN/MAX_GAP_S`, `STINGS_FIRST_DELAY_S`,
+`STINGS_FILL_GAPS`, `STINGS_MIDTRACK_MIN_INTERVAL_S`, `STINGS_MIDTRACK_PROBABILITY`, `STINGS_MIDTRACK_CLEAR_S`,
+`REVIEW_STINGS_PROBABILITY`, `REVIEW_STINGS_MIN_INTERVAL_S`. Checked on a private boot with the quiet target at 0: a
+guest's song got a station ID in each of its two vocal-free stretches (1:11, 2:18), one log line per space. Next: the
+owner's own listening, judged on songs that end on their own.

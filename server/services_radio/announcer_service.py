@@ -14,6 +14,8 @@ from config.settings import settings
 
 FILL_DEFAULT_MS = 3000
 FILL_LATE_MS = 8000
+SPACE_START_PCT = 0.1
+SPACE_END_PCT = 0.85
 
 
 class AnnouncerService:
@@ -224,11 +226,10 @@ class AnnouncerService:
                             state
                         )
                     elif is_playing:
-                        await self._schedule_sting_for_transition(
-                            session_id, current_track_id,
-                            self._crossfade_window(transition_window, current_track), state, fill=True)
-                    if is_playing and not await self._schedule_review_sting(session_id, current_track_id, state):
-                        await self._schedule_midtrack_sting(session_id, current_track_id, state)
+                        self._schedule_space(session_id, current_track_id,
+                                             self._crossfade_window(transition_window, current_track), state)
+                    if is_playing:
+                        await self._schedule_song_spaces(session_id, current_track_id, state)
 
         except Exception as e:
             log_service.error(f"Announcer: Error in playback change handler: {e}")
@@ -536,44 +537,118 @@ class AnnouncerService:
             return
         user_id = self._state_user_id(session_id, state)
         window_s = transition_window['duration_ms'] / 1000.0
-        kind = await stings.plan_between_tracks(session_id, user_id, window_s, 0.0, fill=True)
+        kind = await stings.offer_space(session_id, user_id, window_s, midtrack=False,
+                                        label=f"song change (the hosts' line {why})")
         render = await stings.build(session_id, user_id, kind, window_s) if kind else None
-        played = render is not None and self._still_at_boundary(session_id, current_track_id) and \
+        if render is not None and self._still_at_boundary(session_id, current_track_id):
             await stings.play(session_id, user_id, render)
-        log_service.playback(f"{log_service.who(session_id)}: song change - hosts' line {why}, "
-                             f"{f'station {kind} instead' if played else 'nothing to fill with'}")
 
-    async def _schedule_sting_for_transition(
-            self, session_id: str, current_track_id: str, transition_window: Dict, state: dict, fill: bool = False
-    ) -> bool:
+    def _break_lined_up(self, session_id: str) -> bool:
+        from service_registry import services
+        radio = services.radio_mode_service
+        return bool(radio is not None and radio.break_lined_up(session_id))
+
+    def _schedule_space(self, session_id: str, track_id: str, window: Dict, state: dict):
+        task = asyncio.create_task(self._run_space(session_id, track_id, window, state, midtrack=False,
+                                                   label="song change"))
+        self.session_tasks.setdefault(session_id, []).append(task)
+
+    @staticmethod
+    def _merge_spaces(segments: List[Dict]) -> List[Dict]:
+        merged: List[Dict] = []
+        for seg in sorted(segments, key=lambda s: s['start_ms']):
+            if merged and seg['start_ms'] <= merged[-1]['end_ms']:
+                merged[-1]['end_ms'] = max(merged[-1]['end_ms'], seg['end_ms'])
+                merged[-1]['duration_ms'] = merged[-1]['end_ms'] - merged[-1]['start_ms']
+            else:
+                merged.append(dict(seg))
+        return merged
+
+    async def _schedule_song_spaces(self, session_id: str, track_id: str, state: dict):
+        if not (settings.STINGS_ENABLED and settings.STINGS_MIDTRACK_ENABLED):
+            return
+        try:
+            features = await self.orchestrator.features.load_features(track_id)
+            if not features:
+                return
+            lyrics = await self.orchestrator.lyrics.load_timestamps(track_id)
+            duration_s = features.get('duration', 0)
+            segments = await self._get_quiet_segments(features, lyrics, start_pct=SPACE_START_PCT,
+                                                      end_pct=SPACE_END_PCT)
+            segments += self._lyric_gaps(lyrics, duration_s, SPACE_START_PCT, SPACE_END_PCT)
+            earliest = state.get('progress_ms', 0) + settings.STINGS_BUILD_LEAD_MS + 2000
+            spaces = [s for s in self._merge_spaces(segments)
+                      if s['duration_ms'] >= settings.STINGS_MIDTRACK_MIN_WINDOW_S * 1000 and s['start_ms'] > earliest]
+            if spaces:
+                task = asyncio.create_task(self._walk_spaces(session_id, track_id, spaces, state))
+                self.session_tasks.setdefault(session_id, []).append(task)
+        except Exception as e:
+            log_service.warning(f"Announcer: mapping the song's quiet spaces failed: {type(e).__name__}: {e}")
+
+    async def _walk_spaces(self, session_id: str, track_id: str, spaces: List[Dict], state: dict):
+        for space in spaces:
+            await self._run_space(session_id, track_id, space, state, midtrack=True,
+                                  label=f"quiet stretch at {log_service.clock(space['start_ms'])}")
+
+    async def _run_space(self, session_id: str, track_id: str, window: Dict, state: dict, midtrack: bool,
+                         label: str) -> bool:
+        usage_tracking.bind_session(session_id)
         stings = self._sting_service()
         if stings is None:
             return False
-        trigger_time_ms = transition_window['start_ms'] - settings.STINGS_TRIGGER_EARLY_MS
-        wait_time_ms = trigger_time_ms - state.get('progress_ms', 0)
-        if wait_time_ms < settings.STINGS_BUILD_LEAD_MS:
-            return False
-        window_s = transition_window['duration_ms'] / 1000.0
+        user_id = self._state_user_id(session_id, state)
+        lead_ms = settings.STINGS_BUILD_LEAD_MS
+        window_s = window['duration_ms'] / 1000.0
+        if midtrack:
+            trigger_ms = window['start_ms'] + 500
+            space_s = min(midtrack_max_len(window_s), window_s - 1.0)
+        else:
+            trigger_ms = window['start_ms'] - settings.STINGS_TRIGGER_EARLY_MS
+            space_s = window_s
         try:
-            kind = await stings.plan_between_tracks(
-                session_id, self._state_user_id(session_id, state), window_s, wait_time_ms / 1000.0, fill=fill)
+            if not await self._wait_for_trigger(session_id, track_id, trigger_ms - lead_ms, not midtrack):
+                return False
+            if not midtrack and self._break_lined_up(session_id):
+                log_service.playback(f"{log_service.who(session_id)}: {label} -> the Radio Mode break")
+                return False
+            if midtrack and await self._offer_review(session_id, track_id, window, trigger_ms, user_id):
+                return True
+            kind = await stings.offer_space(session_id, user_id, space_s, midtrack, label, lead_s=lead_ms / 1000.0)
+            if not kind:
+                return False
+            if not midtrack:
+                self.active_announcements[session_id] = track_id
+            render = await stings.build(session_id, user_id, kind, space_s, midtrack=midtrack,
+                                        lead_s=lead_ms / 1000.0)
+            if render is None:
+                log_service.playback(f"{log_service.who(session_id)}: {label} -> {kind} could not be built")
+                return False
+            if not await self._wait_for_trigger(session_id, track_id, trigger_ms, not midtrack):
+                return False
+            return await stings.play(session_id, user_id, render, midtrack=midtrack)
         except Exception as e:
-            log_service.warning(f"Announcer: sting planning failed: {type(e).__name__}: {e}")
+            log_service.error(f"Announcer: {label} failed: {type(e).__name__}: {e}")
             return False
-        if not kind:
+        finally:
+            if not midtrack:
+                self._cleanup_scheduled(session_id)
+
+    async def _offer_review(self, session_id: str, track_id: str, window: Dict, trigger_ms: float,
+                            user_id: Optional[int]) -> bool:
+        stings = self._sting_service()
+        need_ms = 2000 + settings.REVIEW_STINGS_DUCK_S * 1000
+        if window['duration_ms'] < need_ms or not stings.review_sting_possible(session_id, track_id) \
+                or stings.station_quiet_s(session_id, user_id) < settings.STATION_QUIET_TARGET_S:
             return False
-        self.scheduled_announcements[session_id] = {
-            'trigger_time_ms': trigger_time_ms,
-            'track_id': current_track_id,
-            'window': transition_window,
-            'sting': kind
-        }
-        task = asyncio.create_task(
-            self._execute_sting(session_id, current_track_id, trigger_time_ms, window_s, kind, state)
-        )
-        self.session_tasks.setdefault(session_id, []).append(task)
-        log_service.announcer(f"🎙️ [{session_id[:8]}] 🟣 Sting scheduled: {kind} in {wait_time_ms / 1000:.1f}s")
-        return True
+        max_len_s = min(settings.REVIEW_STINGS_MAX_LEN_S, window['duration_ms'] / 1000.0 - 0.5)
+        render = await stings.build_review(session_id, user_id, track_id, max_len_s)
+        if render is None or not await self._wait_for_trigger(session_id, track_id, trigger_ms, False):
+            return False
+        played = await stings.play_review(session_id, user_id, render)
+        if played:
+            log_service.playback(f"{log_service.who(session_id)}: quiet stretch at "
+                                 f"{log_service.clock(window['start_ms'])} -> a listener review")
+        return played
 
     async def _wait_for_trigger(self, session_id: str, current_track_id: str, trigger_time_ms: float,
                                 follow_crossfade: bool = True) -> bool:
@@ -617,73 +692,6 @@ class AnnouncerService:
             else:
                 await asyncio.sleep(min(1.0, time_until_trigger / 1000.0))
 
-    async def _execute_sting(self, session_id: str, current_track_id: str, trigger_time_ms: float,
-                             window_s: float, kind: str, state: dict, midtrack: bool = False):
-        usage_tracking.bind_session(session_id)
-        stings = self._sting_service()
-        user_id = self._state_user_id(session_id, state)
-        try:
-            if not await self._wait_for_trigger(session_id, current_track_id,
-                                                trigger_time_ms - settings.STINGS_BUILD_LEAD_MS, not midtrack):
-                return
-            if not midtrack and self._radio_break_holds(session_id):
-                log_service.announcer(f"🎙️ [{session_id[:8]}] 📻 Sting skipped: Radio Mode talk break at this boundary")
-                return
-            if not midtrack:
-                self.active_announcements[session_id] = current_track_id
-            render = await stings.build(session_id, user_id, kind, window_s, midtrack=midtrack,
-                                        lead_s=settings.STINGS_BUILD_LEAD_MS / 1000.0)
-            if render is None:
-                log_service.announcer(f"🎙️ [{session_id[:8]}] Sting {kind} unavailable, staying quiet")
-                return
-            if not await self._wait_for_trigger(session_id, current_track_id, trigger_time_ms, not midtrack):
-                return
-            if await stings.play(session_id, user_id, render, midtrack=midtrack):
-                self.last_announcement_time[session_id] = time.time()
-        except asyncio.CancelledError:
-            log_service.announcer(f"🎙️ [{session_id}] Sting task cancelled")
-        except Exception as e:
-            log_service.error(f"Announcer sting error: {type(e).__name__}: {e}")
-        finally:
-            if not midtrack:
-                self._cleanup_scheduled(session_id)
-
-    async def _schedule_review_sting(self, session_id: str, current_track_id: str, state: dict) -> bool:
-        stings = self._sting_service()
-        if stings is None:
-            return False
-        try:
-            if not stings.review_sting_possible(session_id, current_track_id):
-                return False
-            if random.random() > settings.REVIEW_STINGS_PROBABILITY:
-                return False
-            features = await self.orchestrator.features.load_features(current_track_id)
-            if not features:
-                return False
-            lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
-            quiet = await self._get_quiet_segments(features, lyrics, start_pct=0.05, end_pct=0.85)
-            quiet += self._lyric_gaps(lyrics, features.get('duration', 0), start_pct=0.05, end_pct=0.85)
-            progress_ms = state.get('progress_ms', 0)
-            need_ms = 2000 + settings.REVIEW_STINGS_DUCK_S * 1000
-            ahead = [seg for seg in quiet
-                     if seg['start_ms'] - progress_ms > settings.STINGS_BUILD_LEAD_MS + 3000
-                     and seg['duration_ms'] >= need_ms]
-            if not ahead:
-                return False
-            window = min(ahead, key=lambda seg: seg['start_ms'])
-            quiet_s = window['duration_ms'] / 1000.0
-            max_len_s = min(settings.REVIEW_STINGS_MAX_LEN_S, quiet_s - 0.5)
-            trigger_time_ms = window['start_ms'] + 400
-            task = asyncio.create_task(self._execute_review_sting(
-                session_id, current_track_id, trigger_time_ms, max_len_s, state))
-            self.session_tasks.setdefault(session_id, []).append(task)
-            log_service.announcer(f"🎙️ [{session_id[:8]}] 💬 Review sting at {trigger_time_ms / 1000:.1f}s "
-                                  f"({quiet_s:.1f}s quiet, lyric-free)")
-            return True
-        except Exception as e:
-            log_service.warning(f"Announcer: review sting planning failed: {type(e).__name__}: {e}")
-            return False
-
     @staticmethod
     def _lyric_gaps(lyric_data: Optional[Dict], duration_s: float, start_pct: float, end_pct: float) -> List[Dict]:
         lines = sorted((l for l in (lyric_data or {}).get('lyrics') or [] if isinstance(l.get('start'), (int, float))),
@@ -701,65 +709,9 @@ class AnnouncerService:
                 gaps.append({'start_ms': start * 1000, 'end_ms': end * 1000, 'duration_ms': (end - start) * 1000})
         return gaps
 
-    async def _execute_review_sting(self, session_id: str, current_track_id: str, trigger_time_ms: float,
-                                    max_len_s: float, state: dict):
-        usage_tracking.bind_session(session_id)
-        stings = self._sting_service()
-        user_id = self._state_user_id(session_id, state)
-        try:
-            if not await self._wait_for_trigger(session_id, current_track_id,
-                                                trigger_time_ms - settings.STINGS_BUILD_LEAD_MS, False):
-                return
-            render = await stings.build_review(session_id, user_id, current_track_id, max_len_s)
-            if render is None:
-                return
-            if not await self._wait_for_trigger(session_id, current_track_id, trigger_time_ms, False):
-                return
-            await stings.play_review(session_id, user_id, render)
-        except asyncio.CancelledError:
-            log_service.announcer(f"🎙️ [{session_id}] Review sting task cancelled")
-        except Exception as e:
-            log_service.error(f"Announcer review sting error: {type(e).__name__}: {e}")
-
-    async def _schedule_midtrack_sting(self, session_id: str, current_track_id: str, state: dict):
-        stings = self._sting_service()
-        if stings is None or not settings.STINGS_ENABLED or not settings.STINGS_MIDTRACK_ENABLED:
-            return
-        try:
-            if not stings.midtrack_possible(session_id):
-                return
-            features = await self.orchestrator.features.load_features(current_track_id)
-            if not features:
-                return
-            lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
-            quiet = await self._get_quiet_segments(features, lyrics, start_pct=0.2, end_pct=0.8)
-            progress_ms = state.get('progress_ms', 0)
-            ahead = [seg for seg in quiet
-                     if seg['start_ms'] - progress_ms > settings.STINGS_BUILD_LEAD_MS + 5000
-                     and seg['duration_ms'] >= settings.STINGS_MIDTRACK_MIN_WINDOW_S * 1000]
-            if not ahead:
-                return
-            window = max(ahead, key=lambda seg: seg['duration_ms'])
-            quiet_s = window['duration_ms'] / 1000.0
-            kind = await stings.plan_midtrack(session_id, self._state_user_id(session_id, state), quiet_s)
-            if not kind:
-                return
-            trigger_time_ms = window['start_ms'] + 500
-            max_len_s = min(midtrack_max_len(quiet_s), quiet_s - 1.0)
-            task = asyncio.create_task(self._execute_sting(
-                session_id, current_track_id, trigger_time_ms, max_len_s, kind, state, midtrack=True))
-            self.session_tasks.setdefault(session_id, []).append(task)
-            log_service.announcer(f"🎙️ [{session_id[:8]}] 🟣 Mid-track sting {kind} at "
-                                  f"{trigger_time_ms / 1000:.1f}s ({quiet_s:.1f}s quiet, lyric-free)")
-        except Exception as e:
-            log_service.warning(f"Announcer: mid-track sting planning failed: {type(e).__name__}: {e}")
-
     async def _schedule_announcement_for_transition(
             self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
     ):
-        if await self._schedule_sting_for_transition(session_id, current_track_id, transition_window, state):
-            return
-
         last_announcement = self.last_announcement_time.get(session_id, 0)
         time_since_last = time.time() - last_announcement
 

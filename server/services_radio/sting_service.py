@@ -35,7 +35,6 @@ class _SessionStings:
         self.tz_name: Optional[str] = None
         self.city: Optional[str] = None
         self.location_at = 0.0
-        self.last_review_at: Optional[float] = None
         self.reviews_heard: Dict[str, float] = {}
 
 
@@ -229,12 +228,13 @@ class StingService:
         from service_registry import services
         return services.radio_mode_service
 
-    def _gate(self, session_id: str, user_id: Optional[int], for_break: bool = False) -> sting_schedule.Gate:
+    def _gate(self, session_id: str, user_id: Optional[int], for_break: bool = False,
+              at_change: bool = False) -> sting_schedule.Gate:
         radio = self._radio()
         radio_sess = radio.sessions.get(session_id) if radio is not None else None
         radio_mode = bool(radio_sess is not None and radio_sess.prefs.enabled and settings.RADIO_MODE_ENABLED)
         pref = radio.stings_pref(session_id) if radio is not None else True
-        blocked = bool(radio is not None and not for_break and radio.blocks_announcer(session_id))
+        blocked = bool(radio is not None and at_change and radio.break_lined_up(session_id))
         conversing = False
         if self.conversation_service is not None:
             try:
@@ -262,68 +262,37 @@ class StingService:
                                         city=entry.city, max_len_s=max_len_s, midtrack=midtrack, rng=self.rng,
                                         recent_ids=entry.state.recent_ids)
 
-    async def plan_between_tracks(self, session_id: str, user_id: Optional[int], window_s: float,
-                                  trigger_in_s: float = 0.0, fill: bool = False) -> Optional[str]:
-        if not settings.STINGS_ENABLED:
+    def station_quiet_s(self, session_id: str, user_id: Optional[int]) -> float:
+        if self.tts_queue_manager is None:
+            return float("inf")
+        return self.tts_queue_manager.quiet_for(session_id, user_id or 0)
+
+    async def offer_space(self, session_id: str, user_id: Optional[int], space_s: float, midtrack: bool,
+                          label: str, lead_s: float = 0.0) -> Optional[str]:
+        if not settings.STINGS_ENABLED or (midtrack and not settings.STINGS_MIDTRACK_ENABLED):
             return None
-        entry = self._session(session_id)
-        gate = self._gate(session_id, user_id)
+        who = log_service.who(session_id, user_id=user_id)
+        gate = self._gate(session_id, user_id, at_change=not midtrack)
         if not gate.allowed():
-            entry.state.breaks_since_sting += 1
-            held = [name for name, on in (("the hosts are mid-conversation", gate.conversing),
-                                          ("the hosts are speaking", gate.tts_busy),
-                                          ("a Radio Mode break holds it", gate.radio_blocked),
-                                          ("stings are switched off", not (gate.enabled and gate.stings_pref)))
-                    if on]
-            outcome = "nothing" if fill else "the hosts' turn"
-            log_service.playback(f"{log_service.who(session_id, user_id=user_id)}: plan for the next song change ({window_s:.1f}s gap) "
-                                 f"-> {outcome} ({', '.join(held) or 'gated'})")
+            log_service.playback(f"{who}: {label} ({space_s:.1f}s) -> nothing ({gate.held_by()})")
             return None
-        await self._location(session_id, user_id, entry)
-        at = self.clock() + max(0.0, trigger_in_s)
-        ctx = self._context(session_id, entry, window_s, midtrack=False, at=at)
-        disabled = settings.STINGS_TYPES_DISABLED
-        ready = [c for c in sting_types.candidates(disabled) if sting_types.get(c[0]).ready(self, ctx)
-                 and (sting_types.get(c[0]).voice or not fill)]
-        time_ready = any(c[0] == sting_schedule.TIME_CHECK for c in ready)
-        decision = sting_schedule.decide_between_tracks(
-            entry.state, gate, window_s, at, ctx.local.minute if ctx.local else None, ready, time_ready, self.rng,
-            fill=fill and settings.STINGS_FILL_GAPS)
-        if decision.kind is None:
-            entry.state.breaks_since_sting += 1
-        outcome = f"station {decision.kind}" if decision.kind else \
-            "nothing" if fill else "the hosts' turn"
-        log_service.playback(f"{log_service.who(session_id, user_id=user_id)}: plan for the next song change ({window_s:.1f}s gap) "
-                             f"-> {outcome} ({decision.reason})")
-        return decision.kind
-
-    def midtrack_possible(self, session_id: str) -> bool:
-        radio = self._radio()
-        radio_sess = radio.sessions.get(session_id) if radio is not None else None
-        if radio_sess is None or not radio_sess.prefs.enabled or not radio.stings_pref(session_id):
-            return False
-        entry = self.sessions.get(session_id)
-        if entry is None:
-            return True
-        now = self.clock()
-        last = entry.state.last_midtrack_at
-        return last is None or now - last >= settings.STINGS_MIDTRACK_MIN_INTERVAL_S
-
-    async def plan_midtrack(self, session_id: str, user_id: Optional[int], quiet_window_s: float) -> Optional[str]:
-        if not (settings.STINGS_ENABLED and settings.STINGS_MIDTRACK_ENABLED):
-            return None
+        if midtrack:
+            quiet = self.station_quiet_s(session_id, user_id)
+            if quiet < settings.STATION_QUIET_TARGET_S:
+                log_service.playback(f"{who}: {label} ({space_s:.1f}s) -> nothing (the station spoke "
+                                     f"{quiet:.0f}s ago)")
+                return None
         entry = self._session(session_id)
-        gate = self._gate(session_id, user_id)
         await self._location(session_id, user_id, entry)
-        ctx = self._context(session_id, entry, midtrack_max_len(quiet_window_s), midtrack=True)
-        ready = [c for c in sting_types.candidates(settings.STINGS_TYPES_DISABLED, midtrack=True)
+        at = self.clock() + max(0.0, lead_s)
+        ctx = self._context(session_id, entry, space_s, midtrack=midtrack, at=at)
+        ready = [c for c in sting_types.candidates(settings.STINGS_TYPES_DISABLED, midtrack=midtrack)
                  if sting_types.get(c[0]).ready(self, ctx)]
-        time_ready = any(c[0] == sting_schedule.TIME_CHECK for c in ready)
-        decision = sting_schedule.decide_midtrack(entry.state, gate, quiet_window_s, self.clock(), ready, self.rng,
-                                                  ctx.local.minute if ctx.local else None, time_ready)
-        if decision.kind:
-            log_service.announcer(f"[STINGS] [{session_id[:8]}] mid-track {decision.kind} in a "
-                                  f"{quiet_window_s:.1f}s quiet passage")
+        voiced = {c[0] for c in ready if sting_types.get(c[0]).voice}
+        decision = sting_schedule.choose(entry.state, space_s, at, ctx.local.minute if ctx.local else None, ready,
+                                         voiced, any(c[0] == sting_schedule.TIME_CHECK for c in ready), self.rng)
+        log_service.playback(f"{who}: {label} ({space_s:.1f}s) -> "
+                             f"{f'station {decision.kind}' if decision.kind else 'nothing'} ({decision.reason})")
         return decision.kind
 
     def _review_candidates(self, track_id: str) -> list:
@@ -341,9 +310,6 @@ class StingService:
         if radio is not None and not radio.reviews_pref(session_id):
             return False
         entry = self._session(session_id)
-        last = entry.last_review_at
-        if last is not None and self.clock() - last < settings.REVIEW_STINGS_MIN_INTERVAL_S:
-            return False
         return any(self._review_fresh(entry, r["id"]) for r in self._review_candidates(track_id))
 
     def _review_fresh(self, entry: _SessionStings, review_id: str) -> bool:
@@ -403,7 +369,6 @@ class StingService:
             clip, user_id=user_id or 0, tts_type=TTS_TYPE, is_temp_user=user_id is None, session_id=session_id)
         if not accepted:
             return False
-        self._session(session_id).last_review_at = self.clock()
         self.plays[render.kind] = self.plays.get(render.kind, 0) + 1
         from services.community_engagement import community_engagement
         for review_id in render.parts:
