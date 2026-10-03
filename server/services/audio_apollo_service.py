@@ -15,10 +15,17 @@ from services.audio_headroom import write_float_wav
 sys.path.insert(0, str(settings.APOLLO_DIR))
 from look2hear.models import BaseModel
 
-CHUNK_SECONDS = 20
-OVERLAP_SECONDS = 2
-
 class AudioApolloService(SingletonService):
+    LABEL = "Apollo"
+    MODEL_ARGS = {"sr": 44100, "win": 20, "feature_dim": 256, "layer": 6}
+    CHUNK_SECONDS = 20
+    OVERLAP_SECONDS = 2
+
+    def checkpoint(self) -> Optional[Path]:
+        checkpoints = list(settings.APOLLO_CHECKPOINTS_DIR.glob("*.bin")) + list(
+            settings.APOLLO_CHECKPOINTS_DIR.glob("*.ckpt"))
+        return checkpoints[0] if checkpoints else None
+
     def __init__(self):
         if getattr(self, '_initialized', False):
             return
@@ -31,10 +38,10 @@ class AudioApolloService(SingletonService):
 
     async def initialize(self):
         if self.apollo_loaded:
-            log_service.upscaling("Apollo already loaded")
+            log_service.upscaling(f"{self.LABEL} already loaded")
             return
 
-        log_service.upscaling("Loading Apollo bandwidth restoration model...")
+        log_service.upscaling(f"Loading {self.LABEL} restoration model...")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -42,22 +49,14 @@ class AudioApolloService(SingletonService):
             log_service.upscaling(f"GPU: {torch.cuda.get_device_name(0)}")
             log_service.upscaling(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f}GB")
 
-        checkpoints = list(settings.APOLLO_CHECKPOINTS_DIR.glob("*.bin")) + list(
-            settings.APOLLO_CHECKPOINTS_DIR.glob("*.ckpt"))
-
-        if not checkpoints:
-            log_service.error("No Apollo checkpoint found")
+        checkpoint = self.checkpoint()
+        if checkpoint is None or not checkpoint.exists():
+            log_service.error(f"No {self.LABEL} checkpoint found")
             return
 
-        log_service.upscaling(f"Loading checkpoint: {checkpoints[0].name}")
+        log_service.upscaling(f"Loading checkpoint: {checkpoint.name}")
 
-        self.model = BaseModel.from_pretrain(
-            str(checkpoints[0]),
-            sr=44100,
-            win=20,
-            feature_dim=256,
-            layer=6
-        )
+        self.model = BaseModel.from_pretrain(str(checkpoint), **self.MODEL_ARGS)
 
         if self.device == "cuda":
             self.model = self.model.cuda()
@@ -68,7 +67,7 @@ class AudioApolloService(SingletonService):
             param.requires_grad = False
 
         self.apollo_loaded = True
-        log_service.upscaling("Apollo model loaded and ready")
+        log_service.upscaling(f"{self.LABEL} model loaded and ready")
 
     def _process_audio_sync(
             self,
@@ -84,8 +83,8 @@ class AudioApolloService(SingletonService):
             channels, original_length = audio.shape
             duration = original_length / 44100
 
-            chunk_samples = int(CHUNK_SECONDS * 44100)
-            overlap_samples = int(OVERLAP_SECONDS * 44100)
+            chunk_samples = int(self.CHUNK_SECONDS * 44100)
+            overlap_samples = int(self.OVERLAP_SECONDS * 44100)
             hop_samples = chunk_samples - overlap_samples
 
             padding_samples = chunk_samples // 2
@@ -173,7 +172,7 @@ class AudioApolloService(SingletonService):
             if self.device == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
-            raise_if_cuda_oom(e, "Apollo")
+            raise_if_cuda_oom(e, self.LABEL)
             return None, {"error": str(e)}
 
     async def process_audio(
@@ -183,16 +182,16 @@ class AudioApolloService(SingletonService):
     ) -> Optional[Path]:
         async with self.lock:
             if not self.apollo_loaded:
-                log_service.error("Apollo model not loaded")
+                log_service.error(f"{self.LABEL} model not loaded")
                 return None
 
             if output_path.exists():
-                log_service.upscaling(f"Apollo WAV already exists: {output_path.name}")
+                log_service.upscaling(f"{self.LABEL} WAV already exists: {output_path.name}")
                 return output_path
 
-            log_service.upscaling(f"Apollo: Processing {input_path.name}")
+            log_service.upscaling(f"{self.LABEL}: Processing {input_path.name}")
 
-            async with gpu_lease("Apollo"):
+            async with gpu_lease(self.LABEL):
                 result, metadata = await asyncio.to_thread(
                     self._process_audio_sync,
                     input_path,
@@ -200,7 +199,7 @@ class AudioApolloService(SingletonService):
                 )
 
             if not result:
-                log_service.error(f"Apollo processing failed: {metadata.get('error', 'Unknown error')}")
+                log_service.error(f"{self.LABEL} processing failed: {metadata.get('error', 'Unknown error')}")
                 return None
 
             log_service.upscaling(
@@ -208,7 +207,7 @@ class AudioApolloService(SingletonService):
                 f"Channels: {metadata['channels']} | "
                 f"Chunks: {metadata['num_chunks']}"
             )
-            log_service.upscaling(f"Apollo complete: {output_path.name}")
+            log_service.upscaling(f"{self.LABEL} complete: {output_path.name}")
 
             return result
 
@@ -222,4 +221,4 @@ class AudioApolloService(SingletonService):
 
         gc.collect()
         self.apollo_loaded = False
-        log_service.upscaling("Apollo model unloaded")
+        log_service.upscaling(f"{self.LABEL} model unloaded")

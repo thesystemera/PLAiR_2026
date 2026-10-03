@@ -112,13 +112,13 @@ class GenerationJob:
 
         stage_weights = {
             "gemini": 5, "suno": 10, "downloading": 5, "metadata_enrichment": 3,
-            "apollo": 8, "demucs": 7, "clearvoice": 5, "sonicmaster": 10,
+            "apollo": 8, "demucs": 7, "vocals": 5, "sonicmaster": 10,
             "master": 5, "audio_features": 3, "lyric_timestamps": 3,
             "artwork": 2, "finalizing": 2
         }
 
         ordered_per_track = [
-            "downloading", "metadata_enrichment", "apollo", "demucs", "clearvoice",
+            "downloading", "metadata_enrichment", "demucs", "vocals", "apollo",
             "sonicmaster", "master", "audio_features", "lyric_timestamps", "artwork", "finalizing"
         ]
 
@@ -1118,7 +1118,7 @@ class SunoGenerationQueueService(SingletonService):
                                     stage_info = {
                                         "Apollo": {"key": "apollo", "display": "Bandwidth Restoration"},
                                         "Demucs": {"key": "demucs", "display": "Stem Separation"},
-                                        "ClearVoice": {"key": "clearvoice", "display": "Vocal Enhancement"},
+                                        "Vocals": {"key": "vocals", "display": "Vocal Restoration"},
                                         "SonicMaster": {"key": "sonicmaster", "display": "Audio Enhancement"},
                                         "Mastering": {"key": "master", "display": "Mastering"},
                                         "AudioFeatures": {"key": "audio_features", "display": "Extracting Audio Features"},

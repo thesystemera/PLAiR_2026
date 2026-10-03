@@ -213,7 +213,7 @@ class HumanMusicUploadService(SingletonService):
         self.lyric_timestamp_service = None
         self.sonic_master_service = None
         self.demucs_service = None
-        self.clearvoice_service = None
+        self.vocal_enhancer = None
 
         self.audio_formats = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.webm'}
         self.video_formats = {'.mp4', '.mov', '.m4v', '.mkv', '.avi'}
@@ -244,7 +244,7 @@ class HumanMusicUploadService(SingletonService):
         lyric_timestamp_service=None,
         sonic_master_service=None,
         demucs_service=None,
-        clearvoice_service=None
+        vocal_enhancer=None
     ):
         if self._service_initialized:
             log_service.info("HumanMusicUploadService already initialized")
@@ -264,23 +264,23 @@ class HumanMusicUploadService(SingletonService):
         self.lyric_timestamp_service = lyric_timestamp_service
         self.sonic_master_service = sonic_master_service
         self.demucs_service = demucs_service
-        self.clearvoice_service = clearvoice_service
+        self.vocal_enhancer = vocal_enhancer
 
         self._service_initialized = True
         log_service.info("✓ HumanMusicUploadService initialized (full pipeline enabled)")
 
-    def attach_services(self, apollo_service=None, demucs_service=None, clearvoice_service=None, vector_db_service=None):
+    def attach_services(self, apollo_service=None, demucs_service=None, vocal_enhancer=None, vector_db_service=None):
         if apollo_service is not None:
             self.apollo_service = apollo_service
         if demucs_service is not None:
             self.demucs_service = demucs_service
-        if clearvoice_service is not None:
-            self.clearvoice_service = clearvoice_service
+        if vocal_enhancer is not None:
+            self.vocal_enhancer = vocal_enhancer
         if vector_db_service is not None:
             self.vector_db_service = vector_db_service
         log_service.info(
             f"HumanMusicUploadService lanes: apollo={bool(self.apollo_service)}, "
-            f"demucs={bool(self.demucs_service)}, clearvoice={bool(self.clearvoice_service)}, "
+            f"demucs={bool(self.demucs_service)}, vocal_enhancer={bool(self.vocal_enhancer)}, "
             f"vector_index={bool(self.vector_db_service)}"
         )
 
@@ -337,7 +337,7 @@ class HumanMusicUploadService(SingletonService):
     def _vocal_lane_ready(self) -> bool:
         return bool(
             self.demucs_service and getattr(self.demucs_service, 'demucs_loaded', False)
-            and self.clearvoice_service and getattr(self.clearvoice_service, 'models_loaded', False)
+            and self.vocal_enhancer and getattr(self.vocal_enhancer, 'models_loaded', False)
         )
 
     def _sonic_ready(self) -> bool:
@@ -919,7 +919,7 @@ class HumanMusicUploadService(SingletonService):
                     log_service.success("[Upload/Audio] Demucs separation complete")
 
                     await progress.stage("vocals")
-                    enhanced_vocals = await self.clearvoice_service.enhance_vocals(
+                    enhanced_vocals = await self.vocal_enhancer.enhance_vocals(
                         stems["vocals"],
                         stems_dir / "vocals_enhanced.wav"
                     )
@@ -933,7 +933,7 @@ class HumanMusicUploadService(SingletonService):
                         catalog_metadata["vocal_enhancement_applied"] = True
                         log_service.success("[Upload/Audio] Vocals enhanced and remixed")
                     else:
-                        log_service.warning("[Upload/Audio] ClearVoice failed, continuing without vocal enhancement")
+                        log_service.warning("[Upload/Audio] Vocal restoration failed, continuing without vocal enhancement")
                 else:
                     log_service.warning("[Upload/Audio] Demucs separation failed, continuing without vocal enhancement")
             except GPUOutOfMemoryError:

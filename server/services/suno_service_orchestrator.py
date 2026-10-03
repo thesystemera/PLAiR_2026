@@ -5,10 +5,13 @@ This orchestrator manages a 6-lane concurrent pipeline from mp3+metadata → cat
 
 ┌─────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────────────┐
 │  Lane 1     │  Lane 2      │  Lane 3      │  Lane 4      │  Lane 5      │       Lane 6             │
-│  APOLLO     │  DEMUCS      │  CLEARVOICE  │  SONICMASTER │  WHISPER     │   CPU POOL               │
+│  DECODE     │  SEPARATION  │ VOCAL+APOLLO │  SONICMASTER │  WHISPER     │   CPU POOL               │
 │  (GPU/VRAM) │  (GPU/VRAM)  │  (GPU/VRAM)  │  (GPU/VRAM)  │  (GPU/VRAM)  │   (CPU: 16-32 workers)   │
 │  1 worker   │  1 worker    │  1 worker    │  1 worker    │  1 worker    │   Massive Parallelism    │
 └─────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────────────┘
+
+Lane 3 restores the separated vocal (Lew's vocal Apollo), remixes it with the music, then runs
+the full-mix bandwidth stage (Apollo) on the remix. Instrumentals skip separation and only get Apollo.
 
 All GPU lanes (1-5) run in parallel with 1 concurrent job each (services have internal locks).
 Lane 6 runs up to N concurrent CPU jobs (configurable via settings.MAX_PARALLEL_CPU_WORKERS).
@@ -33,7 +36,7 @@ from services import log_service
 from services.base_service import SingletonService
 from services.audio_apollo_service import AudioApolloService
 from services.audio_demucs_service import AudioDemucsService
-from services.audio_clearvoice_service import AudioClearVoiceService
+from services.audio_vocal_enhance_service import AudioVocalEnhanceService
 from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
 from services.audio_master_service import AudioMasterService
 from services.audio_headroom import mix_stems_to_file
@@ -63,8 +66,9 @@ class PipelineState(Enum):
     READY_FOR_FINALIZATION = auto()
     READY_FOR_MASTERING = auto()
     READY_FOR_SONIC = auto()
-    READY_FOR_CLEARVOICE = auto()
-    READY_FOR_DEMUCS = auto()
+    READY_FOR_BANDWIDTH = auto()
+    READY_FOR_VOCALS = auto()
+    READY_FOR_SEPARATION = auto()
     NEW = auto()
 
 @dataclass
@@ -76,7 +80,7 @@ class TrackJob:
 
     apollo_complete: bool = False
     demucs_complete: bool = False
-    clearvoice_complete: bool = False
+    vocals_complete: bool = False
     sonic_complete: bool = False
     mastering_complete: bool = False
     mastering_failed: bool = False
@@ -91,10 +95,11 @@ class TrackJob:
     catalog_ready: bool = False
     cancelled: bool = False
 
+    decoded_wav_path: Optional[Path] = None
     apollo_wav_path: Optional[Path] = None
     demucs_vocals_path: Optional[Path] = None
     demucs_instrumentals_path: Optional[Path] = None
-    clearvoice_enhanced_path: Optional[Path] = None
+    vocal_mix_path: Optional[Path] = None
     sonic_wav_path: Optional[Path] = None
     master_wav_path: Optional[Path] = None
 
@@ -128,7 +133,7 @@ class SunoServiceOrchestrator(SingletonService):
         self.demucs: Optional[AudioDemucsService] = None
         self.bandwidth_stage = "apollo"
         self.separation_model = "demucs"
-        self.clearvoice: Optional[AudioClearVoiceService] = None
+        self.vocal_enhancer: Optional[AudioVocalEnhanceService] = None
         self.sonic_master: Optional[SonicMasterService] = None
         self.master: Optional[AudioMasterService] = None
         self.features: Optional[AudioFeaturesService] = None
@@ -163,12 +168,13 @@ class SunoServiceOrchestrator(SingletonService):
             self.demucs, self.separation_model = resolve_separation_model()
             await self.demucs.initialize()
 
-            self.clearvoice = AudioClearVoiceService()
-            await self.clearvoice.initialize()
+            self.vocal_enhancer = AudioVocalEnhanceService()
+            await self.vocal_enhancer.initialize()
 
-        self.sonic_master = SonicMasterService()
-        self.sonic_master.configure(**SUNO_SONIC_SETTINGS)
-        await self.sonic_master.initialize()
+        if settings.SONIC_MASTER_ENABLED:
+            self.sonic_master = SonicMasterService()
+            self.sonic_master.configure(**SUNO_SONIC_SETTINGS)
+            await self.sonic_master.initialize()
 
         self.master = AudioMasterService()
         await self.master.initialize()
@@ -202,9 +208,9 @@ class SunoServiceOrchestrator(SingletonService):
         self.cpu_semaphore = asyncio.Semaphore(cpu_workers)
 
         log_service.suno("\n📊 Highway Configuration:")
-        log_service.suno("  Lane 1 (Apollo):      1 worker  (GPU/VRAM)")
-        log_service.suno("  Lane 2 (Demucs):      1 worker  (GPU/VRAM)")
-        log_service.suno("  Lane 3 (ClearVoice):  1 worker  (GPU/VRAM)")
+        log_service.suno("  Lane 1 (Decode):      1 worker  (CPU)")
+        log_service.suno("  Lane 2 (Separation):  1 worker  (GPU/VRAM)")
+        log_service.suno("  Lane 3 (Vocal+Apollo):1 worker  (GPU/VRAM)")
         log_service.suno("  Lane 4 (SonicMaster): 1 worker  (GPU/VRAM)")
         log_service.suno("  Lane 5 (Whisper):     1 worker  (GPU/VRAM)")
         log_service.suno(f"  Lane 6 (CPU Pool):    {cpu_workers} workers (CPU)")
@@ -213,9 +219,9 @@ class SunoServiceOrchestrator(SingletonService):
 
         self.running = True
         self.consumer_tasks = [
-            asyncio.create_task(self._lane1_consumer(), name="Lane1-Apollo"),
-            asyncio.create_task(self._lane2_consumer(), name="Lane2-Demucs"),
-            asyncio.create_task(self._lane3_consumer(), name="Lane3-ClearVoice"),
+            asyncio.create_task(self._lane1_consumer(), name="Lane1-Decode"),
+            asyncio.create_task(self._lane2_consumer(), name="Lane2-Separation"),
+            asyncio.create_task(self._lane3_consumer(), name="Lane3-VocalApollo"),
             asyncio.create_task(self._lane4_consumer(), name="Lane4-SonicMaster"),
             asyncio.create_task(self._lane5_consumer(), name="Lane5-Whisper"),
             asyncio.create_task(self._lane6_consumer(), name="Lane6-CPUPool"),
@@ -243,22 +249,26 @@ class SunoServiceOrchestrator(SingletonService):
         if sonic_wav.exists():
             return PipelineState.READY_FOR_MASTERING
 
-        enhanced_vocal_wav = settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav"
-        if enhanced_vocal_wav.exists():
+        if (settings.WAV_DIR / f"{track_id}.wav").exists():
             return PipelineState.READY_FOR_SONIC
+
+        if (settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav").exists():
+            return PipelineState.READY_FOR_BANDWIDTH
 
         stems_dir = stems_dir_for(track_id, getattr(self, "separation_model", None))
         if stems_dir.exists() and (stems_dir / "vocals.wav").exists():
-            return PipelineState.READY_FOR_CLEARVOICE
+            return PipelineState.READY_FOR_VOCALS
 
-        apollo_wav = settings.WAV_DIR / f"{track_id}.wav"
-        if apollo_wav.exists():
-            is_instrumental = metadata.get("generation_params", {}).get("instrumental", False)
-            if is_instrumental or not settings.ENABLE_VOCAL_ENHANCEMENT:
-                return PipelineState.READY_FOR_SONIC
-            return PipelineState.READY_FOR_DEMUCS
+        if (settings.DECODED_WAV_DIR / f"{track_id}.wav").exists():
+            if self._needs_separation(metadata):
+                return PipelineState.READY_FOR_SEPARATION
+            return PipelineState.READY_FOR_BANDWIDTH
 
         return PipelineState.NEW
+
+    def _needs_separation(self, metadata: Dict[str, Any]) -> bool:
+        is_instrumental = metadata.get("generation_params", {}).get("instrumental", False)
+        return bool(settings.ENABLE_VOCAL_ENHANCEMENT and self.demucs and not is_instrumental)
 
     async def smart_submit(
             self,
@@ -316,36 +326,35 @@ class SunoServiceOrchestrator(SingletonService):
 
         elif state == PipelineState.READY_FOR_SONIC:
             log(f"🚀 [{track_id[:8]}] Resuming at Lane 4 (SonicMaster)")
-            enhanced_vocal = settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav"
-            apollo_wav = settings.WAV_DIR / f"{track_id}.wav"
-
-            if enhanced_vocal.exists():
-                job.clearvoice_enhanced_path = enhanced_vocal
-                job.clearvoice_complete = True
-            elif apollo_wav.exists():
-                job.apollo_wav_path = apollo_wav
-                job.apollo_complete = True
-
-            await self.lane4_queue.put(job)
-
-        elif state == PipelineState.READY_FOR_CLEARVOICE:
-            log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (ClearVoice)")
             job.apollo_wav_path = settings.WAV_DIR / f"{track_id}.wav"
             job.apollo_complete = True
+            await self.lane4_queue.put(job)
+
+        elif state == PipelineState.READY_FOR_BANDWIDTH:
+            log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (Apollo)")
+            vocal_mix = settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav"
+            if vocal_mix.exists():
+                job.vocal_mix_path = vocal_mix
+                job.vocals_complete = True
+            job.decoded_wav_path = settings.DECODED_WAV_DIR / f"{track_id}.wav"
+            await self.lane3_queue.put(job)
+
+        elif state == PipelineState.READY_FOR_VOCALS:
+            log(f"🚀 [{track_id[:8]}] Resuming at Lane 3 (Vocal restoration)")
+            job.decoded_wav_path = settings.DECODED_WAV_DIR / f"{track_id}.wav"
             resumed_stems_dir = stems_dir_for(track_id, getattr(self, "separation_model", None))
             job.demucs_vocals_path = resumed_stems_dir / "vocals.wav"
             job.demucs_instrumentals_path = resumed_stems_dir / "no_vocals.wav"
             job.demucs_complete = True
             await self.lane3_queue.put(job)
 
-        elif state == PipelineState.READY_FOR_DEMUCS:
-            log(f"🚀 [{track_id[:8]}] Resuming at Lane 2 (Demucs)")
-            job.apollo_wav_path = settings.WAV_DIR / f"{track_id}.wav"
-            job.apollo_complete = True
+        elif state == PipelineState.READY_FOR_SEPARATION:
+            log(f"🚀 [{track_id[:8]}] Resuming at Lane 2 (Separation)")
+            job.decoded_wav_path = settings.DECODED_WAV_DIR / f"{track_id}.wav"
             await self.lane2_queue.put(job)
 
         else:
-            log(f"🚀 [{track_id[:8]}] Submitting to Highway - Entry: Lane 1 (Apollo)")
+            log(f"🚀 [{track_id[:8]}] Submitting to Highway - Entry: Lane 1 (Decode)")
             await self.lane1_queue.put(job)
 
         return job
@@ -383,11 +392,13 @@ class SunoServiceOrchestrator(SingletonService):
             track_states.append((track_id, mp3_path, metadata, state))
 
             if state == PipelineState.NEW:
-                stats["Lane 1 (New - Apollo)"] += 1
-            elif state == PipelineState.READY_FOR_DEMUCS:
-                stats["Lane 2 (Resuming - Demucs)"] += 1
-            elif state == PipelineState.READY_FOR_CLEARVOICE:
-                stats["Lane 3 (Resuming - ClearVoice)"] += 1
+                stats["Lane 1 (New - Decode)"] += 1
+            elif state == PipelineState.READY_FOR_SEPARATION:
+                stats["Lane 2 (Resuming - Separation)"] += 1
+            elif state == PipelineState.READY_FOR_VOCALS:
+                stats["Lane 3 (Resuming - Vocals)"] += 1
+            elif state == PipelineState.READY_FOR_BANDWIDTH:
+                stats["Lane 3 (Resuming - Apollo)"] += 1
             elif state == PipelineState.READY_FOR_SONIC:
                 stats["Lane 4 (Resuming - SonicMaster)"] += 1
             elif state == PipelineState.READY_FOR_MASTERING:
@@ -453,8 +464,8 @@ class SunoServiceOrchestrator(SingletonService):
         assert self.lane1_queue is not None
         lane1_queue = self.lane1_queue
         lane2_queue = self.lane2_queue
-        lane4_queue = self.lane4_queue
-        log_service.suno("Lane 1 (Apollo) consumer started")
+        lane3_queue = self.lane3_queue
+        log_service.suno("Lane 1 (Decode) consumer started")
         while self.running:
             job: Optional[TrackJob] = None
             try:
@@ -463,41 +474,24 @@ class SunoServiceOrchestrator(SingletonService):
                 if self._skip_if_cancelled(job, "Lane 1"):
                     lane1_queue.task_done()
                     continue
-                log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Apollo processing...")
-                if job.progress_callback:
-                    await job.progress_callback("Apollo")
-
-                apollo_wav_path = settings.WAV_DIR / f"{job.track_id}.wav"
-                if self.apollo is None:
-                    if self.transcoding is None:
-                        raise RuntimeError("transcoding service not initialized")
-                    decoded = await self.transcoding.extract_audio_to_wav(
-                        job.mp3_path, apollo_wav_path, sample_rate="44100", codec="pcm_f32le"
-                    )
-                    result = apollo_wav_path if decoded else None
-                else:
-                    result = await self.apollo.process_audio(job.mp3_path, apollo_wav_path)
-
-                if result:
-                    job.apollo_complete = True
-                    job.apollo_wav_path = result
-                    _clear_cuda_cache()
-
-                    is_instrumental = job.metadata.get("generation_params", {}).get("instrumental", False)
-                    if is_instrumental:
-                        log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Instrumental -> Lane 4")
-                        assert lane4_queue is not None
-                        await lane4_queue.put(job)
-                    elif settings.ENABLE_VOCAL_ENHANCEMENT and self.demucs:
-                        log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Complete -> Lane 2")
+                if self.transcoding is None:
+                    raise RuntimeError("transcoding service not initialized")
+                decoded_path = settings.DECODED_WAV_DIR / f"{job.track_id}.wav"
+                decoded = await self.transcoding.extract_audio_to_wav(
+                    job.mp3_path, decoded_path, sample_rate="44100", codec="pcm_f32le"
+                )
+                if decoded:
+                    job.decoded_wav_path = decoded_path
+                    if self._needs_separation(job.metadata):
+                        log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Decoded -> Lane 2")
                         assert lane2_queue is not None
                         await lane2_queue.put(job)
                     else:
-                        log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Enhancement Disabled -> Lane 4")
-                        assert lane4_queue is not None
-                        await lane4_queue.put(job)
+                        log_service.suno(f"[Lane 1] [{job.track_id[:8]}] Decoded (no separation) -> Lane 3")
+                        assert lane3_queue is not None
+                        await lane3_queue.put(job)
                 else:
-                    log_service.error(f"[Lane 1] [{job.track_id[:8]}] Apollo FAILED")
+                    log_service.error(f"[Lane 1] [{job.track_id[:8]}] Decode FAILED")
                     job.failed = True
 
                 lane1_queue.task_done()
@@ -515,8 +509,7 @@ class SunoServiceOrchestrator(SingletonService):
         assert self.lane2_queue is not None
         lane2_queue = self.lane2_queue
         lane3_queue = self.lane3_queue
-        lane4_queue = self.lane4_queue
-        log_service.suno("Lane 2 (Demucs) consumer started")
+        log_service.suno("Lane 2 (Separation) consumer started")
         while self.running:
             job: Optional[TrackJob] = None
             try:
@@ -525,16 +518,16 @@ class SunoServiceOrchestrator(SingletonService):
                 if self._skip_if_cancelled(job, "Lane 2"):
                     lane2_queue.task_done()
                     continue
-                log_service.suno(f"[Lane 2] [{job.track_id[:8]}] Demucs processing...")
+                log_service.suno(f"[Lane 2] [{job.track_id[:8]}] Separation processing...")
                 if job.progress_callback:
                     await job.progress_callback("Demucs")
 
                 if self.demucs is None:
-                    raise RuntimeError("demucs service not initialized")
-                if job.apollo_wav_path is None:
-                    raise ValueError("apollo_wav_path is required for Demucs processing")
+                    raise RuntimeError("separation service not initialized")
+                if job.decoded_wav_path is None:
+                    raise ValueError("decoded_wav_path is required for separation")
                 stems_dir = stems_dir_for(job.track_id, self.separation_model)
-                stems = await self.demucs.separate_stems(job.apollo_wav_path, stems_dir)
+                stems = await self.demucs.separate_stems(job.decoded_wav_path, stems_dir)
 
                 if stems:
                     job.demucs_complete = True
@@ -542,12 +535,10 @@ class SunoServiceOrchestrator(SingletonService):
                     job.demucs_instrumentals_path = stems.get("no_vocals")
                     _clear_cuda_cache()
                     log_service.suno(f"[Lane 2] [{job.track_id[:8]}] Complete -> Lane 3")
-                    assert lane3_queue is not None
-                    await lane3_queue.put(job)
                 else:
-                    log_service.error(f"[Lane 2] [{job.track_id[:8]}] Failed -> Skip to Lane 4")
-                    assert lane4_queue is not None
-                    await lane4_queue.put(job)
+                    log_service.error(f"[Lane 2] [{job.track_id[:8]}] Failed -> Lane 3 (Apollo only)")
+                assert lane3_queue is not None
+                await lane3_queue.put(job)
 
                 lane2_queue.task_done()
                 await asyncio.sleep(0.05)
@@ -579,11 +570,48 @@ class SunoServiceOrchestrator(SingletonService):
                 raise TimeoutError(f"mastering did not complete within {MASTERING_WAIT_TIMEOUT_S}s")
             await asyncio.sleep(0.1)
 
+    async def _restore_vocals(self, job: TrackJob):
+        if job.vocals_complete or job.demucs_vocals_path is None or self.vocal_enhancer is None:
+            return
+        if job.progress_callback:
+            await job.progress_callback("Vocals")
+        restored = await self.vocal_enhancer.enhance_vocals(
+            job.demucs_vocals_path, job.demucs_vocals_path.with_name("vocals_enhanced.wav")
+        )
+        if not restored:
+            log_service.error(f"[Lane 3] [{job.track_id[:8]}] Vocal restoration failed, using the separated vocal")
+            restored = job.demucs_vocals_path
+        vocal_mix = settings.VOCAL_ENHANCED_WAV_DIR / f"{job.track_id}.wav"
+        await asyncio.to_thread(self._mix_stems_sync, restored, job.demucs_instrumentals_path, vocal_mix)
+        job.vocal_mix_path = vocal_mix
+        job.vocals_complete = True
+
+    async def _restore_bandwidth(self, job: TrackJob) -> Optional[Path]:
+        source = job.vocal_mix_path or job.decoded_wav_path
+        if source is None:
+            raise ValueError("no input for the bandwidth stage")
+        apollo_wav_path = settings.WAV_DIR / f"{job.track_id}.wav"
+        if self.apollo is None:
+            if self.transcoding is None:
+                raise RuntimeError("transcoding service not initialized")
+            decoded = await self.transcoding.extract_audio_to_wav(
+                source, apollo_wav_path, sample_rate="44100", codec="pcm_f32le"
+            )
+            if not decoded or self.master is None:
+                return apollo_wav_path if decoded else None
+            return await self.master.correct_audio(apollo_wav_path, apollo_wav_path)
+        if job.progress_callback:
+            await job.progress_callback("Apollo")
+        restored = await self.apollo.process_audio(source, apollo_wav_path)
+        if restored is None or self.master is None:
+            return restored
+        return await self.master.correct_audio(restored, restored)
+
     async def _lane3_consumer(self):
         assert self.lane3_queue is not None
         lane3_queue = self.lane3_queue
         lane4_queue = self.lane4_queue
-        log_service.suno("Lane 3 (ClearVoice) consumer started")
+        log_service.suno("Lane 3 (Vocal restoration + Apollo) consumer started")
         while self.running:
             job: Optional[TrackJob] = None
             try:
@@ -592,37 +620,20 @@ class SunoServiceOrchestrator(SingletonService):
                 if self._skip_if_cancelled(job, "Lane 3"):
                     lane3_queue.task_done()
                     continue
-                log_service.suno(f"[Lane 3] [{job.track_id[:8]}] ClearVoice processing...")
-                if job.progress_callback:
-                    await job.progress_callback("ClearVoice")
-
-                if self.clearvoice is None:
-                    raise RuntimeError("clearvoice service not initialized")
-                if job.demucs_vocals_path is None:
-                    raise ValueError("demucs_vocals_path is required for ClearVoice processing")
-                enhanced_vocals_path = settings.DEMUCS_STEMS_DIR / job.track_id / "vocals_enhanced.wav"
-                enhanced_vocals = await self.clearvoice.enhance_vocals(
-                    job.demucs_vocals_path,
-                    enhanced_vocals_path
-                )
-
-                if enhanced_vocals:
-                    job.clearvoice_complete = True
-
-                    enhanced_path = settings.VOCAL_ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-                    await asyncio.to_thread(
-                        self._mix_stems_sync, enhanced_vocals, job.demucs_instrumentals_path, enhanced_path
-                    )
-
-                    job.clearvoice_enhanced_path = enhanced_path
+                log_service.suno(f"[Lane 3] [{job.track_id[:8]}] Vocal restoration + Apollo...")
+                await self._restore_vocals(job)
+                result = await self._restore_bandwidth(job)
+                if result:
+                    job.apollo_complete = True
+                    job.apollo_wav_path = result
                     _clear_cuda_cache()
                     log_service.suno(f"[Lane 3] [{job.track_id[:8]}] Complete -> Lane 4")
+                    assert lane4_queue is not None
+                    await lane4_queue.put(job)
                 else:
-                    log_service.error(f"[Lane 3] [{job.track_id[:8]}] Failed -> Skip to Lane 4")
-                    job.clearvoice_enhanced_path = job.apollo_wav_path
+                    log_service.error(f"[Lane 3] [{job.track_id[:8]}] Apollo FAILED")
+                    job.failed = True
 
-                assert lane4_queue is not None
-                await lane4_queue.put(job)
                 lane3_queue.task_done()
                 await asyncio.sleep(0.05)
             except asyncio.CancelledError:
@@ -630,9 +641,7 @@ class SunoServiceOrchestrator(SingletonService):
             except Exception as e:
                 log_service.error(f"[Lane 3] Error: {str(e)}")
                 if job is not None:
-                    job.clearvoice_enhanced_path = job.apollo_wav_path
-                    assert lane4_queue is not None
-                    await lane4_queue.put(job)
+                    job.failed = True
                 lane3_queue.task_done()
                 await asyncio.sleep(0.05)
 
@@ -650,18 +659,18 @@ class SunoServiceOrchestrator(SingletonService):
                 if self._skip_if_cancelled(job, "Lane 4"):
                     lane4_queue.task_done()
                     continue
-                log_service.suno(f"[Lane 4] [{job.track_id[:8]}] SonicMaster processing...")
-                if job.progress_callback:
-                    await job.progress_callback("SonicMaster")
-
-                if self.sonic_master is None:
-                    raise RuntimeError("sonic_master service not initialized")
-                input_path = job.clearvoice_enhanced_path or job.apollo_wav_path
+                input_path = job.apollo_wav_path
                 if input_path is None:
                     raise ValueError("input_path is required for SonicMaster processing")
-                sonic_wav_path = settings.SONIC_WAV_DIR / f"{job.track_id}.wav"
-
-                success = await self.sonic_master.enhance_audio(input_path, sonic_wav_path)
+                if self.sonic_master is None:
+                    sonic_wav_path = input_path
+                    success = True
+                else:
+                    log_service.suno(f"[Lane 4] [{job.track_id[:8]}] SonicMaster processing...")
+                    if job.progress_callback:
+                        await job.progress_callback("SonicMaster")
+                    sonic_wav_path = settings.SONIC_WAV_DIR / f"{job.track_id}.wav"
+                    success = await self.sonic_master.enhance_audio(input_path, sonic_wav_path)
 
                 if success:
                     job.sonic_complete = True
@@ -799,7 +808,7 @@ class SunoServiceOrchestrator(SingletonService):
             if job.progress_callback:
                 await job.progress_callback("Mastering")
             final_path = settings.ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=-14.0)
+            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=-14.0, correct=False)
             if result:
                 job.master_wav_path = result
                 job.mastering_complete = True

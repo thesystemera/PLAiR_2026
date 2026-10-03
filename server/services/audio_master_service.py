@@ -16,12 +16,26 @@ from services.audio_headroom import (
     limit_true_peak,
     linear_to_db,
     peak_envelope,
+    write_float_wav,
     write_pcm16_dithered,
 )
 
 MASTER_TARGET_LUFS = -14.0
 SAFETY_ROLLOFF_ORDER = 3
 MIN_MEASURABLE_LUFS = -70.0
+RUMBLE_CUT_HZ = 25.0
+RESONANCE_MIN_PROMINENCE_DB = 6.0
+RESONANCE_MIN_PRESENCE = 0.9
+RESONANCE_NEIGHBOURHOOD_BINS = 12
+TONAL_BANDS = {"body": (300.0, 2000.0), "presence": (2000.0, 6000.0), "air": (6000.0, 15700.0)}
+TONAL_TOLERANCE_DB = {"presence": 4.0, "air": 6.0}
+TONAL_CORRECTION_SHARE = 0.5
+TONAL_MAX_CORRECTION_DB = 3.0
+
+
+def commercial_target_db(freqs: np.ndarray) -> np.ndarray:
+    x = 1.0 + 60.0 * np.log2(np.maximum(freqs, 1.0) / 30.0)
+    return -0.000183 * x ** 2 + 0.0213 * x - 16.735
 
 class AudioMasterService(SingletonService):
 
@@ -82,6 +96,24 @@ class AudioMasterService(SingletonService):
         return signal.sosfiltfilt(sos, data, axis=-1)
 
     @staticmethod
+    def _apply_rumble_cut(data: np.ndarray, rate: int) -> np.ndarray:
+        sos = signal.butter(2, RUMBLE_CUT_HZ, 'high', fs=rate, output='sos')
+        return signal.sosfiltfilt(sos, data, axis=-1)
+
+    @staticmethod
+    def _resonance_presence(frames_db: np.ndarray, peak_bins: np.ndarray) -> np.ndarray:
+        presence = np.zeros(len(peak_bins))
+        half = RESONANCE_NEIGHBOURHOOD_BINS
+        for i, b in enumerate(peak_bins):
+            lo, hi = max(0, b - half), min(frames_db.shape[0], b + half + 1)
+            neighbours = np.concatenate([frames_db[lo:max(lo, b - 2)], frames_db[min(hi, b + 3):hi]], axis=0)
+            if neighbours.shape[0] == 0:
+                continue
+            prominence = frames_db[b] - np.median(neighbours, axis=0)
+            presence[i] = float(np.mean(prominence >= RESONANCE_MIN_PROMINENCE_DB))
+        return presence
+
+    @staticmethod
     def _apply_bell_boost(data: np.ndarray, rate: int, freq: float, gain_db: float, q: float = 1.0) -> np.ndarray:
         if abs(gain_db) < 1e-5:
             return data
@@ -125,51 +157,22 @@ class AudioMasterService(SingletonService):
         return signal.filtfilt(b, a, data, axis=-1)
 
     @staticmethod
-    def _analyze_multiband_tonality(avg_spectrum_db: np.ndarray, freqs: np.ndarray) -> Dict[str, Any]:
-        body_mask = (freqs >= 300) & (freqs <= 2000)
-        pres_mask = (freqs > 2000) & (freqs <= 6000)
-        air_mask = (freqs > 6000) & (freqs <= 16000)
+    def _analyze_multiband_tonality(power_db: np.ndarray, freqs: np.ndarray) -> Dict[str, Any]:
+        def band_deviation(lo: float, hi: float) -> float:
+            points = np.geomspace(lo, hi, 48)
+            measured = np.interp(points, freqs, power_db)
+            return float(np.mean(measured - commercial_target_db(points)))
 
-        if not bool(np.any(body_mask)) or not bool(np.any(pres_mask)) or not bool(np.any(air_mask)):
-            return {}
-
-        body_db = float(np.mean(avg_spectrum_db[body_mask]))
-        pres_db = float(np.mean(avg_spectrum_db[pres_mask]))
-        air_db = float(np.mean(avg_spectrum_db[air_mask]))
-
-        target_pres = body_db - 6.5
-        target_air = body_db - 11.0
-
-        pres_deficit = target_pres - pres_db
-        air_deficit = target_air - air_db
-
-        result = {
-            "presence": 0.0,
-            "air": 0.0,
-            "stats": {
-                "body_db": body_db,
-                "pres_db": pres_db,
-                "air_db": air_db,
-                "pres_deficit": pres_deficit,
-                "air_deficit": air_deficit
-            }
-        }
-
-        threshold = 1.5
-        max_boost = 4.0
-        max_cut = 4.0
-
-        if abs(pres_deficit) > threshold:
-            result["presence"] = float(np.clip(pres_deficit, -max_cut, max_boost))
-
-        if abs(air_deficit) > threshold:
-            result["air"] = float(np.clip(air_deficit, -max_cut, max_boost))
-
+        deviation = {name: band_deviation(*edges) for name, edges in TONAL_BANDS.items()}
+        result: Dict[str, Any] = {"presence": 0.0, "air": 0.0, "stats": {}}
+        for name in ("presence", "air"):
+            relative = deviation[name] - deviation["body"]
+            excess = np.sign(relative) * max(0.0, abs(relative) - TONAL_TOLERANCE_DB[name])
+            result[name] = float(np.clip(-excess * TONAL_CORRECTION_SHARE, -TONAL_MAX_CORRECTION_DB, TONAL_MAX_CORRECTION_DB))
+            result["stats"][f"{name}_vs_target_db"] = relative
         return result
 
     def _apply_adaptive_notch_filter(self, data: np.ndarray, rate: int, wet_mix: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
-        original_data = data.copy()
-
         if data.ndim > 1:
             mono_data = librosa.to_mono(data)
         else:
@@ -180,6 +183,8 @@ class AudioMasterService(SingletonService):
         q_factor = 50.0
         max_notches = 4
         info = {"notched": False, "notches": [], "tonal_fixes": [], "analysis": {}, "debug": {}}
+
+        data = self._apply_rumble_cut(data, rate)
 
         stft_result = librosa.stft(mono_data, n_fft=n_fft, hop_length=hop_length)
         stft_magnitude = np.abs(stft_result)
@@ -195,6 +200,9 @@ class AudioMasterService(SingletonService):
 
         avg_spectrum_db = librosa.amplitude_to_db(avg_spectrum, ref=np.max)
         freqs = librosa.fft_frequencies(sr=rate, n_fft=n_fft)
+        frame_rms = np.sqrt(np.mean(stft_magnitude ** 2, axis=0))
+        loud_frames = frame_rms >= np.mean(frame_rms)
+        power_db = 10.0 * np.log10(np.mean(stft_magnitude[:, loud_frames] ** 2, axis=1) + 1e-20)
 
         peaks, properties = signal.find_peaks(avg_spectrum_db,
                                               prominence=1.0,
@@ -234,9 +242,15 @@ class AudioMasterService(SingletonService):
 
         filtered_data = data.copy()
         top_n = min(max_notches, len(final_notch_indices)) if peaks.size > 0 else 0
+        candidates = [final_notch_indices[idx] for idx in range(top_n)]
+        frames_db = librosa.amplitude_to_db(stft_magnitude[:, active_frames_mask] if np.any(active_frames_mask) else stft_magnitude)
+        presence = self._resonance_presence(frames_db, np.array([peaks[c] for c in candidates], dtype=int))
+        info["debug"]["candidates"] = [
+            {"fc": float(freqs[peaks[c]]), "prom": float(prominences[c]), "presence": round(float(presence[i]), 3)}
+            for i, c in enumerate(candidates)
+        ]
 
-        for idx in range(top_n):
-            peak_idx = final_notch_indices[idx]
+        for i, peak_idx in enumerate(candidates):
             peak_bin = peaks[peak_idx]
             fc = freqs[peak_bin]
 
@@ -244,6 +258,8 @@ class AudioMasterService(SingletonService):
                 continue
 
             prominence = prominences[peak_idx]
+            if prominence < RESONANCE_MIN_PROMINENCE_DB or presence[i] < RESONANCE_MIN_PRESENCE:
+                continue
             gain_db = -(2.0 + min(prominence, 12.0) * 0.8)
 
             b_notch, a_notch = signal.iirnotch(fc, q_factor, rate)
@@ -260,7 +276,7 @@ class AudioMasterService(SingletonService):
 
         filtered_data = self._apply_safety_rolloff(filtered_data, rate)
 
-        tonal_result = self._analyze_multiband_tonality(avg_spectrum_db, freqs)
+        tonal_result = self._analyze_multiband_tonality(power_db, freqs)
         if "stats" in tonal_result:
             info["analysis"] = tonal_result["stats"]
 
@@ -272,30 +288,42 @@ class AudioMasterService(SingletonService):
 
         if abs(tonal_result.get("air", 0)) > 0.01:
             gain = tonal_result["air"]
-            filtered_data = self._apply_high_shelf(filtered_data, rate, freq=8000, gain_db=gain)
+            filtered_data = self._apply_high_shelf(filtered_data, rate, freq=6000, gain_db=gain)
             action = "Boost" if gain > 0 else "Cut"
-            info["tonal_fixes"].append(f"Air {action}: {gain:+.1f}dB @ 8kHz")
+            info["tonal_fixes"].append(f"Air {action}: {gain:+.1f}dB @ 6kHz")
 
         wet = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         dry = 1.0 - wet
-        filtered_data = original_data * dry + filtered_data * wet
+        filtered_data = data * dry + filtered_data * wet
 
         return filtered_data, info
+
+    def _correct_audio_sync(self, input_path: Path, output_path: Path, wet_mix: Optional[float] = None) -> Tuple[Optional[Path], dict]:
+        try:
+            data, rate = sf.read(str(input_path), dtype='float32', always_2d=True)
+            corrected, info = self._apply_adaptive_notch_filter(data.T.astype(np.float64), rate, wet_mix)
+            write_float_wav(output_path, corrected, rate)
+            return output_path, info
+        except Exception as e:
+            log_service.error(f"Corrective EQ failed: {e}")
+            return None, {"error": str(e)}
 
     def _master_audio_sync(
             self,
             input_path: Path,
             output_path: Path,
             target_lufs: float,
-            wet_mix: Optional[float] = None
+            wet_mix: Optional[float] = None,
+            correct: bool = True
     ) -> Tuple[Optional[Path], dict]:
         try:
             data, rate = sf.read(str(input_path), dtype='float32', always_2d=True)
             data = data.T.astype(np.float64)
 
-            data, master_info = self._apply_adaptive_notch_filter(data, rate, wet_mix)
-
-            info = master_info.copy()
+            info: Dict[str, Any] = {}
+            if correct:
+                data, master_info = self._apply_adaptive_notch_filter(data, rate, wet_mix)
+                info = master_info.copy()
 
             meter = pyln.Meter(rate)
             loudness = float(meter.integrated_loudness(data.T))
@@ -343,10 +371,34 @@ class AudioMasterService(SingletonService):
             target_lufs: float = None,  # type: ignore
             progress_callback=None,
             wet_mix: Optional[float] = None,
+            correct: bool = True,
     ) -> Optional[Path]:
         result, _info = await self.master_audio_with_report(
-            input_path, output_path, target_lufs, progress_callback, wet_mix
+            input_path, output_path, target_lufs, progress_callback, wet_mix, correct
         )
+        return result
+
+    @staticmethod
+    def _log_corrections(info: Dict[str, Any], wet_mix: float):
+        if info.get("analysis"):
+            stats = info["analysis"]
+            log_service.upscaling(
+                f"  [SPECTRUM ANALYSIS] vs commercial-master average: "
+                f"Presence {stats['presence_vs_target_db']:+.1f}dB | Air {stats['air_vs_target_db']:+.1f}dB"
+            )
+        if info.get("notches"):
+            log_service.upscaling(
+                f"  [SURGICAL EQ] Removed {len(info['notches'])} resonant peaks/whistles (Wet Mix: {wet_mix:.2f})")
+        if info.get("tonal_fixes"):
+            log_service.upscaling(f"  [TONAL SHAPING] {', '.join(info['tonal_fixes'])}")
+        else:
+            log_service.upscaling("  [TONAL SHAPING] Spectral balance is within range (No EQ needed)")
+
+    async def correct_audio(self, input_path: Path, output_path: Path, wet_mix: Optional[float] = None) -> Optional[Path]:
+        effective_wet_mix = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
+        result, info = await asyncio.to_thread(self._correct_audio_sync, input_path, output_path, effective_wet_mix)
+        if result:
+            self._log_corrections(info, effective_wet_mix)
         return result
 
     async def master_audio_with_report(
@@ -356,6 +408,7 @@ class AudioMasterService(SingletonService):
             target_lufs: float = None,  # type: ignore
             progress_callback=None,
             wet_mix: Optional[float] = None,
+            correct: bool = True,
     ) -> Tuple[Optional[Path], Dict[str, Any]]:
         effective_wet_mix = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         if output_path is None:
@@ -374,38 +427,16 @@ class AudioMasterService(SingletonService):
             input_path,
             output_path,
             target_lufs,
-            effective_wet_mix
+            effective_wet_mix,
+            correct
         )
 
         if not result:
             log_service.error(f"Final Master failed: {info.get('error', 'Unknown error')}")
             return None, info
 
-        if "analysis" in info:
-            stats = info["analysis"]
-            log_service.upscaling("  [SPECTRUM ANALYSIS]")
-            log_service.upscaling(
-                f"    Measured Energy: Body {stats['body_db']:.1f}dB | "
-                f"Presence {stats['pres_db']:.1f}dB | "
-                f"Air {stats['air_db']:.1f}dB"
-            )
-            log_service.upscaling(
-                f"    Pink Noise Deviation: Presence {stats['pres_deficit']:+.1f}dB | "
-                f"Air {stats['air_deficit']:+.1f}dB"
-            )
-
-        if info.get("notched"):
-            notches = info.get("notches", [])
-            if len(notches) > 0:
-                log_service.upscaling(
-                    f"  [SURGICAL EQ] Removed {len(notches)} resonant peaks/whistles (Wet Mix: {effective_wet_mix:.2f})")
-
-        if info.get("tonal_fixes"):
-            log_service.upscaling("  [TONAL SHAPING]")
-            for fix in info["tonal_fixes"]:
-                log_service.upscaling(f"    -> {fix}")
-        else:
-            log_service.upscaling("  [TONAL SHAPING] Spectral balance is optimal (No EQ needed)")
+        if correct:
+            self._log_corrections(info, effective_wet_mix)
 
         limiter = info.get("limiter", {})
         if limiter.get("passes"):

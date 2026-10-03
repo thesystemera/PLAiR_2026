@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ids-file", type=Path, help="Text file with one track id per line (first token is used)")
     parser.add_argument("--all", action="store_true", help="Process every catalog track that has metadata")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N pending tracks this run")
-    parser.add_argument("--from", dest="from_stage", choices=["auto", "apollo", "sonic", "master"], default="auto",
+    parser.add_argument("--from", dest="from_stage", choices=["auto", "source", "sonic", "master"], default="auto",
                         help="apollo: full chain from the Suno MP3 (GPU); sonic: SonicMaster from the vocal mix (GPU); "
                              "master: re-master the existing SonicMaster WAV (CPU); auto: apollo with --gpu, else master")
     parser.add_argument("--gpu", action="store_true",
@@ -85,19 +85,19 @@ AB_VARIANTS = {
     "current": {"description": "Current catalog master, unchanged", "copy_current": True},
     "fixed_master": {"description": "Existing SonicMaster WAV through the fixed mastering chain (CPU)", "from": "master"},
     "full_default": {"description": "Full chain with the new defaults (fp32, 20 steps, aligned + conditioned chunks, "
-                                    "template prompt, compensated blend, true-peak master)", "from": "apollo"},
+                                    "template prompt, compensated blend, true-peak master)", "from": "source"},
     "owner_prompt": {"description": "New defaults with the original free-text SonicMaster prompt (no template)",
-                     "from": "apollo", "sonic": {"templates": False, "prompt": LEGACY_SONIC["prompt"]}},
-    "steps_10": {"description": "New defaults with 10 SonicMaster steps", "from": "apollo", "sonic": {"steps": 10}},
-    "steps_50": {"description": "New defaults with 50 SonicMaster steps", "from": "apollo", "sonic": {"steps": 50}},
+                     "from": "source", "sonic": {"templates": False, "prompt": LEGACY_SONIC["prompt"]}},
+    "steps_10": {"description": "New defaults with 10 SonicMaster steps", "from": "source", "sonic": {"steps": 10}},
+    "steps_50": {"description": "New defaults with 50 SonicMaster steps", "from": "source", "sonic": {"steps": 50}},
     "legacy_sonic": {"description": "Old SonicMaster settings (fp16, 50 steps, old prompt, per-chunk RMS match) with the "
-                                    "fixed float/blend/master chain", "from": "apollo", "sonic": LEGACY_SONIC},
-    "bandwidth_off": {"description": "New defaults without a bandwidth-extension stage", "from": "apollo", "bandwidth": "off"},
-    "bandwidth_flashsr": {"description": "New defaults with FlashSR bandwidth extension", "from": "apollo", "bandwidth": "flashsr"},
-    "separation_roformer": {"description": "New defaults with RoFormer vocal separation", "from": "apollo",
+                                    "fixed float/blend/master chain", "from": "source", "sonic": LEGACY_SONIC},
+    "bandwidth_off": {"description": "New defaults without a bandwidth-extension stage", "from": "source", "bandwidth": "off"},
+    "bandwidth_flashsr": {"description": "New defaults with FlashSR bandwidth extension", "from": "source", "bandwidth": "flashsr"},
+    "separation_roformer": {"description": "New defaults with RoFormer vocal separation", "from": "source",
                             "separation": "roformer"},
 }
-SECONDS_PER_AUDIO_SECOND = {"apollo": 0.35, "demucs": 0.15, "clearvoice": 0.4, "sonic": 0.9, "master": 0.06, "transcode": 0.05}
+SECONDS_PER_AUDIO_SECOND = {"apollo": 0.35, "demucs": 0.15, "vocals": 0.15, "sonic": 0.9, "master": 0.06, "transcode": 0.05}
 BACKUP_BYTES_PER_AUDIO_SECOND = {"outputs": 0.25e6, "apollo": 0.18e6, "stems": 1.06e6, "mix": 0.35e6, "sonic": 0.18e6}
 GROWTH_BYTES_PER_AUDIO_SECOND = {"apollo": 0.18e6, "sonic": 0.18e6}
 
@@ -198,7 +198,6 @@ def plan_track(track_id: str, plan_stage_override: Optional[str] = None) -> Dict
 
     mix_ok = matches(infos["vocal_mix"], reference) and (infos["vocal_mix"] or {}).get("rate") == 44100
     sonic_ok = matches(infos["sonic"], reference)
-    stems_ok = infos["vocal_stem"] is not None and infos["no_vocals"] is not None
     if infos["vocal_mix"] and not mix_ok:
         plan["problems"].append(
             f"vocal mix is {infos['vocal_mix']['duration']:.2f}s @ {infos['vocal_mix']['rate']}Hz (expected {reference}s @ 44100Hz)")
@@ -223,35 +222,28 @@ def plan_track(track_id: str, plan_stage_override: Optional[str] = None) -> Dict
 
     stage = ARGS.from_stage if plan_stage_override is None else plan_stage_override
     if stage == "auto":
-        stage = "apollo" if ARGS.gpu else "master"
-    if stage == "master" and not sonic_ok:
+        stage = "source" if ARGS.gpu else "master"
+    if stage == "master" and settings.SONIC_MASTER_ENABLED and not sonic_ok:
         stage = "sonic"
     plan["stage"] = stage
 
-    if stage == "apollo":
+    if stage == "source":
         if not paths["source_mp3"].exists():
             plan["blocked"] = "Suno source MP3 missing"
             return plan
-        plan["steps"].append("apollo")
+        plan["steps"].append("decode")
         if not plan["instrumental"] and settings.ENABLE_VOCAL_ENHANCEMENT:
-            plan["steps"] += ["demucs", "clearvoice", "mix"]
-        plan["steps"] += ["sonic", "master", "transcode"]
+            plan["steps"] += ["demucs", "vocals", "mix"]
+        plan["steps"] += ["apollo"] + (["sonic"] if settings.SONIC_MASTER_ENABLED else []) + ["master", "transcode"]
     elif stage == "sonic":
-        if mix_ok:
-            plan["sonic_input"] = "vocal_mix"
-        elif stems_ok and not plan["instrumental"]:
-            plan["sonic_input"] = "rebuilt_mix"
-            plan["steps"].append("mix")
-        elif infos["apollo"] and matches(infos["apollo"], reference):
-            plan["sonic_input"] = "apollo"
-        else:
-            plan["blocked"] = "no intact SonicMaster input (vocal mix, stems or Apollo WAV)"
+        if not (infos["apollo"] and matches(infos["apollo"], reference)):
+            plan["blocked"] = "no intact SonicMaster input (Apollo WAV of the vocal mix)"
             return plan
         plan["steps"] += ["sonic", "master", "transcode"]
     else:
         plan["steps"] += ["master", "transcode"]
 
-    if any(step in ("apollo", "demucs", "clearvoice", "sonic") for step in plan["steps"]) and not ARGS.gpu:
+    if any(step in ("apollo", "demucs", "vocals", "sonic") for step in plan["steps"]) and not ARGS.gpu:
         plan["blocked"] = f"stage '{stage}' needs the GPU: add --gpu"
     return plan
 
@@ -294,7 +286,7 @@ class Engines:
         self.master = AudioMasterService()
         self.transcoding: Optional[AudioTranscodingService] = None
         self.stage_services: Dict[str, Any] = {}
-        self.clearvoice = None
+        self.vocal_enhancer = None
         self.sonic = None
 
     async def ensure_transcoding(self) -> AudioTranscodingService:
@@ -332,10 +324,10 @@ class Engines:
                         raise RuntimeError(f"{kind} stage '{stage_name}' is not available yet")
                     await service.initialize()
                     self.stage_services[key] = service
-            if "clearvoice" in steps and self.clearvoice is None:
-                from services.audio_clearvoice_service import AudioClearVoiceService
-                self.clearvoice = AudioClearVoiceService()
-                await self.clearvoice.initialize()
+            if "vocals" in steps and self.vocal_enhancer is None:
+                from services.audio_vocal_enhance_service import AudioVocalEnhanceService
+                self.vocal_enhancer = AudioVocalEnhanceService()
+                await self.vocal_enhancer.initialize()
         if "sonic" in steps and self.sonic is None:
             from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
             self.sonic = SonicMasterService()
@@ -364,7 +356,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
     staging.mkdir(parents=True, exist_ok=True)
     staged: Dict[str, Path] = {}
     transcoding = await engines.ensure_transcoding()
-    gpu_steps = [s for s in steps if s in ("apollo", "demucs", "clearvoice", "sonic") and not (s == "apollo" and bandwidth == "off")]
+    gpu_steps = [s for s in steps if s in ("apollo", "demucs", "vocals", "sonic") and not (s == "apollo" and bandwidth == "off")]
     if gpu_steps:
         await engines.ensure_gpu(gpu_steps, bandwidth, separation)
         await engines.wait_for_vram()
@@ -372,39 +364,39 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
 
     if "decode" in steps:
         source = staging / "source.wav"
-        probe = await transcoding.probe_media(paths["original"]) or {}
-        rate = "48000" if (probe.get("sample_rate") or 44100) > 44100 else "44100"
-        if not await transcoding.extract_audio_to_wav(paths["original"], source, sample_rate=rate, codec="pcm_f32le"):
-            raise RuntimeError("could not decode the uploaded original")
-
-    if "apollo" in steps:
-        staged["apollo"] = staging / "apollo.wav"
-        if bandwidth == "off":
-            if not await transcoding.extract_audio_to_wav(paths["source_mp3"], staged["apollo"], sample_rate="44100",
-                                                          codec="pcm_f32le"):
-                raise RuntimeError("could not decode the Suno MP3")
-        elif not await engines.stage("bandwidth", bandwidth).process_audio(paths["source_mp3"], staged["apollo"]):
-            raise RuntimeError(f"bandwidth stage '{bandwidth}' failed")
-        source = staged["apollo"]
+        if plan["is_upload"]:
+            probe = await transcoding.probe_media(paths["original"]) or {}
+            rate = "48000" if (probe.get("sample_rate") or 44100) > 44100 else "44100"
+            if not await transcoding.extract_audio_to_wav(paths["original"], source, sample_rate=rate, codec="pcm_f32le"):
+                raise RuntimeError("could not decode the uploaded original")
+        elif not await transcoding.extract_audio_to_wav(paths["source_mp3"], source, sample_rate="44100", codec="pcm_f32le"):
+            raise RuntimeError("could not decode the Suno MP3")
 
     if "demucs" in steps:
         staged["stems_dir"] = staging / "stems"
         stems = await engines.stage("separation", separation).separate_stems(source, staged["stems_dir"])
         if not stems:
-            raise RuntimeError("Demucs failed")
-        enhanced = await engines.clearvoice.enhance_vocals(stems["vocals"], staged["stems_dir"] / "vocals_enhanced.wav")
-        vocal_source = enhanced if enhanced else stems["vocals"]
+            raise RuntimeError("separation failed")
+        restored = await engines.vocal_enhancer.enhance_vocals(stems["vocals"], staged["stems_dir"] / "vocals_enhanced.wav")
+        if not restored:
+            raise RuntimeError("vocal restoration failed")
         staged["vocal_mix"] = staging / "vocal_mix.wav"
-        mix_stems_to_file(vocal_source, stems["no_vocals"], staged["vocal_mix"])
+        mix_stems_to_file(restored, stems["no_vocals"], staged["vocal_mix"])
         source = staged["vocal_mix"]
-    elif "mix" in steps:
-        staged["vocal_mix"] = staging / "vocal_mix.wav"
-        mix_stems_to_file(paths["vocal_stem"], paths["no_vocals"], staged["vocal_mix"])
-        source = staged["vocal_mix"]
+
+    if "apollo" in steps:
+        staged["apollo"] = staging / "apollo.wav"
+        if bandwidth == "off":
+            shutil.copyfile(source, staged["apollo"])
+        elif not await engines.stage("bandwidth", bandwidth).process_audio(source, staged["apollo"]):
+            raise RuntimeError(f"bandwidth stage '{bandwidth}' failed")
+        if not await engines.master.correct_audio(staged["apollo"], staged["apollo"], plan["wet_mix"]):
+            raise RuntimeError("corrective EQ failed")
+        source = staged["apollo"]
 
     if "sonic" in steps:
         if source is None:
-            source = paths["vocal_mix"] if plan.get("sonic_input") == "vocal_mix" else paths["apollo"]
+            source = paths["apollo"]
         staged["sonic"] = staging / "sonic.wav"
         restore_settings = apply_sonic_variant(engines, variant.get("sonic"))
         try:
@@ -417,7 +409,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
         source = staged["sonic"]
 
     if source is None:
-        source = paths["sonic"]
+        source = paths["sonic"] if settings.SONIC_MASTER_ENABLED else paths["apollo"]
 
     if plan["is_upload"]:
         loudness = engines.master._analyze_loudness_sync(source)
@@ -426,7 +418,8 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
 
     staged["master"] = staging / "master.wav"
     result, info = await asyncio.to_thread(
-        engines.master._master_audio_sync, source, staged["master"], MASTER_TARGET_LUFS, plan["wet_mix"]
+        engines.master._master_audio_sync, source, staged["master"], MASTER_TARGET_LUFS, plan["wet_mix"],
+        plan["is_upload"]
     )
     if not result:
         raise RuntimeError(f"mastering failed: {info.get('error')}")

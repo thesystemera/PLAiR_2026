@@ -7,7 +7,7 @@ from scipy import signal
 from scipy.ndimage import maximum_filter1d
 
 TRUE_PEAK_CEILING_DBTP = -1.5
-MAX_LIMITER_REDUCTION_DB = 3.0
+MAX_LIMITER_REDUCTION_DB = 6.0
 TRUE_PEAK_OVERSAMPLE = 4
 LIMITER_LOOKAHEAD_MS = 3.0
 LIMITER_RELEASE_MS = 80.0

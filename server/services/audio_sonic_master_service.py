@@ -19,7 +19,7 @@ from services.audio_headroom import spectrally_balanced_blend, write_float_wav
 BASE_DIR = Path(__file__).parent.parent.parent
 SONIC_MASTER_DIR = BASE_DIR / "SonicMaster"
 SUNO_SONIC_SETTINGS = {
-    "wet_mix": 0.5,
+    "wet_mix": 0.25,
     "num_inference_steps": settings.SONIC_MASTER_STEPS,
     "prompt": settings.SONIC_MASTER_SUNO_PROMPT,
     "chunk_duration": 30,
