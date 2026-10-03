@@ -55,7 +55,7 @@ async def main() -> None:
         print("Discovering through news search:")
         queue = [(kind, url, 1.0, 0) for kind, url in await discover(args.city, args.country, args.queries,
                                                                        args.per_query)]
-        queue += [(event_harvest.VENUE, website, 1.0, 0) for _, website in (await collector._venues(region))[:args.venues]]
+        queue += [(event_harvest.VENUE, website, score, 0) for _, website, score in (await collector._venues(region))[:args.venues]]
     budget = {"llm": args.llm, "geocode": args.geocode}
     events, seen, read = [], set(), 0
     while queue and read < args.pages:

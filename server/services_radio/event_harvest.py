@@ -610,7 +610,7 @@ class WebEventsCollector(Collector):
                     (ARTICLE, story.url, query) for story in await self._search(query, region)
                     if story.url and not news_links.is_google(story.url)])
         added += await self._add_sources(region.key, [
-            (VENUE, website, name) for name, website in await self._venues(region)])
+            (VENUE, website, name, score, 0) for name, website, score in await self._venues(region)])
         return added
 
     async def _search(self, query: str, region: Region) -> list:
@@ -620,22 +620,31 @@ class WebEventsCollector(Collector):
             log_service.warning(f"[EVENTS] news search failed for '{query}': {type(e).__name__}: {e}")
             return []
 
-    async def _venues(self, region: Region) -> list[tuple[str, str]]:
+    async def _venues(self, region: Region) -> list[tuple[str, str, float]]:
         lat, lon = region.center
         span = settings.PULSE_CITY_RADIUS_KM / 111.0
         async with self.async_session_maker() as db:
             rows = (await db.execute(
-                select(PlaceCache.name, PlaceCache.website, PlaceCache.latitude, PlaceCache.longitude)
+                select(PlaceCache.name, PlaceCache.type, PlaceCache.details, PlaceCache.website,
+                       PlaceCache.latitude, PlaceCache.longitude)
                 .where(PlaceCache.website.is_not(None), PlaceCache.latitude.between(lat - span, lat + span),
                        PlaceCache.longitude.between(lon - span * 2, lon + span * 2)))).all()
-            candidates = {url_key(website): (name, website) for name, website, plat, plon in rows
-                          if website.startswith("http") and not skipped_host(website)
-                          and _haversine_km((plat, plon), region.center) <= settings.PULSE_CITY_RADIUS_KM}
+            candidates = {url_key(website): (name, website, " ".join(
+                [name, kind or "", *json.loads(details or "{}").get("types", [])]))
+                for name, kind, details, website, plat, plon in rows
+                if website.startswith("http") and not skipped_host(website)
+                and _haversine_km((plat, plon), region.center) <= settings.PULSE_CITY_RADIUS_KM}
             if not candidates:
                 return []
             known = set((await db.execute(select(EventSource.url_key).where(
                 EventSource.url_key.in_(list(candidates))))).scalars().all())
-        return [candidates[key] for key in candidates if key not in known][:settings.EVENT_HARVEST_VENUES_PER_RUN]
+        fresh = [candidates[key] for key in candidates if key not in known]
+        if not fresh:
+            return []
+        scores = await link_scorer.scores([label for _, _, label in fresh])
+        ranked = sorted(((name, website, round(scores[label], 3)) for name, website, label in fresh),
+                        key=lambda venue: -venue[2])
+        return ranked[:settings.EVENT_HARVEST_VENUES_PER_RUN]
 
     async def _add_sources(self, region_key: str, sources: list[tuple]) -> int:
         now = datetime.now(timezone.utc)
