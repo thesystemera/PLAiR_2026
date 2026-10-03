@@ -18,7 +18,7 @@ from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GE
 from services_radio.tts_live_stream import LiveStreamEncoder
 from services_radio.tts_processing_service import MotionSlot, MotionTrack, audible_bounds, decode_mp3
 from services_radio.tts_voice_threads import voice_thread
-from services_radio import talk_clock
+from services_radio import station_blips, talk_clock
 
 SHOUTOUT_AUDIO_URL = re.compile(r'/api/user_content/shoutouts/audio/(\d+)/([A-Za-z0-9_-]+)\.mp3$')
 SHOUTOUT_AUDIO_ID = re.compile(r'^(\d+)_([A-Za-z0-9_-]+)$')
@@ -74,10 +74,12 @@ TTS_TYPE_LABELS = {
 }
 
 class PrerenderedClip:
-    def __init__(self, audio: AudioSegment, marks: Optional[List[Tuple[int, Dict]]] = None, label: str = ""):
+    def __init__(self, audio: AudioSegment, marks: Optional[List[Tuple[int, Dict]]] = None, label: str = "",
+                 blips: Optional[str] = None):
         self.audio = audio
         self.marks = sorted(marks or [(0, {})], key=lambda mark: mark[0])
         self.label = label
+        self.blips = blips
 
     def intensities_at(self, position_ms: int) -> Dict:
         current = self.marks[0][1]
@@ -287,6 +289,7 @@ class TTSQueueManager:
         log_service.detail("TTS Request: Initializing TTSQueueManager", "tts_queue_manager")
 
     async def start(self):
+        spawn(asyncio.to_thread(station_blips.library), name="blips_library_load")
         log_service.detail("TTS Request: Per-session TTS queue processors ready", "tts_queue_manager")
 
     @staticmethod
@@ -478,7 +481,8 @@ class TTSQueueManager:
                            [lookup_tag(segment) for segment in ordered_content
                             if segment['type'] in EMBEDDINGS_BY_CONTENT_TYPE])
         turn = _Turn(next(self._turn_seq), owner, renders, cache_only=tts_type in FILLER_TTS_TYPES)
-        encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id)
+        encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id,
+                                    blips=station_blips.voice_for(tts_type))
         mixer = TimelineMixer()
         started_at = time.perf_counter()
         hits_before = self.tts_generation_service.metrics['hits']
@@ -542,7 +546,8 @@ class TTSQueueManager:
                 talk_clock.meter.note(
                     PACE_KIND.get(tts_type, 'segment'),
                     sum(len((segment.get('content') or '').split()) for segment in spoken),
-                    encoder.fed_seconds - (len(lead_in.audio) / 1000.0 if lead_in is not None else 0.0))
+                    encoder.fed_seconds - encoder.blip_seconds
+                    - (len(lead_in.audio) / 1000.0 if lead_in is not None else 0.0))
             first_audio = (encoder.first_emit_at - started_at) if encoder.first_emit_at else None
             outcome = 'done' if completed else 'failed' if encoder.failed else 'cancelled'
             log_service.tts_queue_manager(
@@ -558,7 +563,8 @@ class TTSQueueManager:
                            session_id: Optional[str] = None):
         usage_tracking.bind_session(session_id, None if session_id else user_id)
         room = session_id or str(user_id)
-        encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id)
+        encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id,
+                                    blips=clip.blips)
         completed = False
         try:
             await encoder.start()

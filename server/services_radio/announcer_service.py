@@ -12,6 +12,10 @@ from services_radio.dj_content_bank import content_bank
 from services_radio.sting_service import midtrack_max_len
 from config.settings import settings
 
+FILL_DEFAULT_MS = 3000
+FILL_LATE_MS = 8000
+
+
 class AnnouncerService:
     MIN_SAFE_ZONE_DURATION = settings.ANNOUNCER_MIN_SAFE_ZONE_DURATION
     MIN_COOLDOWN_BETWEEN_ANNOUNCEMENTS = settings.ANNOUNCER_COOLDOWN_SECONDS
@@ -212,13 +216,17 @@ class AnnouncerService:
                         session_id
                     )
 
-                    if transition_window and is_playing and 'start_ms' in transition_window:
+                    if is_playing and transition_window and 'start_ms' in transition_window:
                         await self._schedule_announcement_for_transition(
                             session_id,
                             current_track_id,
                             transition_window,
                             state
                         )
+                    elif is_playing:
+                        await self._schedule_sting_for_transition(
+                            session_id, current_track_id,
+                            self._crossfade_window(transition_window, current_track), state, fill=True)
                     if is_playing and not await self._schedule_review_sting(session_id, current_track_id, state):
                         await self._schedule_midtrack_sting(session_id, current_track_id, state)
 
@@ -329,9 +337,10 @@ class AnnouncerService:
 
             self._log_transition_report(session_id, current_name, next_name, crossfade_timing, result_window)
 
-            to_cache = result_window if result_window else {'crossfade_timing': crossfade_timing}
+            to_cache = result_window if result_window else {'crossfade_timing': crossfade_timing,
+                                                            'track_ms': current_duration}
             self._cache_transition(session_id, cache_key, to_cache)
-            return result_window
+            return to_cache
 
         except Exception as e:
             log_service.error(f"Announcer: Analysis failed: {e}")
@@ -502,8 +511,40 @@ class AnnouncerService:
                 user_id = None
         return user_id
 
+    @staticmethod
+    def _crossfade_window(analysis: Optional[Dict], current_track: Dict) -> Dict:
+        analysis = analysis or {}
+        timing = analysis.get('crossfade_timing') or {}
+        track_ms = analysis.get('track_ms') or ((current_track.get('track_info') or {}).get('duration') or 0)
+        duration_ms = max(timing.get('duration_ms') or FILL_DEFAULT_MS, settings.STINGS_MIN_WINDOW_S * 1000)
+        start_ms = timing.get('optimal_start_ms') or max(0, track_ms - duration_ms)
+        return {'start_ms': start_ms, 'end_ms': start_ms + duration_ms, 'duration_ms': duration_ms}
+
+    def _still_at_boundary(self, session_id: str, track_id: str) -> bool:
+        session_state = self._existing_session_state(session_id)
+        if session_state is None or not session_state.is_playing:
+            return False
+        if (session_state.current_track or {}).get('id') == track_id:
+            return True
+        return session_state.last_skip_reason == 'auto_crossfade' and \
+            session_state.get_simulated_progress() < FILL_LATE_MS
+
+    async def _fill_now(self, session_id: str, current_track_id: str, transition_window: Dict, state: dict,
+                        why: str):
+        stings = self._sting_service()
+        if stings is None or not self._still_at_boundary(session_id, current_track_id):
+            return
+        user_id = self._state_user_id(session_id, state)
+        window_s = transition_window['duration_ms'] / 1000.0
+        kind = await stings.plan_between_tracks(session_id, user_id, window_s, 0.0, fill=True)
+        render = await stings.build(session_id, user_id, kind, window_s) if kind else None
+        played = render is not None and self._still_at_boundary(session_id, current_track_id) and \
+            await stings.play(session_id, user_id, render)
+        log_service.playback(f"{log_service.who(session_id)}: song change - hosts' line {why}, "
+                             f"{f'station {kind} instead' if played else 'nothing to fill with'}")
+
     async def _schedule_sting_for_transition(
-            self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
+            self, session_id: str, current_track_id: str, transition_window: Dict, state: dict, fill: bool = False
     ) -> bool:
         stings = self._sting_service()
         if stings is None:
@@ -515,7 +556,7 @@ class AnnouncerService:
         window_s = transition_window['duration_ms'] / 1000.0
         try:
             kind = await stings.plan_between_tracks(
-                session_id, self._state_user_id(session_id, state), window_s, wait_time_ms / 1000.0)
+                session_id, self._state_user_id(session_id, state), window_s, wait_time_ms / 1000.0, fill=fill)
         except Exception as e:
             log_service.warning(f"Announcer: sting planning failed: {type(e).__name__}: {e}")
             return False
@@ -736,7 +777,8 @@ class AnnouncerService:
         wait_time_ms = trigger_time_ms - current_progress_ms
 
         if wait_time_ms < 0:
-            log_service.announcer(f"🎙️ [{session_id[:8]}] 🔴 Skipped: Window Missed (Passed by {abs(wait_time_ms)}ms)")
+            log_service.playback(f"{log_service.who(session_id)}: song change - hosts' line skipped, the gap was "
+                                 f"{abs(wait_time_ms) / 1000:.1f}s in the past when it was planned")
             return
 
         if wait_time_ms > self.PENDING_THRESHOLD_MS:
@@ -790,6 +832,7 @@ class AnnouncerService:
             except asyncio.TimeoutError:
                 log_service.error(f"🎙️ [{session_id}] GPT Timeout")
                 self._cleanup_scheduled(session_id)
+                await self._fill_now(session_id, current_track_id, transition_window, state, "timed out")
                 return
 
             gpt_elapsed = time.time() - gpt_start
@@ -798,6 +841,7 @@ class AnnouncerService:
             if not announcement_text:
                 log_service.warning(f"🎙️ [{session_id}] GPT returned empty text")
                 self._cleanup_scheduled(session_id)
+                await self._fill_now(session_id, current_track_id, transition_window, state, "came back empty")
                 return
 
             await self.tts_queue_manager.add_tts_request(
@@ -833,6 +877,7 @@ class AnnouncerService:
             import traceback
             log_service.error(f"Traceback: {traceback.format_exc()}")
             self._cleanup_scheduled(session_id)
+            await self._fill_now(session_id, current_track_id, transition_window, state, "failed")
 
     def _cleanup_scheduled(self, session_id):
         if session_id in self.scheduled_announcements:

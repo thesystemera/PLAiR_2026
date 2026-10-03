@@ -94,18 +94,22 @@ def weighted_choice(kinds: Iterable[tuple], rng: random.Random) -> Optional[str]
 
 def decide_between_tracks(state: StingState, gate: Gate, window_s: float, now: float, minute: Optional[int],
                           candidates: Iterable[tuple], time_check_ready: bool,
-                          rng: Optional[random.Random] = None) -> Decision:
+                          rng: Optional[random.Random] = None, fill: bool = False) -> Decision:
     rng = rng or random.Random()
     if not gate.allowed():
         return Decision(None, "gated")
     if window_s < settings.STINGS_MIN_WINDOW_S:
         return Decision(None, "window_too_short")
-    short = window_s < settings.STINGS_SHORT_WINDOW_S
-    rotation = settings.STINGS_ROTATION_N > 0 and state.breaks_since_sting + 1 >= settings.STINGS_ROTATION_N
-    if not short and not rotation:
-        return Decision(None, "announcer_turn")
-    if not state.gap_open(now):
-        return Decision(None, "min_gap")
+    if not fill:
+        short = window_s < settings.STINGS_SHORT_WINDOW_S
+        rotation = settings.STINGS_ROTATION_N > 0 and state.breaks_since_sting + 1 >= settings.STINGS_ROTATION_N
+        if not short and not rotation:
+            return Decision(None, "announcer_turn")
+        if not state.gap_open(now):
+            return Decision(None, "min_gap")
+        reason = "short_window" if short else "rotation"
+    else:
+        reason = "fill"
     candidates = [(kind, weight, min_window) for kind, weight, min_window in candidates]
     if (time_check_ready and state.last_kind != TIME_CHECK and time_check_due(state, now, minute)
             and any(kind == TIME_CHECK and window_s >= min_window for kind, _w, min_window in candidates)):
@@ -115,7 +119,7 @@ def decide_between_tracks(state: StingState, gate: Gate, window_s: float, now: f
     kind = weighted_choice(pool, rng)
     if kind is None:
         return Decision(None, "nothing_fits")
-    return Decision(kind, "short_window" if short else "rotation")
+    return Decision(kind, reason)
 
 
 def decide_midtrack(state: StingState, gate: Gate, quiet_window_s: float, now: float,

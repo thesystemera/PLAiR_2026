@@ -263,26 +263,38 @@ class StingService:
                                         recent_ids=entry.state.recent_ids)
 
     async def plan_between_tracks(self, session_id: str, user_id: Optional[int], window_s: float,
-                                  trigger_in_s: float = 0.0) -> Optional[str]:
+                                  trigger_in_s: float = 0.0, fill: bool = False) -> Optional[str]:
         if not settings.STINGS_ENABLED:
             return None
         entry = self._session(session_id)
         gate = self._gate(session_id, user_id)
         if not gate.allowed():
             entry.state.breaks_since_sting += 1
+            held = [name for name, on in (("the hosts are mid-conversation", gate.conversing),
+                                          ("the hosts are speaking", gate.tts_busy),
+                                          ("a Radio Mode break holds it", gate.radio_blocked),
+                                          ("stings are switched off", not (gate.enabled and gate.stings_pref)))
+                    if on]
+            outcome = "nothing" if fill else "the hosts' turn"
+            log_service.playback(f"{log_service.who(session_id, user_id=user_id)}: plan for the next song change ({window_s:.1f}s gap) "
+                                 f"-> {outcome} ({', '.join(held) or 'gated'})")
             return None
         await self._location(session_id, user_id, entry)
         at = self.clock() + max(0.0, trigger_in_s)
         ctx = self._context(session_id, entry, window_s, midtrack=False, at=at)
         disabled = settings.STINGS_TYPES_DISABLED
-        ready = [c for c in sting_types.candidates(disabled) if sting_types.get(c[0]).ready(self, ctx)]
+        ready = [c for c in sting_types.candidates(disabled) if sting_types.get(c[0]).ready(self, ctx)
+                 and (sting_types.get(c[0]).voice or not fill)]
         time_ready = any(c[0] == sting_schedule.TIME_CHECK for c in ready)
         decision = sting_schedule.decide_between_tracks(
-            entry.state, gate, window_s, at, ctx.local.minute if ctx.local else None, ready, time_ready, self.rng)
+            entry.state, gate, window_s, at, ctx.local.minute if ctx.local else None, ready, time_ready, self.rng,
+            fill=fill and settings.STINGS_FILL_GAPS)
         if decision.kind is None:
             entry.state.breaks_since_sting += 1
-        log_service.announcer(f"[STINGS] [{session_id[:8]}] window {window_s:.1f}s -> "
-                              f"{decision.kind or 'announcer'} ({decision.reason})")
+        outcome = f"station {decision.kind}" if decision.kind else \
+            "nothing" if fill else "the hosts' turn"
+        log_service.playback(f"{log_service.who(session_id, user_id=user_id)}: plan for the next song change ({window_s:.1f}s gap) "
+                             f"-> {outcome} ({decision.reason})")
         return decision.kind
 
     def midtrack_possible(self, session_id: str) -> bool:
@@ -420,7 +432,8 @@ class StingService:
         if not gate.allowed():
             log_service.announcer(f"[STINGS] [{session_id[:8]}] {render.kind} dropped at air time (gate closed)")
             return False
-        clip = PrerenderedClip(render.audio, render.marks, render.label)
+        clip = PrerenderedClip(render.audio, render.marks, render.label,
+                               blips="station" if render.voice_s and settings.BLIPS_ENABLED else None)
         accepted = await self.tts_queue_manager.add_clip_request(
             clip, user_id=user_id or 0, tts_type=TTS_TYPE, is_temp_user=user_id is None, session_id=session_id)
         if not accepted:

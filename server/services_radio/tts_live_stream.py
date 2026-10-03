@@ -8,7 +8,9 @@ import numpy as np
 import soxr
 from pydub import AudioSegment
 
+from config.settings import settings
 from services import log_service
+from services_radio import station_blips
 from services_radio.tts_voice_threads import voice_thread
 
 ENCODER_SAMPLE_RATE = 48000
@@ -94,16 +96,20 @@ class _StreamResampler:
 
 
 class LiveStreamEncoder:
-    def __init__(self, sio, room: str, user_id, tts_type: str, stream_id: str):
+    def __init__(self, sio, room: str, user_id, tts_type: str, stream_id: str, blips: Optional[str] = None):
         self.sio = sio
         self.room = room
         self.user_id = user_id
         self.tts_type = tts_type
         self.stream_id = stream_id
+        self.blips = blips
         self.started = False
         self.failed = False
         self.first_audio_at: Optional[float] = None
         self.fed_seconds = 0.0
+        self.blip_seconds = 0.0
+        self._intro_done = False
+        self._held: List[Tuple[AudioSegment, Dict]] = []
         self.chunks_emitted = 0
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
@@ -232,6 +238,61 @@ class LiveStreamEncoder:
             return
         if not self.started:
             await self.start()
+        if not self.blips:
+            await self._feed_audio(audio, speaker_intensities)
+            return
+        self._held.append((audio, dict(speaker_intensities or {})))
+        if not self._intro_done and self._held_ms() < settings.BLIPS_HOLD_MS:
+            return
+        if not self._intro_done:
+            await voice_thread(self._blip_in)
+        await self._release(settings.BLIPS_HOLD_MS)
+
+    def _held_ms(self) -> int:
+        return sum(len(audio) for audio, _ in self._held)
+
+    def _held_audio(self) -> AudioSegment:
+        voice = self._held[0][0]
+        for audio, _ in self._held[1:]:
+            voice += audio
+        return voice
+
+    def _resplit(self, mixed: AudioSegment, offset: int):
+        pieces, position = [], offset
+        if offset > 0:
+            pieces.append((mixed[:offset], {}))
+        for audio, intensities in self._held:
+            pieces.append((mixed[position:position + len(audio)], intensities))
+            position += len(audio)
+        if position < len(mixed):
+            pieces.append((mixed[position:], {}))
+        self.blip_seconds += (len(mixed) - self._held_ms()) / 1000.0
+        self._held = pieces
+
+    def _blip_in(self):
+        self._intro_done = True
+        blip = station_blips.pick(self.blips, "in")
+        if blip is not None and self._held:
+            mixed, voice_at = station_blips.mix_in(blip, self._held_audio())
+            self._resplit(mixed, voice_at)
+
+    def _blip_out(self):
+        blip = station_blips.pick(self.blips, "out")
+        if blip is not None and self._held:
+            self._resplit(station_blips.mix_out(self._held_audio(), blip), 0)
+
+    async def _release(self, keep_ms: int):
+        while self._held and self._held_ms() - len(self._held[0][0]) >= keep_ms:
+            audio, intensities = self._held.pop(0)
+            await self._feed_audio(audio, intensities)
+        if keep_ms == 0:
+            while self._held:
+                audio, intensities = self._held.pop(0)
+                await self._feed_audio(audio, intensities)
+
+    async def _feed_audio(self, audio: AudioSegment, speaker_intensities: Dict):
+        if len(audio) == 0:
+            return
         pcm = await voice_thread(self._resampler.process, audio)
         if self.first_audio_at is None:
             self.first_audio_at = time.perf_counter()
@@ -245,6 +306,11 @@ class LiveStreamEncoder:
         if not self.started:
             return
         try:
+            if self._held:
+                if not self._intro_done:
+                    await voice_thread(self._blip_in)
+                await voice_thread(self._blip_out)
+                await self._release(0)
             await self._write(self._resampler.finish())
             if self._proc is not None and self._proc.stdin is not None:
                 self._proc.stdin.close()
