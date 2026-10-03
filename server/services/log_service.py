@@ -135,7 +135,7 @@ def _setup_file_logger():
                 handler.close()
                 _file_logger.removeHandler(handler)
 
-        log_file = logs_dir / 'radio.log'
+        log_file = logs_dir / os.getenv('LOG_FILE_NAME', 'radio.log')
         _file_handler = RotatingFileHandler(
             log_file,
             maxBytes=_env_int("LOG_FILE_MAX_MB", 20) * 1024 * 1024,

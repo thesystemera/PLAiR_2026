@@ -270,6 +270,7 @@ async def lifespan(_app: FastAPI):
         broadcast_callback=websocket_service.broadcast_content_updated
     )
     log_service.success("✓ Catalog service configured for instant vector updates")
+    spawn(catalog_service.watch_for_finished_tracks(settings.CATALOG_WATCH_INTERVAL_S), name="catalog_watch")
 
     log_service.system("Initializing user content vector database service...")
     user_content_vector_db_service = None

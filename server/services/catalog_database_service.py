@@ -411,6 +411,21 @@ class CatalogDatabaseService(SingletonService):
         self.vector_db_service = vector_db_service
         self.broadcast_callback = broadcast_callback
 
+    def _finished_outside_catalog(self) -> List[str]:
+        masters = {p.stem for p in settings.ENHANCED_WAV_DIR.glob("*.wav")}
+        return [tid for tid in masters - set(self.tracks) if (self.metadata_dir / f"{tid}.json").exists()]
+
+    async def watch_for_finished_tracks(self, interval_s: float):
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                new_ids = await asyncio.to_thread(self._finished_outside_catalog)
+                if new_ids and not self._reload_in_progress:
+                    log_service.catalog(f"[Catalog] {len(new_ids)} finished tracks found outside the catalog, reloading")
+                    await self.reload_catalog()
+            except Exception as e:
+                log_service.throttled("catalog_watch", f"[Catalog] Watch for finished tracks failed: {e}")
+
     async def reload_catalog(self):
         async with self._reload_lock:
             old_ids = set(self.tracks)
