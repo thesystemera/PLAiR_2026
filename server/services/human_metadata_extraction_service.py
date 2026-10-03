@@ -72,7 +72,7 @@ For sonic_master_blend (0-60, values above 60 are reduced to 60):
 - 45-60 = Significant issues, heavy enhancement needed
 - If the track is intentionally lo-fi, already loud, already compressed, or stylistically gritty, prefer 0-35. Do not "fix" character.
 
-For mastering_blend (0-100) - how much corrective mastering EQ (resonance notches, presence/air balance) to apply; loudness is always normalized to -14 LUFS with a true-peak limiter regardless of this value:
+For mastering_blend (0-100) - how much corrective mastering EQ (resonance notches, presence/air balance) to apply; loudness is always normalized to -16 LUFS with a true-peak limiter regardless of this value:
 - 20-40 = Already professionally mastered, light touch only
 - 50-70 = Decent mix but needs polish and loudness normalization
 - 80-100 = Raw/unmastered recording, full mastering treatment needed

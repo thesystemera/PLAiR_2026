@@ -253,6 +253,8 @@ class AudioProcessingService:
             return audio
 
         host_gain_db = settings.VOICE_PREFERENCES.get(speaker, {}).get('gain_db', 0.0)
+        if speaker in settings.DJ_HOSTS:
+            host_gain_db += settings.DJ_VOICE_LEVEL_DB
         if host_gain_db:
             audio = audio.apply_gain(host_gain_db)
         if audio.channels == 1:

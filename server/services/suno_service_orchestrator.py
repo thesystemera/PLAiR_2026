@@ -38,7 +38,7 @@ from services.audio_apollo_service import AudioApolloService
 from services.audio_demucs_service import AudioDemucsService
 from services.audio_vocal_enhance_service import AudioVocalEnhanceService
 from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
-from services.audio_master_service import AudioMasterService
+from services.audio_master_service import AudioMasterService, MASTER_TARGET_LUFS
 from services.audio_headroom import mix_stems_to_file
 from services.audio_stage_registry import quality_scorer, resolve_bandwidth_stage, resolve_separation_model, stems_dir_for
 from services.audio_features_service import AudioFeaturesService
@@ -845,7 +845,7 @@ class SunoServiceOrchestrator(SingletonService):
             if job.progress_callback:
                 await job.progress_callback("Mastering")
             final_path = settings.ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=-14.0, correct=False)
+            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False)
             if result:
                 job.master_wav_path = result
                 job.mastering_complete = True

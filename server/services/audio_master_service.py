@@ -20,7 +20,7 @@ from services.audio_headroom import (
     write_pcm16_dithered,
 )
 
-MASTER_TARGET_LUFS = -14.0
+MASTER_TARGET_LUFS = -16.0
 SAFETY_ROLLOFF_ORDER = 3
 MIN_MEASURABLE_LUFS = -70.0
 RUMBLE_CUT_HZ = 25.0

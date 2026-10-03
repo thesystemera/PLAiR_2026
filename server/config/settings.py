@@ -155,6 +155,8 @@ class Settings:
     PARALANGUAGE_ENGINE_TAGS: bool = os.getenv("PARALANGUAGE_ENGINE_TAGS", "true").lower() == "true"
     ENGINE_SOUND_TAGS: tuple = ("laugh", "chuckle", "sigh", "gasp", "cough", "clear throat", "sniff", "groan",
                                 "shush", "crying", "whispering")
+    DJ_HOSTS: tuple = ("jess", "leo")
+    DJ_VOICE_LEVEL_DB: float = float(os.getenv("DJ_VOICE_LEVEL_DB", "-2.0"))
     VOICE_PREFERENCES: dict = {
         "jess": {"voice": "jess", "temperature": 0.8},
         "leo": {"voice": "leo", "temperature": 0.8, "gain_db": float(os.getenv("LEO_GAIN_DB", "2.2"))},
@@ -597,7 +599,7 @@ class Settings:
     SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "true").lower() == "true"
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "fp32").lower()
     SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
-    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, with depth and separation between left and right")
+    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics")
     SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
     SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "false").lower() == "true"
     SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "true").lower() == "true"
@@ -683,7 +685,7 @@ class Settings:
     RADIO_ANNOUNCER_QUIET_AFTER_S: float = float(os.getenv("RADIO_ANNOUNCER_QUIET_AFTER_S", "90"))
     RADIO_IDLE_EVICT_S: float = float(os.getenv("RADIO_IDLE_EVICT_S", "900"))
     RADIO_BEDS_ENABLED: bool = os.getenv("RADIO_BEDS_ENABLED", "true").lower() == "true"
-    RADIO_BED_TARGET_LUFS: float = float(os.getenv("RADIO_BED_TARGET_LUFS", "-20"))
+    RADIO_BED_TARGET_LUFS: float = float(os.getenv("RADIO_BED_TARGET_LUFS", "-22"))
     RADIO_BED_MAX_BYTES: int = int(os.getenv("RADIO_BED_MAX_BYTES", str(25 * 1024 * 1024)))
 
     STINGS_ENABLED: bool = os.getenv("STINGS_ENABLED", "true").lower() == "true"
@@ -696,9 +698,9 @@ class Settings:
     STATION_NAME_SPOKEN: str = os.getenv("STATION_NAME_SPOKEN", "Play Air")
     STATION_VOICE_VERSION: str = os.getenv("STATION_VOICE_VERSION", "1")
     STATION_VOICE_SEED: int = int(os.getenv("STATION_VOICE_SEED", "7100"))
-    STATION_VOICE_TARGET_LUFS: float = float(os.getenv("STATION_VOICE_TARGET_LUFS", "-18"))
+    STATION_VOICE_TARGET_LUFS: float = float(os.getenv("STATION_VOICE_TARGET_LUFS", "-20"))
     STATION_PROCESS_MIX: float = float(os.getenv("STATION_PROCESS_MIX", "0.1"))
-    STINGS_TARGET_LUFS: float = float(os.getenv("STINGS_TARGET_LUFS", "-16"))
+    STINGS_TARGET_LUFS: float = float(os.getenv("STINGS_TARGET_LUFS", "-18"))
     STINGS_BED_UNDER_VOICE_DB: float = float(os.getenv("STINGS_BED_UNDER_VOICE_DB", "-9"))
     STINGS_SHORT_WINDOW_S: float = float(os.getenv("STINGS_SHORT_WINDOW_S", "6"))
     STINGS_MIN_WINDOW_S: float = float(os.getenv("STINGS_MIN_WINDOW_S", "1.5"))
@@ -706,6 +708,12 @@ class Settings:
     STINGS_MIN_GAP_S: float = float(os.getenv("STINGS_MIN_GAP_S", "600"))
     STINGS_MAX_GAP_S: float = float(os.getenv("STINGS_MAX_GAP_S", "900"))
     STINGS_FIRST_DELAY_S: float = float(os.getenv("STINGS_FIRST_DELAY_S", "240"))
+    STINGS_FILL_GAPS: bool = os.getenv("STINGS_FILL_GAPS", "true").lower() == "true"
+    BLIPS_ENABLED: bool = os.getenv("BLIPS_ENABLED", "true").lower() == "true"
+    BLIPS_DIR: Path = Path(os.getenv("BLIPS_DIR") or str(CATALOG_DIR / "blips"))
+    BLIPS_PEAK_DBFS: float = float(os.getenv("BLIPS_PEAK_DBFS", "-12"))
+    BLIPS_RELEASE_DB: float = float(os.getenv("BLIPS_RELEASE_DB", "12"))
+    BLIPS_HOLD_MS: int = int(os.getenv("BLIPS_HOLD_MS", "500"))
     STINGS_CONVERSATION_QUIET_S: float = float(os.getenv("STINGS_CONVERSATION_QUIET_S", "30"))
     STINGS_TIME_CHECK_MIN_INTERVAL_S: float = float(os.getenv("STINGS_TIME_CHECK_MIN_INTERVAL_S", "900"))
     STINGS_TIME_CHECK_MAX_INTERVAL_S: float = float(os.getenv("STINGS_TIME_CHECK_MAX_INTERVAL_S", "1800"))

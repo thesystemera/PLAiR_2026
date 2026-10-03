@@ -9,7 +9,7 @@ Processing Pipeline:
 3. 75 Hz low cut (handling rumble and wind)
 4. The LLM (LLM_BACKGROUND chain) filters the transcript: process talk, stumbles and false starts go
 5. Cut to the kept words (Whisper word timestamps) and shorten long pauses found by Silero VAD
-6. Loudness normalise (-14 LUFS, -1 dBFS peak ceiling) and write MP3
+6. Loudness normalise (-16 LUFS, the station level, -1 dBFS peak ceiling) and write MP3
 7. Reviews: the LLM's best short line is cut out as a separate sting clip for playing over the song
 
 No compression here: on air the DJ broadcast chain in the client compresses and limits every voice.
@@ -34,6 +34,7 @@ from scipy.ndimage import maximum_filter1d, minimum_filter1d
 from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 from services.audio_clearvoice_service import ClearVoice
+from services.audio_master_service import MASTER_TARGET_LUFS
 
 from services import log_service
 from services.llm_router import LLM_BACKGROUND
@@ -305,7 +306,7 @@ class UserContentSpeechEnhancementService:
             limited = limited * (PEAK_CEILING / final_peak)
         return limited
 
-    def loudness_normalize(self, audio: np.ndarray, sample_rate: int, target_lufs=-14.0) -> np.ndarray:
+    def loudness_normalize(self, audio: np.ndarray, sample_rate: int, target_lufs=MASTER_TARGET_LUFS) -> np.ndarray:
         try:
             samples = audio.astype(np.float64)
             loudness = pyln.Meter(sample_rate).integrated_loudness(samples)
