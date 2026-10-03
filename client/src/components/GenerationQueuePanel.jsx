@@ -4,6 +4,7 @@ import { useGenerationQueue } from '../contexts/GenerationQueueContext'
 import { GLASS } from '../lib/themeManager'
 import { MOTION, PRESETS } from '../lib/motion'
 import { Expandable } from './Motion'
+import { InlineNote } from './Notice'
 
 function getJobTypeIcon(type) {
   switch (type) {
@@ -118,9 +119,7 @@ function JobItem({ job, onCancel, onRemove }) {
       )}
 
       {isFailed && job.error && (
-        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
-          {job.error}
-        </div>
+        <InlineNote tone="error">{job.error}</InlineNote>
       )}
     </motion.div>
   )

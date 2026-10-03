@@ -9,6 +9,22 @@ const NOTICE_TONES = {
   neutral: { border: 'border-white/15', iconColor: 'text-white/70', icon: Info },
 }
 
+const NOTICE_TEXT = {
+  success: 'text-emerald-300', error: 'text-red-300', warning: 'text-amber-300', info: 'text-sky-300',
+  neutral: 'text-gray-400',
+}
+
+export const InlineNote = memo(function InlineNote({ tone = 'neutral', children, className = '' }) {
+  const palette = NOTICE_TONES[tone] || NOTICE_TONES.neutral
+  const Icon = palette.icon
+  return (
+    <p className={`flex items-start gap-1.5 text-xs leading-snug ${NOTICE_TEXT[tone] || NOTICE_TEXT.neutral} ${className}`}>
+      <Icon className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
+      <span>{children}</span>
+    </p>
+  )
+})
+
 const NOTICE_BACKGROUND = { backgroundColor: 'rgba(10, 10, 12, 0.82)' }
 const WRAP_AFTER_CHARS = 52
 

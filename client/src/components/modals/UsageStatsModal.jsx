@@ -4,6 +4,7 @@ import { Modal, ModalSection, ModalCard, ModalErrorState } from './Modal'
 import { Expandable } from '../Motion'
 import { api } from '../../lib/api'
 import { formatUsd, formatCount, formatDuration } from '../../lib/usageFormat'
+import { InlineNote } from '../Notice'
 
 const PERIODS = [
   { id: 'day', label: 'Today' },
@@ -95,7 +96,7 @@ const SubjectDetail = memo(function SubjectDetail({ subjectKey, period }) {
     return () => { cancelled = true }
   }, [subjectKey, period])
 
-  if (error) return <div className="text-xs text-red-400 py-2">{error}</div>
+  if (error) return <InlineNote tone="error" className="py-2">{error}</InlineNote>
   if (!detail) return <div className="py-3 flex justify-center"><Loader2 size={16} className="animate-spin text-gray-400" /></div>
   return (
     <div className="py-2 space-y-2">

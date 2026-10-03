@@ -5,6 +5,7 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
 import { ExpandSection, Expandable } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
+import { InlineNote } from './Notice'
 
 const SEGMENTS = [
   { key: 'news', icon: Newspaper, label: 'News', color: 'text-red-400', hint: 'A short bulletin at the top of every hour' },
@@ -91,10 +92,10 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
           News on the hour, a city update at half past and short features between songs, like real radio. A song always finishes before the hosts take over.
         </div>
         {djMuted && radioMode.enabled && (
-          <div className="text-xs text-amber-300 mt-1">DJ voice is muted, so breaks are paused.</div>
+          <InlineNote tone="warning" className="mt-1">DJ voice is muted, so breaks are paused.</InlineNote>
         )}
         {audioState.offlineMode && (
-          <div className="text-xs text-amber-300 mt-1">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</div>
+          <InlineNote tone="warning" className="mt-1">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</InlineNote>
         )}
       </SettingRow>
 

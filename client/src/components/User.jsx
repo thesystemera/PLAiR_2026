@@ -26,6 +26,7 @@ import { AccountSettings } from './AccountSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
+import { InlineNote } from './Notice'
 
 const SOUND_MODE_ACTIVE_CLASS = {
   both: 'bg-green-500/30 text-green-300 border border-green-500/50',
@@ -1614,7 +1615,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                 <p className="text-xs text-gray-400 mb-1">Current period ends {periodEnd.toLocaleDateString()}</p>
               )}
               {billingStatus?.status === 'past_due' && (
-                <p className="text-xs text-red-400 mb-1">Your last payment failed. Update your payment method to keep Premium.</p>
+                <InlineNote tone="error" className="mb-1">Your last payment failed. Update your payment method to keep Premium.</InlineNote>
               )}
               {billingStatus?.has_billing_account && (
                 <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-3 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">

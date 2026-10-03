@@ -8,6 +8,7 @@ import { PRESETS } from '../../lib/motion'
 import { passkeyCancelled, passkeysSupported } from '../../lib/passkeys'
 import { Expandable } from '../Motion'
 import './auth-background.css'
+import { InlineNote } from '../Notice'
 
 const AUTH_OVERLAY_SAFE_STYLE = { paddingTop: 'max(0.75rem, var(--safe-top))', paddingBottom: 'max(0.75rem, var(--safe-bottom))', paddingLeft: 'max(0.75rem, var(--safe-left))', paddingRight: 'max(0.75rem, var(--safe-right))' }
 
@@ -133,7 +134,7 @@ export default function Register({ onClose, onSwitchToLogin }) {
               autoComplete="username"
             />
             {username && username.length < 3 && (
-              <p className="text-xs text-yellow-400 mt-1">Username must be at least 3 characters</p>
+              <InlineNote tone="warning" className="mt-1">Username must be at least 3 characters</InlineNote>
             )}
           </div>
 
@@ -199,7 +200,7 @@ export default function Register({ onClose, onSwitchToLogin }) {
                   </button>
                 </div>
                 {confirmPassword && password !== confirmPassword && (
-                  <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
+                  <InlineNote tone="error" className="mt-1">Passwords do not match</InlineNote>
                 )}
               </div>
             </div>
