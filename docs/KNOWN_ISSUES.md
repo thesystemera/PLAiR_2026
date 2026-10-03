@@ -139,6 +139,9 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
+- **Resemble Enhance on music vocal stems (owner, 3 Oct, parked):** it gave the DJ voices only a small lift
+  over CVSR, too slow to run live, but it may help vocals in the music remaster chain (offline). Runner and setup:
+  `scripts/voice_restoration/`, findings in `docs/TTS_ENGINE_RESEARCH.md`.
 - **Between-track talk and stings (owner, 1 Oct):** the station clock doesn't come in as often as it could,
   some transitions have nothing between the tracks, and the cool-offs between announcer, stings and Radio Mode
   breaks are tangled. Look at it as one schedule. The announcer's window still assumes the next song starts when

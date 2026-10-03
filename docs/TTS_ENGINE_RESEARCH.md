@@ -51,11 +51,30 @@ Voice sourcing for cloning: Qwen3 VoiceDesign output (Apache) makes clean refere
 
 Artificial Analysis open-weights Elo (Sep 2026): Breeze 2 1207, Fish S2 Pro 1118, Step Audio EditX 1094, Voxtral 1080, Kokoro 1065, Magpie 357M 1063, Maya1 1046, OpenAudio S1 mini 1042, Higgs v3 1037, Chatterbox 1023, Zonos 1000, VibeVoice 955, Qwen3-TTS 930. Closed leaders: Eleven v4 1315, Cartesia Sonic 3.6 1279.
 
+## Restoration after the engine (tested 2026-10-03)
+
+Chatterbox renders 24 kHz. Three post-processors were A/B'd on long takes and on full mixed conversations
+(movement, overlaps, room). Times are for a 3 s take on the P6000 with the model loaded.
+
+- **ClearVoice MossFormer2_SR_48K (CVSR), live since 2026-10-03:** 0.56 s (0.28 s for 1 s, 0.94 s for 6 s).
+  Owner: "night and day", more clarity and sparkle; it also makes the synthetic character easier to hear.
+  `server/services_radio/voice_upscale.py`.
+- **Resemble Enhance (MIT):** 1.5 s at full quality, 0.6 s at its fastest (floor is its 44.1 kHz vocoder).
+  On its own a small improvement; Resemble then CVSR sounded "like medium to high quality" against CVSR alone,
+  and in a full mix the difference barely shows. Not worth the time live. Might suit the music remaster chain's
+  vocal stems (offline). Painful official install (deepspeed, old torch pin, POSIX paths in its weights' config).
+- **Sidon (MIT):** fastest (0.17-0.28 s), drier and more studio-like, but artifacts; owner: sounded worse.
+  It is built to clean noisy recordings, and our takes are already clean.
+- No model added or dropped words (Whisper check) or shifted pitch.
+
+Runner scripts and setup notes: `scripts/voice_restoration/`. Not loaded by the backend.
+
 ## Sources
 
 - Qwen3-TTS: https://github.com/QwenLM/Qwen3-TTS, https://github.com/ServeurpersoCom/qwentts.cpp, https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF, https://github.com/ggml-org/llama.cpp/pull/26254, https://github.com/andimarafioti/faster-qwen3-tts, https://tinycomputers.io/posts/the-real-cost-of-running-qwen-tts-locally-three-machines-compared.html, https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/discussions/2
 - Chatterbox: https://huggingface.co/ResembleAI/chatterbox-turbo, https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX, https://github.com/resemble-ai/chatterbox (issues #97, #543, #548), https://github.com/devnen/Chatterbox-TTS-Server/issues/175, https://github.com/jamiepine/voicebox/issues/1110
 - audio.cpp: https://github.com/0xShug0/audio.cpp (PRs #393, #394, #682)
 - Others: https://huggingface.co/openbmb/VoxCPM2, https://huggingface.co/stepfun-ai/Step-Audio-EditX, https://huggingface.co/IndexTeam/IndexTTS-2.5, https://huggingface.co/maya-research/maya1, https://github.com/nari-labs/dia2, https://github.com/HumeAI/tada, https://huggingface.co/bosonai/higgs-tts-2-3b-base, https://github.com/OpenMOSS/MOSS-TTS, https://neosophie.com/en/blog/20260317-tts
+- Restoration: https://github.com/resemble-ai/resemble-enhance, https://github.com/sarulab-speech/Sidon/, https://arxiv.org/abs/2509.17052, https://huggingface.co/sarulab-speech/sidon-v0.1
 - Leaderboards: https://artificialanalysis.ai/text-to-speech/leaderboard/open-weights
 - Platform: https://docs.nvidia.com/cuda/archive/13.0.1/cuda-toolkit-release-notes/index.html, https://github.com/pytorch/pytorch/issues/157517, https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/support-matrix.html, https://github.com/vllm-project/vllm/issues/963
