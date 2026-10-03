@@ -45,11 +45,25 @@ def _blip(audio: AudioSegment) -> Blip:
     return Blip(audio, peak * FRAME_MS, min(len(audio), release * FRAME_MS))
 
 
+def level(audio: AudioSegment) -> Optional[AudioSegment]:
+    import pyloudnorm
+    audio = audio.set_sample_width(2)
+    if len(audio) == 0 or audio.max_dBFS == float("-inf"):
+        return None
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float64).reshape(-1, audio.channels) / 32768.0
+    minimum = int(audio.frame_rate * 0.45)
+    if len(samples) < minimum:
+        samples = np.concatenate([samples, np.zeros((minimum - len(samples), audio.channels))])
+    loudness = pyloudnorm.Meter(audio.frame_rate).integrated_loudness(samples)
+    gain = settings.BLIPS_TARGET_LUFS - loudness if np.isfinite(loudness) else 0.0
+    return audio.apply_gain(min(gain, settings.BLIPS_PEAK_DBFS - audio.max_dBFS))
+
+
 def as_blip(audio: AudioSegment) -> Optional[Blip]:
     audio = audio.set_sample_width(2)
     if len(audio) == 0 or audio.max_dBFS == float("-inf"):
         return None
-    return _blip(audio.apply_gain(settings.BLIPS_PEAK_DBFS - audio.max_dBFS))
+    return _blip(audio)
 
 
 def _load(path: Path) -> Optional[Blip]:

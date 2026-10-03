@@ -26,6 +26,9 @@ second batch that day).
    documents' bodies as a JSON array to `<batch>/picks-export.json`, then run
    `generate_radio_drops.py install <batch> <batch>/picks-export.json`. It copies each kept drop into
    `BLIPS_DIR/hosts|station/in|out/` (Either goes to both) and saves `picks.json` in the batch for the next round.
+   Installing is destructive levelling: each drop is written at `BLIPS_TARGET_LUFS` (-25, integrated) with a
+   `BLIPS_PEAK_DBFS` (-12) ceiling; the station plays the files as they are. After changing either setting or
+   dropping files in by hand, run `generate_radio_drops.py level` (re-levels every installed drop in place).
 4. **Make it live**: restart PLAiR (PLAiR Start shortcut, CLAUDE.md) so `station_blips` reloads the library, then check
    the boot log line `Blips: station in N, ...` and one chat reply in `radio.log`.
 

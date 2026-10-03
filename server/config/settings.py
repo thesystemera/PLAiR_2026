@@ -712,6 +712,7 @@ class Settings:
     STINGS_FILL_GAPS: bool = os.getenv("STINGS_FILL_GAPS", "true").lower() == "true"
     BLIPS_ENABLED: bool = os.getenv("BLIPS_ENABLED", "true").lower() == "true"
     BLIPS_DIR: Path = Path(os.getenv("BLIPS_DIR") or str(CATALOG_DIR / "blips"))
+    BLIPS_TARGET_LUFS: float = float(os.getenv("BLIPS_TARGET_LUFS", "-25"))
     BLIPS_PEAK_DBFS: float = float(os.getenv("BLIPS_PEAK_DBFS", "-12"))
     BLIPS_RELEASE_DB: float = float(os.getenv("BLIPS_RELEASE_DB", "12"))
     BLIPS_HOLD_MS: int = int(os.getenv("BLIPS_HOLD_MS", "500"))

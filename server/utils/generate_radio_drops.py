@@ -15,7 +15,9 @@ go (24 prompts x 1 take is about 11 minutes). The steps, in order:
                            instead of prompts + render: takes a downloaded sound library (wav/mp3/flac/ogg/aiff, any
                            depth), trims leading and trailing silence, skips anything longer than 6 s and writes the
                            batch's FLACs and manifest.json; then run page as usual
-  install <batch> <picks>  copies the kept drops (picks.json exported from that collection) into
+  level                    re-levels every installed drop in place (after changing BLIPS_TARGET_LUFS or adding files
+                           by hand); install levels as it copies
+  install <batch> <picks>  levels (BLIPS_TARGET_LUFS integrated loudness, BLIPS_PEAK_DBFS ceiling) and writes the kept drops (picks.json exported from that collection) into
                            BLIPS_DIR/<hosts|station>/<in|out>/; restart PLAiR to load them
 
 Stable Audio Open 1.0: Stability AI Community License. It uses the deterministic EDM DPM-Solver with the model's own
@@ -205,8 +207,8 @@ def build_page(out: Path):
     labels = {"hosts": "Hosts", "computer": "Computer voice"}
     cards = []
     for entry in json.loads((out / "manifest.json").read_text(encoding="utf-8")):
-        raw = AudioSegment.from_file(out / entry["file"]).set_sample_width(2)
-        blip = station_blips.as_blip(raw)
+        levelled = station_blips.level(AudioSegment.from_file(out / entry["file"]))
+        blip = station_blips.as_blip(levelled) if levelled is not None else None
         if blip is None:
             continue
         opened, _voice_at = station_blips.mix_in(blip, lines[entry["for"]])
@@ -235,8 +237,29 @@ def build_page(out: Path):
     print(f"{page} ({page.stat().st_size / 1e6:.1f} MB, {len(cards)} drops)")
 
 
+def write_levelled(source: Path, target: Path) -> bool:
+    from pydub import AudioSegment
+    from services_radio import station_blips
+    audio = station_blips.level(AudioSegment.from_file(source))
+    if audio is None:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    audio.export(target.with_suffix(".flac"), format="flac")
+    if target.suffix.lower() != ".flac" and target.exists():
+        target.unlink()
+    return True
+
+
+def relevel_installed():
+    from config.settings import settings
+    files = [p for voice in ("hosts", "station") for edge in ("in", "out")
+             for p in sorted((settings.BLIPS_DIR / voice / edge).glob("*")) if p.suffix.lower() in IMPORT_EXTENSIONS]
+    done = sum(write_levelled(p, p) for p in files)
+    print(f"Levelled {done} of {len(files)} installed drops to {settings.BLIPS_TARGET_LUFS:g} LUFS "
+          f"(peak ceiling {settings.BLIPS_PEAK_DBFS:g} dBFS); restart PLAiR to load them")
+
+
 def install(out: Path, picks_path: Path):
-    import shutil
     from config.settings import settings
     folders = {"hosts": "hosts", "computer": "station"}
     edges = {"in": ("in",), "out": ("out",), "either": ("in", "out")}
@@ -247,10 +270,8 @@ def install(out: Path, picks_path: Path):
         if pick.get("verdict") != "keep" or pick.get("for") not in folders:
             continue
         for edge in edges.get(pick.get("role") or "either", ("in", "out")):
-            target = settings.BLIPS_DIR / folders[pick["for"]] / edge
-            target.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(out / pick["file"], target / f"{out.name}_{pick['file']}")
-            installed += 1
+            target = settings.BLIPS_DIR / folders[pick["for"]] / edge / f"{out.name}_{pick['file']}"
+            installed += write_levelled(out / pick["file"], target)
     print(f"Installed {installed} drop file(s) into {settings.BLIPS_DIR}; restart PLAiR to load them")
 
 
@@ -289,6 +310,9 @@ def batch_dir(name: str) -> Path:
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "level":
+        relevel_installed()
+        return
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     mode, out = sys.argv[1], batch_dir(sys.argv[2])
