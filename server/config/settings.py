@@ -720,7 +720,7 @@ class Settings:
     STINGS_ID_NO_REPEAT: int = int(os.getenv("STINGS_ID_NO_REPEAT", "8"))
     STINGS_BREAK_LEAD_IN_PROBABILITY: float = float(os.getenv("STINGS_BREAK_LEAD_IN_PROBABILITY", "0.5"))
     STINGS_MIDTRACK_ENABLED: bool = os.getenv("STINGS_MIDTRACK_ENABLED", "true").lower() == "true"
-    STINGS_MIDTRACK_MIN_WINDOW_S: float = float(os.getenv("STINGS_MIDTRACK_MIN_WINDOW_S", "4"))
+    STINGS_MIDTRACK_MIN_WINDOW_S: float = float(os.getenv("STINGS_MIDTRACK_MIN_WINDOW_S", "3.5"))
     STINGS_MIDTRACK_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_MAX_LEN_S", "2.5"))
     STINGS_MIDTRACK_VOICE_MAX_LEN_S: float = float(os.getenv("STINGS_MIDTRACK_VOICE_MAX_LEN_S", "4.5"))
     REVIEW_STINGS_ENABLED: bool = os.getenv("REVIEW_STINGS_ENABLED", "true").lower() == "true"

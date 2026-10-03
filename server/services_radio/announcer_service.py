@@ -16,6 +16,10 @@ FILL_DEFAULT_MS = 3000
 FILL_LATE_MS = 8000
 SPACE_START_PCT = 0.1
 SPACE_END_PCT = 0.85
+VOCAL_PAD_S = 0.4
+LYRIC_ALIGNMENT_MIN = 0.3
+LYRIC_SPAN_MIN = 0.3
+SPACE_LOUDNESS_PCT = 40
 
 
 class AnnouncerService:
@@ -400,7 +404,8 @@ class AnnouncerService:
             lyric_data: Optional[Dict],
             start_pct: float = 0.0,
             end_pct: float = 1.0,
-            offset_ms: float = 0.0
+            offset_ms: float = 0.0,
+            loudness_pct: float = 30
     ) -> List[Dict]:
         duration = audio_features.get('duration', 0)
         loudness_segments = audio_features.get('loudness_segments', [])
@@ -415,7 +420,7 @@ class AnnouncerService:
         if not all_loudness:
             return []
 
-        loudness_threshold = np.percentile(all_loudness, 30)
+        loudness_threshold = np.percentile(all_loudness, loudness_pct)
         min_segment_duration = 1.0
         quiet_segments = []
         current_quiet_start = None
@@ -572,18 +577,47 @@ class AnnouncerService:
             if not features:
                 return
             lyrics = await self.orchestrator.lyrics.load_timestamps(track_id)
-            duration_s = features.get('duration', 0)
-            segments = await self._get_quiet_segments(features, lyrics, start_pct=SPACE_START_PCT,
-                                                      end_pct=SPACE_END_PCT)
-            segments += self._lyric_gaps(lyrics, duration_s, SPACE_START_PCT, SPACE_END_PCT)
+            vocal_spans = self._vocal_spans(lyrics, features.get('duration', 0))
+            if vocal_spans is None and not self._is_instrumental(session_id, track_id):
+                return
+            quiet = await self._get_quiet_segments(features, None, start_pct=SPACE_START_PCT, end_pct=SPACE_END_PCT,
+                                                   loudness_pct=SPACE_LOUDNESS_PCT)
             earliest = state.get('progress_ms', 0) + settings.STINGS_BUILD_LEAD_MS + 2000
-            spaces = [s for s in self._merge_spaces(segments)
+            spaces = [s for s in self._minus_vocals(self._merge_spaces(quiet), vocal_spans or [])
                       if s['duration_ms'] >= settings.STINGS_MIDTRACK_MIN_WINDOW_S * 1000 and s['start_ms'] > earliest]
             if spaces:
                 task = asyncio.create_task(self._walk_spaces(session_id, track_id, spaces, state))
                 self.session_tasks.setdefault(session_id, []).append(task)
         except Exception as e:
             log_service.warning(f"Announcer: mapping the song's quiet spaces failed: {type(e).__name__}: {e}")
+
+    @staticmethod
+    def _vocal_spans(lyric_data: Optional[Dict], duration_s: float) -> Optional[List[Tuple[float, float]]]:
+        lines = [l for l in (lyric_data or {}).get('lyrics') or [] if isinstance(l.get('start'), (int, float))]
+        if not lines or not duration_s:
+            return None
+        if (lyric_data.get('alignment_score') or 0) < LYRIC_ALIGNMENT_MIN \
+                or max(l.get('end') or l['start'] for l in lines) < duration_s * LYRIC_SPAN_MIN:
+            return None
+        return [((l['start'] - VOCAL_PAD_S) * 1000, ((l.get('end') or l['start']) + VOCAL_PAD_S) * 1000) for l in lines]
+
+    @staticmethod
+    def _minus_vocals(spaces: List[Dict], vocal_spans: List[Tuple[float, float]]) -> List[Dict]:
+        pieces = []
+        for space in spaces:
+            parts = [(space['start_ms'], space['end_ms'])]
+            for v_start, v_end in vocal_spans:
+                parts = [p for a, b in parts
+                         for p in ((a, min(b, v_start)), (max(a, v_end), b)) if p[1] > p[0]]
+            pieces += [{'start_ms': a, 'end_ms': b, 'duration_ms': b - a} for a, b in parts]
+        return pieces
+
+    def _is_instrumental(self, session_id: str, track_id: str) -> bool:
+        from services.catalog_vocals import vocals_of
+        playback_state = self._existing_session_state(session_id)
+        track = playback_state.catalog.get_track(track_id) if playback_state is not None and playback_state.catalog \
+            else None
+        return bool(track) and vocals_of(track) == "instrumental"
 
     async def _walk_spaces(self, session_id: str, track_id: str, spaces: List[Dict], state: dict):
         for space in spaces:
@@ -691,23 +725,6 @@ class AnnouncerService:
                 await asyncio.sleep(5.0)
             else:
                 await asyncio.sleep(min(1.0, time_until_trigger / 1000.0))
-
-    @staticmethod
-    def _lyric_gaps(lyric_data: Optional[Dict], duration_s: float, start_pct: float, end_pct: float) -> List[Dict]:
-        lines = sorted((l for l in (lyric_data or {}).get('lyrics') or [] if isinstance(l.get('start'), (int, float))),
-                       key=lambda l: l['start'])
-        if not lines or not duration_s:
-            return []
-        lo, hi = duration_s * start_pct, duration_s * end_pct
-        edges = [(0.0, lines[0]['start'])]
-        edges += [(a.get('end') or a['start'], b['start']) for a, b in zip(lines, lines[1:])]
-        edges.append((lines[-1].get('end') or lines[-1]['start'], duration_s))
-        gaps = []
-        for start, end in edges:
-            start, end = max(start + 0.3, lo), min(end - 0.3, hi)
-            if end - start >= 1.0:
-                gaps.append({'start_ms': start * 1000, 'end_ms': end * 1000, 'duration_ms': (end - start) * 1000})
-        return gaps
 
     async def _schedule_announcement_for_transition(
             self, session_id: str, current_track_id: str, transition_window: Dict, state: dict
