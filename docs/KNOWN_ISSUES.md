@@ -191,6 +191,21 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 7. Large jobs
 
+- **Music catalog re-render (running since 3 Oct, 22:31).** `server/utils/process_backlog.py --rerender` on the
+  RTX 6000: ~870 Suno songs that never had a master, then ~1,350 masters below chain version 3; ~2.5 min per song
+  (GPU-bound), a few days in all. Progress in `data/logs/backlog.log`; restart the same command if it stops
+  (finished songs are skipped). While a song is re-rendered (~3 min) its old Opus/WebM are gone, so playback may
+  skip it. `utils/relevel_catalog.py` is moving the remaining -14 LUFS masters to -16 by gain (log
+  `data/logs/relevel_run.out`). Chain details: CLAUDE.md section 18.
+- **Music: open ideas, not started.** SonicMaster fp16 on the RTX (`SONIC_MASTER_PRECISION=auto`, 1.7x faster, a
+  slightly different take; the owner kept fp32). Suno's lossless WAV via sunoapi.org `/wav/generate` (~0.4 credits;
+  needs the generation taskId, which the catalog doesn't store). A learned artifact-mask model in the style of
+  Intrect's ArtifactNet (patent-pending), or reviving `D:\Projects_parked\SUNO_UPSCALE`; both need a clean
+  real-music dataset.
+- **E: is full** (about 9 GB free of 954 GB). `E:\deepPBR.io` is 859 GB and grows with every reconstruction job
+  (`storageolatileeconstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's test renders
+  live on D: (`D:\_audio_quality_scratch`).
+
 - **DJ autonomy: the station knows what you're up to** (owner, 2 Oct; `docs/DJ_AUTONOMY.md`). A DJ mode where
   the hosts change the music themselves from the listener's activity (what they say, time and place, movement,
   later heart rate from a watch), and requests that keep steering the station instead of fading back after a few
