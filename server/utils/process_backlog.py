@@ -26,6 +26,7 @@ os.environ["ASSET_DOCTOR_ENABLED"] = "false"
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio  # noqa: E402
+import faulthandler  # noqa: E402
 import json  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 
@@ -83,6 +84,10 @@ def mark_added(track_id: str):
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
+
+
+CRASH_LOG = open(Path(__file__).parent.parent.parent / "data" / "logs" / "backlog_crash.log", "a", encoding="utf-8")
+faulthandler.enable(file=CRASH_LOG, all_threads=True)
 
 
 async def main():
