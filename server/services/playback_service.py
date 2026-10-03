@@ -197,7 +197,7 @@ class PlaybackService(SingletonService):
         return await state.seek(position_ms=position_ms, notify_callback=notify)
 
     async def add_to_queue(self, session_id: str, track_ids: List[str],
-                           position: Optional[int] = None, user_id: Optional[int] = None):
+                           position: Optional[int] = None, user_id: Optional[int] = None, play_next: bool = False):
         state = self.get_session_state(session_id)
         async def notify(snapshot):
             await self._notify_session_change(session_id, snapshot)
@@ -205,7 +205,8 @@ class PlaybackService(SingletonService):
             track_ids=track_ids,
             position=position,
             user_id=user_id,
-            notify_callback=notify
+            notify_callback=notify,
+            play_next=play_next
         )
 
     async def remove_from_queue(self, session_id: str, track_id: str, user_id: Optional[int] = None):

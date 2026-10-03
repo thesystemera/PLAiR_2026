@@ -1,10 +1,53 @@
-import asyncio
 import re
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 import numpy as np
-from typing import List, Dict, Any, Optional, Tuple, Union
+
+from models_global import run_on_gpu_executor
 from services import log_service
 from services.catalog_vocals import VOCALS, vocals_of
+from services.catalog_vector_database_service import TAG_LISTS, CatalogVectorDatabaseService
 from services.semantic_source import SemanticSearch
+
+QUERY_PREFIXES = {
+    "song": "song_title", "track": "song_title", "title": "song_title",
+    "genre": "primary_genre",
+    "subgenre": "secondary_genres", "sub-genre": "secondary_genres", "secondary genre": "secondary_genres",
+    "mood": "mood", "vibe": "mood",
+    "artist": "primary_artist",
+    "similar artist": "similar_artists", "similar artists": "similar_artists",
+    "style": "style", "theme": "theme", "lyrics": "lyrics", "vocal": "vocal",
+    "instrumental": "vocal",
+}
+LABEL_CATEGORIES = set(TAG_LISTS) | {"primary_genre", "primary_artist"}
+NAME_CATEGORIES = {"primary_artist", "similar_artists"}
+NATURAL_PHRASES = (
+    ("secondary_genres", ("subgenre", "subgenres", "sub-genre", "sub-genres", "secondary genre")),
+    ("primary_genre", ("genre", "genres", "type of music", "kind of music", "music like")),
+    ("mood", ("mood", "vibe", "vibes", "feeling", "atmosphere", "energy")),
+    ("similar_artists", ("similar artist", "similar artists", "sounds like")),
+    ("primary_artist", ("artist", "artists", "band", "singer", "musician", "similar to", "like", "reminds me of")),
+    ("style", ("style", "production", "sound", "produced", "recorded")),
+    ("theme", ("theme", "about", "story", "narrative", "lyrics about", "message", "meaning")),
+    ("vocal", ("vocal", "vocals", "voice", "sung", "singing")),
+    ("song_title", ("song", "track", "title", "named", "called", "play the song", "play the track")),
+    ("vocal", ("instrumental", "instrumentals", "no vocals", "without vocals")),
+)
+
+
+@dataclass
+class TagIndex:
+    metas: List[Dict[str, Any]]
+    rows: np.ndarray
+    starts: np.ndarray
+    counts: np.ndarray
+    vectors: np.ndarray
+
+
+def _unit(vectors: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=-1, keepdims=True)
+    return np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms > 0)
 
 
 class CatalogVectorSearchService:
@@ -14,11 +57,13 @@ class CatalogVectorSearchService:
         self.catalog = catalog_service
         self.prompt_cache_service = prompt_cache_service
         self.semantic = SemanticSearch(vector_db_service, prompt_cache_service)
+        self._tag_source = None
+        self._tag_indexes: Dict[str, Optional[TagIndex]] = {}
         log_service.vector_music("✓ CatalogVectorSearchService initialized")
 
     async def search(
             self,
-            query: Union[str, List[str]],
+            query: str,
             n_results: int = 10,
             use_ai_analysis: bool = False,
             banned_ids: Optional[set] = None,
@@ -29,19 +74,6 @@ class CatalogVectorSearchService:
         if not self.catalog or not self.catalog.tracks:
             log_service.warning("No catalog available for search")
             return []
-
-        current_annoy_index = self.vector_db.current_annoy_index()
-
-        def _safe_search(vector_data, num_items):
-            with self.vector_db.index_lock:
-                if current_annoy_index.get_n_items() == 0:
-                    return []
-                return current_annoy_index.get_nns_by_vector(vector_data, num_items)
-
-        if isinstance(query, list):
-            return await asyncio.to_thread(
-                self._search_by_track_ids_sync, query, n_results, banned_ids, _safe_search
-            )
 
         try:
             log_service.detail(f"🔍 Searching: '{query}'", "vector_music")
@@ -64,14 +96,14 @@ class CatalogVectorSearchService:
                     return False
                 return True
 
-            found = await self.semantic.search(cleaned_query, n=n_results, keep=keep, weights=query_weights)
-            track_results = []
-            for match in found:
-                result = match.meta.copy()
-                result['similarity_score'] = match.similarity
-                result['intent_category'] = intent_category
-                result['match_weights'] = query_weights
-                track_results.append(result)
+            if set(query_weights) == {intent_category}:
+                texts = cleaned_query.split(",") if intent_category in LABEL_CATEGORIES else [cleaned_query]
+                found = await self.near_texts(texts, intent_category, n_results, keep=keep)
+            else:
+                found = [{**match.meta, 'similarity_score': match.similarity} for match in
+                         await self.semantic.search(cleaned_query, n=n_results, keep=keep, weights=query_weights)]
+            track_results = [{**track, 'intent_category': intent_category, 'match_weights': query_weights}
+                             for track in found]
 
             if track_results:
                 log_service.detail("  🎯 Top 5 matches:", "vector_music")
@@ -106,73 +138,128 @@ class CatalogVectorSearchService:
         intent, weights, cleaned = self._detect_query_intent(query)
         return intent, weights, cleaned if cleaned.strip() else query, {}
 
-    def _search_by_track_ids_sync(self, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
-        conn = self.catalog._get_connection()
-        try:
-            return self._search_by_track_ids_with_conn(conn, query, n_results, banned_ids, _safe_search)
-        finally:
-            conn.close()
+    def _tag_index(self, category: str) -> Optional[TagIndex]:
+        source = self.vector_db._metadata_cache
+        if self._tag_source is not source:
+            self._tag_source, self._tag_indexes = source, {}
+        if category not in self._tag_indexes:
+            metas = list(source.values())
+            rows, starts, texts = [], [], []
+            for row, meta in enumerate(metas):
+                tags = self.vector_db.category_tags(meta).get(category) or []
+                if tags:
+                    rows.append(row)
+                    starts.append(len(texts))
+                    texts.extend(tags)
+            if not texts:
+                self._tag_indexes[category] = None
+                return None
+            vectors = _unit(np.array(self.vector_db.ensure_embeddings(category, texts), dtype=np.float32))
+            counts = np.diff(np.array(starts + [len(texts)]))
+            self._tag_indexes[category] = TagIndex(metas, np.array(rows), np.array(starts), counts, vectors)
+        return self._tag_indexes[category]
 
-    def _search_by_track_ids_with_conn(self, conn, query: List[str], n_results: int, banned_ids, _safe_search) -> List[Dict[str, Any]]:
-        import json
-        c = conn.cursor()
+    def _tag_scores(self, category: str, anchors: List[List[str]]) -> Optional[np.ndarray]:
+        index = self._tag_index(category)
+        anchors = [tags for tags in anchors if tags]
+        if index is None or not anchors:
+            return None
+        total = np.zeros(len(index.rows), dtype=np.float32)
+        for tags in anchors:
+            anchor = _unit(np.array(self.vector_db.ensure_embeddings(category, tags), dtype=np.float32))
+            similarity = anchor @ index.vectors.T
+            forward = np.maximum.reduceat(similarity, index.starts, axis=1).mean(axis=0)
+            backward = np.add.reduceat(similarity.max(axis=0), index.starts) / index.counts
+            total += (forward + backward) / 2
+        scores = np.full(len(index.metas), np.nan, dtype=np.float32)
+        scores[index.rows] = total / len(anchors)
+        return scores
 
-        context_vectors = []
-        found_ids = set()
-
-        for track_id in query:
-            c.execute("SELECT rowid, metadata_json FROM tracks WHERE track_id = %s", (track_id,))
-            result = c.fetchone()
-            if result:
-                rowid, metadata_json = result
-                track = json.loads(metadata_json)
-                category_texts = self.vector_db._extract_category_texts(track)
-
-                combined = self.vector_db._create_weighted_embedding(
-                    self.vector_db.get_category_embeddings(category_texts)
-                )
-                context_vectors.append(combined)
-                found_ids.add(track_id)
-
-        if not context_vectors:
+    def _rank_tags(self, categories: List[str], anchors_for: Callable[[str], List[List[str]]], n_results: int,
+                   allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
+        per_category = [scores for scores in (self._tag_scores(c, anchors_for(c)) for c in categories)
+                        if scores is not None]
+        if not per_category:
             return []
+        metas = list(self._tag_source.values())
+        stacked = np.vstack(per_category)
+        present = (~np.isnan(stacked)).sum(axis=0)
+        scores = np.where(present > 0, np.nansum(stacked, axis=0) / np.maximum(present, 1), np.nan)
+        ranked = [(float(scores[i]), meta) for i, meta in enumerate(metas)
+                  if not np.isnan(scores[i]) and allowed(meta)]
+        ranked.sort(key=lambda row: row[0], reverse=True)
+        return [{**meta, 'similarity_score': score} for score, meta in ranked[:n_results]]
 
-        weights = np.linspace(0.5, 1.0, len(context_vectors))
-        average_vector = np.average(context_vectors, axis=0, weights=weights)
+    def _rank_names(self, category: str, anchors: List[Dict[str, List[str]]], n_results: int,
+                    allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
+        def names(tags: Dict[str, List[str]], key: str) -> set:
+            return {name.lower() for name in tags.get(key) or []}
 
-        nearest_ids = _safe_search(average_vector, n_results * 3)
-
-        results = []
-        exclude_ids = (banned_ids or set()) | found_ids | (self.catalog.hidden_ids if self.catalog is not None else set())
-
-        for annoy_idx in nearest_ids:
-            rowid = annoy_idx + 1
-
-            track_id, track = self.vector_db.lookup_cached_row(rowid)
-            if track_id is not None:
-                if track_id in exclude_ids:
-                    continue
-                if track:
-                    track['similarity_score'] = 0.95
-                    results.append(track)
-                    if len(results) >= n_results:
-                        break
-                    continue
-
-            c.execute("SELECT track_id, metadata_json FROM tracks WHERE rowid = %s", (rowid,))
-            result = c.fetchone()
-            if not result:
+        artists = set().union(*(names(t, "primary_artist") for t in anchors))
+        similar = set().union(*(names(t, "similar_artists") for t in anchors)) - artists
+        ranked = []
+        for meta in self.vector_db._metadata_cache.values():
+            if not allowed(meta):
                 continue
-            track_id, metadata_json = result
-            if track_id in exclude_ids:
+            tags = self.vector_db.category_tags(meta)
+            own, scene = names(tags, "primary_artist"), names(tags, "similar_artists")
+            if category == "similar_artists" and own & artists:
                 continue
-            track = json.loads(metadata_json)
-            track['similarity_score'] = 0.95
-            results.append(track)
-            if len(results) >= n_results:
-                break
+            key = (bool(own & similar), len(scene & similar) / len(similar) if similar else 0.0)
+            if category == "primary_artist":
+                key = (bool(own & artists),) + key
+            if any(key):
+                ranked.append((key, meta))
+        ranked.sort(key=lambda row: row[0], reverse=True)
+        return [{**meta, 'similarity_score': float(sum(key) / len(key))} for key, meta in ranked[:n_results]]
 
-        return results
+    def _categories(self, category: str) -> List[str]:
+        if category == "all":
+            return [c for c in self.vector_db.categories if c != "song_title"]
+        return [category]
+
+    def _allowed(self, exclude_ids: set, banned_ids: Optional[set],
+                 keep: Optional[Callable[[Dict[str, Any]], bool]]) -> Callable[[Dict[str, Any]], bool]:
+        hidden = self.catalog.hidden_ids
+
+        def allowed(track: Dict[str, Any]) -> bool:
+            track_id = track.get("id")
+            return (track_id not in exclude_ids and track_id not in hidden
+                    and not (banned_ids and track_id in banned_ids) and (keep is None or keep(track)))
+        return allowed
+
+    async def similar(self, tracks: List[Dict[str, Any]], category: str, n_results: int,
+                      banned_ids: Optional[set] = None,
+                      keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
+        if not tracks or not self.catalog or not self.catalog.tracks:
+            return []
+        allowed = self._allowed({t.get("id") for t in tracks}, banned_ids, keep)
+        tags = [self.vector_db.category_tags(t) for t in tracks]
+
+        def run():
+            if category in NAME_CATEGORIES:
+                return self._rank_names(category, tags, n_results, allowed)
+            return self._rank_tags(self._categories(category), lambda c: [t.get(c) or [] for t in tags],
+                                   n_results, allowed)
+
+        return await run_on_gpu_executor(run)
+
+    async def near_texts(self, texts: List[str], category: str, n_results: int,
+                         banned_ids: Optional[set] = None,
+                         keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
+        texts = [text.strip() for text in texts if text and text.strip()]
+        if not texts or not self.catalog or not self.catalog.tracks:
+            return []
+        allowed = self._allowed(set(), banned_ids, keep)
+
+        def run():
+            return self._rank_tags([category], lambda _: [texts], n_results, allowed)
+
+        return await run_on_gpu_executor(run)
+
+    async def warm(self) -> None:
+        for category in self.vector_db.categories:
+            await run_on_gpu_executor(self._tag_index, category)
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()
@@ -191,166 +278,20 @@ class CatalogVectorSearchService:
         return cleaned.strip()
 
     def _detect_query_intent(self, query: str) -> Tuple[str, Dict[str, float], str]:
+        head, sep, rest = query.partition(":")
+        category = QUERY_PREFIXES.get(head.strip().lower()) if sep else None
+        cleaned_query = rest.strip() if category else query
 
-        query_lower = query.lower()
-        detected_category = None
-        cleaned_query = query
+        if category is None:
+            query_lower = query.lower()
+            for category_name, phrases in NATURAL_PHRASES:
+                if re.search(r'(' + '|'.join(phrases) + r')', query_lower):
+                    category = category_name
+                    cleaned_query = self._clean_natural_query(query, list(phrases))
+                    break
 
-        if query_lower.startswith("genre:"):
-            detected_category = "genre"
-            cleaned_query = query[6:].strip()
-        elif query_lower.startswith("mood:") or query_lower.startswith("vibe:"):
-            detected_category = "mood"
-            cleaned_query = query[5:].strip()
-        elif query_lower.startswith("artist:"):
-            detected_category = "artist"
-            cleaned_query = query[7:].strip()
-        elif query_lower.startswith("style:"):
-            detected_category = "style"
-            cleaned_query = query[6:].strip()
-        elif query_lower.startswith("theme:"):
-            detected_category = "theme"
-            cleaned_query = query[6:].strip()
-        elif query_lower.startswith("lyrics:"):
-            detected_category = "lyrics"
-            cleaned_query = query[7:].strip()
-        elif query_lower.startswith("vocal:"):
-            detected_category = "vocal"
-            cleaned_query = query[6:].strip()
-        elif query_lower.startswith("song:") or query_lower.startswith("track:") or query_lower.startswith("title:"):
-            detected_category = "song_title"
-            cleaned_query = query.split(":", 1)[1].strip()
-        elif query_lower.startswith("subgenre:") or query_lower.startswith("sub-genre:") or query_lower.startswith("secondary genre:"):
-            detected_category = "secondary_genres"
-            cleaned_query = query.split(":", 1)[1].strip()
-        elif query_lower.startswith("similar artist:") or query_lower.startswith("similar artists:"):
-            detected_category = "similar_artists"
-            cleaned_query = query.split(":", 1)[1].strip()
-        elif query_lower.startswith("instrumental:"):
-            detected_category = "instrumental"
-            cleaned_query = query[13:].strip()
-
-        elif re.search(r'\b(genre|genres|type of music|kind of music|music like)\b', query_lower):
-            detected_category = "genre"
-            cleaned_query = self._clean_natural_query(query, ['genre', 'genres', 'type of music', 'kind of music', 'music like'])
-        elif re.search(r'\b(mood|vibe|vibes|feeling|atmosphere|energy)\b', query_lower):
-            detected_category = "mood"
-            cleaned_query = self._clean_natural_query(query, ['mood', 'vibe', 'vibes', 'feeling', 'atmosphere', 'energy'])
-        elif re.search(r'\b(artist|artists|band|singer|musician|similar to|like|sounds like|reminds me of)\b',
-                       query_lower):
-            detected_category = "artist"
-            cleaned_query = self._clean_natural_query(query, ['artist', 'artists', 'band', 'singer', 'musician', 'similar to', 'reminds me of'])
-        elif re.search(r'\b(style|production|sound|produced|recorded)\b', query_lower):
-            detected_category = "style"
-            cleaned_query = self._clean_natural_query(query, ['style', 'production', 'sound', 'produced', 'recorded'])
-        elif re.search(r'\b(theme|about|story|narrative|lyrics about|message|meaning)\b', query_lower):
-            detected_category = "theme"
-            cleaned_query = self._clean_natural_query(query, ['theme', 'about', 'story', 'narrative', 'lyrics about', 'message', 'meaning'])
-        elif re.search(r'\b(vocal|vocals|voice|sung|singing)\b', query_lower):
-            detected_category = "vocal"
-            cleaned_query = self._clean_natural_query(query, ['vocal', 'vocals', 'voice', 'sung', 'singing'])
-        elif re.search(r'\b(song|track|title|named|called|play the song|play the track)\b', query_lower):
-            detected_category = "song_title"
-            cleaned_query = self._clean_natural_query(query, ['song', 'track', 'title', 'named', 'called', 'play the song', 'play the track'])
-        elif re.search(r'\b(subgenre|subgenres|sub-genre|sub-genres|secondary genre)\b', query_lower):
-            detected_category = "secondary_genres"
-            cleaned_query = self._clean_natural_query(query, ['subgenre', 'subgenres', 'sub-genre', 'sub-genres', 'secondary genre'])
-        elif re.search(r'\b(similar artist|similar artists|sounds like)\b', query_lower):
-            detected_category = "similar_artists"
-            cleaned_query = self._clean_natural_query(query, ['similar artist', 'similar artists', 'sounds like'])
-        elif re.search(r'\b(instrumental|instrumentals|no vocals|without vocals)\b', query_lower):
-            detected_category = "instrumental"
-            cleaned_query = self._clean_natural_query(query, ['instrumental', 'instrumentals', 'no vocals', 'without vocals'])
-
-        if detected_category == "song_title":
-            weights = {
-                "song_title": 0.60, "primary_artist": 0.15, "lyrics": 0.10,
-                "primary_genre": 0.05, "secondary_genres": 0.02, "mood": 0.03,
-                "style": 0.02, "theme": 0.02, "similar_artists": 0.00, "vocal": 0.01
-            }
-            log_service.detail("🎯 Query intent: SONG TITLE", "vector_music")
-
-        elif detected_category == "genre":
-            weights = {
-                "primary_genre": 0.50, "secondary_genres": 0.15, "mood": 0.12,
-                "primary_artist": 0.08, "similar_artists": 0.05, "style": 0.07,
-                "vocal": 0.02, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: GENRE", "vector_music")
-
-        elif detected_category == "mood":
-            weights = {
-                "mood": 0.50, "primary_genre": 0.12, "secondary_genres": 0.08, "style": 0.12,
-                "theme": 0.08, "primary_artist": 0.04, "similar_artists": 0.03,
-                "vocal": 0.02, "lyrics": 0.01, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: MOOD", "vector_music")
-
-        elif detected_category == "artist":
-            weights = {
-                "primary_artist": 0.50, "similar_artists": 0.15, "primary_genre": 0.10,
-                "secondary_genres": 0.08, "style": 0.10, "mood": 0.04,
-                "vocal": 0.02, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: ARTIST", "vector_music")
-
-        elif detected_category == "style":
-            weights = {
-                "style": 0.45, "primary_genre": 0.20, "secondary_genres": 0.10, "mood": 0.12,
-                "primary_artist": 0.05, "similar_artists": 0.03, "vocal": 0.03,
-                "theme": 0.01, "lyrics": 0.01, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: STYLE", "vector_music")
-
-        elif detected_category == "theme":
-            weights = {
-                "theme": 0.45, "lyrics": 0.22, "mood": 0.15,
-                "primary_genre": 0.06, "secondary_genres": 0.04, "style": 0.04,
-                "primary_artist": 0.02, "similar_artists": 0.01, "vocal": 0.01, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: THEME", "vector_music")
-
-        elif detected_category == "vocal":
-            weights = {
-                "vocal": 0.45, "style": 0.18, "primary_genre": 0.12, "secondary_genres": 0.08,
-                "mood": 0.10, "primary_artist": 0.03, "similar_artists": 0.02,
-                "theme": 0.01, "lyrics": 0.01, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: VOCAL", "vector_music")
-
-        elif detected_category == "secondary_genres":
-            weights = {
-                "secondary_genres": 0.50, "primary_genre": 0.25, "mood": 0.10,
-                "style": 0.08, "primary_artist": 0.03, "similar_artists": 0.02,
-                "vocal": 0.01, "theme": 0.01, "lyrics": 0.00, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: SECONDARY GENRES", "vector_music")
-
-        elif detected_category == "similar_artists":
-            weights = {
-                "similar_artists": 0.50, "primary_artist": 0.25, "primary_genre": 0.10,
-                "secondary_genres": 0.06, "style": 0.06, "mood": 0.02,
-                "vocal": 0.01, "theme": 0.00, "lyrics": 0.00, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: SIMILAR ARTISTS", "vector_music")
-
-        elif detected_category == "instrumental":
-            weights = {
-                "style": 0.35, "primary_genre": 0.25, "secondary_genres": 0.15, "mood": 0.15,
-                "primary_artist": 0.05, "similar_artists": 0.03, "theme": 0.01,
-                "vocal": 0.01, "lyrics": 0.00, "song_title": 0.00
-            }
-            log_service.detail("🎯 Query intent: INSTRUMENTAL", "vector_music")
-
-        else:
-            weights = {
-                "primary_genre": 0.20, "secondary_genres": 0.10, "mood": 0.20,
-                "primary_artist": 0.15, "similar_artists": 0.10, "style": 0.12,
-                "vocal": 0.07, "theme": 0.04, "lyrics": 0.02, "song_title": 0.00
-            }
-            log_service.system("🎯 Query intent: GENERAL")
-
-        return (detected_category or "general", weights, cleaned_query)
+        log_service.detail(f"🎯 Query intent: {category or 'general'}", "vector_music")
+        return category or "general", CatalogVectorDatabaseService.weights_for(category or ""), cleaned_query
 
     async def add_track(self, track_id: str):
         log_service.vector_music(f"New track {track_id} added - background task will rebuild index")

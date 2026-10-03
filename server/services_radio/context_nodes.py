@@ -1045,6 +1045,33 @@ async def get_history_last_track(last_track: Optional[Dict] = None, **_) -> str:
     return f"LAST TRACK (Previously Played): {name} by {artist}"
 
 @node_registry.register(
+    "queue_playlist",
+    "The playlist around now: the songs just played, what's on, and the songs coming up",
+    cost="low"
+)
+async def get_queue_playlist(session_id: Optional[str] = None, playback_service=None, **_) -> str:
+    from services_radio.dj_command_executor import PLAYLIST_DISPLAY, SEED_MODE_DISPLAY
+    state = playback_service.get_state(session_id, simplified=False) if playback_service and session_id else None
+    queue = (state or {}).get("queue") or []
+    if not state or not state.get("current_track") or not queue:
+        return "PLAYLIST: Nothing is playing."
+    index = state.get("current_index") or 0
+    span = settings.DJ_PLAYLIST_VIEW_SONGS
+
+    def line(offset: int, track: Dict) -> str:
+        params = track.get("generation_params") or {}
+        genre = (track.get("derived_tags") or {}).get("primary_genre") or ""
+        slot = "now" if offset == 0 else f"{offset:+d}"
+        return (f"{slot:>4} '{params.get('title') or 'Untitled'}' by {params.get('artist_name') or 'Unknown'}"
+                + (f" ({genre})" if genre else ""))
+
+    rows = [line(i - index, queue[i]) for i in range(max(0, index - span), min(len(queue), index + span + 1))]
+    mode = state.get("activeSeedMode") or ""
+    station = PLAYLIST_DISPLAY.get(mode) or (f"{SEED_MODE_DISPLAY[mode]} radio" if mode in SEED_MODE_DISPLAY else mode)
+    return (f"PLAYLIST ({station}; negative = already played, positive = coming up):\n" if station
+            else "PLAYLIST (negative = already played, positive = coming up):\n") + "\n".join(rows)
+
+@node_registry.register(
     "queue_next_details",
     "Next track with full details",
     cost="medium"

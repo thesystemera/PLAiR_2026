@@ -259,6 +259,7 @@ async def lifespan(_app: FastAPI):
             vector_search_prompt_cache_service
         )
         log_service.success("✓ Catalog vector search service initialized")
+        spawn(vector_search_service.warm(), name="catalog_tag_index_warm")
     except Exception as e:
         log_service.error(f"❌ FATAL: Vector search service initialization failed: {e}")
         import traceback

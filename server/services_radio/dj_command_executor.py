@@ -350,7 +350,7 @@ class CommandExecutorService:
         now_playing = None
         if tracks_to_add and session_id:
             log_service.detail(f"[COMMAND EXECUTOR] Adding {len(tracks_to_add)} tracks to queue", "commands")
-            await self.playback_service.add_to_queue(session_id, tracks_to_add, user_id=user_id)
+            await self.playback_service.add_to_queue(session_id, tracks_to_add, user_id=user_id, play_next=play_first)
             if play_first and tracks_to_add:
                 log_service.detail(f"[COMMAND EXECUTOR] Playing first track: {tracks_to_add[0]}", "commands")
                 await self.playback_service.play(session_id, tracks_to_add[0], user_id=user_id)

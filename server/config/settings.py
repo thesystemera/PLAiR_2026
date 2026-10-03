@@ -271,6 +271,12 @@ class Settings:
     PLAYBACK_SESSION_IDLE_TIMEOUT_S: int = int(os.getenv("PLAYBACK_SESSION_IDLE_TIMEOUT_S", "7200"))
     PLAYBACK_SNAPSHOT_INTERVAL_S: float = float(os.getenv("PLAYBACK_SNAPSHOT_INTERVAL_S", "15"))
     PLAYBACK_SNAPSHOT_KEEP_DAYS: int = int(os.getenv("PLAYBACK_SNAPSHOT_KEEP_DAYS", "30"))
+    QUEUE_PLAYED_SONGS: int = int(os.getenv("QUEUE_PLAYED_SONGS", "5"))
+    QUEUE_AHEAD_SONGS: int = int(os.getenv("QUEUE_AHEAD_SONGS", "15"))
+    QUEUE_HISTORY_SONGS: int = int(os.getenv("QUEUE_HISTORY_SONGS", "50"))
+    QUEUE_NO_REPEAT_SONGS: int = int(os.getenv("QUEUE_NO_REPEAT_SONGS", "20"))
+    SEED_CONTEXT_SONGS: int = int(os.getenv("SEED_CONTEXT_SONGS", "3"))
+    DJ_PLAYLIST_VIEW_SONGS: int = int(os.getenv("DJ_PLAYLIST_VIEW_SONGS", "5"))
     WS_MAX_CONNECTIONS_PER_SESSION: int = int(os.getenv("WS_MAX_CONNECTIONS_PER_SESSION", "8"))
 
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")

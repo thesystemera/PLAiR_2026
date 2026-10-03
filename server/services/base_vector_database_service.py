@@ -275,6 +275,24 @@ class BaseVectorDatabaseService:
         cache[text] = embedding
         return embedding
 
+    def ensure_embeddings(self, category: str, texts: List[str]) -> List[np.ndarray]:
+        cache = self.caches[category]
+        texts = [text.strip() for text in texts]
+        missing = list(dict.fromkeys(text for text in texts if text and text not in cache))
+        if missing:
+            vectors = self._generate_embeddings_batch(missing)
+            conn = self._get_connection()
+            try:
+                c = conn.cursor()
+                for text, vector in zip(missing, vectors):
+                    c.execute(f"INSERT INTO {embeddings_table(category)} (text, embedding) VALUES (%s, %s) "
+                              f"ON CONFLICT (text) DO NOTHING", (text, vector.tobytes()))
+                    cache[text] = vector
+                conn.commit()
+            finally:
+                conn.close()
+        return [cache[text] if text else np.zeros(self.embedding_dim, dtype=np.float32) for text in texts]
+
     def get_category_embeddings(self, category_texts: Dict[str, str]) -> Dict[str, np.ndarray]:
         return {
             category: self.get_or_create_embedding(category_texts[category], embeddings_table(category), cache)

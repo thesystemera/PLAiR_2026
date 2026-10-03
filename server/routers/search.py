@@ -36,7 +36,7 @@ async def semantic_search(
     if results:
         track_ids = [track["id"] for track in results[:request.n_results or 10]]
         assert services.playback_service is not None
-        await services.playback_service.add_to_queue(session_id, track_ids, user_id=user_id)
+        await services.playback_service.add_to_queue(session_id, track_ids, user_id=user_id, play_next=True)
         if track_ids:
             await services.playback_service.play(session_id, track_ids[0], user_id=user_id)
         log_service.listener(

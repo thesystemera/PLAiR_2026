@@ -1,5 +1,6 @@
 import random
-from typing import Dict, List, Optional, Any, Set
+from typing import Any, Dict, List, Optional, Set
+from config import settings
 from services import listener_plays, log_service
 from services.user_data_cache_service import user_data_cache
 from services.analytics_service import analytics_service
@@ -24,56 +25,11 @@ async def _get_user_preferences(user_id: Optional[int] = None, session_id: Optio
         log_service.error(f"Error getting user preferences: {e}")
         return {"likes": set(), "super_likes": set(), "bans": excluded}
 
-def _build_category_query(track: Dict[str, Any], category: str) -> str:
-    params = track.get("generation_params", {}) or {}
-    derived = track.get("derived_tags", {}) or {}
+def _title(track: Dict[str, Any]) -> str:
+    return ((track.get("generation_params") or {}).get("title") or "").strip().lower()
 
-    queries = {
-        "primary_genre":    f"Genre: {derived.get('primary_genre', '')}",
-        "secondary_genres": f"Genre: {' '.join(derived.get('secondary_genres') or [])}",
-        "mood":             f"Mood: {' '.join(derived.get('mood_keywords') or [])}",
-        "primary_artist":   f"Artist: {derived.get('inspired_artist') or params.get('artist_name', '')}",
-        "style":            f"Style: {params.get('style_canonical') or params.get('style', '')}",
-        "theme":            f"Theme: {(derived.get('lyrical_interpretation') or '')[:200]}",
-        "vocal":            f"Vocal: {' '.join(derived.get('vocal_style_keywords') or [])}",
-        "lyrics":           f"Lyrics: {(params.get('prompt') or '')[:200]}",
-    }
-
-    if category in queries:
-        result = queries[category]
-        return result if result.split(": ", 1)[1].strip() else _generic_query(track)
-
-    return _generic_query(track)
-
-def _build_similar_artists_queries(track: Dict[str, Any]) -> List[str]:
-    derived = track.get("derived_tags", {}) or {}
-    similar = derived.get("similar_artists") or []
-    if isinstance(similar, str):
-        similar = [a.strip() for a in similar.split(",") if a.strip()]
-    return [f"Artist: {name}" for name in similar if name]
-
-def _generic_query(track: Dict[str, Any]) -> str:
-    params = track.get("generation_params", {}) or {}
-    track_info = track.get("track_info", {}) or {}
-
-    parts = []
-    if params.get("style"):
-        parts.append(f"Style: {params['style']}")
-    if params.get("title"):
-        parts.append(f"Title: {params['title']}")
-    if track_info.get("tags"):
-        parts.append(f"Tags: {track_info['tags']}")
-    return " | ".join(parts) if parts else "music"
-
-def _apply_preference_boost(tracks: List[Dict], likes: Set[str], super_likes: Set[str]):
-    for t in tracks:
-        score = t.get("similarity_score", 0)
-        tid = t["id"]
-        if tid in super_likes:
-            score += 0.3
-        elif tid in likes:
-            score += 0.15
-        t["_recommendation_score"] = score
+def _recent(history: List[Dict]) -> List[Dict]:
+    return history[-settings.QUEUE_NO_REPEAT_SONGS:] if settings.QUEUE_NO_REPEAT_SONGS > 0 else []
 
 def _deduplicate_by_title(
     results: List[Dict],
@@ -124,6 +80,7 @@ class PlaybackPopulationService:
         queue: List[Dict],
         history: List[Dict],
         queue_size: int,
+        seed_track: Optional[Dict[str, Any]] = None,
         user_id: Optional[int] = None,
         session_id: str = "",
     ) -> List[Dict]:
@@ -133,17 +90,17 @@ class PlaybackPopulationService:
 
         needed = queue_size - len(queue)
         prefs = await _get_user_preferences(user_id, session_id)
-        existing_ids = {t["id"] for t in queue} | {t["id"] for t in history[-20:]}
+        heard = list(queue) + _recent(history)
+        existing_ids = {t["id"] for t in heard}
 
         if is_playlist_mode(radio_mode):
             new_tracks = await self._fill_playlist(
                 radio_mode, needed, prefs, existing_ids, session_id, user_id,
             )
         else:
-            new_tracks = await self._fill_seed(
-                radio_mode, needed, prefs, existing_ids,
-                queue, history, session_id,
-            )
+            recent = (queue or history)[-settings.SEED_CONTEXT_SONGS:]
+            anchors = ([seed_track] if seed_track else []) + [t for t in recent if t is not seed_track]
+            new_tracks = await self._mode_picks(anchors, radio_mode, needed, prefs, heard, existing_ids, session_id)
 
         if len(new_tracks) < needed:
             remaining = needed - len(new_tracks)
@@ -174,33 +131,46 @@ class PlaybackPopulationService:
     ) -> List[Dict]:
 
         prefs = await _get_user_preferences(user_id, session_id)
-        exclude_ids = {t["id"] for t in queue} | {t["id"] for t in history[-10:]}
-
-        if category == "similar_artists":
-            results = await self._search_similar_artists(seed_track, needed, prefs["bans"])
-        else:
-            query = _build_category_query(seed_track, category)
-            log_service.detail(f"{log_service.who(session_id)}: seed fill {category}, query: {query[:100]}", "playback")
-            try:
-                results = await self.vector_search.search(
-                    query=query, n_results=needed + 10, banned_ids=prefs["bans"],
-                )
-            except Exception as e:
-                log_service.error(f"{log_service.who(session_id)}: vector search failed during {category} seed fill: {e}")
-                results = []
-
-        new_tracks = []
-        for t in results:
-            if t["id"] in exclude_ids:
-                continue
-            _apply_preference_boost([t], prefs["likes"], prefs["super_likes"])
-            new_tracks.append(t)
-            exclude_ids.add(t["id"])
-            if len(new_tracks) >= needed:
+        heard = list(queue) + _recent(history) + [seed_track]
+        existing_ids = {t["id"] for t in heard}
+        step = max(1, settings.SEED_CONTEXT_SONGS)
+        new_tracks: List[Dict] = []
+        while len(new_tracks) < needed:
+            anchors = [seed_track] + new_tracks[-step:]
+            picks = await self._mode_picks(anchors, category, min(step, needed - len(new_tracks)), prefs,
+                                           heard + new_tracks, existing_ids, session_id)
+            if not picks:
                 break
-
+            new_tracks.extend(picks)
         log_service.detail(f"{log_service.who(session_id)}: seed fill returned {len(new_tracks)} tracks", "playback")
         return new_tracks
+
+    async def _mode_picks(
+        self,
+        anchors: List[Dict],
+        mode: str,
+        needed: int,
+        prefs: Dict,
+        heard: List[Dict],
+        existing_ids: Set[str],
+        session_id: str,
+    ) -> List[Dict]:
+        if not self.vector_search or not anchors or needed <= 0:
+            return []
+        existing_titles = {_title(t) for t in heard if _title(t)}
+
+        def fresh(track: Dict[str, Any]) -> bool:
+            return track.get("id") not in existing_ids and _title(track) not in existing_titles
+
+        try:
+            results = await self.vector_search.similar(
+                anchors, mode, n_results=len(self.catalog.tracks), banned_ids=prefs["bans"], keep=fresh,
+            )
+        except Exception as e:
+            log_service.error(f"{log_service.who(session_id)}: {mode} seed search failed: {e}")
+            return []
+
+        return _deduplicate_by_title(results, existing_ids, existing_titles, needed)
 
     async def _fill_playlist(
         self,
@@ -272,18 +242,9 @@ class PlaybackPopulationService:
         self, needed: int, prefs: Dict,
         existing_ids: Set[str], session_id: str, user_id: Optional[int],
     ) -> List[Dict]:
-        likes = list(prefs["likes"])
-        super_likes = list(prefs["super_likes"])
-        banned_ids = prefs["bans"]
-
-        target_favs = needed // 2
+        loved = set(prefs["likes"]) | set(prefs["super_likes"])
+        target_favs = needed // 2 + (needed % 2 if random.random() < 0.5 else 0)
         target_discovery = needed - target_favs
-
-        if needed % 2 == 1:
-            if random.random() < 0.5:
-                target_favs += 1
-            else:
-                target_discovery += 1
 
         favorites_added = await self._fill_favorites(target_favs, prefs, existing_ids, session_id, user_id)
 
@@ -293,102 +254,20 @@ class PlaybackPopulationService:
                 log_service.detail(f"{log_service.who(session_id)}: favorites exhausted, filling with discovery", "playback")
 
         discovery_added = []
-        if target_discovery > 0 and self.vector_search:
-            all_favs = list(set(likes + super_likes))
-            if all_favs:
-                seed_ids = random.sample(all_favs, min(len(all_favs), 4))
-                try:
-                    results = await self.vector_search.search(
-                        query=seed_ids, n_results=target_discovery + 10, banned_ids=banned_ids,
-                    )
-                    for track in results:
-                        if track["id"] not in existing_ids:
-                            discovery_added.append(track)
-                            existing_ids.add(track["id"])
-                            if len(discovery_added) >= target_discovery:
-                                break
-                except Exception as e:
-                    log_service.error(f"{log_service.who(session_id)}: Discovery search failed: {e}")
+        if target_discovery > 0 and self.vector_search and loved:
+            seeds = [self.catalog.get_track(tid) for tid in random.sample(sorted(loved), min(len(loved), 4))]
+            try:
+                discovery_added = await self.vector_search.similar(
+                    [t for t in seeds if t], "all", n_results=target_discovery, banned_ids=prefs["bans"],
+                    keep=lambda t: t.get("id") not in existing_ids,
+                )
+                existing_ids.update(t["id"] for t in discovery_added)
+            except Exception as e:
+                log_service.error(f"{log_service.who(session_id)}: Discovery search failed: {e}")
 
         combined = favorites_added + discovery_added
         random.shuffle(combined)
         return combined
-
-    async def _fill_seed(
-        self,
-        mode: str,
-        needed: int,
-        prefs: Dict,
-        existing_ids: Set[str],
-        queue: List[Dict],
-        history: List[Dict],
-        session_id: str,
-    ) -> List[Dict]:
-        context = queue[-3:] if queue else (history[-3:] if history else [])
-        context_ids = [t["id"] for t in context]
-
-        existing_titles: Set[str] = set()
-        for t in queue + history[-20:]:
-            title = t.get("generation_params", {}).get("title")
-            if title:
-                existing_titles.add(title.strip().lower())
-
-        if not self.vector_search or not context_ids:
-            return []
-
-        if mode == "similar_artists":
-            seed_track = context[-1] if context else None
-            if seed_track:
-                results = await self._search_similar_artists(seed_track, needed + 15, prefs["bans"])
-                _apply_preference_boost(results, prefs["likes"], prefs["super_likes"])
-                return _deduplicate_by_title(results, existing_ids, existing_titles, needed)
-            return []
-
-        try:
-            results = await self.vector_search.search(
-                query=context_ids, n_results=needed + 15, banned_ids=prefs["bans"],
-            )
-        except Exception as e:
-            log_service.error(f"{log_service.who(session_id)}: Seed mode search failed: {e}")
-            return []
-
-        _apply_preference_boost(results, prefs["likes"], prefs["super_likes"])
-        return _deduplicate_by_title(results, existing_ids, existing_titles, needed)
-
-    async def _search_similar_artists(
-        self,
-        seed_track: Dict[str, Any],
-        n_results: int,
-        banned_ids: Set[str],
-    ) -> List[Dict]:
-
-        queries = _build_similar_artists_queries(seed_track)
-        if not queries:
-            derived = seed_track.get("derived_tags", {}) or {}
-            artist = derived.get("inspired_artist", "")
-            if artist:
-                queries = [f"Artist: {artist}"]
-            else:
-                return []
-
-        seen_ids: Set[str] = set()
-        merged: List[Dict] = []
-        per_artist = max(3, n_results // len(queries) + 2)
-
-        for query in queries:
-            try:
-                results = await self.vector_search.search(
-                    query=query, n_results=per_artist, banned_ids=banned_ids,
-                )
-                for t in results:
-                    if t["id"] not in seen_ids:
-                        merged.append(t)
-                        seen_ids.add(t["id"])
-            except Exception as e:
-                log_service.error(f"Similar artist search failed for '{query}': {e}")
-
-        merged.sort(key=lambda t: t.get("similarity_score", 0), reverse=True)
-        return merged[:n_results]
 
     def _fill_random_fallback(
         self,

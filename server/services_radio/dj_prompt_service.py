@@ -159,6 +159,7 @@ class DJPromptService:
                     'tool_guidance',
                     'station_recent_airings',
                     'studio_clock',
+                    'queue_playlist',
                     'city_pulse'
                 ],
                 'use_ai_picker': True

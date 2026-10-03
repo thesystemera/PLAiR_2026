@@ -267,8 +267,9 @@ async def get_track_context(session_id: str, playback_service, audio_features_se
         current_index = playback_state.get('current_index', 0)
 
         last_track = _empty_track()
-        if history and len(history) > 0:
-            last_track = await _format_track(history[-1], audio_features_service)
+        previous = queue[current_index - 1] if 0 < current_index <= len(queue) else (history[-1] if history else None)
+        if previous:
+            last_track = await _format_track(previous, audio_features_service)
 
         current_track_data = _empty_track()
         current_track = playback_state.get('current_track')

@@ -6,10 +6,9 @@ from typing import Any, Dict, Optional
 from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 
+from config import settings
 from database import AsyncSessionLocal
 from database.models import PlaybackSnapshot, utc_now
-
-HISTORY_KEPT = 10
 
 
 def snapshot(state) -> Optional[Dict[str, Any]]:
@@ -18,11 +17,12 @@ def snapshot(state) -> Optional[Dict[str, Any]]:
     queue_ids = [t["id"] for t in state.queue if t.get("id")]
     return {
         "radio_mode": state.radio_mode,
+        "seed_track_id": state.seed_track_id,
         "queue": queue_ids,
         "current_track_id": state.current_track_id,
         "progress_ms": int(state.get_simulated_progress()),
         "is_playing": bool(state.is_playing),
-        "history": [t["id"] for t in state.history[-HISTORY_KEPT:] if t.get("id")],
+        "history": [t["id"] for t in state.history[-settings.QUEUE_HISTORY_SONGS:] if t.get("id")],
         "auto_filled": [tid for tid in queue_ids if tid in state._auto_filled_track_ids],
     }
 
@@ -42,6 +42,7 @@ def restore(state, saved: Dict[str, Any], catalog) -> bool:
     state.history = tracks(saved.get("history"))
     state.current_track_id = current
     state.radio_mode = saved.get("radio_mode") or state.radio_mode
+    state.seed_track_id = saved.get("seed_track_id") if catalog.get_track(saved.get("seed_track_id") or "") else None
     state.progress_ms = min(progress, duration) if duration else progress
     state.is_playing = False
     state.last_update_time = time.time()

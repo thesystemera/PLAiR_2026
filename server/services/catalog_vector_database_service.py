@@ -1,6 +1,6 @@
 import re
 from functools import lru_cache
-from typing import Dict, Any
+from typing import Any, Dict, List
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
 from services.catalog_credit import search_artist_text
@@ -10,6 +10,14 @@ from services.catalog_vocals import VOCALS_TEXT, vocals_of
 VOCAL_WORD = re.compile(r"\b(vocals?|vocalists?|singers?|singing|sung|sings|voices?|duets?|rapp\w*|MCs?)\b", re.I)
 SENTENCE_BREAK = re.compile(r"[.\n]+")
 VOCAL_TEXT_MAX_CHARS = 400
+
+TAG_LISTS = {"secondary_genres": "secondary_genres", "mood": "mood_keywords", "similar_artists": "similar_artists"}
+
+
+def _tag_list(value) -> List[str]:
+    if isinstance(value, str):
+        value = value.split(",")
+    return list(dict.fromkeys(tag.strip() for tag in value or [] if isinstance(tag, str) and tag.strip()))
 
 
 @lru_cache(maxsize=8192)
@@ -39,6 +47,19 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         "theme": 0.04,
         "lyrics": 0.02
     }
+    @classmethod
+    def weights_for(cls, category: str) -> Dict[str, float]:
+        return {category: 1.0} if category in cls.categories else dict(cls.default_weights)
+
+    def category_tags(self, track: Dict[str, Any]) -> Dict[str, List[str]]:
+        texts = self._extract_category_texts(track)
+        derived = track.get("derived_tags", {}) or {}
+        tags = {category: [text.strip()] if text and text.strip() else [] for category, text in texts.items()}
+        for category, field in TAG_LISTS.items():
+            tags[category] = _tag_list(derived.get(field))
+        tags["primary_artist"] = _tag_list(log_service.track_artists(track))
+        return tags
+
     log_channel = "vector_music"
     service_label = "Music"
     display_name = "Catalog"
