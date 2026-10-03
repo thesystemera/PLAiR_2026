@@ -665,7 +665,7 @@ class TTSQueueManager:
                 if cached_file_path:
                     render.resolve(await generation.clip_rate(cached_file_path))
                 elif can_generate and embeddings_type in GENERATED_TYPES:
-                    render.resolve(settings.TTS_SAMPLE_RATE)
+                    render.resolve(generation.output_rate)
                 else:
                     render.resolve(NO_AUDIO)
 

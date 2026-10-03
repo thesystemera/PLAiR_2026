@@ -147,6 +147,8 @@ class Settings:
     TTS_SERVER_EXTERNAL: bool = os.getenv("TTS_SERVER_EXTERNAL", "false").lower() == "true"
     TTS_REQUEST_TIMEOUT: float = float(os.getenv("TTS_REQUEST_TIMEOUT", "120"))
     TTS_SAMPLE_RATE: int = int(os.getenv("TTS_SAMPLE_RATE", "24000"))
+    TTS_UPSCALE: bool = os.getenv("TTS_UPSCALE", "true").lower() == "true"
+    TTS_UPSCALE_MODEL: str = os.getenv("TTS_UPSCALE_MODEL", "MossFormer2_SR_48K")
 
     TTS_SFX_TARGET_DBFS: float = float(os.getenv("TTS_SFX_TARGET_DBFS", "-46"))
     TTS_SFX_MAX_PEAK_DBFS: float = float(os.getenv("TTS_SFX_MAX_PEAK_DBFS", "-24"))

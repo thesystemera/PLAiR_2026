@@ -426,6 +426,10 @@ async def lifespan(_app: FastAPI):
         dj_prompt_system_service
     )
     log_service.success("✓ TTS Generation service initialized")
+    try:
+        await asyncio.to_thread(tts_generation_service.upscaler.load)
+    except Exception as e:
+        log_service.error(f"Voice upscaler failed to load, takes air at the engine's rate: {e}")
 
     services.tts_stream_planner = tts_stream_planner = TTSStreamPlanner()
     log_service.success("✓ TTS Stream Planner initialized")

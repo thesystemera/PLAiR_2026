@@ -23,6 +23,7 @@ from services_radio.tts_processing_service import (
     MotionSlot, decode_mp3, level_sound_effect, motion_chunks
 )
 from services_radio.tts_voice_threads import voice_thread
+from services_radio.voice_upscale import UPSCALE_RATE, VoiceUpscaler
 from services_radio.dj_prompt_helper_service import is_clean_paralanguage
 from services_radio.paralanguage_emoji import ParalanguageEmoji
 from services.task_utils import spawn
@@ -158,6 +159,7 @@ class TTSGenerationService:
         self.audio_processing_service = audio_processing_service
         self.ai_service = ai_service
         self.paralanguage_emoji = ParalanguageEmoji(vector_db_service, ai_service)
+        self.upscaler = VoiceUpscaler()
 
         self.tts_directory = settings.TTS_AUDIO_DIR
         self.paralanguage_directory = settings.PARALANGUAGE_AUDIO_DIR
@@ -221,6 +223,7 @@ class TTSGenerationService:
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
         self._http_session = None
+        self.upscaler.close()
 
     def open_turn(self, group: Hashable):
         self.engine_slots.set_group_limit(group, TURN_GENERATION_PARALLEL_START)
@@ -362,10 +365,23 @@ class TTSGenerationService:
             return None
         return bytes(pcm)
 
-    async def save_generated_clip(self, pcm: bytes, audio_path: str, tag: str, audio_description: Optional[str],
-                                  content_voice: str, embeddings_type: str):
+    @property
+    def output_rate(self) -> int:
+        return UPSCALE_RATE if self.upscaler.ready else settings.TTS_SAMPLE_RATE
+
+    async def upscale(self, pcm: bytes) -> Tuple[bytes, int]:
+        if not self.upscaler.ready:
+            return pcm, settings.TTS_SAMPLE_RATE
         try:
-            await asyncio.to_thread(write_clip, audio_path, pcm, settings.TTS_SAMPLE_RATE, tag, audio_description)
+            return await voice_thread(self.upscaler.upscale, pcm, settings.TTS_SAMPLE_RATE)
+        except Exception as e:
+            log_service.error(f"Voice upscaler failed, this take airs at the engine's rate: {e}")
+            return pcm, settings.TTS_SAMPLE_RATE
+
+    async def save_generated_clip(self, pcm: bytes, sample_rate: int, audio_path: str, tag: str,
+                                  audio_description: Optional[str], content_voice: str, embeddings_type: str):
+        try:
+            await asyncio.to_thread(write_clip, audio_path, pcm, sample_rate, tag, audio_description)
             await asyncio.to_thread(
                 self.vector_db_service.save_embedding,
                 audio_path, tag, content_voice, embeddings_type
@@ -426,10 +442,11 @@ class TTSGenerationService:
                 pcm = await self.generate_pcm(description, voice_settings, priority=PRIORITY_LOW)
                 if pcm is None:
                     return
+                pcm, rate = await self.upscale(pcm)
                 title = sanitize_clip_title(tag) if embeddings_type == 'breath_embeddings' else tag
                 audio_path = new_clip_path(self.clip_directory(embeddings_type, content_voice))
                 await self.save_generated_clip(
-                    pcm, audio_path, title or 'breath', description, content_voice, embeddings_type
+                    pcm, rate, audio_path, title or 'breath', description, content_voice, embeddings_type
                 )
                 log_service.detail(f"Background refresh: cached new {embeddings_type} clip for '{tag[:40]}'", "tts_generation")
         except Exception as e:
@@ -629,7 +646,8 @@ class TTSGenerationService:
         if pcm is None:
             return None, None
 
-        raw_audio = AudioSegment(data=pcm, sample_width=2, frame_rate=settings.TTS_SAMPLE_RATE, channels=1)
+        pcm, rate = await self.upscale(pcm)
+        raw_audio = AudioSegment(data=pcm, sample_width=2, frame_rate=rate, channels=1)
         prepare = PREPARE_INPUT.get(embeddings_type)
         if prepare is not None:
             raw_audio = await voice_thread(prepare, raw_audio)
@@ -642,7 +660,7 @@ class TTSGenerationService:
         if embeddings_type == 'paralanguage_embeddings':
             self.paralanguage_emoji.note_new_title(title)
         spawn(self.save_generated_clip(
-            pcm, audio_path, title, audio_description, content_voice, embeddings_type
+            pcm, rate, audio_path, title, audio_description, content_voice, embeddings_type
         ), name="tts_save_audio_and_embedding")
 
         return processed_audio, audio_path
