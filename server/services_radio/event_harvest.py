@@ -154,7 +154,7 @@ def _clean(value, limit: int = 300) -> str:
     if isinstance(value, list):
         value = next((v for v in value if v), "")
         return _clean(value, limit)
-    text = html_lib.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
+    text = html_lib.unescape(re.sub(r"<[^>]+>", " ", html_lib.unescape(str(value or ""))))
     return " ".join(text.split())[:limit]
 
 
