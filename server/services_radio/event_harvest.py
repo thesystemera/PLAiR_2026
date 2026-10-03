@@ -698,19 +698,24 @@ class WebEventsCollector(Collector):
                 RegionalItem.source != SOURCE, RegionalItem.starts_at.is_not(None)))).all()
         return {event_id(title, starts_at, zone) for title, starts_at in rows}
 
-    async def _place(self, event: FoundEvent, region: Region, budget: dict) -> None:
+    async def _place(self, event: FoundEvent, region: Region, budget: dict) -> bool:
         if event.lat is not None and event.lon is not None:
-            return
+            return True
         phrase = event.address or event.venue
         if not phrase or budget["geocode"] <= 0 or not geo.resolver.available():
-            return
-        if region.name.lower() not in phrase.lower():
+            return True
+        if "," not in phrase and region.name.lower() not in phrase.lower():
             phrase = f"{phrase}, {region.name}"
         if geo.resolver.cached(phrase, region.country) is None:
             budget["geocode"] -= 1
         where = await geo.resolver.resolve(phrase, region.country)
-        if where is not None and where.scope in LOCAL_SCOPES:
+        if where is None:
+            return True
+        if _haversine_km((where.lat, where.lon), region.center) > settings.PULSE_CITY_RADIUS_KM:
+            return False
+        if where.scope in LOCAL_SCOPES:
             event.lat, event.lon = where.lat, where.lon
+        return True
 
     async def to_items(self, region: Region, zone, events: list[FoundEvent], budget: dict) -> list[KnowledgeItem]:
         now = datetime.now(timezone.utc)
@@ -730,7 +735,8 @@ class WebEventsCollector(Collector):
                 chosen[key] = event
         items = []
         for key, event in chosen.items():
-            await self._place(event, region, budget)
+            if not await self._place(event, region, budget):
+                continue
             if event.lat is not None and event.lon is not None and _haversine_km(
                     (event.lat, event.lon), region.center) > settings.PULSE_CITY_RADIUS_KM:
                 continue
