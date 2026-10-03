@@ -20,7 +20,7 @@ import { formatDateShort } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
 import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
-import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
 
 
 const CategoryCard = memo(function CategoryCard({ category, count, onSelectCategory, index }) {
@@ -540,11 +540,7 @@ export function Shoutouts() {
                 contentType="shoutouts"
               />
               {audioState.offlineMode ? (
-                <MediaEmptyState
-                  icon={ShoutoutsIcon}
-                  title="Shoutouts need a connection"
-                  subtitle="They'll be back when PLAiR is online. Your downloads keep playing in the meantime."
-                />
+                <MediaOfflineState icon={ShoutoutsIcon} title="Shoutouts need a connection" />
               ) : (
                 <MediaEmptyState
                   icon={ShoutoutsIcon}

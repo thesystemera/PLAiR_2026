@@ -1,11 +1,12 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
+import { History, LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { Expandable, ExpandChevron } from './Motion'
+import { MediaEmptyState, MediaOfflineState } from './MediaShared'
 
 const TIMELINE_HOURS = 24
 const REFRESH_MS = 30000
@@ -136,14 +137,16 @@ export function ListenerTimeline({ kind = 'all' }) {
   }, [load, offlineMode]))
 
   if (offlineMode) {
-    return <p className="py-6 text-center text-sm text-gray-400">The timeline needs a connection. Your music keeps playing.</p>
+    return <MediaOfflineState icon={History} title="The timeline needs a connection" compact />
   }
   if (!data) {
-    return <p className="py-6 text-center text-sm text-gray-500">{failed ? "Couldn't load the timeline." : 'Loading…'}</p>
+    return failed
+      ? <MediaEmptyState icon={History} title="Couldn't load the timeline" subtitle="It'll try again in a moment." compact />
+      : <MediaEmptyState icon={History} title="Loading the timeline" subtitle="" compact />
   }
   if (!data.entries?.length) {
     const what = kind === 'all' ? 'Nothing has' : `No ${KIND_META[kind]?.plural || 'entries'} have`
-    return <p className="py-6 text-center text-sm text-gray-500">{what} aired for you in the last {TIMELINE_HOURS} hours.</p>
+    return <MediaEmptyState icon={History} title={`${what} aired for you yet`} subtitle={`The timeline covers the last ${TIMELINE_HOURS} hours.`} compact />
   }
   return (
     <div className="pb-4">

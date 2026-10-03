@@ -66,30 +66,37 @@ export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
 
 export const MediaEmptyState = memo(function MediaEmptyState({
   icon: Icon = null,
-  emoji = null, // Deprecated: use icon prop instead
   title = 'Nothing here',
-  subtitle = 'Try adjusting your search'
+  subtitle = 'Try adjusting your search',
+  compact = false
 }) {
   const { getGrey400, getGrey300 } = useDynamicTheme()
 
   return (
     <motion.div
       {...PRESETS.emptyState}
-      className="flex flex-col items-center justify-center h-64 transition-colors duration-theme"
+      className={`flex flex-col items-center justify-center px-6 text-center transition-colors duration-theme ${compact ? 'py-6' : 'min-h-64 py-8'}`}
       style={{ color: getGrey400() }}
     >
-      <div className="mb-4">
-        {Icon ? (
-          <Icon className="w-16 h-16 opacity-50" />
-        ) : emoji ? (
-          <span className="text-6xl">{emoji}</span>
-        ) : null}
-      </div>
-      <div className="text-lg">{title}</div>
-      <div className="text-sm mt-2" style={{ color: getGrey300() }}>
-        {subtitle}
-      </div>
+      {Icon && <Icon className="w-16 h-16 mb-4 opacity-50" />}
+      <div className="text-lg max-w-sm text-balance">{title}</div>
+      {subtitle && (
+        <div className="text-sm mt-2 max-w-sm text-balance" style={{ color: getGrey300() }}>
+          {subtitle}
+        </div>
+      )}
     </motion.div>
+  )
+})
+
+export const MediaOfflineState = memo(function MediaOfflineState({ icon, title, compact = false }) {
+  return (
+    <MediaEmptyState
+      icon={icon}
+      title={title}
+      subtitle="It'll be back when PLAiR is online. Your downloads keep playing in the meantime."
+      compact={compact}
+    />
   )
 })
 
