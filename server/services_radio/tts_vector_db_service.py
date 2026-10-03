@@ -371,6 +371,20 @@ class VectorDBService:
                 self._embedding_cache.popitem(last=False)
         return embedding
 
+    def prime_embeddings(self, texts: List[str]):
+        with self.embedding_lock:
+            missing = list(dict.fromkeys(text for text in texts if text and text not in self._embedding_cache))
+        if not missing:
+            return
+        embeddings = self.encoder.encode(missing, normalize_embeddings=True, convert_to_numpy=True,
+                                         batch_size=64).astype(np.float32)
+        with self.embedding_lock:
+            for text, embedding in zip(missing, embeddings):
+                embedding.setflags(write=False)
+                self._embedding_cache[text] = embedding
+            while len(self._embedding_cache) > EMBEDDING_CACHE_MAX:
+                self._embedding_cache.popitem(last=False)
+
     def _generate_embedding(self, text: str) -> np.ndarray:
         return self.encoder.encode(text, normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
 

@@ -113,6 +113,12 @@ class _SegmentRender:
             self.rate = rate
             self.resolved.set()
 
+def lookup_tag(segment: Dict) -> str:
+    if segment['type'] == 'breath':
+        return (segment.get('context') or segment['content']).strip()
+    return segment['content'].strip()
+
+
 def _spoken_seconds(segment: Dict) -> float:
     if segment.get('type') == 'sentence':
         return len(segment.get('content') or '') / SPOKEN_CHARS_PER_S
@@ -468,6 +474,9 @@ class TTSQueueManager:
             if track is not None:
                 render.motion = motion_tracks.setdefault(track, MotionTrack()).slot()
         renders_by_segment = {id(render.segment): render for render in renders}
+        await voice_thread(self.vector_db_service.prime_embeddings,
+                           [lookup_tag(segment) for segment in ordered_content
+                            if segment['type'] in EMBEDDINGS_BY_CONTENT_TYPE])
         turn = _Turn(next(self._turn_seq), owner, renders, cache_only=tts_type in FILLER_TTS_TYPES)
         encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id)
         mixer = TimelineMixer()
@@ -639,7 +648,7 @@ class TTSQueueManager:
                 embeddings_type = EMBEDDINGS_BY_CONTENT_TYPE[content_type]
                 clip_voice = content_voice if content_type != 'audio' else 'computer'
                 can_generate = content_voice in settings.GENERATION_PERMISSIONS.get(content_type, set())
-                tag = (segment.get('context') or segment['content'] if content_type == 'breath' else segment['content']).strip()
+                tag = lookup_tag(segment)
 
                 threshold = generation.similarity_threshold(embeddings_type)
                 if turn.cache_only:
