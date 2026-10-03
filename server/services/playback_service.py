@@ -220,7 +220,8 @@ class PlaybackService(SingletonService):
         )
 
     async def seed_radio(self, session_id: str, category: str = "all",
-                         track_id: Optional[str] = None, user_id: Optional[int] = None):
+                         track_id: Optional[str] = None, user_id: Optional[int] = None,
+                         blend: Optional[List[Dict[str, Any]]] = None):
         state = self.get_session_state(session_id)
         async def notify(snapshot):
             await self._notify_session_change(session_id, snapshot)
@@ -228,7 +229,8 @@ class PlaybackService(SingletonService):
             category=category,
             track_id=track_id,
             user_id=user_id,
-            notify_callback=notify
+            notify_callback=notify,
+            blend=blend
         )
 
     async def handle_preference_change(self, session_id: str, user_id: int,

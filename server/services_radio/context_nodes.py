@@ -1067,7 +1067,8 @@ async def get_queue_playlist(session_id: Optional[str] = None, playback_service=
 
     rows = [line(i - index, queue[i]) for i in range(max(0, index - span), min(len(queue), index + span + 1))]
     mode = state.get("activeSeedMode") or ""
-    station = PLAYLIST_DISPLAY.get(mode) or (f"{SEED_MODE_DISPLAY[mode]} radio" if mode in SEED_MODE_DISPLAY else mode)
+    station = state.get("station_blend") or PLAYLIST_DISPLAY.get(mode) or (
+        f"{SEED_MODE_DISPLAY[mode]} radio" if mode in SEED_MODE_DISPLAY else mode)
     return (f"PLAYLIST ({station}; negative = already played, positive = coming up):\n" if station
             else "PLAYLIST (negative = already played, positive = coming up):\n") + "\n".join(rows)
 

@@ -447,7 +447,8 @@ Set needs_tools=true when the hosts must find something out or make something ha
   pin down one particular song or band from clues (find_tracks, then search_and_play with the chosen track_id);
 - saving the listener's own voice message (save_shoutout, save_shoutout_reply, save_review);
 - any command: skip, go back, pause, resume, restart or jump within the song, drop a queued track
-  (playback_control), like or ban a track or a shoutout (rate_track), more like this (seed_radio), a playlist
+  (playback_control), like or ban a track or a shoutout (rate_track), more like this or a station from several
+  things at once, e.g. this style with that mood (seed_radio, one step with a weighted blend), a playlist
   (play_playlist), the music on another device (move_playback), Radio Mode, its talk breaks or human / AI music
   (radio_settings). Nothing happens unless a tool is called, so every action needs its step.
 - the segment tools (get_news, get_weather, get_events, find_places, get_artist_biography, explain_lyrics,

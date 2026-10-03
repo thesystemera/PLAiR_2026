@@ -1,17 +1,12 @@
 import random
 from typing import Any, Dict, List, Optional, Set
+
 from config import settings
-from services import listener_plays, log_service
+from services import log_service
+from services.catalog_aspects import Aspect, aspects_for
+from services.playback_lists import ListFills, is_list_mode
 from services.user_data_cache_service import user_data_cache
-from services.analytics_service import analytics_service
 
-PLAYLIST_MODES = frozenset([
-    "favorites", "discovery",
-    "top_hits_all", "top_hits_week", "top_hits_day",
-])
-
-def is_playlist_mode(mode: str) -> bool:
-    return mode in PLAYLIST_MODES
 
 async def _get_user_preferences(user_id: Optional[int] = None, session_id: Optional[str] = None):
     from services.listener_filters import excluded_ids
@@ -25,11 +20,14 @@ async def _get_user_preferences(user_id: Optional[int] = None, session_id: Optio
         log_service.error(f"Error getting user preferences: {e}")
         return {"likes": set(), "super_likes": set(), "bans": excluded}
 
+
 def _title(track: Dict[str, Any]) -> str:
     return ((track.get("generation_params") or {}).get("title") or "").strip().lower()
 
+
 def _recent(history: List[Dict]) -> List[Dict]:
     return history[-settings.QUEUE_NO_REPEAT_SONGS:] if settings.QUEUE_NO_REPEAT_SONGS > 0 else []
+
 
 def _deduplicate_by_title(
     results: List[Dict],
@@ -66,12 +64,23 @@ def _deduplicate_by_title(
 
     return out
 
+
 class PlaybackPopulationService:
+    """Fills a station's queue. Lists (favorites, discovery, top hits) come from ListFills; every other mode is a
+    station built from aspects: one aspect (a pure seed) or a weighted blend, matched to the seed (a song, or words)
+    and the last few songs, each counted equally."""
 
     def __init__(self, catalog_service, vector_search_service):
         self.catalog = catalog_service
         self.vector_search = vector_search_service
+        self.lists = ListFills(catalog_service, vector_search_service)
         log_service.system("PlaybackPopulationService initialized")
+
+    def station_aspects(self, mode: str, blend: Optional[List[Dict[str, Any]]]) -> List[Aspect]:
+        if blend:
+            return [Aspect(item["category"], float(item.get("weight") or 1.0), item.get("words") or None)
+                    for item in blend]
+        return aspects_for(mode, self.vector_search.aspects) if self.vector_search else []
 
     async def fill_queue(
         self,
@@ -81,6 +90,7 @@ class PlaybackPopulationService:
         history: List[Dict],
         queue_size: int,
         seed_track: Optional[Dict[str, Any]] = None,
+        blend: Optional[List[Dict[str, Any]]] = None,
         user_id: Optional[int] = None,
         session_id: str = "",
     ) -> List[Dict]:
@@ -93,14 +103,13 @@ class PlaybackPopulationService:
         heard = list(queue) + _recent(history)
         existing_ids = {t["id"] for t in heard}
 
-        if is_playlist_mode(radio_mode):
-            new_tracks = await self._fill_playlist(
-                radio_mode, needed, prefs, existing_ids, session_id, user_id,
-            )
+        if is_list_mode(radio_mode):
+            new_tracks = await self.lists.fill(radio_mode, needed, prefs, existing_ids, session_id, user_id)
         else:
-            recent = (queue or history)[-settings.SEED_CONTEXT_SONGS:]
-            anchors = ([seed_track] if seed_track else []) + [t for t in recent if t is not seed_track]
-            new_tracks = await self._mode_picks(anchors, radio_mode, needed, prefs, heard, existing_ids, session_id)
+            seed_id = seed_track.get("id") if seed_track else None
+            recent = [t for t in (queue or history)[-settings.SEED_CONTEXT_SONGS:] if t.get("id") != seed_id]
+            new_tracks = await self._station_picks(self.station_aspects(radio_mode, blend), seed_track, recent,
+                                                   needed, prefs, heard, existing_ids, session_id)
 
         if len(new_tracks) < needed:
             remaining = needed - len(new_tracks)
@@ -121,41 +130,45 @@ class PlaybackPopulationService:
     async def seed_fill(
         self,
         *,
-        seed_track: Dict[str, Any],
+        seed_track: Optional[Dict[str, Any]],
         category: str,
         needed: int,
         queue: List[Dict],
         history: List[Dict],
+        blend: Optional[List[Dict[str, Any]]] = None,
         user_id: Optional[int] = None,
         session_id: str = "",
     ) -> List[Dict]:
 
         prefs = await _get_user_preferences(user_id, session_id)
-        heard = list(queue) + _recent(history) + [seed_track]
+        heard = list(queue) + _recent(history) + ([seed_track] if seed_track else [])
         existing_ids = {t["id"] for t in heard}
+        aspects = self.station_aspects(category, blend)
         step = max(1, settings.SEED_CONTEXT_SONGS)
         new_tracks: List[Dict] = []
         while len(new_tracks) < needed:
-            anchors = [seed_track] + new_tracks[-step:]
-            picks = await self._mode_picks(anchors, category, min(step, needed - len(new_tracks)), prefs,
-                                           heard + new_tracks, existing_ids, session_id)
+            picks = await self._station_picks(aspects, seed_track, new_tracks[-step:],
+                                              min(step, needed - len(new_tracks)), prefs, heard + new_tracks,
+                                              existing_ids, session_id)
             if not picks:
                 break
             new_tracks.extend(picks)
         log_service.detail(f"{log_service.who(session_id)}: seed fill returned {len(new_tracks)} tracks", "playback")
         return new_tracks
 
-    async def _mode_picks(
+    async def _station_picks(
         self,
-        anchors: List[Dict],
-        mode: str,
+        aspects: List[Aspect],
+        seed_track: Optional[Dict[str, Any]],
+        recent: List[Dict],
         needed: int,
         prefs: Dict,
         heard: List[Dict],
         existing_ids: Set[str],
         session_id: str,
     ) -> List[Dict]:
-        if not self.vector_search or not anchors or needed <= 0:
+        anchored = seed_track or recent or any(aspect.words for aspect in aspects)
+        if not self.vector_search or not aspects or needed <= 0 or not anchored:
             return []
         existing_titles = {_title(t) for t in heard if _title(t)}
 
@@ -163,111 +176,16 @@ class PlaybackPopulationService:
             return track.get("id") not in existing_ids and _title(track) not in existing_titles
 
         try:
-            results = await self.vector_search.similar(
-                anchors, mode, n_results=len(self.catalog.tracks), banned_ids=prefs["bans"], keep=fresh,
+            results = await self.vector_search.station(
+                aspects, seed_track, recent, n_results=len(self.catalog.tracks), banned_ids=prefs["bans"],
+                keep=fresh,
             )
         except Exception as e:
-            log_service.error(f"{log_service.who(session_id)}: {mode} seed search failed: {e}")
+            log_service.error(f"{log_service.who(session_id)}: station search failed "
+                              f"({', '.join(a.category for a in aspects)}): {e}")
             return []
 
         return _deduplicate_by_title(results, existing_ids, existing_titles, needed)
-
-    async def _fill_playlist(
-        self,
-        mode: str,
-        needed: int,
-        prefs: Dict,
-        existing_ids: Set[str],
-        session_id: str,
-        user_id: Optional[int],
-    ) -> List[Dict]:
-        if mode.startswith("top_hits_"):
-            return await self._fill_top_hits(mode, needed, prefs["bans"], existing_ids, session_id)
-        if mode == "favorites":
-            return await self._fill_favorites(needed, prefs, existing_ids, session_id, user_id)
-        if mode == "discovery":
-            return await self._fill_discovery(needed, prefs, existing_ids, session_id, user_id)
-        return []
-
-    async def _fill_top_hits(
-        self, mode: str, needed: int, banned_ids: Set[str],
-        existing_ids: Set[str], session_id: str,
-    ) -> List[Dict]:
-        period = mode.replace("top_hits_", "")
-
-        try:
-            top_hits = await analytics_service.get_top_hits(
-                period=period, limit=needed + len(existing_ids) + len(banned_ids) + 10,
-            )
-        except Exception as e:
-            log_service.error(f"{log_service.who(session_id)}: failed to fetch {period} top hits: {e}")
-            return []
-
-        if not top_hits:
-            log_service.throttled(f"no_top_hits:{period}", f"No {period} top hits available - queues fall back to other sources")
-            return []
-
-        new_tracks = []
-        for hit in top_hits:
-            if len(new_tracks) >= needed:
-                break
-            tid = hit["track_id"]
-            if tid not in existing_ids and tid not in banned_ids:
-                track = self.catalog.get_track(tid)
-                if track:
-                    new_tracks.append(track)
-                    existing_ids.add(tid)
-
-        random.shuffle(new_tracks)
-        log_service.detail(f"{log_service.who(session_id)}: added {len(new_tracks)} tracks from {period} top hits", "playback")
-        return new_tracks
-
-    async def _fill_favorites(
-        self, needed: int, prefs: Dict,
-        existing_ids: Set[str], session_id: str, user_id: Optional[int],
-    ) -> List[Dict]:
-        loved = await listener_plays.loved_tracks(user_id, session_id)
-        weights = {item.track_id: item.weight for item in loved
-                   if item.track_id not in existing_ids and item.track_id not in prefs["bans"]
-                   and self.catalog and self.catalog.get_track(item.track_id)}
-
-        new_tracks = []
-        for chosen_id in listener_plays.weighted_pick(weights, needed):
-            new_tracks.append(self.catalog.get_track(chosen_id))
-            existing_ids.add(chosen_id)
-        log_service.detail(f"{log_service.who(session_id)}: favorites added {len(new_tracks)}/{needed} tracks", "playback")
-        return new_tracks
-
-    async def _fill_discovery(
-        self, needed: int, prefs: Dict,
-        existing_ids: Set[str], session_id: str, user_id: Optional[int],
-    ) -> List[Dict]:
-        loved = set(prefs["likes"]) | set(prefs["super_likes"])
-        target_favs = needed // 2 + (needed % 2 if random.random() < 0.5 else 0)
-        target_discovery = needed - target_favs
-
-        favorites_added = await self._fill_favorites(target_favs, prefs, existing_ids, session_id, user_id)
-
-        if len(favorites_added) < target_favs:
-            target_discovery += target_favs - len(favorites_added)
-            if target_discovery > 0:
-                log_service.detail(f"{log_service.who(session_id)}: favorites exhausted, filling with discovery", "playback")
-
-        discovery_added = []
-        if target_discovery > 0 and self.vector_search and loved:
-            seeds = [self.catalog.get_track(tid) for tid in random.sample(sorted(loved), min(len(loved), 4))]
-            try:
-                discovery_added = await self.vector_search.similar(
-                    [t for t in seeds if t], "all", n_results=target_discovery, banned_ids=prefs["bans"],
-                    keep=lambda t: t.get("id") not in existing_ids,
-                )
-                existing_ids.update(t["id"] for t in discovery_added)
-            except Exception as e:
-                log_service.error(f"{log_service.who(session_id)}: Discovery search failed: {e}")
-
-        combined = favorites_added + discovery_added
-        random.shuffle(combined)
-        return combined
 
     def _fill_random_fallback(
         self,

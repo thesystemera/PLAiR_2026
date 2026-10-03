@@ -6,24 +6,17 @@ from typing import Dict, List, Optional, Any, Set
 from datetime import datetime, timezone
 from config import settings
 from services import log_service
-from services import usage_tracking
 from services.api_utils import simplify_track_info
-from services.user_data_cache_service import user_data_cache
 from services.analytics_service import analytics_service
-from services.task_utils import spawn
-
-async def safe_background_task(coro, task_name="background_task"):
-    try:
-        await coro
-    except Exception as e:
-        log_service.error(f"{task_name} failed with exception: {e}")
-        import traceback
-        log_service.error(f"Traceback: {traceback.format_exc()}")
+from services.task_utils import safe_background_task, spawn
+from services.playback_devices import PlaybackDevices
+from services.playback_queue import PlaybackQueue
+from services.playback_stations import PlaybackStations
 
 def _valid_seq(seq) -> bool:
     return isinstance(seq, int) and not isinstance(seq, bool) and 0 <= seq < 2 ** 53
 
-class PlaybackState:
+class PlaybackState(PlaybackDevices, PlaybackQueue, PlaybackStations):
     TARGET_INDEX = settings.QUEUE_PLAYED_SONGS
     QUEUE_SIZE = settings.QUEUE_PLAYED_SONGS + 1 + settings.QUEUE_AHEAD_SONGS
     TIMING_CACHE_MAX = 64
@@ -49,6 +42,7 @@ class PlaybackState:
         self.last_update_time = None
         self.radio_mode = 'top_hits_all'
         self.seed_track_id: Optional[str] = None
+        self.seed_blend: Optional[List[Dict[str, Any]]] = None
 
         self._auto_filled_track_ids = set()
         self.active_device_id = None
@@ -163,146 +157,6 @@ class PlaybackState:
         except Exception as e:
             log_service.error(f"{self._who()}: Queue prefill failed: {e}")
 
-    def device_connected(self, device_id: str) -> bool:
-        self._online_devices.add(device_id)
-        self._device_offline_since.pop(device_id, None)
-        if self.active_device_id is None:
-            self.active_device_id = device_id
-            log_service.detail(f"{self._who(device_id)}: first device online - playback is on this device", "playback")
-            return True
-        return False
-
-    def device_disconnected(self, device_id: str) -> bool:
-        self._online_devices.discard(device_id)
-        self._device_offline_since.pop(device_id, None)
-        self._device_offline_since[device_id] = time.time()
-        while len(self._device_offline_since) > self.MAX_TRACKED_OFFLINE:
-            del self._device_offline_since[next(iter(self._device_offline_since))]
-        return device_id == self.active_device_id
-
-    def is_device_online(self, device_id: Optional[str]) -> bool:
-        return bool(device_id) and device_id in self._online_devices
-
-    @property
-    def active_device_online(self) -> bool:
-        return self.is_device_online(self.active_device_id)
-
-    def can_claim(self, device_id: str, now: Optional[float] = None) -> bool:
-        if not self.active_device_id or self.active_device_id == device_id:
-            return True
-        if self.active_device_id in self._online_devices:
-            return False
-        offline_since = self._device_offline_since.get(self.active_device_id)
-        if offline_since is None:
-            return True
-        return (now if now is not None else time.time()) - offline_since >= self.DEVICE_CLAIM_GRACE_S
-
-    def _apply_transfer(self, device_id: str, play: Optional[bool] = None, reason: str = "transfer") -> bool:
-        previous = self.active_device_id
-        self.progress_ms = self.get_simulated_progress()
-        self.last_update_time = time.time()
-        if play is not None:
-            self.is_playing = play
-        self.active_device_id = device_id
-        self.seek_version += 1
-        if previous != device_id:
-            self._last_transfer_at = time.time()
-            log_service.playback(
-                f"{self._who(device_id)}: playback moved here from device {previous[:8] if previous else 'none'} "
-                f"({reason}) at {log_service.clock(self.progress_ms)} of {log_service.track_label(self.current_track)}"
-            )
-        return previous != device_id
-
-    async def transfer(self, device_id: str, play: Optional[bool] = None, notify_callback=None,
-                       requester_device_id: Optional[str] = None, seq=None) -> bool:
-        async with self._command(requester_device_id, seq):
-            reason = "picked on this device" if requester_device_id in (None, device_id) \
-                else f"sent from device {requester_device_id[:8]}"
-            changed = self._apply_transfer(device_id, play=play, reason=reason)
-            if notify_callback:
-                await notify_callback(self.get_state())
-        return changed
-
-    async def claim(self, device_id: str, play: Optional[bool] = None, notify_callback=None, seq=None) -> bool:
-        async with self._command(device_id, seq):
-            if not self.can_claim(device_id):
-                if notify_callback:
-                    await notify_callback(self.get_state())
-                return False
-            self._apply_transfer(device_id, play=play, reason="claimed")
-            if notify_callback:
-                await notify_callback(self.get_state())
-        return True
-
-    def open_claim_verdict(self, device_id: str, now: Optional[float] = None) -> str:
-        if not device_id:
-            return "invalid"
-        if self.active_device_id == device_id:
-            return "already_active"
-        now = now if now is not None else time.time()
-        if self.active_device_id and now - self._last_transfer_at < self.OPEN_CLAIM_DEBOUNCE_S:
-            return "debounced"
-        return "claim"
-
-    async def claim_on_open(self, device_id: str, notify_callback=None, seq=None) -> str:
-        async with self._command(device_id, seq):
-            verdict = self.open_claim_verdict(device_id)
-            if verdict == "claim":
-                self._apply_transfer(device_id, reason="app opened on this device")
-            if notify_callback:
-                await notify_callback(self.get_state())
-        return verdict
-
-    def _shift_queue_to_target(self):
-        while self.current_index > self.TARGET_INDEX and self.queue:
-            removed = self.queue.pop(0)
-            self._remember(removed)
-            self._auto_filled_track_ids.discard(removed["id"])
-
-    def _remember(self, track: Dict) -> None:
-        self.history.append(track)
-        del self.history[:-settings.QUEUE_HISTORY_SONGS or None]
-
-    def _retire_played(self) -> None:
-        if self.current_track:
-            for track in self.queue[:self.current_index + 1]:
-                self._remember(track)
-
-    def _shift_queue_from_history(self):
-        while self.current_index < self.TARGET_INDEX and self.history:
-            self.queue.insert(0, self.history.pop())
-        self._enforce_queue_size()
-
-    def _upcoming_picks(self) -> List[Dict]:
-        start = self.current_index + 1 if self.current_track else 0
-        return [t for t in self.queue[start:] if t.get("id") not in self._auto_filled_track_ids]
-
-    def _after_picks_index(self) -> int:
-        start = self.current_index + 1 if self.current_track else 0
-        index = start
-        for i in range(start, len(self.queue)):
-            if self.queue[i].get("id") not in self._auto_filled_track_ids:
-                index = i + 1
-        return index
-
-    def _enforce_queue_size(self):
-        start = self.current_index + 1 if self.current_track else 0
-        for i in range(len(self.queue) - 1, start - 1, -1):
-            if len(self.queue) <= self.QUEUE_SIZE:
-                return
-            if self.queue[i].get("id") in self._auto_filled_track_ids:
-                self._auto_filled_track_ids.discard(self.queue.pop(i)["id"])
-
-    @staticmethod
-    async def _get_user_preferences(user_id: Optional[int] = None):
-        if not user_id:
-            return {"likes": set(), "super_likes": set(), "bans": set()}
-        try:
-            return await user_data_cache.get_preferences(user_id)
-        except Exception as e:
-            log_service.error(f"Error getting user preferences: {e}")
-            return {"likes": set(), "super_likes": set(), "bans": set()}
-
     def _spawn_play_event(self, **event):
         spawn(safe_background_task(
             analytics_service.log_play_event(**event),
@@ -347,88 +201,6 @@ class PlaybackState:
 
         self._current_play_track_id = None
         self._current_play_start_time = None
-
-    def _reset_fill_epoch(self):
-        self._fill_epoch += 1
-
-    def _append_unique_tracks(self, new_tracks: List[Dict]) -> bool:
-        existing_ids = {t.get("id") for t in self.queue}
-        added = False
-        for track in new_tracks:
-            if len(self.queue) >= self.QUEUE_SIZE:
-                break
-            track_id = track.get("id")
-            if track_id in existing_ids:
-                continue
-            self.queue.append(track)
-            existing_ids.add(track_id)
-            self._auto_filled_track_ids.add(track_id)
-            added = True
-        return added
-
-    async def _run_auto_fill(self, user_id: Optional[int], epoch: int) -> bool:
-        usage_tracking.bind_session(self.session_id, user_id)
-        if not self.population:
-            return False
-
-        seed_track = self.catalog.get_track(self.seed_track_id) if self.catalog and self.seed_track_id else None
-        new_tracks = await self.population.fill_queue(
-            radio_mode=self.radio_mode,
-            queue=list(self.queue),
-            history=list(self.history),
-            queue_size=self.QUEUE_SIZE,
-            seed_track=seed_track,
-            user_id=user_id,
-            session_id=self.session_id,
-        )
-
-        if not new_tracks:
-            return False
-
-        async with self._queue_lock:
-            if epoch != self._fill_epoch:
-                return False
-            added = self._append_unique_tracks(new_tracks)
-            self._enforce_queue_size()
-        return added
-
-    async def _auto_fill_queue(self, user_id: Optional[int] = None, notify_callback=None):
-        task = self._fill_task
-        if task is None or task.done() or self._fill_task_epoch != self._fill_epoch:
-            task = spawn(self._run_auto_fill(user_id, self._fill_epoch), name=f"auto_fill_run_{self.session_id}")
-            self._fill_task = task
-            self._fill_task_epoch = self._fill_epoch
-
-        added = await asyncio.shield(task)
-
-        if added and notify_callback:
-            await notify_callback(self.get_state())
-
-    async def _auto_fill_queue_background(self, user_id: Optional[int] = None, notify_callback=None):
-        try:
-            await self._auto_fill_queue(user_id=user_id, notify_callback=notify_callback)
-        except Exception as e:
-            log_service.error(f"{self._who()}: Background queue auto-fill error: {e}")
-
-    def _spawn_background_fill(self, user_id: Optional[int], notify_callback):
-        spawn(safe_background_task(
-            self._auto_fill_queue_background(user_id=user_id, notify_callback=notify_callback),
-            f"auto_fill_queue_{self.session_id}"
-        ), name=f"auto_fill_queue_{self.session_id}")
-
-    def _has_next_track(self) -> bool:
-        return bool(self.current_track_id) and self.current_track is not None and self.current_index + 1 < len(self.queue)
-
-    async def _ensure_next_track(self, user_id: Optional[int]) -> bool:
-        for _ in range(self.NEXT_FILL_ATTEMPTS):
-            if self._has_next_track():
-                return True
-            try:
-                await self._auto_fill_queue(user_id=user_id)
-            except Exception as e:
-                log_service.error(f"{self._who()}: Queue fill before skip failed: {e}")
-                return self._has_next_track()
-        return self._has_next_track()
 
     async def play(self, track_id: Optional[str] = None, user_id: Optional[int] = None, notify_callback=None,
                    device_id: Optional[str] = None, seq=None, claim: bool = False):
@@ -517,6 +289,7 @@ class PlaybackState:
             self.last_update_time = None
             self.radio_mode = 'top_hits_all'
             self.seed_track_id = None
+            self.seed_blend = None
             log_service.playback(f"{self._who(device_id)}: playback stopped, queue cleared")
             if notify_callback:
                 await notify_callback(self.get_state())
@@ -612,209 +385,6 @@ class PlaybackState:
                 f"{log_service.track_label(self.current_track)}")
             if notify_callback:
                 await notify_callback(self.get_state())
-        return True
-
-    async def add_to_queue(self, track_ids: List[str], position: Optional[int] = None,
-                           user_id: Optional[int] = None, notify_callback=None, play_next: bool = False):
-        added = []
-        async with self._command():
-            async with self._queue_lock:
-                upcoming_start = self.current_index + 1 if self.current_track else 0
-                if position is None:
-                    position = upcoming_start if play_next else self._after_picks_index()
-                insert_pos = max(upcoming_start, min(position, len(self.queue)))
-
-                for track_id in dict.fromkeys(track_ids):
-                    index = next((i for i, t in enumerate(self.queue) if t["id"] == track_id), None)
-                    if index is not None and index < upcoming_start:
-                        continue
-                    if index is not None:
-                        track = self.queue.pop(index)
-                        if index < insert_pos:
-                            insert_pos -= 1
-                    else:
-                        track = self.catalog.get_track(track_id) if self.catalog else None
-                        if not track:
-                            continue
-
-                    self.queue.insert(insert_pos, track)
-                    self._auto_filled_track_ids.discard(track_id)
-                    insert_pos += 1
-                    added.append(track_id)
-
-                self._enforce_queue_size()
-
-            log_service.playback(f"{self._who()}: queued {len(added)} track(s)")
-
-            if notify_callback:
-                await notify_callback(self.get_state())
-
-        self._spawn_background_fill(user_id, notify_callback)
-        return added
-
-    async def _remove_from_queue_unlocked(self, track_id: str, user_id: Optional[int] = None) -> bool:
-        replacement_index = None
-        async with self._queue_lock:
-            removed_indices = [i for i, t in enumerate(self.queue) if t.get("id") == track_id]
-
-            if not removed_indices:
-                return False
-
-            for i in sorted(removed_indices, reverse=True):
-                removed_track = self.queue.pop(i)
-                self._auto_filled_track_ids.discard(track_id)
-
-                if removed_track["id"] == self.current_track_id:
-                    replacement_index = i
-                    self.current_track_id = None
-
-            if replacement_index is None:
-                self._shift_queue_to_target()
-                self._shift_queue_from_history()
-                return True
-
-        if replacement_index >= len(self.queue):
-            try:
-                await self._auto_fill_queue(user_id=user_id)
-            except Exception as e:
-                log_service.error(f"{self._who()}: Queue fill after removal failed: {e}")
-
-        async with self._queue_lock:
-            if self.current_track_id is None:
-                if replacement_index < len(self.queue):
-                    self.current_track_id = self.queue[replacement_index]["id"]
-                elif self.queue:
-                    self.current_track_id = self.queue[-1]["id"]
-            self.progress_ms = 0
-            self.last_update_time = time.time()
-            self._shift_queue_to_target()
-            self._shift_queue_from_history()
-        return True
-
-    async def remove_from_queue(self, track_id: str, user_id: Optional[int] = None, notify_callback=None):
-        async with self._command():
-            was_current = track_id == self.current_track_id
-            removed_track = next((t for t in self.queue if t.get("id") == track_id), None)
-            if was_current:
-                self._log_play_end(user_id=user_id, event_type="skip", skip_reason="removed")
-            removed = await self._remove_from_queue_unlocked(track_id, user_id=user_id)
-            if not removed:
-                return False
-            if was_current and self.current_track_id:
-                self._log_play_start(track_id=self.current_track_id, user_id=user_id)
-
-            log_service.playback(
-                f"{self._who()}: removed {log_service.track_label(removed_track, track_id)} from the queue")
-
-            await self._prefill_before_broadcast(user_id)
-            if notify_callback:
-                await notify_callback(self.get_state())
-
-        self._spawn_background_fill(user_id, notify_callback)
-        return True
-
-    async def seed_radio(self, category: str = "all", track_id: Optional[str] = None,
-                         user_id: Optional[int] = None, notify_callback=None):
-        from services.playback_population_service import is_playlist_mode
-
-        if is_playlist_mode(category):
-            self.radio_mode = category
-            self.seed_track_id = None
-            async with self._queue_lock:
-                picks = self._upcoming_picks()
-                self._reset_fill_epoch()
-                self._retire_played()
-                self.queue = []
-                self.current_track_id = None
-                self._auto_filled_track_ids.clear()
-
-            await self._auto_fill_queue(user_id=user_id, notify_callback=notify_callback)
-
-            if self.queue or picks:
-                async with self._queue_lock:
-                    pick_ids = {t["id"] for t in picks}
-                    fill = [t for t in self.queue if t["id"] not in pick_ids]
-                    self.queue = fill[:1] + picks + fill[1:]
-                    self.current_track_id = self.queue[0]["id"]
-                    self.progress_ms = 0
-                    self.last_update_time = time.time()
-                    self._shift_queue_from_history()
-
-                log_service.playback(
-                    f"{self._who()}: switched to {category} radio, starting with "
-                    f"{log_service.track_label(self.current_track)} ({len(self.queue)} queued)")
-
-                if notify_callback:
-                    await notify_callback(self.get_state())
-            else:
-                log_service.warning(f"{self._who()}: switched to {category} radio but no tracks were found")
-                if notify_callback:
-                    await notify_callback(self.get_state())
-
-            return True
-
-        self.radio_mode = category
-
-        if track_id:
-            seed_track = self.catalog.get_track(track_id) if self.catalog else None
-            if not seed_track:
-                log_service.error(f"{self._who()}: {category} radio not seeded - seed track {track_id} not found")
-                return False
-        else:
-            seed_track = self.current_track or (self.history[-1] if self.history else None)
-
-        if not seed_track:
-            log_service.warning(f"{self._who()}: {category} radio not seeded - no seed track available")
-            return False
-        self.seed_track_id = seed_track["id"]
-
-        async with self._queue_lock:
-            picks = self._upcoming_picks()
-            self._reset_fill_epoch()
-            seed_epoch = self._fill_epoch
-            if self.current_track:
-                self.queue = self.queue[:self.current_index + 1] + picks
-            else:
-                self.queue = picks
-                self.current_track_id = None
-            self._auto_filled_track_ids.clear()
-
-        if self.population:
-            needed = self.QUEUE_SIZE - len(self.queue)
-            new_tracks = await self.population.seed_fill(
-                seed_track=seed_track,
-                category=category,
-                needed=needed,
-                queue=list(self.queue),
-                history=list(self.history),
-                user_id=user_id,
-                session_id=self.session_id,
-            )
-
-            async with self._queue_lock:
-                if seed_epoch == self._fill_epoch:
-                    self._append_unique_tracks(new_tracks)
-
-            log_service.playback(
-                f"{self._who()}: seeded {category} radio from {log_service.track_label(seed_track)} "
-                f"({len(self.queue)} tracks queued)")
-
-        if len(self.queue) < self.QUEUE_SIZE:
-            self._spawn_background_fill(user_id, notify_callback)
-
-        if self.queue and not self.current_track_id:
-            async with self._queue_lock:
-                self.current_track_id = self.queue[0]["id"]
-                self.progress_ms = 0
-                self.last_update_time = time.time()
-                self._shift_queue_to_target()
-
-            log_service.detail(
-                f"{self._who()}: {category} radio starts with {log_service.track_label(self.queue[0])}", "playback")
-
-        if notify_callback:
-            await notify_callback(self.get_state())
-
         return True
 
     async def handle_preference_change(self, user_id: int, track_id: str, preference_type: str, notify_callback=None):
@@ -1030,6 +600,7 @@ class PlaybackState:
             "active_device_id": self.active_device_id,
             "active_device_online": self.active_device_online,
             "activeSeedMode": self.radio_mode if self.radio_mode != "standard" else None,
+            "station_blend": self.station_label() if self.seed_blend else None,
             "crossfade_hint": crossfade_hint,
             "announcer_hint": announcer_hint,
             "override_active": self.override_active,

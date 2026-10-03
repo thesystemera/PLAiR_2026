@@ -22,5 +22,14 @@ def spawn(coro: Coroutine, name: Optional[str] = None) -> asyncio.Task:
     return task
 
 
+async def safe_background_task(coro, task_name="background_task"):
+    try:
+        await coro
+    except Exception as e:
+        log_service.error(f"{task_name} failed with exception: {e}")
+        import traceback
+        log_service.error(f"Traceback: {traceback.format_exc()}")
+
+
 def pending_task_count() -> int:
     return len(_background_tasks)

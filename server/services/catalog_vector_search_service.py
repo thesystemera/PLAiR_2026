@@ -1,13 +1,12 @@
 import re
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
-
-import numpy as np
 
 from models_global import run_on_gpu_executor
 from services import log_service
+from services.catalog_aspects import Aspect, AspectRanker
+from services.catalog_names import NameLookup
 from services.catalog_vocals import VOCALS, vocals_of
-from services.catalog_vector_database_service import TAG_LISTS, CatalogVectorDatabaseService
+from services.catalog_vector_database_service import CatalogVectorDatabaseService
 from services.semantic_source import SemanticSearch
 
 QUERY_PREFIXES = {
@@ -20,8 +19,7 @@ QUERY_PREFIXES = {
     "style": "style", "theme": "theme", "lyrics": "lyrics", "vocal": "vocal",
     "instrumental": "vocal",
 }
-LABEL_CATEGORIES = set(TAG_LISTS) | {"primary_genre", "primary_artist"}
-NAME_CATEGORIES = {"primary_artist", "similar_artists"}
+NAME_LOOKUPS = {"primary_artist": "artist", "song_title": "title"}
 NATURAL_PHRASES = (
     ("secondary_genres", ("subgenre", "subgenres", "sub-genre", "sub-genres", "secondary genre")),
     ("primary_genre", ("genre", "genres", "type of music", "kind of music", "music like")),
@@ -36,29 +34,17 @@ NATURAL_PHRASES = (
 )
 
 
-@dataclass
-class TagIndex:
-    metas: List[Dict[str, Any]]
-    rows: np.ndarray
-    starts: np.ndarray
-    counts: np.ndarray
-    vectors: np.ndarray
-
-
-def _unit(vectors: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(vectors, axis=-1, keepdims=True)
-    return np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms > 0)
-
-
 class CatalogVectorSearchService:
+    """The catalog's three ways in: free-text search (AI or keyword weights over every aspect), name lookup
+    (artists and titles by spelling, catalog_names) and stations built from aspects (catalog_aspects)."""
 
     def __init__(self, vector_db_service, catalog_service=None, prompt_cache_service=None):
         self.vector_db = vector_db_service
         self.catalog = catalog_service
         self.prompt_cache_service = prompt_cache_service
         self.semantic = SemanticSearch(vector_db_service, prompt_cache_service)
-        self._tag_source = None
-        self._tag_indexes: Dict[str, Optional[TagIndex]] = {}
+        self.names = NameLookup(vector_db_service)
+        self.aspects = AspectRanker(vector_db_service, self.names)
         log_service.vector_music("✓ CatalogVectorSearchService initialized")
 
     async def search(
@@ -83,25 +69,21 @@ class CatalogVectorSearchService:
             if wanted:
                 log_service.detail(f"  🎚️ Vocals filter: {wanted}", "vector_music")
 
-            hidden = self.catalog.hidden_ids if self.catalog is not None else set()
-
             def keep(track: Dict[str, Any]) -> bool:
-                if banned_ids and track.get("id") in banned_ids:
-                    return False
                 if only_ids is not None and track.get("id") not in only_ids:
                     return False
-                if track.get("id") in hidden:
-                    return False
-                if wanted and vocals_of(track) != wanted:
-                    return False
-                return True
+                return not (wanted and vocals_of(track) != wanted)
 
-            if set(query_weights) == {intent_category}:
-                texts = cleaned_query.split(",") if intent_category in LABEL_CATEGORIES else [cleaned_query]
-                found = await self.near_texts(texts, intent_category, n_results, keep=keep)
+            allowed = self.allowed(set(), banned_ids, keep)
+            if set(query_weights) == {intent_category} and intent_category in NAME_LOOKUPS:
+                found = await run_on_gpu_executor(self.names.find, NAME_LOOKUPS[intent_category], cleaned_query,
+                                                  n_results, allowed)
+            elif set(query_weights) == {intent_category}:
+                found = await run_on_gpu_executor(self.aspects.rank, [Aspect(intent_category, words=cleaned_query)],
+                                                  None, [], n_results, allowed)
             else:
                 found = [{**match.meta, 'similarity_score': match.similarity} for match in
-                         await self.semantic.search(cleaned_query, n=n_results, keep=keep, weights=query_weights)]
+                         await self.semantic.search(cleaned_query, n=n_results, keep=allowed, weights=query_weights)]
             track_results = [{**track, 'intent_category': intent_category, 'match_weights': query_weights}
                              for track in found]
 
@@ -138,88 +120,8 @@ class CatalogVectorSearchService:
         intent, weights, cleaned = self._detect_query_intent(query)
         return intent, weights, cleaned if cleaned.strip() else query, {}
 
-    def _tag_index(self, category: str) -> Optional[TagIndex]:
-        source = self.vector_db._metadata_cache
-        if self._tag_source is not source:
-            self._tag_source, self._tag_indexes = source, {}
-        if category not in self._tag_indexes:
-            metas = list(source.values())
-            rows, starts, texts = [], [], []
-            for row, meta in enumerate(metas):
-                tags = self.vector_db.category_tags(meta).get(category) or []
-                if tags:
-                    rows.append(row)
-                    starts.append(len(texts))
-                    texts.extend(tags)
-            if not texts:
-                self._tag_indexes[category] = None
-                return None
-            vectors = _unit(np.array(self.vector_db.ensure_embeddings(category, texts), dtype=np.float32))
-            counts = np.diff(np.array(starts + [len(texts)]))
-            self._tag_indexes[category] = TagIndex(metas, np.array(rows), np.array(starts), counts, vectors)
-        return self._tag_indexes[category]
-
-    def _tag_scores(self, category: str, anchors: List[List[str]]) -> Optional[np.ndarray]:
-        index = self._tag_index(category)
-        anchors = [tags for tags in anchors if tags]
-        if index is None or not anchors:
-            return None
-        total = np.zeros(len(index.rows), dtype=np.float32)
-        for tags in anchors:
-            anchor = _unit(np.array(self.vector_db.ensure_embeddings(category, tags), dtype=np.float32))
-            similarity = anchor @ index.vectors.T
-            forward = np.maximum.reduceat(similarity, index.starts, axis=1).mean(axis=0)
-            backward = np.add.reduceat(similarity.max(axis=0), index.starts) / index.counts
-            total += (forward + backward) / 2
-        scores = np.full(len(index.metas), np.nan, dtype=np.float32)
-        scores[index.rows] = total / len(anchors)
-        return scores
-
-    def _rank_tags(self, categories: List[str], anchors_for: Callable[[str], List[List[str]]], n_results: int,
-                   allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        per_category = [scores for scores in (self._tag_scores(c, anchors_for(c)) for c in categories)
-                        if scores is not None]
-        if not per_category:
-            return []
-        metas = list(self._tag_source.values())
-        stacked = np.vstack(per_category)
-        present = (~np.isnan(stacked)).sum(axis=0)
-        scores = np.where(present > 0, np.nansum(stacked, axis=0) / np.maximum(present, 1), np.nan)
-        ranked = [(float(scores[i]), meta) for i, meta in enumerate(metas)
-                  if not np.isnan(scores[i]) and allowed(meta)]
-        ranked.sort(key=lambda row: row[0], reverse=True)
-        return [{**meta, 'similarity_score': score} for score, meta in ranked[:n_results]]
-
-    def _rank_names(self, category: str, anchors: List[Dict[str, List[str]]], n_results: int,
-                    allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        def names(tags: Dict[str, List[str]], key: str) -> set:
-            return {name.lower() for name in tags.get(key) or []}
-
-        artists = set().union(*(names(t, "primary_artist") for t in anchors))
-        similar = set().union(*(names(t, "similar_artists") for t in anchors)) - artists
-        ranked = []
-        for meta in self.vector_db._metadata_cache.values():
-            if not allowed(meta):
-                continue
-            tags = self.vector_db.category_tags(meta)
-            own, scene = names(tags, "primary_artist"), names(tags, "similar_artists")
-            if category == "similar_artists" and own & artists:
-                continue
-            key = (bool(own & similar), len(scene & similar) / len(similar) if similar else 0.0)
-            if category == "primary_artist":
-                key = (bool(own & artists),) + key
-            if any(key):
-                ranked.append((key, meta))
-        ranked.sort(key=lambda row: row[0], reverse=True)
-        return [{**meta, 'similarity_score': float(sum(key) / len(key))} for key, meta in ranked[:n_results]]
-
-    def _categories(self, category: str) -> List[str]:
-        if category == "all":
-            return [c for c in self.vector_db.categories if c != "song_title"]
-        return [category]
-
-    def _allowed(self, exclude_ids: set, banned_ids: Optional[set],
-                 keep: Optional[Callable[[Dict[str, Any]], bool]]) -> Callable[[Dict[str, Any]], bool]:
+    def allowed(self, exclude_ids: set, banned_ids: Optional[set],
+                keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> Callable[[Dict[str, Any]], bool]:
         hidden = self.catalog.hidden_ids
 
         def allowed(track: Dict[str, Any]) -> bool:
@@ -228,38 +130,20 @@ class CatalogVectorSearchService:
                     and not (banned_ids and track_id in banned_ids) and (keep is None or keep(track)))
         return allowed
 
-    async def similar(self, tracks: List[Dict[str, Any]], category: str, n_results: int,
-                      banned_ids: Optional[set] = None,
+    async def station(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
+                      n_results: int, banned_ids: Optional[set] = None,
                       keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
-        if not tracks or not self.catalog or not self.catalog.tracks:
+        if not aspects or not self.catalog or not self.catalog.tracks:
             return []
-        allowed = self._allowed({t.get("id") for t in tracks}, banned_ids, keep)
-        tags = [self.vector_db.category_tags(t) for t in tracks]
+        exclude = {t.get("id") for t in recent} | ({seed.get("id")} if seed else set())
+        return await run_on_gpu_executor(self.aspects.rank, aspects, seed, recent, n_results,
+                                         self.allowed(exclude, banned_ids, keep))
 
-        def run():
-            if category in NAME_CATEGORIES:
-                return self._rank_names(category, tags, n_results, allowed)
-            return self._rank_tags(self._categories(category), lambda c: [t.get(c) or [] for t in tags],
-                                   n_results, allowed)
-
-        return await run_on_gpu_executor(run)
-
-    async def near_texts(self, texts: List[str], category: str, n_results: int,
-                         banned_ids: Optional[set] = None,
-                         keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
-        texts = [text.strip() for text in texts if text and text.strip()]
-        if not texts or not self.catalog or not self.catalog.tracks:
-            return []
-        allowed = self._allowed(set(), banned_ids, keep)
-
-        def run():
-            return self._rank_tags([category], lambda _: [texts], n_results, allowed)
-
-        return await run_on_gpu_executor(run)
+    async def closest_names(self, field: str, text: str, how_many: int) -> List[Tuple[str, float]]:
+        return await run_on_gpu_executor(self.names.closest, field, text, how_many)
 
     async def warm(self) -> None:
-        for category in self.vector_db.categories:
-            await run_on_gpu_executor(self._tag_index, category)
+        await run_on_gpu_executor(self.aspects.warm)
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()
@@ -285,7 +169,7 @@ class CatalogVectorSearchService:
         if category is None:
             query_lower = query.lower()
             for category_name, phrases in NATURAL_PHRASES:
-                if re.search(r'(' + '|'.join(phrases) + r')', query_lower):
+                if re.search(r'\b(' + '|'.join(phrases) + r')\b', query_lower):
                     category = category_name
                     cleaned_query = self._clean_natural_query(query, list(phrases))
                     break

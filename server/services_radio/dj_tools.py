@@ -23,6 +23,7 @@ from services_radio.dj_command_executor import (
 
 SEARCH_CATEGORIES = list(SEARCH_CATEGORY_PREFIXES.keys())
 SEED_CATEGORIES = list(SEED_MODE_DISPLAY.keys())
+BLEND_CATEGORIES = [category for category in SEED_CATEGORIES if category != "all"]
 RATINGS = ["like", "super_like", "clear", "ban"]
 PLAYLISTS = list(PLAYLIST_DISPLAY.keys())
 TRACK_TARGETS = ["current", "previous", "next"]
@@ -256,8 +257,9 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "description": "Plays music, three ways. (1) Search and play in one step, when any good match will do or the "
                        "listener names exactly what they want: a mood, genre or vibe ('something dreamy', 'jazz'), or "
                        "an artist or song by name. This is the app's own smart search: it works out which aspects the "
-                       "words mean and weighs them; a category pins one field (primary_artist or song_title for an "
-                       "exact name, which also says plainly when the catalog doesn't have it). It plays the closest "
+                       "words mean and weighs them; a category pins one field (primary_artist or song_title for a "
+                       "name, matched by spelling so typos still find it; the result says when nothing is spelled "
+                       "exactly like it and shows the closest names). It plays the closest "
                        "match straight away, unseen. (2) Play a track you picked: pass its track_id (from find_tracks, "
                        "what_aired or pulse_search). When the listener can only describe the one band or song they "
                        "mean, look with find_tracks first and play your pick this way. (3) Play the listener's own "
@@ -334,17 +336,33 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
     {
         "name": "seed_radio",
         "cost": "memory",
-        "requires": "a track playing",
-        "summary": "build a station from a track",
-        "description": "Turn the radio into a station built from a track, matched on one aspect ('all' for a "
-                       "balanced mix): the track playing now by default, or the previous or next one. Use it for "
-                       "'more like this', or to steer from a sound the listener just heard.",
+        "requires": "a track playing, unless every aspect in the blend has words",
+        "summary": "build a station from aspects of a track or of words, alone or blended with weights",
+        "description": "Turn the radio into a station: songs matched on aspects of a seed, and the station keeps "
+                       "matching as it rolls on. One aspect (category) makes a pure station: 'primary_genre' from a "
+                       "track plays that genre, 'vocal' that kind of singing. Several aspects with weights (blend) "
+                       "make a mixed station when the listener asks for more than one thing, e.g. this track's style "
+                       "with a rainy, slow mood: blend [{category: style, weight: 0.7}, {category: mood, weight: "
+                       "0.5, words: 'rainy, slow'}]. An aspect with words is matched to those words instead of the "
+                       "track. The track is the one playing now by default, or the previous or next one. Use it for "
+                       "'more like this', to steer from a sound the listener just heard, or to build a station from "
+                       "what they describe.",
         "parameters": _schema({
-            "category": _enum(SEED_CATEGORIES, "Aspect of the track to match, the same categories as the search "
-                                               "('all' for a balanced mix)."),
+            "category": _enum(SEED_CATEGORIES, "One aspect of the track to match, the same categories as the "
+                                               "search ('all' for every aspect equally). Leave out when you give "
+                                               "a blend."),
+            "blend": {"type": "array", "description": "Several aspects at once, each with its weight (how much it "
+                                                      "counts) and optional words to match instead of the track.",
+                      "items": _schema({
+                          "category": _enum(BLEND_CATEGORIES, "The aspect."),
+                          "weight": {"type": "number", "description": "How much this aspect counts, relative "
+                                                                      "to the others (above 0)."},
+                          "words": _string("Optional: match these words for this aspect instead of the track, "
+                                           "e.g. 'rainy, slow' for mood or 'husky' for vocal."),
+                      }, ["category"])},
             "target": _enum(TRACK_TARGETS, "Which track to build from: current (default), previous or next."),
             "track_id": TRACK_ID,
-        }, ["category"]),
+        }),
     },
     {
         "name": "play_playlist",
@@ -701,9 +719,10 @@ def activity_summary(name: str, result: Any) -> tuple[str, str]:
             singular, plural = KIND_NOUNS.get(kind, (kind, kind))
             parts.append(f"{len(items)} {singular if len(items) == 1 else plural}")
         return ("found", " · ".join(parts[:4])) if parts else ("empty", "nothing on hand")
-    if result.get("not_in_catalog"):
+    if result.get("not_spelled_exactly"):
         instead = result.get("now_playing") or (result.get("queued") or [""])[0]
-        return "empty", (f"no {', '.join(result['not_in_catalog'])}" + (f" · closest: {instead}" if instead else ""))[:100]
+        return "found", (f"no exact {', '.join(result['not_spelled_exactly'])}"
+                         + (f" · closest: {instead}" if instead else ""))[:100]
     if result.get("now_playing"):
         return "found", f"playing {result['now_playing']}"
     if result.get("queued"):
@@ -760,8 +779,9 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
             return _brace("remove", value=args.get("title") or "next")
         return _brace(action)
     if name == "seed_radio":
-        return _brace("play", "seed", _target(args["target"]) if args["target"] != "current" else "",
-                      value=args["category"])
+        value = " + ".join(f"{item['category']} {item['weight']:g}" + (f" '{item['words']}'" if item["words"] else "")
+                           for item in args["blend"]) if args["blend"] else args["category"]
+        return _brace("play", "seed", _target(args["target"]) if args["target"] != "current" else "", value=value)
     if name == "move_playback":
         return _brace("move_playback", value=args.get("device") or "list devices")
     if name == "radio_settings":
@@ -958,7 +978,26 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"action": action, "title": text("title")}
         return {"action": action}
     if name == "seed_radio":
-        return {"category": choice("category", SEED_CATEGORIES), "target": track_target()}
+        raw = args.get("blend") or []
+        blend = []
+        for item in [raw] if isinstance(raw, dict) else raw:
+            if not isinstance(item, dict):
+                raise ValueError("'blend' is a list of {category, weight, words}")
+            category = str(item.get("category") or "").strip().lower()
+            if category not in BLEND_CATEGORIES:
+                raise ValueError(f"each blend 'category' must be one of {', '.join(BLEND_CATEGORIES)}")
+            try:
+                weight = float(item["weight"]) if item.get("weight") not in (None, "") else 1.0
+            except (TypeError, ValueError):
+                raise ValueError("each blend 'weight' must be a number above 0")
+            if weight <= 0:
+                raise ValueError("each blend 'weight' must be a number above 0")
+            words = str(item.get("words") or "").strip()[:MAX_TEXT_ARG_CHARS] or None
+            blend.append({"category": category, "weight": weight, "words": words})
+        if not blend and not args.get("category"):
+            raise ValueError("give 'category' (one aspect) or 'blend' (several aspects with weights)")
+        return {"category": None if blend else choice("category", SEED_CATEGORIES), "blend": blend or None,
+                "target": track_target()}
     if name == "move_playback":
         return {"device": text("device")}
     if name == "radio_settings":
@@ -1331,7 +1370,8 @@ class DJToolRuntime:
 
     async def _seed_radio(self, args):
         async with self.ctx.playback_lock:
-            return await self.executor.execute_seed_radio(self.session_dict, args["category"], args["target"])
+            return await self.executor.execute_seed_radio(self.session_dict, args["category"], args["target"],
+                                                          blend=args["blend"])
 
     async def _move_playback(self, args):
         async with self.ctx.playback_lock:

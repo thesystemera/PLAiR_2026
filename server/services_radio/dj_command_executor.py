@@ -1,12 +1,15 @@
 import asyncio
 import datetime
 import re
+
+import numpy as np
 from sqlalchemy import select
 from services_radio.conversation_service import save_conversation_to_database
 from services_radio import listener_location as location_resolver
 from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
 from services_radio.tts_stream_planner import spoken_text
+from services.catalog_names import spelled_alike
 from services.catalog_vocals import vocals_of
 from services import listener_plays
 from services.task_utils import spawn
@@ -26,6 +29,11 @@ SEARCH_CATEGORY_PREFIXES = {
     "lyrics": "Lyrics",
 }
 LOVED_PICKS = 5
+NAME_CLOSEST_SHOWN = 3
+NOT_SPELLED_NOTE = ("No name in the catalog is spelled exactly like {names}. What came back is by the closest spelling "
+                    "(closest_names, 1.0 = the same spelling). If that's who the listener meant (a typo or a "
+                    "mishearing), carry on. If not, tell them plainly the station doesn't have it, then name what's "
+                    "playing or queued instead.")
 NAME_SEARCH_FIELDS = {"Artist": "artist", "Song": "title"}
 FIND_TAKES_PER_SONG = 3
 CANDIDATE_SOUND_CHARS = 140
@@ -181,14 +189,15 @@ class CommandExecutorService:
         entry = {"query": query, "found": len(track_ids)}
         missing = None
         if prefix in NAME_SEARCH_FIELDS and track_ids:
-            matches = [track_id for track_id in track_ids
-                       if self._name_matches(value, track_id, NAME_SEARCH_FIELDS[prefix])]
-            entry["exact"] = bool(matches)
-            if matches:
-                track_ids = matches
-            else:
+            closest = await self.vector_search_service.closest_names(NAME_SEARCH_FIELDS[prefix], value,
+                                                                     NAME_CLOSEST_SHOWN)
+            entry["closest_names"] = [{"name": name, "spelling": round(score, 2)} for name, score in closest]
+            entry["exact"] = bool(closest) and spelled_alike(closest[0][1])
+            best = results[0].get("similarity_score", 0.0)
+            track_ids = [track["id"] for track in results if np.isclose(track.get("similarity_score", 0.0), best)]
+            entry["found"] = len(track_ids)
+            if not entry["exact"]:
                 missing = value
-                entry["closest"] = self._track_label(track_ids[0])
         return track_ids, entry, missing
 
     def _candidate(self, track_id):
@@ -294,9 +303,9 @@ class CommandExecutorService:
         if only_ids is not None:
             result["within"] = within
         if missing:
-            result["not_in_catalog"] = [missing]
-            result["note"] = (f"The catalog has nothing by or called {missing}; these are only the closest by "
-                              f"sound. {FIND_NOTE}")
+            result["not_spelled_exactly"] = [missing]
+            result["closest_names"] = entry.get("closest_names", [])
+            result["note"] = f"{NOT_SPELLED_NOTE.format(names=missing)} {FIND_NOTE}"
         return result
 
     async def execute_play_ids(self, session_dict, track_ids, play):
@@ -418,10 +427,8 @@ class CommandExecutorService:
                 result["note"] = ("Nothing in the listener's own liked tracks matches that. Say so, and offer to "
                                   "search the whole catalog.")
         if missing:
-            result["not_in_catalog"] = missing
-            result["note"] = (f"The catalog has nothing by or called {', '.join(missing)}. What was found are only the "
-                              "closest matches by sound. Tell the listener plainly that the station doesn't have it, "
-                              "then name what's playing or queued instead.")
+            result["not_spelled_exactly"] = missing
+            result["note"] = NOT_SPELLED_NOTE.format(names=", ".join(missing))
         return result
 
     def _name_matches(self, value, track_id, field):
@@ -845,29 +852,35 @@ class CommandExecutorService:
             await self.sio.emit('conversation_update', {'bot_response': gpt_response, 'message_type': 'shoutouts'},
                                 room=session_id)
 
-    async def execute_seed_radio(self, session_dict, category, target="current"):
+    async def execute_seed_radio(self, session_dict, category, target="current", blend=None):
         session_id = session_dict.get('session_id')
         user_id = session_dict.get('user_id')
 
         if not session_id:
             return {"status": "error", "reason": "No active playback session"}
 
-        mode_display = SEED_MODE_DISPLAY.get(category)
+        if blend:
+            mode_display = " + ".join(f"{SEED_MODE_DISPLAY.get(item['category'], item['category'])} {item['weight']:g}"
+                                      + (f" ('{item['words']}')" if item.get("words") else "") for item in blend)
+        else:
+            mode_display = SEED_MODE_DISPLAY.get(category)
         if not mode_display:
             return {"status": "error", "reason": f"Unknown seed category '{category}'"}
 
-        track_id = self._resolve_track_id(session_id, target)
-        if not track_id:
+        needs_song = not blend or any(not item.get("words") for item in blend)
+        track_id = self._resolve_track_id(session_id, target) if needs_song else None
+        if needs_song and not track_id:
             log_service.error(f"No {target} track available for seeding")
             return {"status": "error", "reason": "Nothing is playing to seed the radio from" if target == "current"
                     else f"There is no {target} track to seed the radio from"}
 
-        track_name = self._track_label(track_id) or "this track"
+        track_name = (self._track_label(track_id) or "this track") if track_id else "the listener's words"
 
         log_service.detail(f"[COMMAND EXECUTOR] Seeding radio based on {track_name} ({mode_display})", "commands")
 
         seeded = await self.playback_service.seed_radio(
-            session_id, category=category, track_id=None if target == "current" else track_id, user_id=user_id)
+            session_id, category=category or blend[0]["category"],
+            track_id=None if target == "current" else track_id, user_id=user_id, blend=blend)
 
         if not seeded:
             if self.broadcast_playback_state_callback:
@@ -892,7 +905,7 @@ class CommandExecutorService:
 
         return {
             "status": "ok",
-            "category": category,
+            "station": mode_display,
             "seed_track": track_name,
             "up_next": self._upcoming_labels(session_id)
         }

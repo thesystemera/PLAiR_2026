@@ -58,6 +58,8 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         for category, field in TAG_LISTS.items():
             tags[category] = _tag_list(derived.get(field))
         tags["primary_artist"] = _tag_list(log_service.track_artists(track))
+        who = VOCALS_TEXT.get(vocals_of(track))
+        tags["vocal"] = list(dict.fromkeys(([who] if who else []) + _tag_list(derived.get("vocal_style_keywords"))))
         return tags
 
     log_channel = "vector_music"

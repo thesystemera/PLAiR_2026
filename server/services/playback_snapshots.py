@@ -18,6 +18,7 @@ def snapshot(state) -> Optional[Dict[str, Any]]:
     return {
         "radio_mode": state.radio_mode,
         "seed_track_id": state.seed_track_id,
+        "seed_blend": state.seed_blend,
         "queue": queue_ids,
         "current_track_id": state.current_track_id,
         "progress_ms": int(state.get_simulated_progress()),
@@ -43,6 +44,7 @@ def restore(state, saved: Dict[str, Any], catalog) -> bool:
     state.current_track_id = current
     state.radio_mode = saved.get("radio_mode") or state.radio_mode
     state.seed_track_id = saved.get("seed_track_id") if catalog.get_track(saved.get("seed_track_id") or "") else None
+    state.seed_blend = saved.get("seed_blend") or None
     state.progress_ms = min(progress, duration) if duration else progress
     state.is_playing = False
     state.last_update_time = time.time()

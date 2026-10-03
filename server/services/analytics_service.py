@@ -9,20 +9,12 @@ from database.models import ShoutoutAnalytics, ShoutoutPreference, ShoutoutPrefe
 from services import log_service
 from services.base_service import SingletonService
 from services.analytics_file_service import analytics_file_service
-from services.task_utils import spawn
+from services.task_utils import safe_background_task, spawn
 
 ANALYTICS_MAX_FLUSH_ATTEMPTS = 5
 ANALYTICS_CACHE_SIZE = 100
 AGGREGATE_CHUNK = 500
 TOP_HITS_PERIOD_DAYS = {"week": 7, "day": 1}
-
-async def safe_background_task(coro, task_name="background_task"):
-    try:
-        await coro
-    except Exception as e:
-        log_service.error(f"{task_name} failed with exception: {e}")
-        import traceback
-        log_service.error(f"Traceback: {traceback.format_exc()}")
 
 class AnalyticsService(SingletonService):
     def __init__(self):
