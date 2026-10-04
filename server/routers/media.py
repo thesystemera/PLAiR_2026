@@ -12,6 +12,7 @@ from typing import Optional
 from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import THUMBNAIL_SIZES, ensure_thumbnail
 from services.normal_map_service import ensure_track_normal
+from services.device_settings_service import settings_for, valid_kind
 from services import log_service
 from database import User
 from config import settings
@@ -306,10 +307,11 @@ async def get_audio_features(track_id: str):
     return await _json_file_response(settings.AUDIOFEATURES_DIR / f"{track_id}.json", "Audio features not found")
 
 @router.get("/api/video-clips/{track_id}")
-async def get_video_clips(track_id: str, current_user: Optional[User] = Depends(get_cached_current_user)):
+async def get_video_clips(track_id: str, current_user: Optional[User] = Depends(get_cached_current_user),
+                          x_device_kind: Optional[str] = Header(None)):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=400, detail="Invalid track id")
-    if not current_user or not current_user.video_clips_enabled:
+    if not current_user or not settings_for(current_user, valid_kind(x_device_kind))["videoClipsEnabled"]:
         return {"clips": [], "keywords": [], "reason": "video_clips_disabled"}
     youtube_service = get_youtube_clip_service()
     return await youtube_service.get_clips_for_track(track_id)  # type: ignore

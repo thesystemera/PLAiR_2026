@@ -330,8 +330,9 @@ class TTSQueueManager:
     async def _tts_allowed(self, user_id: int, is_broadcast: bool, is_temp_user: bool) -> bool:
         if is_broadcast and not is_temp_user and user_id:
             from services.user_data_cache_service import user_data_cache
+            from services.device_settings_service import playing_setting
             user = await user_data_cache.get_user(user_id)
-            if user and getattr(user, 'tts_muted', False):
+            if user and playing_setting(user, str(user_id), 'ttsMuted'):
                 log_service.tts_queue_manager(
                     f"DJ voice: skipped for {log_service.who(user_id=user_id)} (DJ voice muted)")
                 return False

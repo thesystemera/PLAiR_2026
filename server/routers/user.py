@@ -45,8 +45,6 @@ async def update_user_profile(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    if "tts_muted" in changes and services.radio_mode_service is not None:
-        services.radio_mode_service.note_tts_muted(str(current_user.id), bool(changes["tts_muted"]))
     return result
 
 @router.post("/api/user/profile-picture")

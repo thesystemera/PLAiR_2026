@@ -1,24 +1,14 @@
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from database.models import User, Conversation, WeatherData, AiredTalk
 from services import log_service
 from services.user_data_cache_service import user_data_cache
 
-if TYPE_CHECKING:
-    from services.websocket_service import WebSocketService
-
-UI_SETTING_KEYS = ('dataSaverMode', 'costTickerEnabled', 'autoClaimOnOpen', 'backgroundDownloads', 'radioInput')
-
-
 class UserProfileService:
 
     def __init__(self):
         self._initialized = False
-        self._websocket_service: Optional['WebSocketService'] = None
-
-    def set_websocket_service(self, websocket_service: 'WebSocketService'):
-        self._websocket_service = websocket_service
 
     async def initialize(self):
         if self._initialized:
@@ -48,30 +38,6 @@ class UserProfileService:
         log_service.api(f"Username updated: {old_username} -> {new_username}")
         return {"username": user.username}
 
-    async def update_audio_quality(self, user_id: int, audio_quality: str, db: AsyncSession) -> Dict[str, Any]:
-        valid_qualities = ["auto", "128k", "192k", "256k"]
-        if audio_quality not in valid_qualities:
-            raise ValueError(f"Invalid audio quality. Must be one of: {', '.join(valid_qualities)}")
-
-        result = await db.execute(select(User).where(User.id == user_id))  # type: ignore
-        user = result.scalar_one_or_none()
-        if not user:
-            raise ValueError("User not found")
-
-        old_quality = user.audio_quality
-        user.audio_quality = audio_quality  # type: ignore
-        await db.commit()
-        await db.refresh(user)
-
-        log_service.api(f"User {user.username} updated audio quality: {old_quality} -> {user.audio_quality}")
-
-        if self._websocket_service:
-            await self._websocket_service.broadcast_user_settings_updated(user_id, {
-                "audioQuality": user.audio_quality
-            })
-
-        return {"status": "success", "audio_quality": user.audio_quality}
-
     async def get_profile(self, user_id: int, db: AsyncSession) -> Dict[str, Any]:
         result = await db.execute(select(User).where(User.id == user_id))  # type: ignore
         user = result.scalar_one_or_none()
@@ -99,15 +65,6 @@ class UserProfileService:
             "latitude": user.latitude,
             "longitude": user.longitude,
             "timezone": user.timezone,
-            "tts_muted": user.tts_muted,
-            "notifications_muted": user.notifications_muted,
-            "dark_mode": user.dark_mode,
-            "fps_enabled": user.fps_enabled,
-            "video_clips_enabled": user.video_clips_enabled,
-            "visual_quality": user.visual_quality,
-            "lit_artwork": user.lit_artwork,
-            "ui_settings": user.ui_settings or {},
-            "audio_quality": user.audio_quality,
             "engagements_since_last_update": user.engagements_since_last_update,
             "last_login": last_login_str,
             "created_at": created_at_str,
@@ -120,8 +77,6 @@ class UserProfileService:
         if not user:
             raise ValueError("User not found")
 
-        settings_to_broadcast = {}
-
         if updates.get("location") is not None:
             user.location = updates["location"]  # type: ignore
         if updates.get("latitude") is not None:
@@ -130,30 +85,6 @@ class UserProfileService:
             user.longitude = updates["longitude"]  # type: ignore
         if updates.get("timezone") is not None:
             user.timezone = updates["timezone"]  # type: ignore
-        if updates.get("tts_muted") is not None:
-            user.tts_muted = updates["tts_muted"]  # type: ignore
-            settings_to_broadcast["ttsMuted"] = user.tts_muted
-        if updates.get("notifications_muted") is not None:
-            user.notifications_muted = updates["notifications_muted"]  # type: ignore
-            settings_to_broadcast["notificationsMuted"] = user.notifications_muted
-        if updates.get("dark_mode") is not None:
-            user.dark_mode = updates["dark_mode"]  # type: ignore
-        if updates.get("fps_enabled") is not None:
-            user.fps_enabled = updates["fps_enabled"]  # type: ignore
-            settings_to_broadcast["fpsEnabled"] = user.fps_enabled
-        if updates.get("video_clips_enabled") is not None:
-            user.video_clips_enabled = updates["video_clips_enabled"]  # type: ignore
-            settings_to_broadcast["videoClipsEnabled"] = user.video_clips_enabled
-        if updates.get("visual_quality") is not None:
-            user.visual_quality = updates["visual_quality"]  # type: ignore
-            settings_to_broadcast["visualQuality"] = user.visual_quality
-        if updates.get("lit_artwork") is not None:
-            user.lit_artwork = updates["lit_artwork"]  # type: ignore
-            settings_to_broadcast["litArtwork"] = user.lit_artwork
-        if updates.get("ui_settings"):
-            merged = {**(user.ui_settings or {}), **updates["ui_settings"]}
-            user.ui_settings = {key: merged[key] for key in UI_SETTING_KEYS if key in merged}  # type: ignore
-            settings_to_broadcast.update(user.ui_settings)  # type: ignore
         if updates.get("persona") is not None:
             user.persona = updates["persona"]  # type: ignore
         if updates.get("profile") is not None:
@@ -162,11 +93,7 @@ class UserProfileService:
         await db.commit()
         await user_data_cache.invalidate_user(user_id)
         log_service.api(f"User profile updated for {user.username}")
-
-        if settings_to_broadcast and self._websocket_service is not None:
-            await self._websocket_service.broadcast_user_settings_updated(user_id, settings_to_broadcast)
-
-        return {"status": "success", "settings": settings_to_broadcast}
+        return {"status": "success"}
 
     async def delete_conversations(self, user_id: int, db: AsyncSession) -> None:
         await db.execute(delete(Conversation).where(Conversation.user_id == user_id))  # type: ignore

@@ -1,10 +1,12 @@
 from typing import Optional, List, Dict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import delete, select, update, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from database.models import UserDevice
 from services import log_service
+from config import settings
+from database.connection import AsyncSessionLocal
 
 class DeviceManagementService:
 
@@ -16,7 +18,18 @@ class DeviceManagementService:
             return
 
         self._initialized = True
-        log_service.success("✓ Device management service initialized")
+        pruned = await self.prune_stale_devices(settings.DEVICE_ROW_RETENTION_DAYS)
+        log_service.success(f"✓ Device management service initialized ({pruned} devices unused for "
+                            f"{settings.DEVICE_ROW_RETENTION_DAYS}+ days removed)")
+
+    @staticmethod
+    async def prune_stale_devices(keep_days: int) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=keep_days)
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(delete(UserDevice).where(UserDevice.last_active < cutoff,
+                                                                UserDevice.is_active.is_(False)))
+            await db.commit()
+            return result.rowcount or 0
 
     async def register_or_update_device(
         self,

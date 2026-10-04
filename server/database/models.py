@@ -16,7 +16,6 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=True)
-    audio_quality = Column(String, default="auto", nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: utc_now())
 
     persona = Column(Text, nullable=True)
@@ -30,14 +29,7 @@ class User(Base):
     longitude = Column(String, nullable=True)
     timezone = Column(String, nullable=True)
 
-    tts_muted = Column(Boolean, default=False)
-    notifications_muted = Column(Boolean, default=False)
-    dark_mode = Column(Boolean, default=True)
-    fps_enabled = Column(Boolean, default=False)
-    video_clips_enabled = Column(Boolean, default=False)  # Enable video clips in visuals and shared videos
-    lit_artwork = Column(Boolean, default=True, server_default="true", nullable=False)
-    ui_settings = Column(JSONB, default=dict, server_default="{}", nullable=False)
-    visual_quality = Column(String, default="high")  # high, medium, low - controls AudioReactiveCanvas shader complexity
+    device_settings = Column(JSONB, default=dict, server_default="{}", nullable=False)
 
     subscribed = Column(Boolean, default=False, nullable=False)
     tier = Column(String, default="basic", nullable=False)  # basic, premium

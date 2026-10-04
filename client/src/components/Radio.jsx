@@ -61,9 +61,9 @@ export function Radio() {
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
   const { reportEngineStatus, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
-  const { interfaceState, toggleRadioInput } = useUISelector(state => ({ interfaceState: state.interfaceState, toggleRadioInput: state.toggleRadioInput }))
+  const { interfaceState, radioInput, toggleRadioInput } = useUISelector(state => ({ interfaceState: state.interfaceState, radioInput: state.settingsState.radioInput, toggleRadioInput: state.toggleRadioInput }))
   const mobilePanel = interfaceState.currentMobilePanel
-  const isTextInput = interfaceState.radioInput === 'text'
+  const isTextInput = radioInput === 'text'
   const playerHeight = interfaceState.playerHeight
 
   const [messageFilter, setMessageFilter] = useState('all')

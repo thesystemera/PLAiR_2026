@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from config.settings import settings
+from services.device_settings_service import playing_setting
 from services import log_service
 from services import usage_tracking
 from services import listener_timeline
@@ -243,7 +244,7 @@ class RadioModeService:
             if user is None:
                 return
             await self.set_user_prefs(user_id, prefs, getattr(user, "timezone", None),
-                                      bool(getattr(user, "tts_muted", False)))
+                                      bool(playing_setting(user, session_id, "ttsMuted")))
         except Exception as e:
             log_service.warning(f"[RADIO] Loading Radio Mode settings for user {user_id} failed: {type(e).__name__}: {e}")
 
@@ -386,7 +387,7 @@ class RadioModeService:
             async with self.async_session_maker() as db:
                 user = await db.get(User, sess.user_id)
         if user is not None:
-            sess.tts_muted = bool(getattr(user, "tts_muted", False))
+            sess.tts_muted = bool(playing_setting(user, sess.session_id, "ttsMuted"))
         location = await location_resolver.resolve(user, sess.session_id)
         tz_name = (getattr(user, "timezone", None) if user is not None else None) or location.timezone \
             or sess.tz_name or content_bank.session_timezone(sess.session_id)

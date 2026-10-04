@@ -1,6 +1,6 @@
 import { logger } from '../lib/logger'
 import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { getSessionIds } from '../lib/session'
+import { getSessionIds, deviceKind } from '../lib/session'
 import { api } from '../lib/api'
 import { reportClientEvent } from '../lib/errorReporter'
 import { uiState } from './UIStateContext'
@@ -149,7 +149,8 @@ export function WebSocketProvider({ children, sessionKey = 'guest', getToken, on
           guest_id: session.guestId,
           device_id: session.deviceId,
           device_name: session.deviceName,
-          device_type: session.deviceType
+          device_type: session.deviceType,
+          device_kind: deviceKind()
         })
 
         const sentToken = getTokenRef.current?.() || null

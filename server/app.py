@@ -97,7 +97,7 @@ from service_registry import services
 from services.task_utils import spawn
 from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts, artists,
                      conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
-                     client_log, account)
+                     client_log, account, settings as settings_routes)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -123,7 +123,6 @@ async def lifespan(_app: FastAPI):
 
     services.user_profile_service = user_profile_service = UserProfileService()
     await user_profile_service.initialize()
-    user_profile_service.set_websocket_service(websocket_service)
 
     services.opengraph_service = OpenGraphService(base_url=settings.PUBLIC_BASE_URL)
     log_service.success("✓ OpenGraph service initialized")
@@ -687,3 +686,4 @@ app.include_router(ws.router)
 app.include_router(usage.router)
 app.include_router(radio.router)
 app.include_router(client_log.router)
+app.include_router(settings_routes.router)

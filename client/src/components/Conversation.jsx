@@ -264,7 +264,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
   const sayCountRef = useRef(0)
   const uiSound = useUISound(window.audioEngine)
   const { token } = useAuth()
-  const { toastError, radioInput } = useUISelector(state => ({ toastError: state.toastError, radioInput: state.interfaceState.radioInput }))
+  const { toastError, radioInput } = useUISelector(state => ({ toastError: state.toastError, radioInput: state.settingsState.radioInput }))
   const { playShoutout } = usePlaybackShoutout()
 
   const formatTimestamp = (ts) => {

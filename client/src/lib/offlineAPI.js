@@ -1016,11 +1016,6 @@ class OfflineBackend {
     writeJson(STORAGE_KEYS.PENDING_PROFILE, { userId: entry.userId, updates: { ...entry.updates, ...(current?.updates || {}) } })
   }
 
-  async updateAudioQuality(audioQuality) {
-    this.queueProfileUpdate({ audio_quality: audioQuality })
-    return { status: 'queued', audio_quality: audioQuality, offline: true }
-  }
-
   async updateUserProfile(updates) {
     this.queueProfileUpdate(updates)
     return { status: 'queued', offline: true }

@@ -1,6 +1,5 @@
 import { logger } from '../lib/logger'
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
-import { api } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useNetwork, BITRATE_OPTIONS } from '../contexts/NetworkContext'
@@ -11,7 +10,7 @@ import { CSS_TRANSITION } from '../lib/motion'
 import { Expandable } from './Motion'
 
 export function useBitratePicker(onReloadTrackQuality) {
-  const { isAuthenticated, refreshUser } = useAuth()
+  const { isAuthenticated } = useAuth()
   const {
     toastError,
     audioState,
@@ -78,24 +77,14 @@ export function useBitratePicker(onReloadTrackQuality) {
 
     try {
       setActionLoading(true)
-
       publishSettings({ audioQuality: bitrate })
-
-      await api.updateAudioQuality(bitrate)
-
-      if (refreshUser) {
-        await refreshUser()
-      }
-
       if (onReloadTrackQuality) {
         await onReloadTrackQuality()
       }
-
       setIsOpen(false)
     } catch (err) {
-      logger.error('[BitratePicker] Failed to update bitrate:', err)
-      publishSettings({ audioQuality: settingsState.audioQuality })
-      showError('Failed to update audio quality. Please try again.')
+      logger.error('[BitratePicker] Failed to reload the track at the new quality:', err)
+      showError('Failed to switch audio quality. Please try again.')
     } finally {
       setActionLoading(false)
     }

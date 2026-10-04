@@ -340,11 +340,12 @@ class PreferencesService(SingletonService):
 
     async def apply_radio_settings(self, user, updates: Dict, db: AsyncSession) -> Dict:
         from service_registry import services
+        from services.device_settings_service import playing_setting
         user_id = int(user.id)
         prefs = await self.set_radio_settings(user_id, updates, db)
         if services.radio_mode_service is not None:
             await services.radio_mode_service.set_user_prefs(
-                user_id, prefs, getattr(user, "timezone", None), bool(getattr(user, "tts_muted", False)))
+                user_id, prefs, getattr(user, "timezone", None), bool(playing_setting(user, str(user_id), "ttsMuted")))
         if services.websocket_service is not None:
             await services.websocket_service.broadcast_to_session(
                 str(user_id), {"type": "radio_mode_updated", "data": {"settings": prefs}})

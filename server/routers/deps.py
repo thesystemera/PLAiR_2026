@@ -1,4 +1,5 @@
 from fastapi import HTTPException, Depends, Header, Request, UploadFile
+from services.device_settings_service import device_kinds, valid_kind
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,7 @@ async def get_session_info(
         x_device_id: Optional[str] = Header(None),
         x_device_name: Optional[str] = Header(None),
         x_device_type: Optional[str] = Header(None),
+        x_device_kind: Optional[str] = Header(None),
         authorization: Optional[str] = Header(None),
         token: Optional[str] = None,
         guest_id: Optional[str] = None,
@@ -66,12 +68,15 @@ async def get_session_info(
             detail="Missing device ID. Please include X-Device-ID header."
         )
 
+    device_kinds.note(session_id, session_device_id, x_device_kind)
+
     result: dict = {
         "user": user,
         "session_id": session_id,
         "device_id": session_device_id,
         "device_name": session_device_name,
         "device_type": session_device_type,
+        "device_kind": valid_kind(x_device_kind),
         "is_authenticated": user is not None
     }
     return result

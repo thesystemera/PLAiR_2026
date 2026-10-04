@@ -7,7 +7,7 @@ const MAX_TEXT = 4000
 
 export function DJTextComposer({ onSend }) {
   const { radioInput, isAIProcessing } = useUISelector(state => ({
-    radioInput: state.interfaceState.radioInput,
+    radioInput: state.settingsState.radioInput,
     isAIProcessing: state.engineState.isAIProcessing
   }))
   const [draft, setDraft] = useState('')

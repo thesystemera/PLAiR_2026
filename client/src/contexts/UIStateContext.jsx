@@ -71,11 +71,12 @@ import { safeStorage } from '../lib/safeStorage'
 import { UI_FULLSCREEN, FALLBACK_GRADIENT_HEX, getOnAirSegment } from '../lib/themeManager'
 import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
+import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
 
-const RADIO_INPUT_KEY = 'radioInputMode'
+const INITIAL_SETTINGS = loadLocalSettings()
+
 const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
 const MAX_PASSING_NOTICES = 3
-const initialRadioInput = () => (safeStorage.get(RADIO_INPUT_KEY) === 'text' ? 'text' : 'voice')
 const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function'
 
@@ -192,16 +193,12 @@ export const uiState = {
     totalQueued: 0,
     dailyDownloadedBytes: 0,
     dailyLimit: 500 * 1024 * 1024,
-    isEnabled: (() => { try { return localStorage.getItem('backgroundDownloads') !== 'false' } catch { return true } })(),
   },
   authState: {
     isAuthenticated: (() => { try { return !!localStorage.getItem('cached_user') } catch { return false } })(),
     user: null,
   },
-  settingsState: {
-    ttsMuted: false,
-    notificationsMuted: false,
-  }
+  settingsState: { ...INITIAL_SETTINGS },
 }
 
 let updateDownloadStateCallback = null
@@ -603,46 +600,24 @@ export function UIStateProvider({ children }) {
     totalQueued: 0,
     dailyDownloadedBytes: 0,
     dailyLimit: 500 * 1024 * 1024,
-    isEnabled: safeStorage.get('backgroundDownloads') !== 'false',
   })
 
-  const [settingsState, setSettingsState] = useState({
-    ttsMuted: false,
-    notificationsMuted: false,
-    audioQuality: 'auto',
-    dataSaverMode: safeStorage.get('dataSaverMode') === 'true',
-    costTickerEnabled: safeStorage.get('costTicker') === 'true',
-    autoClaimOnOpen: safeStorage.get('autoClaimOnOpen') !== 'false',
-    fpsEnabled: false,
-    videoClipsEnabled: false,
-    visualQuality: 'high',
-    litArtwork: true,
-  })
+  const [settingsState, setSettingsState] = useState(INITIAL_SETTINGS)
 
-  const publishSettings = useCallback((updates) => {
-    setSettingsState(prev => {
-      const newState = { ...prev, ...updates }
-      Object.assign(uiState.settingsState, newState)
-      if (updates.dataSaverMode !== undefined) {
-        safeStorage.set('dataSaverMode', String(updates.dataSaverMode))
-      }
-      if (updates.costTickerEnabled !== undefined) {
-        safeStorage.set('costTicker', String(updates.costTickerEnabled))
-      }
-      if (updates.autoClaimOnOpen !== undefined) {
-        safeStorage.set('autoClaimOnOpen', String(updates.autoClaimOnOpen))
-      }
-      return newState
-    })
+  const publishSettings = useCallback((updates, { fromServer = false } = {}) => {
+    const current = uiState.settingsState
+    const changes = Object.fromEntries(Object.entries(pickValidSettings(updates)).filter(([key, value]) => current[key] !== value))
+    if (!Object.keys(changes).length) return
+    Object.assign(current, changes)
+    saveLocalSettings(current)
+    setSettingsState(prev => ({ ...prev, ...changes }))
+    if (!fromServer) notifySettingsChanged(changes)
   }, [])
 
   const publishDownloadState = useCallback((updates) => {
     setDownloadState(prev => {
       const newState = { ...prev, ...updates }
       Object.assign(uiState.downloadState, newState)
-      if (updates.isEnabled !== undefined) {
-        safeStorage.set('backgroundDownloads', String(updates.isEnabled))
-      }
       return newState
     })
   }, [])
@@ -736,7 +711,7 @@ export function UIStateProvider({ children }) {
     scale: 1
   })
 
-  const initialButtonOpacity = initialRadioInput() === 'text' ? 0 : 1
+  const initialButtonOpacity = INITIAL_SETTINGS.radioInput === 'text' ? 0 : 1
   const [radioButtonOpacity, setRadioButtonOpacityState] = useState(initialButtonOpacity)
   const [radioButtonForegroundOpacity, setRadioButtonForegroundOpacityState] = useState(initialButtonOpacity)
 
@@ -766,7 +741,6 @@ export function UIStateProvider({ children }) {
     showUIControls: false,
     currentMobilePanel: 2,
     catalogView: 'tracks',
-    radioInput: initialRadioInput(),
     playerHeight: 80
   })
 
@@ -778,7 +752,6 @@ export function UIStateProvider({ children }) {
     showUIControls: false,
     currentMobilePanel: 2,
     catalogView: 'tracks',
-    radioInput: initialRadioInput(),
     playerHeight: 80
   })
 
@@ -791,7 +764,7 @@ export function UIStateProvider({ children }) {
     }
 
     const merged = interfaceRef.current
-    const isHidden = merged.isFullscreenVisuals || merged.isScrolling || merged.radioInput === 'text'
+    const isHidden = merged.isFullscreenVisuals || merged.isScrolling || uiState.settingsState.radioInput === 'text'
     const isRadioPanel = merged.currentMobilePanel === 2
     setRadioButtonOpacity(isHidden ? 0 : (isRadioPanel ? 1 : UI_FULLSCREEN.radioGlassOpacity))
     setRadioButtonForegroundOpacity(isHidden ? 0 : (isRadioPanel ? 1 : 0))
@@ -806,14 +779,13 @@ export function UIStateProvider({ children }) {
     reportInterfaceState({ catalogView: interfaceRef.current.catalogView === 'tracks' ? 'shoutouts' : 'tracks' })
   }, [reportInterfaceState])
 
-  const setRadioInput = useCallback((radioInput) => {
-    safeStorage.set(RADIO_INPUT_KEY, radioInput)
-    reportInterfaceState({ radioInput })
-  }, [reportInterfaceState])
-
   const toggleRadioInput = useCallback(() => {
-    setRadioInput(interfaceRef.current.radioInput === 'text' ? 'voice' : 'text')
-  }, [setRadioInput])
+    publishSettings({ radioInput: uiState.settingsState.radioInput === 'text' ? 'voice' : 'text' })
+  }, [publishSettings])
+
+  useEffect(() => {
+    reportInterfaceState({})
+  }, [settingsState.radioInput, reportInterfaceState])
 
   const setMobilePanel = useCallback((index) => {
     reportInterfaceState({ currentMobilePanel: index })
@@ -1262,7 +1234,6 @@ export function UIStateProvider({ children }) {
     interfaceRef,
     toggleCatalogView,
     toggleRadioInput,
-    setRadioInput,
     setMobilePanel,
 
     shaderPanelRegions: shaderPanelRegionsRef,
@@ -1320,7 +1291,7 @@ export function UIStateProvider({ children }) {
     settingsState, publishSettings, contentUpdates, publishContentUpdate,
     notices, showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
-    reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
+    reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
     subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
     getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,

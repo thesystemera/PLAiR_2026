@@ -5,7 +5,6 @@ import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
 import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
 import {offlineBackend} from './lib/offlineAPI'
-import {ACCOUNT_SETTING_DEFAULTS, loadGuestSettings, settingsFromAccount} from './lib/accountSettings'
 import {MOTION, PRESETS} from './lib/motion'
 import {VERTICAL_EDGE_FADE_MASK} from './lib/themeManager'
 import {useUISelector, useUIStateGetter} from './contexts/UIStateContext'
@@ -171,7 +170,7 @@ function App() {
   const { playTrack, seek, seedRadio, reloadCurrentTrackQuality, audio } = usePlaybackActions()
   const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
   const {
-    updateShaderRegions, updateShaderRadioButtonPos, publishSettings, fpsEnabled, costTickerEnabled,
+    updateShaderRegions, updateShaderRadioButtonPos, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
     interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, reviewModalState, closeReviewModal, hasActiveJobs,
     uploadModalOpen, uploadEditTrackId, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
@@ -179,7 +178,6 @@ function App() {
   } = useUISelector(state => ({
     updateShaderRegions: state.updateShaderRegions,
     updateShaderRadioButtonPos: state.updateShaderRadioButtonPos,
-    publishSettings: state.publishSettings,
     fpsEnabled: state.settingsState.fpsEnabled,
     costTickerEnabled: state.settingsState.costTickerEnabled,
     toastSuccess: state.toastSuccess,
@@ -204,7 +202,7 @@ function App() {
     closeUsageModal: state.closeUsageModal,
     toggleCatalogView: state.toggleCatalogView,
     toggleRadioInput: state.toggleRadioInput,
-    radioInput: state.interfaceState.radioInput,
+    radioInput: state.settingsState.radioInput,
     setMobilePanel: state.setMobilePanel,
     tracksUpdateCount: state.contentUpdates.tracks,
     shoutoutsUpdateCount: state.contentUpdates.shoutouts,
@@ -230,15 +228,10 @@ function App() {
   }
 
   useEffect(() => {
-    if (!user) {
-      publishSettings({ ...ACCOUNT_SETTING_DEFAULTS, ...loadGuestSettings() })
-      return
-    }
+    if (!user) return
     const pending = offlineBackend.pendingProfileUpdates(user.id)
-    const settings = { ...settingsFromAccount(user), ...settingsFromAccount(pending) }
-    if (Object.keys(settings).length) publishSettings(settings)
     if (pending && !getUIState().audioState.offlineMode) void api.syncOfflineWrites()
-  }, [user, publishSettings, getUIState])
+  }, [user, getUIState])
 
   useEffect(() => {
     if (window.__rafDebug) {

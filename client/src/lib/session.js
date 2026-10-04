@@ -101,6 +101,19 @@ function getDeviceType() {
   return deviceType
 }
 
+export function deviceKind() {
+  const ua = navigator.userAgent
+  const touch = (navigator.maxTouchPoints || 0) > 1
+  if (/iPhone|iPod/.test(ua)) return 'iphone'
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && touch)) return 'ipad'
+  if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'android-phone' : 'android-tablet'
+  if (/CrOS/.test(ua)) return 'chromebook'
+  if (/Windows/.test(ua)) return 'windows-pc'
+  if (/Mac/.test(ua)) return 'mac'
+  if (/Linux/.test(ua)) return 'linux-pc'
+  return 'other'
+}
+
 export function getSessionIds() {
   return {
     guestId: getGuestId(),

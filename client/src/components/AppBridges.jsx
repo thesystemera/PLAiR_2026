@@ -5,6 +5,9 @@ import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
 import { fetchFinishedUploadJob, uploadJobTitle, UPLOAD_FINISHED_STATUSES } from '../lib/uploadJobs'
 import { useArtwork, useUISelector, useUIStateGetter, uiState } from '../contexts/UIStateContext'
+import { onSettingsChanged, pickValidSettings } from '../lib/settings'
+import { deviceKind } from '../lib/session'
+import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
@@ -287,76 +290,82 @@ export function DeviceLinkBridge() {
   return null
 }
 
-const DEVICE_SETTING_KEYS = ['dataSaverMode', 'costTickerEnabled', 'autoClaimOnOpen']
-const SYNCED_UI_SETTINGS = [...DEVICE_SETTING_KEYS, 'backgroundDownloads', 'radioInput']
-const SETTINGS_SYNC_DELAY_MS = 800
+const SETTINGS_SAVE_DELAY_MS = 800
 
 export function SettingsSyncBridge() {
   const { user } = useAuth()
-  const {
-    dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput,
-    publishSettings, publishDownloadState, setRadioInput,
-  } = useUISelector(state => ({
-    dataSaverMode: !!state.settingsState.dataSaverMode,
-    costTickerEnabled: !!state.settingsState.costTickerEnabled,
-    autoClaimOnOpen: state.settingsState.autoClaimOnOpen !== false,
-    backgroundDownloads: state.downloadState.isEnabled !== false,
-    radioInput: state.interfaceState.radioInput,
+  const { publishSettings, backgroundDownloads } = useUISelector(state => ({
     publishSettings: state.publishSettings,
-    publishDownloadState: state.publishDownloadState,
-    setRadioInput: state.setRadioInput,
+    backgroundDownloads: state.settingsState.backgroundDownloads,
   }))
-  const syncedRef = useRef(null)
-  const appliedForRef = useRef(null)
+  const userId = user?.id ?? null
+  const pendingRef = useRef({})
+  const timerRef = useRef(null)
+  const loadedForRef = useRef(null)
+  const downloadsRef = useRef(backgroundDownloads)
+  const [attempt, setAttempt] = useState(0)
 
-  const apply = useCallback((saved) => {
-    const settings = {}
-    for (const [key, value] of Object.entries(saved || {})) {
-      if (key === 'backgroundDownloads') {
-        if (typeof value === 'boolean') publishDownloadState({ isEnabled: value })
-      } else if (key === 'radioInput') {
-        if (value === 'voice' || value === 'text') setRadioInput(value)
-      } else {
-        settings[key] = value
-      }
+  const flush = useCallback(async () => {
+    timerRef.current = null
+    const changes = pendingRef.current
+    if (loadedForRef.current === null || !Object.keys(changes).length) return
+    pendingRef.current = {}
+    try {
+      await api.saveDeviceSettings(changes)
+    } catch (err) {
+      pendingRef.current = { ...changes, ...pendingRef.current }
+      logger.warn('[Settings] Saving failed, will retry:', err.message)
     }
-    if (Object.keys(settings).length) publishSettings(settings)
-    if (syncedRef.current) {
-      for (const key of SYNCED_UI_SETTINGS) {
-        if (saved && key in saved) syncedRef.current[key] = saved[key]
-      }
-    }
-  }, [publishSettings, publishDownloadState, setRadioInput])
+  }, [])
+
+  const schedule = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => void flush(), SETTINGS_SAVE_DELAY_MS)
+  }, [flush])
+
+  useEffect(() => onSettingsChanged((changes) => {
+    if (!uiState.authState.isAuthenticated) return
+    Object.assign(pendingRef.current, changes)
+    if (loadedForRef.current !== null) schedule()
+  }), [schedule])
+
+  useEffect(() => api.onConnectivity((event) => {
+    if (event.type === 'recovered') setAttempt(count => count + 1)
+  }), [])
 
   useEffect(() => {
-    if (!user) {
-      appliedForRef.current = null
-      syncedRef.current = null
+    if (!userId) {
+      loadedForRef.current = null
+      pendingRef.current = {}
       return
     }
-    if (appliedForRef.current === user.id) return
-    appliedForRef.current = user.id
-    syncedRef.current = {}
-    apply(user.ui_settings || {})
-  }, [user, apply])
+    if (loadedForRef.current === userId) {
+      schedule()
+      return
+    }
+    let cancelled = false
+    api.getDeviceSettings().then((result) => {
+      if (cancelled || !result) return
+      const edited = pendingRef.current
+      publishSettings(result.settings, { fromServer: true })
+      publishSettings(edited, { fromServer: true })
+      pendingRef.current = result.stored ? edited : pickValidSettings(uiState.settingsState)
+      loadedForRef.current = userId
+      logger.info(`[Settings] ${result.stored ? 'Loaded' : 'First save of'} settings for this ${result.kind}`)
+      schedule()
+    }).catch(err => logger.warn('[Settings] Loading the settings for this device failed:', err.message))
+    return () => { cancelled = true }
+  }, [userId, attempt, publishSettings, schedule])
 
-  useWebSocketSubscribe('user_settings_updated', (data) => {
-    logger.info('[Settings] Updated from another device:', data)
-    apply(data)
+  useWebSocketSubscribe('device_settings_updated', (data) => {
+    if (data?.kind === deviceKind()) publishSettings(data.settings, { fromServer: true })
   })
 
   useEffect(() => {
-    const synced = syncedRef.current
-    if (!user || !synced) return
-    const values = { dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput }
-    const changes = Object.fromEntries(SYNCED_UI_SETTINGS.filter(key => synced[key] !== values[key]).map(key => [key, values[key]]))
-    if (!Object.keys(changes).length) return
-    const timer = setTimeout(() => {
-      Object.assign(synced, changes)
-      api.updateUserProfile({ ui_settings: changes }).catch(err => logger.warn('[Settings] Saving to the account failed:', err))
-    }, SETTINGS_SYNC_DELAY_MS)
-    return () => clearTimeout(timer)
-  }, [user, dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput])
+    if (downloadsRef.current === backgroundDownloads) return
+    downloadsRef.current = backgroundDownloads
+    backgroundDownloader.toggle(backgroundDownloads)
+  }, [backgroundDownloads])
 
   return null
 }

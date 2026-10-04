@@ -10,7 +10,6 @@ import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './Bit
 import { GenerationQueuePanel } from './GenerationQueuePanel'
 import { useArtwork, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
-import { useAuth } from '../contexts/AuthContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
@@ -221,7 +220,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playback = usePlaybackActions()
   const { togglePlay, next, previous, audio, talkBreakProgress } = playback
   const {
-    audioFeatures, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess, toastError,
+    audioFeatures, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess,
     isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
@@ -231,7 +230,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     ttsMuted: state.settingsState.ttsMuted,
     publishSettings: state.publishSettings,
     toastSuccess: state.toastSuccess,
-    toastError: state.toastError,
     isScreenVisible: state.isScreenVisible,
     reportInterfaceState: state.reportInterfaceState,
     currentTrack: state.engineState.currentTrack,
@@ -240,7 +238,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     talkBreak: state.engineState.talkBreak,
   }))
   const onAir = !!talkBreak
-  const { user, refreshUser } = useAuth()
   const { isPhoneLandscape } = useViewport()
   const compact = isPhoneLandscape
   const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
@@ -429,17 +426,13 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     }
   }, [audio, isMuted])
 
-  const handleToggleSounds = useCallback(async (e) => {
+  const handleToggleSounds = useCallback((e) => {
     e?.preventDefault()
     triggerHaptic('medium')
     const mode = nextSoundMode(soundModeFor(ttsMuted, notificationsMuted))
-    try {
-      await applySoundMode(mode, { user, publishSettings, refreshUser })
-      toastSuccess(mode.label, 1500)
-    } catch {
-      toastError('Failed to toggle sounds')
-    }
-  }, [ttsMuted, notificationsMuted, publishSettings, user, refreshUser, toastSuccess, toastError])
+    applySoundMode(mode, publishSettings)
+    toastSuccess(mode.label, 1500)
+  }, [ttsMuted, notificationsMuted, publishSettings, toastSuccess])
 
   const soundState = useMemo(() => {
     const mode = soundModeFor(ttsMuted, notificationsMuted)

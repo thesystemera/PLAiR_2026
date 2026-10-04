@@ -27,14 +27,14 @@ class BackgroundDownloader {
     })
 
     onAuthStateChange((authState) => {
-      if (authState.isAuthenticated && uiState.downloadState?.isEnabled && !this.isRunning) {
+      if (authState.isAuthenticated && uiState.settingsState.backgroundDownloads && !this.isRunning) {
         logger.info('[BackgroundDownloader] Auto-starting after authentication')
         void this.start()
       }
     })
 
     setTimeout(() => {
-      if (uiState.authState?.isAuthenticated && uiState.downloadState?.isEnabled && !this.isRunning) {
+      if (uiState.authState?.isAuthenticated && uiState.settingsState.backgroundDownloads && !this.isRunning) {
         logger.info('[BackgroundDownloader] Auto-starting (cached session)')
         void this.start()
       }
@@ -81,13 +81,13 @@ class BackgroundDownloader {
   }
 
   shouldDownload() {
-    const { audioState, downloadState } = uiState
+    const { audioState, settingsState } = uiState
 
     if (!safeStorage.get('cached_user')) {
       return false
     }
 
-    if (!downloadState.isEnabled) {
+    if (!settingsState.backgroundDownloads) {
       return false
     }
 
@@ -95,7 +95,7 @@ class BackgroundDownloader {
       return false
     }
 
-    if (safeStorage.get('dataSaverMode') === 'true') {
+    if (settingsState.dataSaverMode) {
       return false
     }
 
@@ -112,7 +112,7 @@ class BackgroundDownloader {
 
     this.resetDailyLimitIfNeeded()
 
-    if (this.dailyDownloadedBytes >= downloadState.dailyLimit) {
+    if (this.dailyDownloadedBytes >= uiState.downloadState.dailyLimit) {
       logger.info('[BackgroundDownloader] Daily download limit reached')
       return false
     }

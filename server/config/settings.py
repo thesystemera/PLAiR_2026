@@ -270,6 +270,8 @@ class Settings:
     PLAYBACK_SESSION_IDLE_TIMEOUT_S: int = int(os.getenv("PLAYBACK_SESSION_IDLE_TIMEOUT_S", "7200"))
     PLAYBACK_SNAPSHOT_INTERVAL_S: float = float(os.getenv("PLAYBACK_SNAPSHOT_INTERVAL_S", "15"))
     PLAYBACK_SNAPSHOT_KEEP_DAYS: int = int(os.getenv("PLAYBACK_SNAPSHOT_KEEP_DAYS", "30"))
+    DEVICE_ROW_RETENTION_DAYS: int = int(os.getenv("DEVICE_ROW_RETENTION_DAYS", "60"))
+    DEVICE_KIND_MEMORY: int = int(os.getenv("DEVICE_KIND_MEMORY", "5000"))
     QUEUE_PLAYED_SONGS: int = int(os.getenv("QUEUE_PLAYED_SONGS", "5"))
     QUEUE_AHEAD_SONGS: int = int(os.getenv("QUEUE_AHEAD_SONGS", "15"))
     QUEUE_HISTORY_SONGS: int = int(os.getenv("QUEUE_HISTORY_SONGS", "50"))

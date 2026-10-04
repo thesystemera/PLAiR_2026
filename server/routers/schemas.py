@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional, List, Union
+from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -56,9 +56,6 @@ class SetPasswordRequest(BaseModel):
 class PreferenceRequest(BaseModel):
     preference_type: str
 
-class AudioQualityRequest(BaseModel):
-    audio_quality: str
-
 class UsernameUpdateRequest(BaseModel):
     username: str
 
@@ -70,14 +67,6 @@ class UserProfileUpdate(BaseModel):
     latitude: Optional[str] = None
     longitude: Optional[str] = None
     timezone: Optional[str] = None
-    tts_muted: Optional[bool] = None
-    notifications_muted: Optional[bool] = None
-    dark_mode: Optional[bool] = None
-    fps_enabled: Optional[bool] = None
-    video_clips_enabled: Optional[bool] = None
-    visual_quality: Optional[str] = None
-    lit_artwork: Optional[bool] = None
-    ui_settings: Optional[Dict[str, Union[bool, str]]] = None
 
 class DirectReplyUploadRequest(BaseModel):
     audio: str = Field(..., max_length=settings.MAX_BASE64_AUDIO_CHARS)

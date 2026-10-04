@@ -1,6 +1,6 @@
 import { logger } from './logger'
 import { safeStorage } from './safeStorage'
-import { getSessionIds } from './session'
+import { deviceKind, getSessionIds } from './session'
 import { offlineBackend } from './offlineAPI'
 import { uiState } from '../contexts/UIStateContext'
 
@@ -51,16 +51,8 @@ class API {
       }
     })()
     if (!this.token || currentUser?.id !== entry.userId) return 0
-    const { audio_quality: audioQuality, ...profileUpdates } = entry.updates
+    const profileUpdates = entry.updates
     try {
-      if (audioQuality !== undefined) {
-        const res = await this._fetch(`${API_BASE}/auth/audio-quality`, {
-          method: 'PUT',
-          headers: this.getHeaders(),
-          body: JSON.stringify({ audio_quality: audioQuality }),
-        })
-        if (!res.ok) throw new Error(`audio quality sync failed (${res.status})`)
-      }
       if (Object.keys(profileUpdates).length) {
         const res = await this._fetch(`${API_BASE}/user/profile`, {
           method: 'PUT',
@@ -182,6 +174,7 @@ class API {
     headers['X-Device-ID'] = session.deviceId
     headers['X-Device-Name'] = session.deviceName
     headers['X-Device-Type'] = session.deviceType
+    headers['X-Device-Kind'] = deviceKind()
 
     return headers
   }
@@ -334,19 +327,23 @@ class API {
     })
   }
 
-  async updateAudioQuality(audioQuality) {
-    logger.info('[API] Updating audio quality to:', audioQuality)
-    return this._routeRequest('updateAudioQuality', [audioQuality], async () => {
-      const res = await this._fetch(`${API_BASE}/auth/audio-quality`, {
+  async getDeviceSettings() {
+    return this._routeRequest('getDeviceSettings', [], async () => {
+      const res = await this._fetch(`${API_BASE}/settings`, { headers: this.getHeaders() })
+      if (!res.ok) throw new Error(`Failed to load settings (${res.status})`)
+      return res.json()
+    })
+  }
+
+  async saveDeviceSettings(changes) {
+    return this._routeRequest('saveDeviceSettings', [changes], async () => {
+      const res = await this._fetch(`${API_BASE}/settings`, {
         method: 'PUT',
         headers: this.getHeaders(),
-        body: JSON.stringify({ audio_quality: audioQuality }),
+        body: JSON.stringify({ settings: changes }),
       })
-      if (!res.ok) throw new Error('Failed to update audio quality')
-      offlineBackend.clearPendingProfileKeys(['audio_quality'])
-      const data = await res.json()
-      logger.info('[API] Audio quality update response:', data)
-      return data
+      if (!res.ok) throw new Error(`Failed to save settings (${res.status})`)
+      return res.json()
     })
   }
 

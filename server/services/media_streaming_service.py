@@ -41,15 +41,7 @@ class MediaStreamingService:
 
     @staticmethod
     def resolve_bitrate(user: Optional[User]) -> str:
-        if not user:
-            return "192k"
-
-        if user.audio_quality == "auto":
-            return "256k"
-        elif user.audio_quality in ["128k", "192k", "256k"]:
-            return user.audio_quality
-        else:
-            return "192k"
+        return "256k" if user else "192k"
 
     async def stream_file(
         self,

@@ -37,15 +37,47 @@ def add_column(conn, table_name, column_name, column_def):
     print(f"  [ADDED] {column_name} to {table_name}")
 
 
+LEGACY_SETTING_COLUMNS = {
+    "tts_muted": "ttsMuted",
+    "notifications_muted": "notificationsMuted",
+    "audio_quality": "audioQuality",
+    "fps_enabled": "fpsEnabled",
+    "video_clips_enabled": "videoClipsEnabled",
+    "visual_quality": "visualQuality",
+    "lit_artwork": "litArtwork",
+}
+DROPPED_USER_COLUMNS = (*LEGACY_SETTING_COLUMNS, "ui_settings", "dark_mode")
+
+
+def migrate_device_settings(conn):
+    """Settings moved from account columns to users.device_settings (docs/SETTINGS.md)"""
+    print("\n[CHECK] users.device_settings...")
+    present = [column for column in LEGACY_SETTING_COLUMNS if column_exists(conn, "users", column)]
+    if present:
+        pairs = ", ".join(f"'{LEGACY_SETTING_COLUMNS[column]}', {column}" for column in present)
+        legacy = f"jsonb_strip_nulls(jsonb_build_object({pairs}))"
+        if column_exists(conn, "users", "ui_settings"):
+            legacy = f"({legacy} || COALESCE(ui_settings, '{{}}'::jsonb))"
+        conn.execute(text(f"""
+            UPDATE users SET device_settings = jsonb_build_object('_legacy', {legacy})
+            WHERE device_settings = '{{}}'::jsonb
+        """))
+        conn.commit()
+        print(f"  [COPIED] {', '.join(present)} into device_settings._legacy")
+    for column in DROPPED_USER_COLUMNS:
+        if column_exists(conn, "users", column):
+            conn.execute(text(f"ALTER TABLE users DROP COLUMN {column}"))
+            conn.commit()
+            print(f"  [DROPPED] users.{column}")
+
+
 def migrate_users_table(conn):
     """Migrate users table - add any missing columns"""
     print("\n[CHECK] users table...")
     
     # Map of column names to their SQL definitions
     columns = {
-        "visual_quality": "VARCHAR DEFAULT 'high' NOT NULL",
-        "lit_artwork": "BOOLEAN DEFAULT true NOT NULL",
-        "ui_settings": "JSONB DEFAULT '{}'::jsonb NOT NULL",
+        "device_settings": "JSONB DEFAULT '{}'::jsonb NOT NULL",
         "stripe_subscription_id": "VARCHAR",
         "subscription_status": "VARCHAR",
         "current_period_end": "TIMESTAMP WITH TIME ZONE",
@@ -78,6 +110,7 @@ def main():
     
     with _sync_engine.connect() as conn:
         migrate_users_table(conn)
+        migrate_device_settings(conn)
         for table_name, col_name, col_def in (("regional_items", "published_at", "TIMESTAMP WITH TIME ZONE"),
                                               ("regional_items", "latitude", "DOUBLE PRECISION"),
                                               ("regional_items", "longitude", "DOUBLE PRECISION"),

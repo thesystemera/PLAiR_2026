@@ -231,15 +231,6 @@ class WebSocketService:
         }
         await self.broadcast_to_session(session_id, message)
 
-    async def broadcast_user_settings_updated(self, user_id: int, settings: dict):
-        session_id = str(user_id)
-        message = {
-            "type": "user_settings_updated",
-            "data": settings
-        }
-        await self.broadcast_to_session(session_id, message)
-        log_service.system(f"{log_service.who(user_id=user_id)}: settings updated")
-
     async def broadcast_content_updated(self, content_type: str, content_id: str, metadata: Optional[Dict[str, Any]] = None):
         message = {
             "type": "content_updated",

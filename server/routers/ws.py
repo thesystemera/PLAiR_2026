@@ -9,6 +9,7 @@ from services import log_service
 from services import auth_service
 from security_middleware import is_valid_guest_id
 from database import AsyncSessionLocal
+from services.device_settings_service import device_kinds
 from service_registry import services
 from services.task_utils import spawn
 from services import usage_tracking
@@ -225,6 +226,7 @@ async def websocket_endpoint(
         device_id: Optional[str] = None,
         device_name: Optional[str] = None,
         device_type: Optional[str] = None,
+        device_kind: Optional[str] = None,
         tz: Optional[str] = None
 ):
     assert services.websocket_service is not None
@@ -265,6 +267,7 @@ async def websocket_endpoint(
         log_service.system(
             f"{log_service.who(session_id, session_device_id)}: login token rejected - connected as guest")
 
+    device_kinds.note(session_id, session_device_id, device_kind)
     services.websocket_service.register_connection(session_id, session_device_id, websocket)
     connected_at = time.monotonic()
     log_service.playback(f"[WS] Connected {session_device_id[:8]} ({'user' if user else 'guest'}, {session_device_type}, "

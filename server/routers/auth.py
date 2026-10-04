@@ -8,7 +8,7 @@ from database import get_db, User, WeatherData
 from service_registry import services
 from routers.deps import get_current_user, enforce_auth_rate_limit
 from routers.usage import is_admin_user, usage_stats_visible
-from routers.schemas import RegisterRequest, LoginRequest, AudioQualityRequest, UsernameUpdateRequest, ManageUserDataRequest
+from routers.schemas import RegisterRequest, LoginRequest, UsernameUpdateRequest, ManageUserDataRequest
 
 router = APIRouter()
 
@@ -88,19 +88,10 @@ async def get_me(
     return {
         "id": user.id,
         "username": user.username,
-        "audio_quality": getattr(user, "audio_quality", "auto"),
         "tier": getattr(user, "tier", "basic"),
         "subscribed": getattr(user, "subscribed", False),
         "is_admin": is_admin_user(user),
         "usage_stats_visible": usage_stats_visible(user),
-        "tts_muted": getattr(user, "tts_muted", False),
-        "notifications_muted": getattr(user, "notifications_muted", False),
-        "dark_mode": getattr(user, "dark_mode", False),
-        "fps_enabled": getattr(user, "fps_enabled", False),
-        "video_clips_enabled": getattr(user, "video_clips_enabled", False),
-        "visual_quality": getattr(user, "visual_quality", "high"),
-        "lit_artwork": getattr(user, "lit_artwork", True),
-        "ui_settings": getattr(user, "ui_settings", None) or {},
         "persona": user.persona,
         "profile": user.profile,
         "shoutout_interests": user.shoutout_interests,
@@ -112,25 +103,6 @@ async def get_me(
         "weather_description": weather_data.description if weather_data else None,
         "weather_timestamp": weather_data.timestamp.isoformat() if weather_data else None
     }
-
-@router.put("/api/auth/audio-quality")
-async def update_audio_quality(
-        request: AudioQualityRequest,
-        current_user: User = Depends(get_current_user),
-        db: AsyncSession = Depends(get_db)
-):
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        assert services.user_profile_service is not None
-        return await services.user_profile_service.update_audio_quality(
-            int(current_user.id),  # type: ignore
-            request.audio_quality,
-            db
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/api/auth/update-username")
 async def update_username(

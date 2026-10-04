@@ -10,12 +10,10 @@ import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useDialog } from '../contexts/DialogContext'
 import { api } from '../lib/api'
 import { applySoundMode, SOUND_MODES, soundModeFor } from '../lib/soundModes'
-import { backgroundDownloader } from '../lib/backgroundDownloader'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { useDeletePost } from '../hooks/useDeletePost'
 import { profileDepthCache, profileNormalCache, profilePictureCache } from '../lib/mediaCache'
-import { saveGuestSettings } from '../lib/accountSettings'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
@@ -554,7 +552,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const {
     audioState,
     downloadState,
-    publishDownloadState,
     settingsState,
     publishSettings,
     toastSuccess,
@@ -572,7 +569,6 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   } = useUISelector(state => ({
     audioState: state.audioState,
     downloadState: state.downloadState,
-    publishDownloadState: state.publishDownloadState,
     settingsState: state.settingsState,
     publishSettings: state.publishSettings,
     toastSuccess: state.toastSuccess,
@@ -886,98 +882,38 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }, [removePreference])
 
   const handleAudioQualityChange = async (newQuality) => {
-    try {
-      publishSettings({ audioQuality: newQuality })
-
-      await api.updateAudioQuality(newQuality)
-      if (refreshUser) await refreshUser()
-      if (onReloadTrackQuality) await onReloadTrackQuality()
-      success(`Quality set to ${newQuality}`)
-    } catch (_err) {
-      publishSettings({ audioQuality: user?.audio_quality ?? 'auto' })
-      error('Failed to update quality')
-      logger.error('Failed to update audio quality:', _err)
-    }
+    publishSettings({ audioQuality: newQuality })
+    if (onReloadTrackQuality) await onReloadTrackQuality()
+    success(`Quality set to ${newQuality}`)
   }
 
-  const handleToggleFpsEnabled = async () => {
-    try {
-      const newVal = !settingsState.fpsEnabled
-
-      publishSettings({ fpsEnabled: newVal })
-
-      await api.updateUserProfile({ fps_enabled: newVal })
-      if (refreshUser) await refreshUser()
-      success(`FPS ${newVal ? 'enabled' : 'disabled'}`)
-    } catch (_err) {
-      publishSettings({ fpsEnabled: user?.fps_enabled ?? false })
-      error('Failed to update FPS')
-      logger.error('Failed to update FPS setting:', _err)
-    }
+  const handleToggleFpsEnabled = () => {
+    publishSettings({ fpsEnabled: !settingsState.fpsEnabled })
   }
 
-  const handleToggleLitArtwork = async () => {
-    const newVal = settingsState.litArtwork === false
+  const handleToggleLitArtwork = () => {
+    const newVal = !settingsState.litArtwork
     publishSettings({ litArtwork: newVal })
     if (newVal && tiltNeedsPermission) void requestMotionAccess()
-    if (!user) {
-      saveGuestSettings({ litArtwork: newVal })
-      return
-    }
-    try {
-      await api.updateUserProfile({ lit_artwork: newVal })
-      if (refreshUser) await refreshUser()
-    } catch (_err) {
-      publishSettings({ litArtwork: user?.lit_artwork ?? true })
-      error('Failed to update 3D Lit Artwork')
-      logger.error('Failed to update lit artwork setting:', _err)
-    }
   }
 
-  const handleToggleVideoClips = async () => {
-    try {
-      const newVal = !settingsState.videoClipsEnabled
-
-      publishSettings({ videoClipsEnabled: newVal })
-
-      await api.updateUserProfile({ video_clips_enabled: newVal })
-      if (refreshUser) await refreshUser()
-      success(`Video clips ${newVal ? 'enabled' : 'disabled'}`)
-    } catch (_err) {
-      publishSettings({ videoClipsEnabled: user?.video_clips_enabled ?? false })
-      error('Failed to update video clips setting')
-      logger.error('Failed to update video clips setting:', _err)
-    }
+  const handleToggleVideoClips = () => {
+    publishSettings({ videoClipsEnabled: !settingsState.videoClipsEnabled })
   }
 
-  const handleSetVisualQuality = async (quality) => {
-    try {
-      publishSettings({ visualQuality: quality })
-      await api.updateUserProfile({ visual_quality: quality })
-      if (refreshUser) await refreshUser()
-      success(`Visual quality: ${quality}`)
-    } catch (_err) {
-      publishSettings({ visualQuality: user?.visual_quality ?? 'high' })
-      error('Failed to update visual quality')
-      logger.error('Failed to update visual quality:', _err)
-    }
+  const handleSetVisualQuality = (quality) => {
+    publishSettings({ visualQuality: quality })
   }
 
   const handleToggleBackgroundDownloads = () => {
-    const newValue = !downloadState.isEnabled
-    publishDownloadState({ isEnabled: newValue })
-    backgroundDownloader.toggle(newValue)
+    const newValue = !settingsState.backgroundDownloads
+    publishSettings({ backgroundDownloads: newValue })
     success(`Background downloads ${newValue ? 'enabled' : 'disabled'}`)
   }
 
-  const handleSetSoundMode = async (mode) => {
-    try {
-      await applySoundMode(mode, { user, publishSettings, refreshUser })
-      success(mode.label, 1500)
-    } catch (_err) {
-      error('Failed to update sound settings')
-      logger.error('Failed to update sound settings:', _err)
-    }
+  const handleSetSoundMode = (mode) => {
+    applySoundMode(mode, publishSettings)
+    success(mode.label, 1500)
   }
 
   const handleDeleteCachedTrack = async (trackId) => {
@@ -1224,8 +1160,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             color="text-blue-400"
             headerContent={
               <ToggleChip
-                on={settingsState.autoClaimOnOpen !== false}
-                onClick={() => publishSettings({ autoClaimOnOpen: settingsState.autoClaimOnOpen === false })}
+                on={settingsState.autoClaimOnOpen}
+                onClick={() => publishSettings({ autoClaimOnOpen: !settingsState.autoClaimOnOpen })}
                 activeClassName="bg-blue-500 text-white"
                 label="Auto-switch playback to the device I open"
               />
@@ -1377,7 +1313,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="3D Lit Artwork"
             color="text-sky-400"
             headerContent={
-              <button onClick={() => void handleToggleLitArtwork()} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.litArtwork !== false ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.litArtwork !== false ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleLitArtwork} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.litArtwork ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.litArtwork ? 'ON' : 'OFF'}</button>
             }
           >
             <div className="text-xs text-gray-400">
@@ -1403,10 +1339,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Background Downloads"
             color="text-purple-400"
             headerContent={
-              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${downloadState?.isEnabled ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{downloadState?.isEnabled ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.backgroundDownloads ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.backgroundDownloads ? 'ON' : 'OFF'}</button>
             }
           >
-            {downloadState?.isEnabled && (
+            {settingsState.backgroundDownloads && (
               <div className="text-xs text-gray-400 space-y-1">
                 {downloadState.isDownloading && (
                   <div className="flex items-center gap-2">
