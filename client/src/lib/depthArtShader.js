@@ -1,4 +1,5 @@
 import { MAX_LIGHTS } from './lightProbe'
+import { logger } from './logger'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEPTH ARTWORK SHADER - parallax occlusion mapping + lights from the background
@@ -93,7 +94,7 @@ const LIGHT = {
 
 const G = v => String(v).includes('.') ? String(v) : String(v) + '.0'
 
-const depthArtVertexShader = `
+const VERTEX_100 = `
   attribute vec2 a_position;
   attribute vec2 a_texCoord;
   varying vec2 v_texCoord;
@@ -104,17 +105,28 @@ const depthArtVertexShader = `
   }
 `
 
-const depthArtFragmentShader = `
-  precision highp float;
+const VERTEX_300 = `#version 300 es
+  in vec2 a_position;
+  in vec2 a_texCoord;
+  out vec2 v_texCoord;
 
+  void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+    v_texCoord = a_texCoord;
+  }
+`
+
+const PARALLAX_UNIFORMS = `
   uniform sampler2D u_color;
   uniform sampler2D u_depth;
-  uniform sampler2D u_normal;
   uniform vec2 u_gyro;
   uniform float u_intensity;
   uniform float u_zoom;
   uniform float u_steps;
+`
 
+const LIGHT_UNIFORMS = `
+  uniform sampler2D u_normal;
   uniform vec4 u_lights[${MAX_LIGHTS}];
   uniform vec3 u_light_colors[${MAX_LIGHTS}];
   uniform vec4 u_rect;
@@ -122,9 +134,9 @@ const depthArtFragmentShader = `
   uniform float u_light;
   uniform float u_kick;
   uniform float u_pulse;
+`
 
-  varying vec2 v_texCoord;
-
+const PARALLAX = `
   vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV) {
     float dispLen = length(displacement);
 
@@ -225,6 +237,36 @@ const depthArtFragmentShader = `
     return mix(pomColor, fillColor, trailMask * ${G(POM.FILL_STRENGTH)});
   }
 
+
+  vec4 parallaxAt(vec2 texCoord, out vec2 hitUV) {
+    vec2 displacement = u_gyro * u_intensity;
+
+    float autoZoom = 1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)};
+    float finalZoom = u_zoom * autoZoom;
+    vec2 uv = (texCoord - 0.5) / finalZoom + 0.5;
+
+    return parallax(uv, displacement, hitUV);
+  }
+`
+
+function powerFunction(exponent) {
+  if (!Number.isInteger(exponent) || exponent < 1) return `float shine(float x) { return pow(x, ${G(exponent)}); }`
+  const lines = []
+  let result = null
+  let square = 'x'
+  for (let bit = exponent, level = 0; bit > 0; bit >>= 1, level++) {
+    if (level > 0) {
+      lines.push(`float x${level} = ${square} * ${square};`)
+      square = `x${level}`
+    }
+    if (bit & 1) result = result ? `${result} * ${square}` : square
+  }
+  return `float shine(float x) { ${lines.join(' ')} return ${result}; }`
+}
+
+const SKYLIGHT = `
+  ${powerFunction(LIGHT.SHININESS)}
+
   vec3 skylight(vec3 color, vec2 hitUV, vec2 screenUV) {
     vec3 n = normalize(texture2D(u_normal, clamp(hitUV, 0.0, 1.0)).rgb * 2.0 - 1.0);
     float slopeLen = length(n.xy);
@@ -237,13 +279,13 @@ const depthArtFragmentShader = `
       vec4 source = u_lights[i];
       if (source.w <= 0.001) continue;
       vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
-      float dist = length(toLight);
-      vec2 dir = dist > 0.0001 ? toLight / dist : vec2(0.0);
-      vec3 L = normalize(vec3(toLight, ${G(LIGHT.HEIGHT)}));
-      vec3 light = u_light_colors[i] * source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist * dist * ${G(LIGHT.FALLOFF)});
+      float dist2 = dot(toLight, toLight);
+      vec2 dir = dist2 > 1e-8 ? toLight * inversesqrt(dist2) : vec2(0.0);
+      vec3 L = vec3(toLight, ${G(LIGHT.HEIGHT)}) * inversesqrt(dist2 + ${G(LIGHT.HEIGHT * LIGHT.HEIGHT)});
+      vec3 light = u_light_colors[i] * (source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist2 * ${G(LIGHT.FALLOFF)}));
       relief += light * (dot(n, L) - L.z);
-      vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
-      glint += light * max(pow(max(dot(n, H), 0.0), ${G(LIGHT.SHININESS)}) - pow(H.z, ${G(LIGHT.SHININESS)}), 0.0);
+      vec3 H = vec3(L.xy, L.z + 1.0) * inversesqrt(2.0 + 2.0 * L.z);
+      glint += light * max(shine(max(dot(n, H), 0.0)) - shine(H.z), 0.0);
       rim += light * max(dot(facing, dir), 0.0);
     }
 
@@ -254,21 +296,87 @@ const depthArtFragmentShader = `
     return clamp(lit, 0.0, 1.0);
   }
 
+  vec3 lightAt(vec3 color, vec2 hitUV, vec2 texCoord) {
+    return skylight(color, hitUV, u_rect.xy + texCoord * u_rect.zw);
+  }
+`
+
+const FULL_FRAGMENT = `
+  precision highp float;
+  ${PARALLAX_UNIFORMS}
+  ${LIGHT_UNIFORMS}
+  varying vec2 v_texCoord;
+  ${PARALLAX}
+  ${SKYLIGHT}
   void main() {
-    vec2 displacement = u_gyro * u_intensity;
-
-    float autoZoom = 1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)};
-    float finalZoom = u_zoom * autoZoom;
-    vec2 uv = (v_texCoord - 0.5) / finalZoom + 0.5;
-
     vec2 hitUV;
-    vec4 color = parallax(uv, displacement, hitUV);
+    vec4 color = parallaxAt(v_texCoord, hitUV);
+    if (u_light > 0.0) color.rgb = lightAt(color.rgb, hitUV, v_texCoord);
+    gl_FragColor = color;
+  }
+`
 
-    if (u_light > 0.0) {
-      vec2 screenUV = u_rect.xy + v_texCoord * u_rect.zw;
-      color.rgb = skylight(color.rgb, hitUV, screenUV);
+const FULL_FRAGMENT_300 = `#version 300 es
+  precision highp float;
+  #define texture2D texture
+  ${PARALLAX_UNIFORMS}
+  ${LIGHT_UNIFORMS}
+  in vec2 v_texCoord;
+  out vec4 o_color;
+  ${PARALLAX}
+  ${SKYLIGHT}
+  void main() {
+    vec2 hitUV;
+    vec4 color = parallaxAt(v_texCoord, hitUV);
+    if (u_light > 0.0) color.rgb = lightAt(color.rgb, hitUV, v_texCoord);
+    o_color = color;
+  }
+`
+
+const HIT_PACKED = {
+  write: `
+    vec2 fixedUV = floor(clamp(hitUV, 0.0, 1.0) * 65535.0 + 0.5);
+    vec2 high = floor(fixedUV / 256.0);
+    o_hit = vec4(high.x, fixedUV.x - high.x * 256.0, high.y, fixedUV.y - high.y * 256.0) / 255.0;`,
+  read: `
+      vec4 bytes = floor(texture2D(u_cached_hit, cell) * 255.0 + 0.5);
+      vec2 hitUV = vec2(bytes.x * 256.0 + bytes.y, bytes.z * 256.0 + bytes.w) / 65535.0;`,
+}
+
+const HIT_FLOAT = {
+  write: `
+    o_hit = vec4(hitUV, 0.0, 1.0);`,
+  read: `
+      vec2 hitUV = texture2D(u_cached_hit, cell).xy;`,
+}
+
+const cacheFragment = hit => `#version 300 es
+  precision highp float;
+  #define texture2D texture
+  ${PARALLAX_UNIFORMS}
+  in vec2 v_texCoord;
+  layout(location = 0) out vec4 o_color;
+  layout(location = 1) out vec4 o_hit;
+  ${PARALLAX}
+  void main() {
+    vec2 hitUV;
+    o_color = parallaxAt(v_texCoord, hitUV);${hit.write}
+  }
+`
+
+const relightFragment = hit => `
+  precision highp float;
+  uniform sampler2D u_cached_color;
+  uniform sampler2D u_cached_hit;
+  ${LIGHT_UNIFORMS}
+  varying vec2 v_texCoord;
+  ${SKYLIGHT}
+  void main() {
+    vec2 cell = vec2(v_texCoord.x, 1.0 - v_texCoord.y);
+    vec4 color = texture2D(u_cached_color, cell);
+    if (u_light > 0.0) {${hit.read}
+      color.rgb = lightAt(color.rgb, hitUV, v_texCoord);
     }
-
     gl_FragColor = color;
   }
 `
@@ -283,11 +391,12 @@ const QUAD_TEX_COORDS = new Float32Array([
   0, 0,  1, 1,  1, 0
 ])
 
-const DEPTH_ART_UNIFORMS = ['u_color', 'u_depth', 'u_normal', 'u_gyro', 'u_intensity', 'u_zoom', 'u_steps', 'u_lights', 'u_light_colors', 'u_rect', 'u_aspect', 'u_light', 'u_kick', 'u_pulse']
+const PARALLAX_UNIFORM_NAMES = ['u_color', 'u_depth', 'u_gyro', 'u_intensity', 'u_zoom', 'u_steps']
+const LIGHT_UNIFORM_NAMES = ['u_normal', 'u_lights', 'u_light_colors', 'u_rect', 'u_aspect', 'u_light', 'u_kick', 'u_pulse']
 
 const MIN_LINEAR_STEPS = 6
 
-export function createDepthArtProgram(gl) {
+function linkProgram(gl, vertexSource, fragmentSource, uniformNames, samplers) {
   const compile = (type, source) => {
     const shader = gl.createShader(type)
     gl.shaderSource(shader, source)
@@ -300,11 +409,13 @@ export function createDepthArtProgram(gl) {
     return shader
   }
 
-  const vertShader = compile(gl.VERTEX_SHADER, depthArtVertexShader)
-  const fragShader = compile(gl.FRAGMENT_SHADER, depthArtFragmentShader)
+  const vertShader = compile(gl.VERTEX_SHADER, vertexSource)
+  const fragShader = compile(gl.FRAGMENT_SHADER, fragmentSource)
   const program = gl.createProgram()
   gl.attachShader(program, vertShader)
   gl.attachShader(program, fragShader)
+  gl.bindAttribLocation(program, 0, 'a_position')
+  gl.bindAttribLocation(program, 1, 'a_texCoord')
   gl.linkProgram(program)
   gl.deleteShader(vertShader)
   gl.deleteShader(fragShader)
@@ -313,29 +424,71 @@ export function createDepthArtProgram(gl) {
   }
   gl.useProgram(program)
 
+  const uniforms = {}
+  for (const name of uniformNames) {
+    uniforms[name.slice(2)] = gl.getUniformLocation(program, name === 'u_lights' || name === 'u_light_colors' ? `${name}[0]` : name)
+  }
+  for (const [name, unit] of Object.entries(samplers)) gl.uniform1i(uniforms[name], unit)
+  return { program, uniforms }
+}
+
+export function createDepthArtPrograms(gl) {
   const posBuffer = gl.createBuffer()
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
   gl.bufferData(gl.ARRAY_BUFFER, QUAD_POSITIONS, gl.STATIC_DRAW)
-  const posLoc = gl.getAttribLocation(program, 'a_position')
-  gl.enableVertexAttribArray(posLoc)
-  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+  gl.enableVertexAttribArray(0)
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
 
   const texBuffer = gl.createBuffer()
   gl.bindBuffer(gl.ARRAY_BUFFER, texBuffer)
   gl.bufferData(gl.ARRAY_BUFFER, QUAD_TEX_COORDS, gl.STATIC_DRAW)
-  const texLoc = gl.getAttribLocation(program, 'a_texCoord')
-  gl.enableVertexAttribArray(texLoc)
-  gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+  gl.enableVertexAttribArray(1)
+  gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0)
 
-  const uniforms = {}
-  for (const name of DEPTH_ART_UNIFORMS) {
-    uniforms[name.slice(2)] = gl.getUniformLocation(program, name === 'u_lights' || name === 'u_light_colors' ? `${name}[0]` : name)
+  const fullUniforms = [...PARALLAX_UNIFORM_NAMES, ...LIGHT_UNIFORM_NAMES]
+  const fullSamplers = { color: 0, depth: 1, normal: 2 }
+  if (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext) {
+    try {
+      const floatHit = !!gl.getExtension('EXT_color_buffer_float')
+      const hit = floatHit ? HIT_FLOAT : HIT_PACKED
+      const cache = linkProgram(gl, VERTEX_300, cacheFragment(hit), PARALLAX_UNIFORM_NAMES, { color: 0, depth: 1 })
+      const relight = linkProgram(gl, VERTEX_100, relightFragment(hit), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
+      const full = linkProgram(gl, VERTEX_300, FULL_FRAGMENT_300, fullUniforms, fullSamplers)
+      return { full, cache, relight, floatHit }
+    } catch (error) {
+      logger.warn('[DepthArt] Parallax cache unavailable:', error)
+    }
   }
-  gl.uniform1i(uniforms.color, 0)
-  gl.uniform1i(uniforms.depth, 1)
-  gl.uniform1i(uniforms.normal, 2)
+  const full = linkProgram(gl, VERTEX_100, FULL_FRAGMENT, fullUniforms, fullSamplers)
+  return { full, cache: null, relight: null, floatHit: false }
+}
 
-  return { program, uniforms }
+export function createParallaxCache(gl, width, height, floatHit) {
+  const formats = [[gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE], floatHit ? [gl.RG32F, gl.RG, gl.FLOAT] : [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE]]
+  const textures = formats.map(([internalFormat, format, type]) => {
+    const texture = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null)
+    return texture
+  })
+  const framebuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[0], 0)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, textures[1], 0)
+  gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1])
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  return { width, height, color: textures[0], hit: textures[1], framebuffer, art: null, px: 0, py: 0, ready: false }
+}
+
+export function deleteParallaxCache(gl, cache) {
+  if (!cache || gl.isContextLost()) return
+  gl.deleteFramebuffer(cache.framebuffer)
+  gl.deleteTexture(cache.color)
+  gl.deleteTexture(cache.hit)
 }
 
 export function parallaxSteps(travelPx, stepPx) {
@@ -343,16 +496,31 @@ export function parallaxSteps(travelPx, stepPx) {
   return Math.min(POM.LINEAR_STEPS, Math.max(MIN_LINEAR_STEPS, Math.ceil(travelPx / stepPx)))
 }
 
-export function setLightUniforms(gl, uniforms, probe, rect, hasNormals) {
+export const viewport = { width: 1, height: 1 }
+
+function measureViewport() {
+  viewport.width = Math.max(1, window.innerWidth)
+  viewport.height = Math.max(1, window.innerHeight)
+}
+
+if (typeof window !== 'undefined') {
+  measureViewport()
+  window.addEventListener('resize', measureViewport, { passive: true })
+  window.visualViewport?.addEventListener('resize', measureViewport, { passive: true })
+}
+
+export function setLightUniforms(gl, uniforms, probe, hasNormals) {
   const on = probe.active && hasNormals
   gl.uniform1f(uniforms.light, on ? probe.level : 0)
-  if (!on) return
-  const width = Math.max(1, window.innerWidth)
-  const height = Math.max(1, window.innerHeight)
+  if (!on) return false
   gl.uniform4fv(uniforms.lights, probe.lights)
   gl.uniform3fv(uniforms.light_colors, probe.lightColors)
-  gl.uniform4f(uniforms.rect, rect.left / width, rect.top / height, rect.width / width, rect.height / height)
-  gl.uniform1f(uniforms.aspect, width / height)
+  gl.uniform1f(uniforms.aspect, viewport.width / viewport.height)
   gl.uniform1f(uniforms.kick, probe.kick)
   gl.uniform1f(uniforms.pulse, probe.pulse)
+  return true
+}
+
+export function setLightRect(gl, uniforms, rect) {
+  gl.uniform4f(uniforms.rect, rect.left / viewport.width, rect.top / viewport.height, rect.width / viewport.width, rect.height / viewport.height)
 }

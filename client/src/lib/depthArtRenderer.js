@@ -1,5 +1,5 @@
-import { POM, createDepthArtProgram, parallaxSteps, setLightUniforms } from './depthArtShader'
-import { readLightProbe } from './lightProbe'
+import { POM, createDepthArtPrograms, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
+import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
 
@@ -11,7 +11,8 @@ const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const LAYOUT_REFRESH_MS = 250
-const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true }
+const CACHE_AFTER_STILL_DRAWS = 2
+const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
 function loadImage(url) {
@@ -19,6 +20,19 @@ function loadImage(url) {
   image.decoding = 'async'
   image.src = url
   return image.decode().then(() => image)
+}
+
+function createAtlas() {
+  if (typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.transferToImageBitmap === 'function') {
+    const canvas = new OffscreenCanvas(256, 256)
+    const options = { ...CONTEXT_OPTIONS, preserveDrawingBuffer: false }
+    const gl = canvas.getContext('webgl2', options) || canvas.getContext('webgl', options)
+    if (gl) return { canvas, gl, options, snapshot: true }
+  }
+  const canvas = document.createElement('canvas')
+  const options = { ...CONTEXT_OPTIONS, preserveDrawingBuffer: true }
+  const gl = canvas.getContext('webgl2', options) || canvas.getContext('webgl', options)
+  return gl ? { canvas, gl, options, snapshot: false } : null
 }
 
 function clamp(value, min, max) {
@@ -32,8 +46,9 @@ class DepthArtRenderer {
     this.uploads = []
     this.settings = { dpr: Infinity, fpsCap: 0, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
     this.canvas = null
+    this.snapshot = false
     this.gl = null
-    this.uniforms = null
+    this.programs = null
     this.maxSize = 4096
     this.unavailable = false
     this.contextLost = false
@@ -43,6 +58,7 @@ class DepthArtRenderer {
     this.layoutDirty = true
     this.lastLayoutAt = 0
     this.lastInput = null
+    this.showing = false
     this.tick = this.tick.bind(this)
     this.markLayoutDirty = () => {
       this.layoutDirty = true
@@ -74,6 +90,7 @@ class DepthArtRenderer {
     this.observer?.unobserve(view.host)
     if (view.entry) view.entry.refs--
     view.entry = null
+    this.dropCache(view)
     this.evictIdle()
   }
 
@@ -86,7 +103,9 @@ class DepthArtRenderer {
       this.observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
           for (const view of this.views) {
-            if (view.host === entry.target) view.visible = entry.isIntersecting
+            if (view.host !== entry.target) continue
+            view.visible = entry.isIntersecting
+            if (!view.visible) this.dropCache(view)
           }
         }
         this.layoutDirty = true
@@ -100,10 +119,11 @@ class DepthArtRenderer {
     if (this.gl) return true
     if (this.unavailable) return false
     try {
-      const canvas = document.createElement('canvas')
-      const gl = canvas.getContext('webgl2', CONTEXT_OPTIONS) || canvas.getContext('webgl', CONTEXT_OPTIONS)
-      if (!gl) throw new Error('WebGL unavailable')
+      const atlas = createAtlas()
+      if (!atlas) throw new Error('WebGL unavailable')
+      const { canvas, gl, options } = atlas
       this.canvas = canvas
+      this.snapshot = atlas.snapshot
       this.setupContext(gl)
       canvas.addEventListener('webglcontextlost', (event) => {
         event.preventDefault()
@@ -114,11 +134,12 @@ class DepthArtRenderer {
         for (const view of this.views) {
           view.entry = null
           view.last = null
+          view.cache = null
         }
       })
       canvas.addEventListener('webglcontextrestored', () => {
         try {
-          this.setupContext(canvas.getContext(gl instanceof WebGLRenderingContext ? 'webgl' : 'webgl2', CONTEXT_OPTIONS))
+          this.setupContext(canvas.getContext(gl instanceof WebGLRenderingContext ? 'webgl' : 'webgl2', options))
           this.contextLost = false
           for (const view of this.views) view.entry = this.acquire(view)
           this.schedule()
@@ -137,13 +158,17 @@ class DepthArtRenderer {
   }
 
   setupContext(gl) {
-    const { uniforms } = createDepthArtProgram(gl)
+    const programs = createDepthArtPrograms(gl)
+    for (const entry of [programs.full, programs.cache]) {
+      if (!entry) continue
+      gl.useProgram(entry.program)
+      gl.uniform1f(entry.uniforms.intensity, INTENSITY)
+      gl.uniform1f(entry.uniforms.zoom, 1)
+    }
     this.gl = gl
-    this.uniforms = uniforms
+    this.programs = programs
     const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS)
     this.maxSize = Math.min(4096, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), dims[0], dims[1])
-    gl.enable(gl.SCISSOR_TEST)
-    gl.clearColor(0, 0, 0, 1)
   }
 
   acquire({ colorUrl, depthUrl, normalUrl }) {
@@ -183,6 +208,12 @@ class DepthArtRenderer {
       if (entry.depth) this.gl.deleteTexture(entry.depth)
       if (entry.normal) this.gl.deleteTexture(entry.normal)
     }
+  }
+
+  dropCache(view) {
+    if (!view.cache) return
+    if (this.gl && !this.contextLost) deleteParallaxCache(this.gl, view.cache)
+    view.cache = null
   }
 
   createTexture(source, format) {
@@ -234,6 +265,7 @@ class DepthArtRenderer {
     if (fpsCap > 0 && timestamp - this.lastDrawAt < 1000 / fpsCap - FRAME_CAP_SLACK_MS) return
     if (isSceneRenderingPaused(timestamp)) return
 
+    if (this.showing) noteLightConsumer(timestamp)
     const probe = readLightProbe(timestamp)
     const base = this.baseParallax()
     const relayout = this.layoutDirty || timestamp - this.lastLayoutAt > LAYOUT_REFRESH_MS
@@ -246,10 +278,11 @@ class DepthArtRenderer {
       this.layoutDirty = false
       this.lastLayoutAt = timestamp
     }
-    const viewportHalf = Math.max(1, window.innerHeight / 2)
+    const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
     const batch = []
+    let showing = false
 
     for (const view of this.views) {
       const entry = view.entry
@@ -261,6 +294,7 @@ class DepthArtRenderer {
       if (!view.shown) continue
       const rect = view.rect
       if (rect.width < 2 || rect.height < 2) continue
+      showing = true
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
       const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
@@ -269,13 +303,22 @@ class DepthArtRenderer {
       const pixelsPerUnit = INTENSITY * Math.max(width, height) * zoom
       const epsilon = REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit)
       const last = view.last
-      if (last && last.entry === entry && last.width === width && last.height === height &&
-        Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon &&
-        last.light === probe.key &&
-        last.left === rect.left && last.top === rect.top) continue
-      batch.push({ view, entry, rect, width, height, px, py, steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) })
+      const tiltStill = last && last.entry === entry && last.width === width && last.height === height &&
+        Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
+      if (tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
+      const cache = view.cache
+      const cached = probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
+        Math.abs(cache.px - px) < epsilon && Math.abs(cache.py - py) < epsilon
+      view.stillDraws = tiltStill ? (view.stillDraws || 0) + 1 : 0
+      const build = !cached && probe.active && !!this.programs.cache && view.stillDraws >= CACHE_AFTER_STILL_DRAWS
+      batch.push({
+        view, entry, rect, width, height, px, py,
+        steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx),
+        mode: cached ? 'relight' : build ? 'build' : 'full',
+      })
     }
 
+    this.showing = showing
     if (!batch.length) return
     this.lastDrawAt = timestamp
     this.drawBatch(batch, probe)
@@ -318,30 +361,74 @@ class DepthArtRenderer {
       canvas.width = Math.max(canvas.width, Math.min(this.maxSize, Math.ceil(width / 256) * 256))
       canvas.height = Math.max(canvas.height, Math.min(this.maxSize, Math.ceil(height / 256) * 256))
     }
-    const uniforms = this.uniforms
-    gl.uniform1f(uniforms.intensity, INTENSITY)
-    gl.uniform1f(uniforms.zoom, 1)
-
+    const { full, cache, relight } = this.programs
     const profile = window.__plairProfile
     const drawStart = profile ? performance.now() : 0
-    for (const item of group) {
-      const glY = canvas.height - item.y - item.height
-      gl.viewport(item.x, glY, item.width, item.height)
-      gl.scissor(item.x, glY, item.width, item.height)
-      gl.clear(gl.COLOR_BUFFER_BIT)
-      gl.activeTexture(gl.TEXTURE0)
-      gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
-      gl.activeTexture(gl.TEXTURE1)
-      gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
-      gl.activeTexture(gl.TEXTURE2)
-      gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
-      gl.uniform2f(uniforms.gyro, item.px, item.py)
-      gl.uniform1f(uniforms.steps, item.steps)
-      setLightUniforms(gl, uniforms, probe, item.rect, true)
-      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    const builds = group.filter(item => item.mode === 'build')
+    if (builds.length) {
+      gl.useProgram(cache.program)
+      for (const item of builds) {
+        const view = item.view
+        if (!view.cache || view.cache.width !== item.width || view.cache.height !== item.height) {
+          this.dropCache(view)
+          view.cache = createParallaxCache(gl, item.width, item.height, this.programs.floatHit)
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, view.cache.framebuffer)
+        gl.viewport(0, 0, item.width, item.height)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+        gl.uniform2f(cache.uniforms.gyro, item.px, item.py)
+        gl.uniform1f(cache.uniforms.steps, item.steps)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        Object.assign(view.cache, { art: item.entry, px: item.px, py: item.py, ready: true })
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    }
+
+    const fulls = group.filter(item => item.mode === 'full')
+    if (fulls.length) {
+      gl.useProgram(full.program)
+      const lit = setLightUniforms(gl, full.uniforms, probe, true)
+      for (const item of fulls) {
+        gl.viewport(item.x, canvas.height - item.y - item.height, item.width, item.height)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
+        gl.uniform2f(full.uniforms.gyro, item.px, item.py)
+        gl.uniform1f(full.uniforms.steps, item.steps)
+        if (lit) setLightRect(gl, full.uniforms, item.rect)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+      }
+    }
+
+    const relit = group.filter(item => item.mode !== 'full')
+    if (relit.length) {
+      gl.useProgram(relight.program)
+      setLightUniforms(gl, relight.uniforms, probe, true)
+      for (const item of relit) {
+        const cached = item.view.cache
+        gl.viewport(item.x, canvas.height - item.y - item.height, item.width, item.height)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, cached.color)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, cached.hit)
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
+        setLightRect(gl, relight.uniforms, item.rect)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        item.px = cached.px
+        item.py = cached.py
+      }
     }
 
     const copyStart = profile ? (gl.finish(), performance.now()) : 0
+    const source = this.snapshot ? canvas.transferToImageBitmap() : canvas
     for (const item of group) {
       const view = item.view
       if (view.canvas.width !== item.width || view.canvas.height !== item.height) {
@@ -350,7 +437,7 @@ class DepthArtRenderer {
       }
       if (!view.ctx) view.ctx = view.canvas.getContext('2d', { alpha: false })
       if (!view.ctx) continue
-      view.ctx.drawImage(canvas, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
+      view.ctx.drawImage(source, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
       view.last = {
         entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
         light: probe.key, left: item.rect.left, top: item.rect.top,
@@ -360,10 +447,12 @@ class DepthArtRenderer {
         view.onDrawn?.(true)
       }
     }
+    if (source !== canvas) source.close()
     if (profile) {
       const pixels = group.reduce((total, item) => total + item.width * item.height, 0)
-      profile.tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0 }
+      profile.tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0, full: 0, build: 0, relight: 0 }
       profile.tiles.frames++
+      for (const item of group) profile.tiles[item.mode]++
       profile.tiles.drawMs += copyStart - drawStart
       profile.tiles.copyMs += performance.now() - copyStart
       profile.tiles.pixels += pixels

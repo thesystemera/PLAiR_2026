@@ -28,7 +28,8 @@ import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
-import {PROBE_GRID, publishBeat, publishLightLevel, publishLightProbe, setLightGlow} from '../lib/lightProbe'
+import {PROBE_GRID, lightProbeWanted, publishBeat, publishLightLevel, setLightGlow} from '../lib/lightProbe'
+import {LightProbeReader} from '../lib/lightProbeReader'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -1108,7 +1109,16 @@ function MultiPassPlane({
   useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
   useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
   useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
-  const probeReadRef = useRef({ pending: false, at: 0, buffer: new Uint8Array(PROBE_GRID * PROBE_GRID * 4) })
+  const probeReaderRef = useRef(null)
+  const probeAtRef = useRef(0)
+  useEffect(() => {
+    const reader = new LightProbeReader(renderer.getContext())
+    probeReaderRef.current = reader
+    return () => {
+      probeReaderRef.current = null
+      reader.dispose()
+    }
+  }, [renderer])
   const lightCurveRef = useRef(null)
   const lightLevelRef = useRef(0)
   const lastKickBeatRef = useRef(-1)
@@ -1332,6 +1342,8 @@ function MultiPassPlane({
 
     if (isUnmountedRef.current || !engineRef || !interfaceRef || !programsReadyRef.current) return
 
+    probeReaderRef.current?.collect()
+
     const now = Date.now()
     const effects = effectsRef.current
 
@@ -1479,7 +1491,7 @@ function MultiPassPlane({
         const lightRate = lightTarget > lightLevelRef.current ? LIGHT_ATTACK_RATE : LIGHT_RELEASE_RATE
         lightLevelRef.current = approach(lightLevelRef.current, lightTarget, lightRate, delta)
         if (lightLevelRef.current < 0.002 && lightTarget === 0) lightLevelRef.current = 0
-        publishLightLevel(lightLevelRef.current)
+        publishLightLevel(lightLevelRef.current, lightTarget)
     }
 
     const dpr = gl.getPixelRatio()
@@ -1830,16 +1842,12 @@ function MultiPassPlane({
         bgUniforms.u_is_capture.value = 1.0
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
-        const probeRead = probeReadRef.current
-        if (!probeRead.pending && frameStart - probeRead.at >= PROBE_INTERVAL_MS) {
-          probeRead.pending = true
-          probeRead.at = frameStart
+        const probeReader = probeReaderRef.current
+        if (probeReader?.ready && frameStart - probeAtRef.current >= PROBE_INTERVAL_MS && lightProbeWanted(frameStart)) {
+          probeAtRef.current = frameStart
           gl.setRenderTarget(probeTarget)
           gl.render(probeScene, captureCamera)
-          gl.readRenderTargetPixelsAsync(probeTarget, 0, 0, PROBE_GRID, PROBE_GRID, probeRead.buffer)
-            .then(() => publishLightProbe(probeRead.buffer))
-            .catch(() => {})
-            .finally(() => { probeRead.pending = false })
+          probeReader.request()
         }
         gl.setRenderTarget(null)
         bgUniforms.u_is_capture.value = 0.0

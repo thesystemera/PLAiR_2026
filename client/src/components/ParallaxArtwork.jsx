@@ -5,8 +5,8 @@ import { useQuality } from '../contexts/QualityContext'
 import { isSceneRenderingPaused } from '../lib/renderPause'
 import { logger } from '../lib/logger'
 import { CSS_TRANSITION } from '../lib/motion'
-import { POM, createDepthArtProgram, parallaxSteps, setLightUniforms } from '../lib/depthArtShader'
-import { readLightProbe } from '../lib/lightProbe'
+import { POM, createDepthArtPrograms, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
+import { noteLightConsumer, readLightProbe } from '../lib/lightProbe'
 import { normalFullCache } from '../lib/mediaCache'
 import { useDepthMap } from '../hooks/useDepthMap'
 
@@ -14,6 +14,10 @@ const PARALLAX_EPSILON = 1e-4
 const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
+const CACHE_AFTER_STILL_DRAWS = 2
+const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: false }
+
+const getContext = canvas => canvas.getContext('webgl2', CONTEXT_OPTIONS) || canvas.getContext('webgl', CONTEXT_OPTIONS)
 
 const isPowerOfTwo = value => value > 0 && (value & (value - 1)) === 0
 
@@ -38,7 +42,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const depthTextureRef = useRef(null)
   const normalTextureRef = useRef(null)
   const animationFrameRef = useRef(null)
-  const uniformsRef = useRef(null)
+  const cacheRef = useRef(null)
   const lastDrawRef = useRef(null)
   const colorTextureInfoRef = useRef(null)
 
@@ -68,6 +72,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     setGlReady(false)
     setTexturesKey(null)
     setNormalKey(null)
+    cacheRef.current = null
 
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current)
@@ -82,12 +87,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const gl = canvas.getContext('webgl', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-      preserveDrawingBuffer: false
-    })
+    const gl = getContext(canvas)
 
     if (!gl) {
       logger.error('[ParallaxArtwork] Failed to restore WebGL context')
@@ -98,9 +98,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     glRef.current = gl
 
     try {
-      const { program, uniforms } = createDepthArtProgram(gl)
-      programRef.current = program
-      uniformsRef.current = uniforms
+      programRef.current = createDepthArtPrograms(gl)
 
       setGlReady(true)
       logger.info('[ParallaxArtwork] WebGL context successfully restored')
@@ -114,12 +112,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const gl = canvas.getContext('webgl', {
-      alpha: false,
-      antialias: false,
-      depth: false,
-      preserveDrawingBuffer: false
-    })
+    const gl = getContext(canvas)
 
     if (!gl) {
       logger.warn('[ParallaxArtwork] WebGL not available, using fallback')
@@ -130,9 +123,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     glRef.current = gl
 
     try {
-      const { program, uniforms } = createDepthArtProgram(gl)
-      programRef.current = program
-      uniformsRef.current = uniforms
+      programRef.current = createDepthArtPrograms(gl)
 
       canvas.addEventListener('webglcontextlost', handleContextLost)
       canvas.addEventListener('webglcontextrestored', handleContextRestored)
@@ -154,13 +145,15 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       }
 
       if (!gl.isContextLost()) {
-        if (programRef.current) gl.deleteProgram(programRef.current)
+        for (const entry of Object.values(programRef.current || {})) if (entry) gl.deleteProgram(entry.program)
+        deleteParallaxCache(gl, cacheRef.current)
         if (colorTextureRef.current) gl.deleteTexture(colorTextureRef.current)
         if (depthTextureRef.current) gl.deleteTexture(depthTextureRef.current)
         if (normalTextureRef.current) gl.deleteTexture(normalTextureRef.current)
         gl.getExtension('WEBGL_lose_context')?.loseContext()
       }
       programRef.current = null
+      cacheRef.current = null
       colorTextureRef.current = null
       depthTextureRef.current = null
       normalTextureRef.current = null
@@ -253,7 +246,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, splitCanvas)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, splitCanvas)
 
         if (colorTextureRef.current && !gl.isContextLost()) {
           gl.deleteTexture(colorTextureRef.current)
@@ -339,20 +332,44 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
     const gl = glRef.current
     const canvas = canvasRef.current
-    const uniforms = uniformsRef.current
+    const programs = programRef.current
 
-    if (!gl || !canvas || !uniforms) {
+    if (!gl || !canvas || !programs) {
       logger.warn('[ParallaxArtwork] Missing required refs for render loop')
       return
     }
 
     lastDrawRef.current = null
     let errorCheckPending = true
+    let stillDraws = 0
     const minFrameMs = parallaxFpsCap > 0 ? 1000 / parallaxFpsCap - FRAME_CAP_SLACK_MS : 0
+
+    const bindArtwork = () => {
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
+      const colorInfo = colorTextureInfoRef.current
+      if (colorInfo) {
+        const minify = !isTopTier && colorInfo.canMipmap && canvas.width < colorInfo.width * MIPMAP_BELOW_RATIO
+        const filter = minify ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR
+        if (colorInfo.filter !== filter) {
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+          colorInfo.filter = filter
+        }
+      }
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
+    }
+
+    const setParallax = (uniforms, parallaxX, parallaxY, steps) => {
+      gl.uniform2f(uniforms.gyro, parallaxX, parallaxY)
+      gl.uniform1f(uniforms.intensity, intensity)
+      gl.uniform1f(uniforms.zoom, zoom)
+      gl.uniform1f(uniforms.steps, steps)
+    }
 
     const render = (timestamp) => {
       try {
-        if (!gl || !canvas || !uniforms) {
+        if (!gl || !canvas || !programs) {
           return
         }
 
@@ -371,69 +388,86 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         const mouse = mouseRef?.current || { parallaxX: 0, parallaxY: 0 }
 
         const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
-        const parallaxX = reduceMotion ? 0 : hasGyro ? gyro.parallaxX : mouse.parallaxX
-        const parallaxY = reduceMotion ? 0 : hasGyro ? gyro.parallaxY : mouse.parallaxY
+        let parallaxX = reduceMotion ? 0 : hasGyro ? gyro.parallaxX : mouse.parallaxX
+        let parallaxY = reduceMotion ? 0 : hasGyro ? gyro.parallaxY : mouse.parallaxY
 
         const effectiveZoom = zoom * (1 + Math.abs(intensity) * POM.ZOOM_FACTOR)
         const pixelsPerUnit = Math.abs(intensity) * Math.max(canvas.width, canvas.height) * effectiveZoom
         const epsilon = Math.max(PARALLAX_EPSILON, pixelsPerUnit > 0 ? REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit) : PARALLAX_EPSILON)
 
         const now = timestamp ?? performance.now()
+        if (hasNormals) noteLightConsumer(now)
         const probe = readLightProbe(now)
         const rect = canvas.getBoundingClientRect()
 
         const last = lastDrawRef.current
-        const still = last &&
+        const tiltStill = last &&
           last.color === colorTextureRef.current &&
           last.width === canvas.width &&
           last.height === canvas.height &&
           Math.abs(last.x - parallaxX) < epsilon &&
-          Math.abs(last.y - parallaxY) < epsilon &&
-          last.left === rect.left &&
-          last.top === rect.top
-        const sameLight = last && last.light === probe.key
-        const unchanged = still && sameLight
+          Math.abs(last.y - parallaxY) < epsilon
+        const unchanged = tiltStill && last.left === rect.left && last.top === rect.top && last.light === probe.key
 
         const paused = last && timestamp !== undefined && isSceneRenderingPaused(timestamp)
         const throttled = paused || (last && minFrameMs > 0 && timestamp !== undefined && timestamp - last.time < minFrameMs)
 
         if (!unchanged && !throttled) {
+          stillDraws = tiltStill ? stillDraws + 1 : 0
+          const lit = probe.active && hasNormals
+          let cache = cacheRef.current
+          const cached = lit && cache?.ready && cache.art === colorTextureRef.current &&
+            cache.width === canvas.width && cache.height === canvas.height &&
+            Math.abs(cache.px - parallaxX) < epsilon && Math.abs(cache.py - parallaxY) < epsilon
+          const build = !cached && lit && !!programs.cache && stillDraws >= CACHE_AFTER_STILL_DRAWS
           const steps = parallaxSteps(Math.hypot(parallaxX, parallaxY) * pixelsPerUnit, parallaxStepPx)
-
-          setLightUniforms(gl, uniforms, probe, rect, hasNormals)
-
-          gl.viewport(0, 0, canvas.width, canvas.height)
-
-          gl.activeTexture(gl.TEXTURE0)
-          gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
-          const colorInfo = colorTextureInfoRef.current
-          if (colorInfo) {
-            const minify = !isTopTier && colorInfo.canMipmap && canvas.width < colorInfo.width * MIPMAP_BELOW_RATIO
-            const filter = minify ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR
-            if (colorInfo.filter !== filter) {
-              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
-              colorInfo.filter = filter
-            }
-          }
-          gl.activeTexture(gl.TEXTURE1)
-          gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
-          gl.activeTexture(gl.TEXTURE2)
-          gl.bindTexture(gl.TEXTURE_2D, hasNormals ? normalTextureRef.current : null)
-
-          gl.uniform2f(uniforms.gyro, parallaxX, parallaxY)
-          gl.uniform1f(uniforms.intensity, intensity)
-          gl.uniform1f(uniforms.zoom, zoom)
-          gl.uniform1f(uniforms.steps, steps)
 
           const profile = window.__plairProfile
           const drawStart = profile ? performance.now() : 0
+          if (build) {
+            if (!cache || cache.width !== canvas.width || cache.height !== canvas.height) {
+              deleteParallaxCache(gl, cache)
+              cache = cacheRef.current = createParallaxCache(gl, canvas.width, canvas.height, programs.floatHit)
+            }
+            gl.useProgram(programs.cache.program)
+            setParallax(programs.cache.uniforms, parallaxX, parallaxY, steps)
+            bindArtwork()
+            gl.bindFramebuffer(gl.FRAMEBUFFER, cache.framebuffer)
+            gl.viewport(0, 0, cache.width, cache.height)
+            gl.drawArrays(gl.TRIANGLES, 0, 6)
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+            Object.assign(cache, { art: colorTextureRef.current, px: parallaxX, py: parallaxY, ready: true })
+          }
+
+          gl.viewport(0, 0, canvas.width, canvas.height)
           gl.clearColor(0, 0, 0, 1)
           gl.clear(gl.COLOR_BUFFER_BIT)
+          if (cached || build) {
+            const { program, uniforms } = programs.relight
+            gl.useProgram(program)
+            if (setLightUniforms(gl, uniforms, probe, true)) setLightRect(gl, uniforms, rect)
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, cache.color)
+            gl.activeTexture(gl.TEXTURE1)
+            gl.bindTexture(gl.TEXTURE_2D, cache.hit)
+            parallaxX = cache.px
+            parallaxY = cache.py
+          } else {
+            const { program, uniforms } = programs.full
+            gl.useProgram(program)
+            if (setLightUniforms(gl, uniforms, probe, hasNormals)) setLightRect(gl, uniforms, rect)
+            setParallax(uniforms, parallaxX, parallaxY, steps)
+            bindArtwork()
+          }
+          gl.activeTexture(gl.TEXTURE2)
+          gl.bindTexture(gl.TEXTURE_2D, hasNormals ? normalTextureRef.current : null)
           gl.drawArrays(gl.TRIANGLES, 0, 6)
           if (profile) {
             gl.finish()
-            profile.nowPlaying = profile.nowPlaying || { frames: 0, drawMs: 0, pixels: 0 }
+            const kind = cached ? 'relit' : build ? 'cached' : 'full'
+            profile.nowPlaying = profile.nowPlaying || { frames: 0, drawMs: 0, pixels: 0, full: 0, cached: 0, relit: 0 }
             profile.nowPlaying.frames++
+            profile.nowPlaying[kind]++
             profile.nowPlaying.drawMs += performance.now() - drawStart
             profile.nowPlaying.pixels += canvas.width * canvas.height
           }
