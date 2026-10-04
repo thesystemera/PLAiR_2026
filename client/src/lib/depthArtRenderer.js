@@ -3,7 +3,7 @@ import { readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
 
-const INTENSITY = 0.05
+const INTENSITY = 0.1
 const SCROLL_TILT = 0.9
 const MAX_PARALLAX = 1.6
 const MAX_IDLE_TEXTURES = 48

@@ -26,9 +26,7 @@ import { useViewport } from '../contexts/ViewportContext'
 import { MOTION } from '../lib/motion'
 import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
-import { useDepthMap } from '../hooks/useDepthMap'
-import { depthThumbCache, normalThumbCache } from '../lib/mediaCache'
-import { DepthArt } from './DepthArt'
+import { TrackArt } from './DepthArt'
 
 const CATALOG_ERROR_GRACE_MS = 4000
 
@@ -100,8 +98,6 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
   const [isLoading, setIsLoading] = useState(false)
   const cardInteraction = usePointerInteraction()
   const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
-  const depthUrl = useDepthMap(depthThumbCache, track.id, track.has_artwork !== false)
-  const normalUrl = useDepthMap(normalThumbCache, track.id, track.has_artwork !== false)
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
   useEffect(() => {
@@ -155,10 +151,10 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
       onPointerUp={handlePlayNow}
     >
       <div ref={artBoxRef} className="aspect-square bg-gradient-to-br from-white/[0.06] to-white/[0.03] rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">
-        <DepthArt
+        <TrackArt
+          trackId={track.id}
+          hasArtwork={track.has_artwork}
           colorUrl={artworkUrl}
-          depthUrl={depthUrl}
-          normalUrl={normalUrl}
           alt={params.title || 'Track artwork'}
           onLoad={onArtLoad}
           onError={hideBrokenImage}

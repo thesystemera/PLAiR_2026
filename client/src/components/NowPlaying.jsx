@@ -8,6 +8,7 @@ import {useGenerationQueue} from '../contexts/GenerationQueueContext'
 import {BUTTON} from '../lib/themeManager.js'
 import {Scroller} from './Scroller'
 import {ParallaxArtwork} from './ParallaxArtwork'
+import { TrackArt } from './DepthArt'
 import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
@@ -204,8 +205,8 @@ const ArtistTrackRow = memo(function ArtistTrackRow({ item, onPlay }) {
       onClick={() => onPlay(item.id)}
       className="ui-press w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors text-left"
     >
-      <div className="w-10 h-10 rounded bg-white/10 flex items-center justify-center overflow-hidden flex-shrink-0">
-        {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" decoding="async" loading="lazy" /> : <Music size={16} className="text-white/50" />}
+      <div className="relative w-10 h-10 rounded bg-white/10 flex items-center justify-center overflow-hidden flex-shrink-0">
+        {thumb ? <TrackArt trackId={item.id} hasArtwork={item.has_artwork} colorUrl={thumb} alt="" /> : <Music size={16} className="text-white/50" />}
       </div>
       <span className="text-sm truncate">{item.title || 'Untitled'}</span>
     </button>

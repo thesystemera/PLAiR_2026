@@ -43,7 +43,7 @@ import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
 import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, TrackDataLoader, UploadNotice} from './components/AppBridges'
-import {DepthArtBridge} from './components/DepthArt'
+import {DepthArtBridge, ProfileArt} from './components/DepthArt'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -937,10 +937,12 @@ function App() {
                       {id === PANEL_IDS.USER && isAuthenticated ? (
                         <>
                           {userProfilePicture ? (
-                            <img decoding="async"
-                              src={userProfilePicture}
+                            <ProfileArt
+                              userId={user?.id}
+                              colorUrl={userProfilePicture}
                               alt={user?.username || 'User'}
-                              className={`${navIconClass} rounded-full object-cover`}
+                              className={`relative ${navIconClass} rounded-full overflow-hidden`}
+                              imgClassName="w-full h-full object-cover"
                             />
                           ) : (
                             <div className={`${navIconClass} rounded-full bg-purple-600 flex items-center justify-center text-white text-xs font-bold`}>

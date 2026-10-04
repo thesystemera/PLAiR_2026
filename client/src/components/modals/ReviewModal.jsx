@@ -3,6 +3,7 @@ import { X, Mic, Square, Loader, Send, Play, Pause, MessageSquareText, Keyboard,
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
+import { ProfileArt } from '../DepthArt'
 import { usePlaybackShoutout } from '../../contexts/PlaybackShoutoutContext'
 import { useUISelector } from '../../contexts/UIStateContext'
 import { useVoiceRecording } from '../../contexts/VoiceRecordingContext'
@@ -40,10 +41,12 @@ const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop,
       style={{ backgroundColor: isPlaying ? getBorder(0.15) : getBorder(0.05) }}
     >
       {profilePictureUrl ? (
-        <img decoding="async"
-          src={profilePictureUrl}
+        <ProfileArt
+          userId={review.user_id}
+          colorUrl={profilePictureUrl}
           alt={review.username || 'User'}
-          className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+          className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
+          imgClassName="w-full h-full object-cover"
         />
       ) : (
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">

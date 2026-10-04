@@ -345,7 +345,7 @@ export function parallaxSteps(travelPx, stepPx) {
 
 export function setLightUniforms(gl, uniforms, probe, rect, hasNormals) {
   const on = probe.active && hasNormals
-  gl.uniform1f(uniforms.light, on ? 1 : 0)
+  gl.uniform1f(uniforms.light, on ? probe.level : 0)
   if (!on) return
   const width = Math.max(1, window.innerWidth)
   const height = Math.max(1, window.innerHeight)

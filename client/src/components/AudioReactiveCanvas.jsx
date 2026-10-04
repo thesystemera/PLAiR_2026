@@ -28,7 +28,7 @@ import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
-import {PROBE_GRID, publishBeat, publishLightProbe, setLightGlow} from '../lib/lightProbe'
+import {PROBE_GRID, publishBeat, publishLightLevel, publishLightProbe, setLightGlow} from '../lib/lightProbe'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -672,6 +672,42 @@ const CROSSFADE_RELEASE = 1.2
 
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
+const LIGHT_CURVE_STEP_S = 0.5
+const LIGHT_CURVE_WINDOW_S = 4
+const LIGHT_IN_RANK = 0.55
+const LIGHT_FULL_RANK = 0.85
+const LIGHT_ATTACK_RATE = 1.2
+const LIGHT_RELEASE_RATE = 0.35
+const LIGHT_WITHOUT_ANALYSIS = 0.5
+const LIGHT_KICK_FLOOR = 0.25
+
+function buildLightCurve(features) {
+  const segments = features?.loudness_segments
+  if (!segments?.length) return null
+  const last = segments[segments.length - 1]
+  const bins = Math.max(1, Math.ceil((features.duration || last.start + last.duration) / LIGHT_CURVE_STEP_S))
+  const sum = new Float32Array(bins)
+  const count = new Float32Array(bins)
+  for (const segment of segments) {
+    const bin = Math.min(bins - 1, Math.floor(segment.start / LIGHT_CURVE_STEP_S))
+    sum[bin] += segment.loudness
+    count[bin]++
+  }
+  const loudness = Float32Array.from(sum, (total, i) => (count[i] ? total / count[i] : -60))
+  const half = Math.round(LIGHT_CURVE_WINDOW_S / LIGHT_CURVE_STEP_S / 2)
+  const smooth = Float32Array.from(loudness, (_, i) => {
+    let total = 0
+    let n = 0
+    for (let j = Math.max(0, i - half); j <= Math.min(bins - 1, i + half); j++) {
+      total += loudness[j]
+      n++
+    }
+    return total / n
+  })
+  const sorted = Array.from(smooth).sort(numericAscending)
+  return Float32Array.from(smooth, value => MathUtils.smoothstep(lowerBound(sorted, value) / bins, LIGHT_IN_RANK, LIGHT_FULL_RANK))
+}
+
 function averageLevel(data) {
   if (!data || !data.length) return 0
   let sum = 0
@@ -1072,6 +1108,8 @@ function MultiPassPlane({
   useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
   useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
   const probeReadRef = useRef({ pending: false, buffer: new Uint8Array(PROBE_GRID * PROBE_GRID * 4) })
+  const lightCurveRef = useRef(null)
+  const lightLevelRef = useRef(0)
   const lastKickBeatRef = useRef(-1)
 
   const glowAt = useMemo(() => {
@@ -1246,6 +1284,7 @@ function MultiPassPlane({
   }, [videoClips])
 
   useEffect(() => {
+    lightCurveRef.current = buildLightCurve(audioFeatures)
     if (audioFeatures) {
         lastBeatIndexRef.current = 0
         lastSegmentIndexRef.current = 0
@@ -1410,7 +1449,8 @@ function MultiPassPlane({
 
                 const kick = onBeat && beatHit !== lastKickBeatRef.current && rawEnergy > energyThreshold
                 if (kick) lastKickBeatRef.current = beatHit
-                publishBeat(reduceMotion || !kick ? 0 : Math.min(1, 0.5 + intensity * 0.5), reduceMotion ? 0 : effects.beatPulse)
+                const lightUp = lightLevelRef.current >= LIGHT_KICK_FLOOR
+                publishBeat(reduceMotion || !kick || !lightUp ? 0 : Math.min(1, 0.5 + intensity * 0.5), reduceMotion ? 0 : effects.beatPulse)
              }
         } else {
             effects.chromatic *= (1.0 - fastDecay)
@@ -1430,6 +1470,15 @@ function MultiPassPlane({
             effects.beatPulse = 0.0;
             publishBeat(0, 0)
         }
+
+        const curve = lightCurveRef.current
+        const lightTarget = !isPlaying ? 0 : curve
+          ? curve[Math.min(curve.length - 1, Math.floor(interpolatedProgressRef.current / 1000 / LIGHT_CURVE_STEP_S))]
+          : LIGHT_WITHOUT_ANALYSIS
+        const lightRate = lightTarget > lightLevelRef.current ? LIGHT_ATTACK_RATE : LIGHT_RELEASE_RATE
+        lightLevelRef.current = approach(lightLevelRef.current, lightTarget, lightRate, delta)
+        if (lightLevelRef.current < 0.002 && lightTarget === 0) lightLevelRef.current = 0
+        publishLightLevel(lightLevelRef.current)
     }
 
     const dpr = gl.getPixelRatio()

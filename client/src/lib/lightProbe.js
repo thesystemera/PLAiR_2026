@@ -16,8 +16,8 @@ const order = Array.from({ length: CELLS }, (_, i) => i)
 const lights = new Float32Array(MAX_LIGHTS * 4)
 const lightColors = new Float32Array(MAX_LIGHTS * 3)
 const picked = Array.from({ length: MAX_LIGHTS }, () => ({ x: 0, y: 0, r: 0, g: 0, b: 0, intensity: 0, taken: false }))
-const state = { version: 0, lastBlendAt: 0, kickLevel: 0, kickAt: 0, pulse: 0, hasProbe: false, glow: null }
-const debug = { off: false, kick: null }
+const state = { version: 0, lastBlendAt: 0, kickLevel: 0, kickAt: 0, pulse: 0, level: 0, hasProbe: false, glow: null }
+const debug = { off: false, kick: null, level: null }
 
 export function publishLightProbe(rgbaBottomUp) {
   for (let row = 0; row < PROBE_GRID; row++) {
@@ -38,6 +38,11 @@ export function setLightGlow(glow) {
   return () => {
     if (state.glow === glow) state.glow = null
   }
+}
+
+export function publishLightLevel(level) {
+  if (Math.abs(level - state.level) > 1 / 512 || (level === 0 && state.level !== 0)) state.version++
+  state.level = level
 }
 
 export function publishBeat(kick, pulse) {
@@ -142,7 +147,8 @@ export function readLightProbe(now) {
     if (moved > 1 / 1024) state.version++
   }
   const kick = debug.kick ?? currentKick(now)
-  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, version: state.version, active: state.hasProbe && !debug.off }
+  const level = debug.level ?? state.level
+  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, level, version: state.version, active: state.hasProbe && !debug.off && level > 0.001 }
 }
 
 if (typeof window !== 'undefined') {
@@ -153,6 +159,7 @@ if (typeof window !== 'undefined') {
         active: probe.active,
         kick: probe.kick,
         pulse: probe.pulse,
+        level: +probe.level.toFixed(3),
         lights: picked.map(slot => ({ x: +slot.x.toFixed(2), y: +slot.y.toFixed(2), intensity: +slot.intensity.toFixed(2), color: [slot.r, slot.g, slot.b].map(v => +v.toFixed(2)) })),
       }
     },

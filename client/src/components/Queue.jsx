@@ -15,6 +15,9 @@ import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { Scroller } from './Scroller'
 import { MOTION, PRESETS, TWEEN } from '../lib/motion'
 import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
+import { TrackArt } from './DepthArt'
+
+const QUEUE_ART_PROPS = { 'data-queue-art': true }
 
 const QUEUE_ROW = PRESETS.listReorder
 const QUEUE_ITEM_VARIANTS = {
@@ -132,12 +135,15 @@ const TrackArtwork = memo(function TrackArtwork({ track }) {
 
   if (track.has_artwork && !artworkError) {
     return (
-      <img
-        ref={noteImageMount}
-        data-queue-art
-        src={artworkUrl}
+      <TrackArt
+        trackId={track.id}
+        hasArtwork={track.has_artwork}
+        colorUrl={artworkUrl}
         alt={track.title || 'Track artwork'}
-        className="w-12 h-12 rounded object-cover flex-shrink-0"
+        className="relative w-12 h-12 rounded overflow-hidden flex-shrink-0"
+        imgClassName="w-full h-full object-cover"
+        imgRef={noteImageMount}
+        imgProps={QUEUE_ART_PROPS}
         onLoad={revealOnLoad}
         onError={() => setArtworkError(true)}
       />

@@ -3,6 +3,7 @@ import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Me
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
+import { ProfileArt } from '../DepthArt'
 import { usePlaybackShoutout, useShoutoutProgress } from '../../contexts/PlaybackShoutoutContext'
 import { useUISelector } from '../../contexts/UIStateContext'
 import { useVoiceRecording } from '../../contexts/VoiceRecordingContext'
@@ -275,10 +276,12 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop, on
       style={{ backgroundColor: isPlaying ? getBorder(0.15) : getBorder(0.05) }}
     >
       {profilePictureUrl ? (
-        <img decoding="async"
-          src={profilePictureUrl}
+        <ProfileArt
+          userId={reply.user_id}
+          colorUrl={profilePictureUrl}
           alt={reply.username || 'User'}
-          className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+          className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
+          imgClassName="w-full h-full object-cover"
         />
       ) : (
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
@@ -661,10 +664,12 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
           <div className="relative pb-6 border-b mb-6" style={{ borderColor: getBorder(0.1) }}>
             <div className="flex items-start gap-4">
               {profilePictureUrl ? (
-                <img decoding="async"
-                  src={profilePictureUrl}
+                <ProfileArt
+                  userId={shoutout.user_id}
+                  colorUrl={profilePictureUrl}
                   alt={shoutout.username || 'User'}
-                  className="w-16 h-16 rounded-full object-cover shadow-lg flex-shrink-0"
+                  className="relative w-16 h-16 rounded-full overflow-hidden shadow-lg flex-shrink-0"
+                  imgClassName="w-full h-full object-cover"
                 />
               ) : (
                 <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg flex-shrink-0">

@@ -9,6 +9,7 @@ import { DURATION, MOTION, PRESETS, SPRING, TWEEN } from '../../lib/motion'
 import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
 import { MODAL_CLOSE_PAUSE_MS, MODAL_OPEN_PAUSE_MS } from '../../lib/renderPause'
+import { TrackArt } from '../DepthArt'
 
 const MODAL_BACKDROP_SAFE_STYLE = {
   backgroundColor: 'rgba(0,0,0,0.75)',
@@ -207,7 +208,7 @@ export function prewarmModalAssets(artworkUrl) {
 
 const ModalBlurContext = createContext(null)
 
-const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artworkUrl, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
+const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artworkUrl, trackId, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
   const [loadedUrl, setLoadedUrl] = useState(() => (isDecoded(artworkUrl) ? artworkUrl : null))
   const mountedAtRef = useRef(0)
   const imageLoaded = !!artworkUrl && (loadedUrl === artworkUrl || isDecoded(artworkUrl))
@@ -272,14 +273,9 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artwor
       <motion.div
         {...ARTWORK_MOTION}
         transition={MOTION.settle}
-        className="absolute inset-0"
-        style={{
-          backgroundImage: `url(${artworkUrl})`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          transform: 'scale(1.2)',
-        }}
+        className="absolute inset-0 overflow-hidden"
       >
+        <TrackArt trackId={trackId} colorUrl={artworkUrl} alt="" className="absolute inset-0" />
         <div className="absolute inset-0" style={ARTWORK_DIM_OVERLAY} />
       </motion.div>
 
@@ -468,6 +464,7 @@ export function Modal({
           >
             <BlurredArtworkBackground
               artworkUrl={artworkUrl}
+              trackId={currentTrack?.id}
               categoryColor={categoryColor}
               gradientOpacity={gradientOpacity}
               onBlurReady={setBlurs}

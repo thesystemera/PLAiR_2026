@@ -14,6 +14,7 @@ import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
 import { ON_AIR_LAMP } from '../lib/themeManager'
+import { TrackArt } from './DepthArt'
 
 const PLAYED_WINDOW_STYLE = {
   transition: CSS_TRANSITION.progress
@@ -128,7 +129,7 @@ const PLAYER_SAFE_AREA_STYLE = {
   paddingRight: 'var(--safe-right)'
 }
 
-const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick, sizeClass }) {
+const TrackArtwork = memo(function TrackArtwork({ url, trackId, hasArtwork, onClick, sizeClass }) {
   const [layerA, setLayerA] = useState(null)
   const [layerB, setLayerB] = useState(null)
   const [frontLayer, setFrontLayer] = useState('A')
@@ -139,6 +140,7 @@ const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick, size
     if (url && url !== previousArtworkUrlRef.current) {
       const newImage = {
         url: url,
+        trackId: trackId,
         hasArtwork: hasArtwork
       }
       const swapTo = (layer) => {
@@ -156,17 +158,12 @@ const TrackArtwork = memo(function TrackArtwork({ url, hasArtwork, onClick, size
 
       previousArtworkUrlRef.current = url
     }
-  }, [url, hasArtwork, frontLayer])
+  }, [url, trackId, hasArtwork, frontLayer])
 
   const renderLayer = (layer, isFront) => (
     <div className={`absolute inset-0 transition-opacity duration-theme ${isFront ? 'opacity-100' : 'opacity-0'}`}>
       {layer && (
-        <img
-          src={layer.url}
-          alt="Album art"
-          decoding="async"
-          className="w-full h-full object-cover"
-        />
+        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArtwork} colorUrl={layer.url} alt="Album art" />
       )}
     </div>
   )
@@ -529,6 +526,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     <>
       <TrackArtwork
         url={artworkUrl}
+        trackId={currentTrack.id}
         hasArtwork={currentTrack.has_artwork}
         onClick={onArtworkClick}
         sizeClass={controlSizeClass}
