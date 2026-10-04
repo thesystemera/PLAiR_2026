@@ -10,6 +10,8 @@ const MAX_IDLE_TEXTURES = 48
 const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
+const LIGHT_ONLY_FRAME_MS = 33
+const LAYOUT_REFRESH_MS = 250
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
@@ -39,7 +41,17 @@ class DepthArtRenderer {
     this.frame = null
     this.lastDrawAt = 0
     this.observer = null
+    this.layoutDirty = true
+    this.lastLayoutAt = 0
+    this.lastInput = null
     this.tick = this.tick.bind(this)
+    this.markLayoutDirty = () => {
+      this.layoutDirty = true
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('scroll', this.markLayoutDirty, { capture: true, passive: true })
+      window.addEventListener('resize', this.markLayoutDirty, { passive: true })
+    }
   }
 
   configure(settings) {
@@ -52,6 +64,7 @@ class DepthArtRenderer {
     const view = { host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn, visible: false, entry: null, last: null, drawn: false }
     view.entry = this.acquire(view)
     this.views.add(view)
+    this.layoutDirty = true
     this.observe(view)
     this.schedule()
     return () => this.detach(view)
@@ -77,6 +90,7 @@ class DepthArtRenderer {
             if (view.host === entry.target) view.visible = entry.isIntersecting
           }
         }
+        this.layoutDirty = true
         this.schedule()
       })
     }
@@ -214,7 +228,8 @@ class DepthArtRenderer {
     if (!this.views.size) return
     this.schedule()
     if (!this.gl || this.contextLost) return
-    if (this.uploads.length) this.processUploads()
+    const uploaded = this.uploads.length > 0
+    if (uploaded) this.processUploads()
 
     const { fpsCap, stepPx, reduceMotion } = this.settings
     if (fpsCap > 0 && timestamp - this.lastDrawAt < 1000 / fpsCap - FRAME_CAP_SLACK_MS) return
@@ -222,6 +237,16 @@ class DepthArtRenderer {
 
     const probe = readLightProbe(timestamp)
     const base = this.baseParallax()
+    const relayout = this.layoutDirty || timestamp - this.lastLayoutAt > LAYOUT_REFRESH_MS
+    const input = this.lastInput
+    const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
+    const lit = !input || input.probe !== probe.version || input.kick !== probe.kick || input.pulse !== probe.pulse
+    if (!relayout && !moved && !uploaded && (!lit || timestamp - this.lastDrawAt < LIGHT_ONLY_FRAME_MS)) return
+    this.lastInput = { x: base.parallaxX, y: base.parallaxY, probe: probe.version, kick: probe.kick, pulse: probe.pulse }
+    if (relayout) {
+      this.layoutDirty = false
+      this.lastLayoutAt = timestamp
+    }
     const viewportHalf = Math.max(1, window.innerHeight / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
@@ -230,7 +255,8 @@ class DepthArtRenderer {
     for (const view of this.views) {
       const entry = view.entry
       if (!view.visible || !entry || entry.state !== 'ready') continue
-      const rect = view.host.getBoundingClientRect()
+      if (relayout || !view.rect) view.rect = view.host.getBoundingClientRect()
+      const rect = view.rect
       if (rect.width < 2 || rect.height < 2) continue
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))

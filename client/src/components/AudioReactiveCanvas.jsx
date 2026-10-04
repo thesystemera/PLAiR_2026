@@ -672,6 +672,7 @@ const CROSSFADE_RELEASE = 1.2
 
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
+const PROBE_INTERVAL_MS = 66
 const LIGHT_CURVE_STEP_S = 0.5
 const LIGHT_CURVE_WINDOW_S = 4
 const LIGHT_IN_RANK = 0.55
@@ -1107,7 +1108,7 @@ function MultiPassPlane({
   useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
   useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
   useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
-  const probeReadRef = useRef({ pending: false, buffer: new Uint8Array(PROBE_GRID * PROBE_GRID * 4) })
+  const probeReadRef = useRef({ pending: false, at: 0, buffer: new Uint8Array(PROBE_GRID * PROBE_GRID * 4) })
   const lightCurveRef = useRef(null)
   const lightLevelRef = useRef(0)
   const lastKickBeatRef = useRef(-1)
@@ -1830,8 +1831,9 @@ function MultiPassPlane({
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
         const probeRead = probeReadRef.current
-        if (!probeRead.pending) {
+        if (!probeRead.pending && frameStart - probeRead.at >= PROBE_INTERVAL_MS) {
           probeRead.pending = true
+          probeRead.at = frameStart
           gl.setRenderTarget(probeTarget)
           gl.render(probeScene, captureCamera)
           gl.readRenderTargetPixelsAsync(probeTarget, 0, 0, PROBE_GRID, PROBE_GRID, probeRead.buffer)
