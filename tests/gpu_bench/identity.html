@@ -1,0 +1,160 @@
+<!doctype html>
+<html><body>
+<script type="importmap">{ "imports": { "/src/lib/logger": "/stub-logger.js" } }</script>
+<script type="module">
+import { createDepthArtPrograms, createParallaxCache, createDepthBound, bindDepthBound, setLightRect, setLightUniforms, parallaxSteps, POM } from '/src/lib/depthArtShader.js'
+import { createDepthArtProgram as createOriginalProgram, setLightUniforms as setOriginalLight } from '/old/depthArtShader.js'
+
+const results = window.results = { cases: [] }
+const W = 512, H = 512
+const params = new URLSearchParams(location.search)
+const ids = (params.get('ids') || '').split(',').filter(Boolean)
+
+function makeContext() {
+  const canvas = document.createElement('canvas')
+  canvas.width = W
+  canvas.height = H
+  return canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: true })
+}
+function helpers(gl) {
+  return {
+    texture(source, format) {
+      const t = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texImage2D(gl.TEXTURE_2D, 0, format, format, gl.UNSIGNED_BYTE, source)
+      return t
+    },
+    target() {
+      const t = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      const fb = gl.createFramebuffer()
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0)
+      return fb
+    },
+    read(fb) {
+      const out = new Uint8Array(W * H * 4)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, out)
+      return out
+    },
+  }
+}
+function compare(a, b) {
+  const histogram = [0, 0, 0, 0]
+  let max = 0
+  for (let i = 0; i < a.length; i += 4) {
+    const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]))
+    histogram[Math.min(3, d)]++
+    max = Math.max(max, d)
+  }
+  return `max ${max} | same ${(histogram[0] / (W * H) * 100).toFixed(1)}% | off1 ${histogram[1]} | off2 ${histogram[2]} | off3+ ${histogram[3]}`
+}
+
+const gl = makeContext()
+const programs = createDepthArtPrograms(gl)
+const h = helpers(gl)
+const og = makeContext()
+const original = createOriginalProgram(og)
+const oh = helpers(og)
+
+const load = url => new Promise((resolve, reject) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => resolve(i); i.onerror = reject; i.src = url })
+const probe = {
+  active: true, level: 1, kick: 0.6, pulse: 0.4,
+  lights: new Float32Array([0.2, 0.3, 0, 1.4, 0.8, 0.2, 0, 0.9, 0.5, 0.85, 0, 2.1, 0.9, 0.7, 0, 0.6]),
+  lightColors: new Float32Array([1.1, 0.9, 0.6, 0.6, 0.9, 1.3, 1.0, 1.0, 1.0, 1.3, 0.7, 0.8]),
+}
+const rect = { left: 40, top: 300, width: 190, height: 190 }
+const fullTarget = h.target()
+const relitTarget = h.target()
+const originalTarget = oh.target()
+const cache = createParallaxCache(gl, W, H, programs.floatHit)
+results.floatHit = programs.floatHit
+
+for (const id of ids) {
+  const [color, depth, normal] = await Promise.all([
+    load(`/api/artwork/${id}/thumb/512`), load(`/api/artwork/${id}/depth/thumb/512`), load(`/api/artwork/${id}/normal/thumb/512?v=3`),
+  ])
+  const tex = { color: h.texture(color, gl.RGBA), depth: h.texture(depth, gl.LUMINANCE), normal: h.texture(normal, gl.RGB) }
+  const bound = createDepthBound(gl, programs, tex.depth, depth.width, depth.height)
+  const otex = { color: oh.texture(color, og.RGBA), depth: oh.texture(depth, og.LUMINANCE), normal: oh.texture(normal, og.RGB) }
+  for (const [px, py] of [[0, 0], [0.4, -0.3], [-1.2, 0.9], [1.6, 1.6]]) {
+    const steps = parallaxSteps(Math.hypot(px, py) * 0.1 * W * (1 + 0.1 * POM.ZOOM_FACTOR), 0)
+    const bind = (g, t) => {
+      g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D, t.color)
+      g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, t.depth)
+      g.activeTexture(g.TEXTURE2); g.bindTexture(g.TEXTURE_2D, t.normal)
+    }
+    const setParallax = (g, u) => { g.uniform2f(u.gyro, px, py); g.uniform1f(u.intensity, 0.1); g.uniform1f(u.zoom, 1); g.uniform1f(u.steps, steps) }
+
+    og.bindFramebuffer(og.FRAMEBUFFER, originalTarget)
+    og.viewport(0, 0, W, H)
+    og.useProgram(original.program)
+    setParallax(og, original.uniforms)
+    setOriginalLight(og, original.uniforms, probe, rect, true)
+    bind(og, otex)
+    og.drawArrays(og.TRIANGLES, 0, 6)
+
+    gl.viewport(0, 0, W, H)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fullTarget)
+    gl.useProgram(programs.full.program)
+    setParallax(gl, programs.full.uniforms)
+    setLightUniforms(gl, programs.full.uniforms, probe, true)
+    setLightRect(gl, programs.full.uniforms, rect)
+    bind(gl, tex)
+    bindDepthBound(gl, programs, programs.full.uniforms, bound)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, cache.framebuffer)
+    gl.useProgram(programs.cache.program)
+    setParallax(gl, programs.cache.uniforms)
+    bind(gl, tex)
+    bindDepthBound(gl, programs, programs.cache.uniforms, bound)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, relitTarget)
+    gl.useProgram(programs.relight.program)
+    setLightUniforms(gl, programs.relight.uniforms, probe, true)
+    setLightRect(gl, programs.relight.uniforms, rect)
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, cache.color)
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, cache.hit)
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex.normal)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2')
+    const time = (withBound) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fullTarget)
+      gl.useProgram(programs.full.program)
+      bind(gl, tex)
+      bindDepthBound(gl, programs, programs.full.uniforms, withBound ? bound : null)
+      const q = gl.createQuery()
+      gl.beginQuery(ext.TIME_ELAPSED_EXT, q)
+      for (let n = 0; n < 100; n++) gl.drawArrays(gl.TRIANGLES, 0, 6)
+      gl.endQuery(ext.TIME_ELAPSED_EXT)
+      return q
+    }
+    const queries = [time(false), time(true)]
+    const originalPixels = oh.read(originalTarget)
+    results.cases.push({
+      case: `${id.slice(0, 4)} tilt ${px},${py}`,
+      fullVsOriginal: compare(h.read(fullTarget), originalPixels),
+      relitVsOriginal: compare(h.read(relitTarget), originalPixels),
+      queries,
+    })
+  }
+}
+await new Promise(r => setTimeout(r, 500))
+for (const c of results.cases) {
+  const [without, withBound] = c.queries.map(q => gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6 / 100)
+  c.fullPassMs = `without bound ${without.toFixed(4)} ms, with bound ${withBound.toFixed(4)} ms`
+  delete c.queries
+}
+results.error = [gl.getError(), og.getError()]
+results.done = true
+</script>
+</body></html>

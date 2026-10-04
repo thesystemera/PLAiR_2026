@@ -1,0 +1,57 @@
+<!doctype html>
+<html><body>
+<script type="importmap">{ "imports": { "/src/lib/logger": "/stub-logger.js" } }</script>
+<script type="module">
+import { createDepthArtPrograms, createDepthBound } from '/src/lib/depthArtShader.js'
+const results = window.results = { levels: [] }
+const canvas = document.createElement('canvas')
+const gl = canvas.getContext('webgl2')
+const programs = createDepthArtPrograms(gl)
+const id = new URLSearchParams(location.search).get('id')
+const image = await new Promise((resolve, reject) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => resolve(i); i.onerror = reject; i.src = `/api/artwork/${id}/depth/thumb/512` })
+const depth = gl.createTexture()
+gl.bindTexture(gl.TEXTURE_2D, depth)
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, image)
+const bound = createDepthBound(gl, programs, depth, image.width, image.height)
+
+const c2 = document.createElement('canvas')
+c2.width = image.width
+c2.height = image.height
+const ctx = c2.getContext('2d', { willReadFrequently: true })
+ctx.drawImage(image, 0, 0)
+const rgba = ctx.getImageData(0, 0, image.width, image.height).data
+let size = image.width
+let cpu = new Uint8Array(size * size)
+for (let i = 0; i < size * size; i++) cpu[i] = rgba[i * 4]
+
+const fb = gl.createFramebuffer()
+gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+for (let level = 0; level < bound.levels; level++) {
+  const s = Math.max(1, 512 >> level)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bound.texture, level)
+  const out = new Uint8Array(s * s * 4)
+  gl.readPixels(0, 0, s, s, gl.RGBA, gl.UNSIGNED_BYTE, out)
+  let mismatches = 0
+  let example = null
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const gpuValue = out[(y * s + x) * 4]
+    const cpuValue = cpu[(s - 1 - y) * s + x]
+    const flippedValue = cpu[y * s + x]
+    if (gpuValue !== flippedValue) { mismatches++; if (!example) example = { x, y, gpuValue, cpuFlipped: flippedValue, cpuTopDown: cpuValue } }
+  }
+  results.levels.push({ level, size: s, mismatchesVsGlRows: mismatches, example })
+  const next = Math.max(1, size >> 1)
+  const reduced = new Uint8Array(next * next)
+  for (let y = 0; y < next; y++) for (let x = 0; x < next; x++) {
+    let m = 0
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) m = Math.max(m, cpu[Math.min(size - 1, y * 2 + dy) * size + Math.min(size - 1, x * 2 + dx)])
+    reduced[y * next + x] = m
+  }
+  cpu = reduced
+  size = next
+}
+results.error = gl.getError()
+results.done = true
+</script>
+</body></html>

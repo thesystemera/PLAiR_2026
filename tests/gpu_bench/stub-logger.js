@@ -1,0 +1,1 @@
+export const logger = { warn: console.warn, error: console.error, info: () => {}, debug: () => {} }

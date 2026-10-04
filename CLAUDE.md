@@ -725,13 +725,14 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/backgroundDownloader.js` - Background download queue for offline tracks with daily limits and slow-connection backoff.
 - `client/src/lib/cacheManager.js` - Offline library manager: download tracks with artwork and data, quota, cleanup, track list.
 - `client/src/lib/cacheValidator.js` - Validates track data and blobs before they are stored offline.
-- `client/src/lib/depthArtRenderer.js` - Shared WebGL renderer drawing depth-lit artwork into many canvases with parallax.
-- `client/src/lib/depthArtShader.js` - Parallax occlusion mapping shader and light uniforms for depth artwork.
+- `client/src/lib/depthArtRenderer.js` - Shared WebGL renderer drawing depth-lit artwork into many canvases: own visibility check (no IntersectionObserver), per-tile parallax cache for light-only frames, one atlas snapshot per frame.
+- `client/src/lib/depthArtShader.js` - Depth artwork shaders: full pass (parallax march + lighting), parallax-to-cache and re-light-from-cache passes, the max-depth pyramid that lets the march skip steps that cannot hit, light uniforms and the cached viewport size.
 - `client/src/lib/djBroadcastChain.js` - Web Audio processing chain for DJ voice playback (compression, gain ramps).
 - `client/src/lib/djStreamPlayer.js` - DJ voice stream player: MediaSource per stream, sequential queue, cancel, stall watchdog.
 - `client/src/lib/errorReporter.js` - Collects log breadcrumbs and sends client errors and events to the server.
 - `client/src/lib/haptics.js` - Triggers device vibration patterns for haptic feedback.
-- `client/src/lib/lightProbe.js` - Samples the background shader into a light grid and lights for depth artwork.
+- `client/src/lib/lightProbe.js` - Turns the background's 16x16 light grid into tracked lights for depth artwork; says when a probe is worth reading (lit art on screen, light up, no panel resizing).
+- `client/src/lib/lightProbeReader.js` - Reads the 16x16 probe back from the scene's WebGL context through a persistent pixel buffer and a fence.
 - `client/src/lib/logger.js` - Logger with levels and a sink hook used by the error reporter.
 - `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for artwork, depth and profile images.
 - `client/src/lib/mediaSupport.js` - Detects MSE and WebM/Opus support and picks streaming and download formats.
@@ -842,6 +843,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `tests/event_harvest_probe.py` - Crawls for events in one city without saving; DeepSeek reads a few pages without structured data.
 - `tests/for_you_probe.py` - Builds one Radio Mode For You feature for a located guest or user; calls the DeepSeek agent.
 - `tests/perf_depth_art.mjs` - Frame-time benchmark of depth/light artwork on a simulated low-end phone in headless Chrome; no LLM.
+- `tests/gpu_bench/` - Headless Chrome pinned to the P6000: per-pass GPU timing, traces, panel-toggle frames and pixel-identity checks against an older shader (`README.md`); no LLM.
 - `tests/pulse_links_test.py` - Checks City Pulse links between gigs, places, news and shoutouts on fake sources; no LLM.
 - `tests/queue_rules_test.py` - Checks queue rules (picks, play next, seeding, playlist switch) on a fake catalog; no LLM.
 - `tests/seed_probe.py` - Probes whether each seed radio mode holds its thread song after song; no backend, no LLM.

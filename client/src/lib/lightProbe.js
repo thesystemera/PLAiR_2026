@@ -15,7 +15,8 @@ const MOTION_QUIET_MS = 300
 const base = new Float32Array(CELLS * 3)
 const grid = new Float32Array(CELLS * 3)
 const luma = new Float32Array(CELLS)
-const order = Array.from({ length: CELLS }, (_, i) => i)
+const taken = new Uint8Array(CELLS)
+const found = Array.from({ length: MAX_LIGHTS }, () => ({ x: 0, y: 0, r: 0, g: 0, b: 0, intensity: 0 }))
 const lights = new Float32Array(MAX_LIGHTS * 4)
 const lightColors = new Float32Array(MAX_LIGHTS * 3)
 const picked = Array.from({ length: MAX_LIGHTS }, () => ({ x: 0, y: 0, r: 0, g: 0, b: 0, intensity: 0, taken: false }))
@@ -100,28 +101,42 @@ function findLightSources() {
   let mean = 0
   for (let i = 0; i < CELLS; i++) mean += luma[i]
   mean /= CELLS
-  order.sort((a, b) => luma[b] - luma[a])
-  const found = []
-  for (const cell of order) {
-    if (found.length === MAX_LIGHTS) break
-    const contrast = (luma[cell] - mean) / Math.max(mean, CONTRAST_FLOOR)
+  const contrastBase = Math.max(mean, CONTRAST_FLOOR)
+  taken.fill(0)
+  let count = 0
+  for (let pick = 0; pick < CELLS && count < MAX_LIGHTS; pick++) {
+    let cell = 0
+    let brightest = -Infinity
+    for (let i = 0; i < CELLS; i++) {
+      if (!taken[i] && luma[i] > brightest) {
+        brightest = luma[i]
+        cell = i
+      }
+    }
+    taken[cell] = 1
+    const contrast = (brightest - mean) / contrastBase
     if (contrast <= 0) break
     const x = ((cell % PROBE_GRID) + 0.5) / PROBE_GRID
     const y = (Math.floor(cell / PROBE_GRID) + 0.5) / PROBE_GRID
-    if (found.some(light => Math.hypot(light.x - x, light.y - y) < MIN_LIGHT_SPACING)) continue
-    const level = Math.max(luma[cell], 1e-3)
-    found.push({
-      x, y,
-      r: grid[cell * 3] / level, g: grid[cell * 3 + 1] / level, b: grid[cell * 3 + 2] / level,
-      intensity: Math.min(MAX_INTENSITY, contrast),
-    })
+    let crowded = false
+    for (let k = 0; k < count && !crowded; k++) crowded = Math.hypot(found[k].x - x, found[k].y - y) < MIN_LIGHT_SPACING
+    if (crowded) continue
+    const level = Math.max(brightest, 1e-3)
+    const light = found[count++]
+    light.x = x
+    light.y = y
+    light.r = grid[cell * 3] / level
+    light.g = grid[cell * 3 + 1] / level
+    light.b = grid[cell * 3 + 2] / level
+    light.intensity = Math.min(MAX_INTENSITY, contrast)
   }
-  return found
+  return count
 }
 
-function followLights(found, follow) {
+function followLights(count, follow) {
   for (const slot of picked) slot.taken = false
-  for (const light of found) {
+  for (let n = 0; n < count; n++) {
+    const light = found[n]
     let best = null
     let bestDistance = Infinity
     for (const slot of picked) {
@@ -148,16 +163,18 @@ function followLights(found, follow) {
     if (!slot.taken) slot.intensity -= slot.intensity * follow
   }
   let moved = 0
-  picked.forEach((slot, i) => {
-    const values = [slot.x, slot.y, 0, slot.intensity]
-    for (let k = 0; k < 4; k++) {
-      moved = Math.max(moved, Math.abs(lights[i * 4 + k] - values[k]))
-      lights[i * 4 + k] = values[k]
-    }
+  for (let i = 0; i < MAX_LIGHTS; i++) {
+    const slot = picked[i]
+    const at = i * 4
+    moved = Math.max(moved, Math.abs(lights[at] - slot.x), Math.abs(lights[at + 1] - slot.y), Math.abs(lights[at + 2]), Math.abs(lights[at + 3] - slot.intensity))
+    lights[at] = slot.x
+    lights[at + 1] = slot.y
+    lights[at + 2] = 0
+    lights[at + 3] = slot.intensity
     lightColors[i * 3] = slot.r
     lightColors[i * 3 + 1] = slot.g
     lightColors[i * 3 + 2] = slot.b
-  })
+  }
   return moved
 }
 
