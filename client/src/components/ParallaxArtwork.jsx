@@ -5,7 +5,7 @@ import { useQuality } from '../contexts/QualityContext'
 import { isSceneRenderingPaused } from '../lib/renderPause'
 import { logger } from '../lib/logger'
 import { CSS_TRANSITION } from '../lib/motion'
-import { POM, createDepthArtPrograms, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
+import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
 import { noteLightConsumer, readLightProbe } from '../lib/lightProbe'
 import { normalFullCache } from '../lib/mediaCache'
 import { useDepthMap } from '../hooks/useDepthMap'
@@ -42,6 +42,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const programRef = useRef(null)
   const colorTextureRef = useRef(null)
   const depthTextureRef = useRef(null)
+  const depthBoundRef = useRef(null)
   const normalTextureRef = useRef(null)
   const animationFrameRef = useRef(null)
   const cacheRef = useRef(null)
@@ -151,6 +152,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         deleteParallaxCache(gl, cacheRef.current)
         if (colorTextureRef.current) gl.deleteTexture(colorTextureRef.current)
         if (depthTextureRef.current) gl.deleteTexture(depthTextureRef.current)
+        if (depthBoundRef.current) gl.deleteTexture(depthBoundRef.current.texture)
         if (normalTextureRef.current) gl.deleteTexture(normalTextureRef.current)
         gl.getExtension('WEBGL_lose_context')?.loseContext()
       }
@@ -158,6 +160,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       cacheRef.current = null
       colorTextureRef.current = null
       depthTextureRef.current = null
+      depthBoundRef.current = null
       normalTextureRef.current = null
       glRef.current = null
     }
@@ -249,6 +252,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, splitCanvas)
+        const newDepthBound = programRef.current ? createDepthBound(gl, programRef.current, newDepthTexture, halfWidth, height) : null
 
         if (colorTextureRef.current && !gl.isContextLost()) {
           gl.deleteTexture(colorTextureRef.current)
@@ -256,9 +260,13 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         if (depthTextureRef.current && !gl.isContextLost()) {
           gl.deleteTexture(depthTextureRef.current)
         }
+        if (depthBoundRef.current && !gl.isContextLost()) {
+          gl.deleteTexture(depthBoundRef.current.texture)
+        }
 
         colorTextureRef.current = newColorTexture
         depthTextureRef.current = newDepthTexture
+        depthBoundRef.current = newDepthBound
 
         setTexturesKey(loadKey)
         if (onLoad) onLoad()
@@ -347,7 +355,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     const placement = { rect: null, at: 0, dirty: true }
     const minFrameMs = parallaxFpsCap > 0 ? 1000 / parallaxFpsCap - FRAME_CAP_SLACK_MS : 0
 
-    const bindArtwork = () => {
+    const bindArtwork = (uniforms) => {
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
       const colorInfo = colorTextureInfoRef.current
@@ -361,6 +369,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       }
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
+      bindDepthBound(gl, programs, uniforms, depthBoundRef.current)
     }
 
     const setParallax = (uniforms, parallaxX, parallaxY, steps) => {
@@ -439,7 +448,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
             }
             gl.useProgram(programs.cache.program)
             setParallax(programs.cache.uniforms, parallaxX, parallaxY, steps)
-            bindArtwork()
+            bindArtwork(programs.cache.uniforms)
             gl.bindFramebuffer(gl.FRAMEBUFFER, cache.framebuffer)
             gl.viewport(0, 0, cache.width, cache.height)
             gl.drawArrays(gl.TRIANGLES, 0, 6)
@@ -465,7 +474,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
             gl.useProgram(program)
             if (setLightUniforms(gl, uniforms, probe, hasNormals)) setLightRect(gl, uniforms, rect)
             setParallax(uniforms, parallaxX, parallaxY, steps)
-            bindArtwork()
+            bindArtwork(uniforms)
           }
           gl.activeTexture(gl.TEXTURE2)
           gl.bindTexture(gl.TEXTURE_2D, hasNormals ? normalTextureRef.current : null)

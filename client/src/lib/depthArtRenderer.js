@@ -1,4 +1,4 @@
-import { POM, createDepthArtPrograms, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
+import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
 import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
@@ -205,7 +205,7 @@ class DepthArtRenderer {
     const key = `${colorUrl}|${depthUrl}|${normalUrl}`
     let entry = this.textures.get(key)
     if (!entry) {
-      entry = { key, refs: 0, state: 'loading', color: null, depth: null, normal: null, usedAt: 0 }
+      entry = { key, refs: 0, state: 'loading', color: null, depth: null, bound: null, normal: null, usedAt: 0 }
       this.textures.set(key, entry)
       Promise.all([loadImage(colorUrl), loadImage(depthUrl), loadImage(normalUrl)])
         .then(([color, depth, normal]) => {
@@ -236,6 +236,7 @@ class DepthArtRenderer {
     if (this.gl && !this.contextLost) {
       if (entry.color) this.gl.deleteTexture(entry.color)
       if (entry.depth) this.gl.deleteTexture(entry.depth)
+      if (entry.bound) this.gl.deleteTexture(entry.bound.texture)
       if (entry.normal) this.gl.deleteTexture(entry.normal)
     }
   }
@@ -266,6 +267,7 @@ class DepthArtRenderer {
       gl.activeTexture(gl.TEXTURE0)
       entry.color = this.createTexture(color, gl.RGBA)
       entry.depth = this.createTexture(depth, gl.LUMINANCE)
+      entry.bound = createDepthBound(gl, this.programs, entry.depth, depth.width, depth.height)
       entry.normal = this.createTexture(normal, gl.RGB)
       entry.state = 'ready'
     }
@@ -414,6 +416,7 @@ class DepthArtRenderer {
         gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
         gl.uniform2f(cache.uniforms.gyro, item.px, item.py)
         gl.uniform1f(cache.uniforms.steps, item.steps)
+        bindDepthBound(gl, this.programs, cache.uniforms, item.entry.bound)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
         Object.assign(view.cache, { art: item.entry, px: item.px, py: item.py, ready: true })
       }
@@ -434,6 +437,7 @@ class DepthArtRenderer {
         gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
         gl.uniform2f(full.uniforms.gyro, item.px, item.py)
         gl.uniform1f(full.uniforms.steps, item.steps)
+        bindDepthBound(gl, this.programs, full.uniforms, item.entry.bound)
         if (lit) setLightRect(gl, full.uniforms, item.rect)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
       }

@@ -136,7 +136,45 @@ const LIGHT_UNIFORMS = `
   uniform float u_pulse;
 `
 
+const MARCH_BOUND = `
+  #ifdef MARCH_BOUND
+  uniform highp sampler2D u_depth_bound;
+  uniform float u_bound_levels;
+
+  float marchBound(vec2 uv, vec2 displacement) {
+    vec2 size = vec2(textureSize(u_depth, 0));
+    vec2 a = clamp(uv - 0.5 * displacement, 0.0, 1.0) * size - 0.5;
+    vec2 b = clamp(uv + 0.5 * displacement, 0.0, 1.0) * size - 0.5;
+    vec2 lo = clamp(floor(min(a, b)), vec2(0.0), size - 1.0);
+    vec2 hi = clamp(floor(max(a, b)) + 1.0, vec2(0.0), size - 1.0);
+    float span = max(hi.x - lo.x, hi.y - lo.y);
+    float level = span <= 1.0 ? 0.0 : ceil(log2(span));
+    float block = exp2(level);
+    if (floor(hi.x / block) - floor(lo.x / block) > 1.0 || floor(hi.y / block) - floor(lo.y / block) > 1.0) {
+      level += 1.0;
+      block *= 2.0;
+    }
+    if (level >= u_bound_levels) return 2.0;
+    int lod = int(level);
+    ivec2 last = textureSize(u_depth_bound, lod) - 1;
+    ivec2 c0 = min(ivec2(floor(lo / block)), last);
+    ivec2 c1 = min(ivec2(floor(hi / block)), last);
+    float top = max(
+      max(texelFetch(u_depth_bound, c0, lod).r, texelFetch(u_depth_bound, ivec2(c1.x, c0.y), lod).r),
+      max(texelFetch(u_depth_bound, ivec2(c0.x, c1.y), lod).r, texelFetch(u_depth_bound, c1, lod).r)
+    );
+    return top + 1.0 / 512.0;
+  }
+  #else
+  float marchBound(vec2 uv, vec2 displacement) {
+    return 2.0;
+  }
+  #endif
+`
+
 const PARALLAX = `
+  ${MARCH_BOUND}
+
   vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV) {
     float dispLen = length(displacement);
 
@@ -149,10 +187,16 @@ const PARALLAX = `
     vec2 testUV;
     float sampledDepth;
     bool hit = false;
+    float bound = marchBound(uv, displacement);
 
     for (int i = 0; i < LINEAR_STEPS; i++) {
       if (float(i) >= u_steps) break;
       testUV = uv - (testDepth - 0.5) * displacement;
+      if (testDepth > bound) {
+        prevTestDepth = testDepth;
+        testDepth -= layerStep;
+        continue;
+      }
       sampledDepth = texture2D(u_depth, clamp(testUV, 0.0, 1.0)).r;
 
       if (sampledDepth >= testDepth) {
@@ -319,6 +363,7 @@ const FULL_FRAGMENT = `
 const FULL_FRAGMENT_300 = `#version 300 es
   precision highp float;
   #define texture2D texture
+  #define MARCH_BOUND
   ${PARALLAX_UNIFORMS}
   ${LIGHT_UNIFORMS}
   in vec2 v_texCoord;
@@ -350,9 +395,36 @@ const HIT_FLOAT = {
       vec2 hitUV = texture2D(u_cached_hit, cell).xy;`,
 }
 
+const BOUND_UNIT = 3
+const BUILD_UNIT = 4
+
+const BOUND_BUILD_FRAGMENT = `#version 300 es
+  precision highp float;
+  uniform highp sampler2D u_source;
+  uniform int u_reduce;
+  uniform int u_level;
+  out vec4 o_value;
+
+  void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 last = textureSize(u_source, u_level) - 1;
+    if (u_reduce == 0) {
+      o_value = vec4(all(lessThanEqual(p, last)) ? texelFetch(u_source, p, u_level).r : 0.0);
+      return;
+    }
+    ivec2 q = p * 2;
+    float top = max(
+      max(texelFetch(u_source, min(q, last), u_level).r, texelFetch(u_source, min(q + ivec2(1, 0), last), u_level).r),
+      max(texelFetch(u_source, min(q + ivec2(0, 1), last), u_level).r, texelFetch(u_source, min(q + ivec2(1, 1), last), u_level).r)
+    );
+    o_value = vec4(top);
+  }
+`
+
 const cacheFragment = hit => `#version 300 es
   precision highp float;
   #define texture2D texture
+  #define MARCH_BOUND
   ${PARALLAX_UNIFORMS}
   in vec2 v_texCoord;
   layout(location = 0) out vec4 o_color;
@@ -451,16 +523,100 @@ export function createDepthArtPrograms(gl) {
     try {
       const floatHit = !!gl.getExtension('EXT_color_buffer_float')
       const hit = floatHit ? HIT_FLOAT : HIT_PACKED
-      const cache = linkProgram(gl, VERTEX_300, cacheFragment(hit), PARALLAX_UNIFORM_NAMES, { color: 0, depth: 1 })
+      const builder = linkProgram(gl, VERTEX_300, BOUND_BUILD_FRAGMENT, ['u_source', 'u_reduce', 'u_level'], { source: BUILD_UNIT })
+      const cache = linkProgram(gl, VERTEX_300, cacheFragment(hit), [...PARALLAX_UNIFORM_NAMES, 'u_depth_bound', 'u_bound_levels'], { color: 0, depth: 1, depth_bound: BOUND_UNIT })
       const relight = linkProgram(gl, VERTEX_100, relightFragment(hit), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
-      const full = linkProgram(gl, VERTEX_300, FULL_FRAGMENT_300, fullUniforms, fullSamplers)
-      return { full, cache, relight, floatHit }
+      const full = linkProgram(gl, VERTEX_300, FULL_FRAGMENT_300, [...fullUniforms, 'u_depth_bound', 'u_bound_levels'], { ...fullSamplers, depth_bound: BOUND_UNIT })
+      const noBound = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, noBound)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+      return { full, cache, relight, floatHit, bound: { builder, noBound } }
     } catch (error) {
       logger.warn('[DepthArt] Parallax cache unavailable:', error)
     }
   }
   const full = linkProgram(gl, VERTEX_100, FULL_FRAGMENT, fullUniforms, fullSamplers)
-  return { full, cache: null, relight: null, floatHit: false }
+  return { full, cache: null, relight: null, floatHit: false, bound: null }
+}
+
+export function createDepthBound(gl, programs, depthTexture, width, height) {
+  const state = programs.bound
+  if (!state || state.failed) return null
+  try {
+    const bound = buildDepthBound(gl, state.builder, depthTexture, width, height, !state.verified)
+    if (!state.verified) {
+      state.verified = true
+      if (!bound || gl.getError() !== gl.NO_ERROR) throw new Error('depth bound did not render')
+    }
+    return bound
+  } catch (error) {
+    state.failed = true
+    logger.warn('[DepthArt] Depth bound unavailable, full march:', error)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    return null
+  }
+}
+
+function buildDepthBound(gl, builder, depthTexture, width, height, verify) {
+  const levelWidth = 2 ** Math.ceil(Math.log2(Math.max(1, width)))
+  const levelHeight = 2 ** Math.ceil(Math.log2(Math.max(1, height)))
+  const levels = Math.log2(Math.max(levelWidth, levelHeight)) + 1
+  const texture = gl.createTexture()
+  gl.activeTexture(gl.TEXTURE0 + BUILD_UNIT)
+  gl.bindTexture(gl.TEXTURE_2D, texture)
+  gl.texStorage2D(gl.TEXTURE_2D, levels, gl.R8, levelWidth, levelHeight)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_NEAREST)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+  const { program, uniforms } = builder
+  const framebuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+  gl.useProgram(program)
+
+  gl.bindTexture(gl.TEXTURE_2D, depthTexture)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0)
+  if (verify && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.deleteFramebuffer(framebuffer)
+    gl.deleteTexture(texture)
+    return null
+  }
+  gl.viewport(0, 0, levelWidth, levelHeight)
+  gl.uniform1i(uniforms.reduce, 0)
+  gl.uniform1i(uniforms.level, 0)
+  gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+  if (levels > 1) {
+    const scratch = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, scratch)
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.R8, Math.max(1, levelWidth >> 1), Math.max(1, levelHeight >> 1))
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, scratch, 0)
+    gl.uniform1i(uniforms.reduce, 1)
+    for (let level = 1; level < levels; level++) {
+      const width = Math.max(1, levelWidth >> level)
+      const height = Math.max(1, levelHeight >> level)
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.uniform1i(uniforms.level, level - 1)
+      gl.viewport(0, 0, width, height)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+      gl.copyTexSubImage2D(gl.TEXTURE_2D, level, 0, 0, 0, 0, width, height)
+    }
+    gl.deleteTexture(scratch)
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  gl.deleteFramebuffer(framebuffer)
+  return { texture, levels }
+}
+
+export function bindDepthBound(gl, programs, uniforms, bound) {
+  if (!programs.bound) return
+  gl.activeTexture(gl.TEXTURE0 + BOUND_UNIT)
+  gl.bindTexture(gl.TEXTURE_2D, bound ? bound.texture : programs.bound.noBound)
+  gl.uniform1f(uniforms.bound_levels, bound ? bound.levels : 0)
 }
 
 export function createParallaxCache(gl, width, height, floatHit) {
