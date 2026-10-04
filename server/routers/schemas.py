@@ -1,4 +1,4 @@
-from typing import Literal, Optional, List
+from typing import Dict, Literal, Optional, List, Union
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -77,6 +77,7 @@ class UserProfileUpdate(BaseModel):
     video_clips_enabled: Optional[bool] = None
     visual_quality: Optional[str] = None
     lit_artwork: Optional[bool] = None
+    ui_settings: Optional[Dict[str, Union[bool, str]]] = None
 
 class DirectReplyUploadRequest(BaseModel):
     audio: str = Field(..., max_length=settings.MAX_BASE64_AUDIO_CHARS)

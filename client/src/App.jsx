@@ -43,7 +43,7 @@ import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
-import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, TrackDataLoader, UploadNotice} from './components/AppBridges'
+import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, TrackDataLoader, UploadNotice} from './components/AppBridges'
 import {DepthArtBridge} from './components/DepthArt'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
@@ -724,11 +724,6 @@ function App() {
     if (normalizedType) publishContentUpdate(normalizedType)
   })
 
-  useWebSocketSubscribe('user_settings_updated', (data) => {
-    logger.info('[App] 📢 User settings updated from another device:', data)
-    publishSettings(data)
-  })
-
   const QueuePanel = useMemo(() => (
     <Queue
       onSeedRadio={handleOpenSeedModal}
@@ -796,6 +791,7 @@ function App() {
         <OnAirNotice />
         <DJActivityBridge />
         <DepthArtBridge />
+        <SettingsSyncBridge />
         <KeyboardControls
         showLogin={showLogin}
         showRegister={showRegister}

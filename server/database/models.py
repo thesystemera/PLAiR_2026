@@ -1,3 +1,4 @@
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import Column, Integer, BigInteger, String, Date, DateTime, ForeignKey, Enum, UniqueConstraint, Index, Boolean, Text, Float, LargeBinary, Identity
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ class User(Base):
     fps_enabled = Column(Boolean, default=False)
     video_clips_enabled = Column(Boolean, default=False)  # Enable video clips in visuals and shared videos
     lit_artwork = Column(Boolean, default=True, server_default="true", nullable=False)
+    ui_settings = Column(JSONB, default=dict, server_default="{}", nullable=False)
     visual_quality = Column(String, default="high")  # high, medium, low - controls AudioReactiveCanvas shader complexity
 
     subscribed = Column(Boolean, default=False, nullable=False)

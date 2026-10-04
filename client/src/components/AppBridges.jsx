@@ -286,3 +286,77 @@ export function DeviceLinkBridge() {
 
   return null
 }
+
+const DEVICE_SETTING_KEYS = ['dataSaverMode', 'costTickerEnabled', 'autoClaimOnOpen']
+const SYNCED_UI_SETTINGS = [...DEVICE_SETTING_KEYS, 'backgroundDownloads', 'radioInput']
+const SETTINGS_SYNC_DELAY_MS = 800
+
+export function SettingsSyncBridge() {
+  const { user } = useAuth()
+  const {
+    dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput,
+    publishSettings, publishDownloadState, setRadioInput,
+  } = useUISelector(state => ({
+    dataSaverMode: !!state.settingsState.dataSaverMode,
+    costTickerEnabled: !!state.settingsState.costTickerEnabled,
+    autoClaimOnOpen: state.settingsState.autoClaimOnOpen !== false,
+    backgroundDownloads: state.downloadState.isEnabled !== false,
+    radioInput: state.interfaceState.radioInput,
+    publishSettings: state.publishSettings,
+    publishDownloadState: state.publishDownloadState,
+    setRadioInput: state.setRadioInput,
+  }))
+  const syncedRef = useRef(null)
+  const appliedForRef = useRef(null)
+
+  const apply = useCallback((saved) => {
+    const settings = {}
+    for (const [key, value] of Object.entries(saved || {})) {
+      if (key === 'backgroundDownloads') {
+        if (typeof value === 'boolean') publishDownloadState({ isEnabled: value })
+      } else if (key === 'radioInput') {
+        if (value === 'voice' || value === 'text') setRadioInput(value)
+      } else {
+        settings[key] = value
+      }
+    }
+    if (Object.keys(settings).length) publishSettings(settings)
+    if (syncedRef.current) {
+      for (const key of SYNCED_UI_SETTINGS) {
+        if (saved && key in saved) syncedRef.current[key] = saved[key]
+      }
+    }
+  }, [publishSettings, publishDownloadState, setRadioInput])
+
+  useEffect(() => {
+    if (!user) {
+      appliedForRef.current = null
+      syncedRef.current = null
+      return
+    }
+    if (appliedForRef.current === user.id) return
+    appliedForRef.current = user.id
+    syncedRef.current = {}
+    apply(user.ui_settings || {})
+  }, [user, apply])
+
+  useWebSocketSubscribe('user_settings_updated', (data) => {
+    logger.info('[Settings] Updated from another device:', data)
+    apply(data)
+  })
+
+  useEffect(() => {
+    const synced = syncedRef.current
+    if (!user || !synced) return
+    const values = { dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput }
+    const changes = Object.fromEntries(SYNCED_UI_SETTINGS.filter(key => synced[key] !== values[key]).map(key => [key, values[key]]))
+    if (!Object.keys(changes).length) return
+    const timer = setTimeout(() => {
+      Object.assign(synced, changes)
+      api.updateUserProfile({ ui_settings: changes }).catch(err => logger.warn('[Settings] Saving to the account failed:', err))
+    }, SETTINGS_SYNC_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [user, dataSaverMode, costTickerEnabled, autoClaimOnOpen, backgroundDownloads, radioInput])
+
+  return null
+}

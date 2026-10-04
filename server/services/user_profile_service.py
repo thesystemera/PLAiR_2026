@@ -8,6 +8,9 @@ from services.user_data_cache_service import user_data_cache
 if TYPE_CHECKING:
     from services.websocket_service import WebSocketService
 
+UI_SETTING_KEYS = ('dataSaverMode', 'costTickerEnabled', 'autoClaimOnOpen', 'backgroundDownloads', 'radioInput')
+
+
 class UserProfileService:
 
     def __init__(self):
@@ -103,6 +106,7 @@ class UserProfileService:
             "video_clips_enabled": user.video_clips_enabled,
             "visual_quality": user.visual_quality,
             "lit_artwork": user.lit_artwork,
+            "ui_settings": user.ui_settings or {},
             "audio_quality": user.audio_quality,
             "engagements_since_last_update": user.engagements_since_last_update,
             "last_login": last_login_str,
@@ -146,6 +150,10 @@ class UserProfileService:
         if updates.get("lit_artwork") is not None:
             user.lit_artwork = updates["lit_artwork"]  # type: ignore
             settings_to_broadcast["litArtwork"] = user.lit_artwork
+        if updates.get("ui_settings"):
+            merged = {**(user.ui_settings or {}), **updates["ui_settings"]}
+            user.ui_settings = {key: merged[key] for key in UI_SETTING_KEYS if key in merged}  # type: ignore
+            settings_to_broadcast.update(user.ui_settings)  # type: ignore
         if updates.get("persona") is not None:
             user.persona = updates["persona"]  # type: ignore
         if updates.get("profile") is not None:

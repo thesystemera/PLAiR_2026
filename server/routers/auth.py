@@ -100,6 +100,7 @@ async def get_me(
         "video_clips_enabled": getattr(user, "video_clips_enabled", False),
         "visual_quality": getattr(user, "visual_quality", "high"),
         "lit_artwork": getattr(user, "lit_artwork", True),
+        "ui_settings": getattr(user, "ui_settings", None) or {},
         "persona": user.persona,
         "profile": user.profile,
         "shoutout_interests": user.shoutout_interests,

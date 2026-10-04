@@ -806,11 +806,14 @@ export function UIStateProvider({ children }) {
     reportInterfaceState({ catalogView: interfaceRef.current.catalogView === 'tracks' ? 'shoutouts' : 'tracks' })
   }, [reportInterfaceState])
 
-  const toggleRadioInput = useCallback(() => {
-    const radioInput = interfaceRef.current.radioInput === 'text' ? 'voice' : 'text'
+  const setRadioInput = useCallback((radioInput) => {
     safeStorage.set(RADIO_INPUT_KEY, radioInput)
     reportInterfaceState({ radioInput })
   }, [reportInterfaceState])
+
+  const toggleRadioInput = useCallback(() => {
+    setRadioInput(interfaceRef.current.radioInput === 'text' ? 'voice' : 'text')
+  }, [setRadioInput])
 
   const setMobilePanel = useCallback((index) => {
     reportInterfaceState({ currentMobilePanel: index })
@@ -1259,6 +1262,7 @@ export function UIStateProvider({ children }) {
     interfaceRef,
     toggleCatalogView,
     toggleRadioInput,
+    setRadioInput,
     setMobilePanel,
 
     shaderPanelRegions: shaderPanelRegionsRef,
@@ -1316,7 +1320,7 @@ export function UIStateProvider({ children }) {
     settingsState, publishSettings, contentUpdates, publishContentUpdate,
     notices, showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
-    reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
+    reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
     subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
     getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,

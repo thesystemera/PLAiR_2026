@@ -45,6 +45,7 @@ def migrate_users_table(conn):
     columns = {
         "visual_quality": "VARCHAR DEFAULT 'high' NOT NULL",
         "lit_artwork": "BOOLEAN DEFAULT true NOT NULL",
+        "ui_settings": "JSONB DEFAULT '{}'::jsonb NOT NULL",
         "stripe_subscription_id": "VARCHAR",
         "subscription_status": "VARCHAR",
         "current_period_end": "TIMESTAMP WITH TIME ZONE",
