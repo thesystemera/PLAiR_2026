@@ -1,4 +1,4 @@
-import { X, Radio, Heart, Star, Ban, TrendingUp } from 'lucide-react'
+import { X, Heart, Star, Ban, TrendingUp, Library, Sprout } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { flushSync } from 'react-dom'
 import { forwardRef, useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
@@ -248,7 +248,55 @@ const QueueRow = memo(forwardRef(function QueueRow({
   )
 }))
 
-function QueueComponent({ onSeedRadio, onAnalytics }) {
+const MODE_CAMPS = {
+  favorites: 'mine',
+  discovery: 'mine',
+  top_hits_all: 'charts',
+  top_hits_week: 'charts',
+  top_hits_day: 'charts',
+}
+
+function QueueModeButton({ icon: Icon, label, active, color, disabled, onOpen }) {
+  const { onPointerDown, onPointerMove, shouldTrigger } = usePointerInteraction()
+  const { getGrey400, getWhite, getButtonHoverBg } = useDynamicTheme()
+  const restBackground = active ? `${color}15` : 'transparent'
+
+  const handlePointerUp = (e) => {
+    e?.preventDefault()
+    if (!shouldTrigger()) return
+    triggerHaptic('medium')
+    onOpen()
+  }
+
+  return (
+    <button
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={handlePointerUp}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="ui-tap p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
+      style={{
+        color: active ? color : getGrey400(),
+        backgroundColor: restBackground,
+        borderColor: active ? `${color}30` : 'transparent'
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = active ? `${color}25` : getButtonHoverBg()
+        if (!active) e.currentTarget.style.color = getWhite()
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = restBackground
+        if (!active) e.currentTarget.style.color = getGrey400()
+      }}
+    >
+      <Icon size={16} />
+    </button>
+  )
+}
+
+function QueueComponent({ onSeedRadio, onList }) {
   const playback = usePlaybackActions()
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
@@ -263,7 +311,6 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
     getWhite,
     getGrey400,
     getGrey300,
-    getPrimaryActionText,
     getButtonHoverBg,
     getPanelBorder,
     getPlayingRingColor,
@@ -289,8 +336,6 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   } = usePointerInteraction()
   const currentTrackIdRef = useRef(currentTrackId)
   useEffect(() => { currentTrackIdRef.current = currentTrackId }, [currentTrackId])
-  const seedInteraction = usePointerInteraction()
-  const analyticsInteraction = usePointerInteraction()
 
   const handlePlay = useCallback((e, trackId) => {
     e?.preventDefault()
@@ -334,20 +379,6 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
       })
     })
   }, [playback, shouldTriggerRemove])
-
-  const handleSeedButtonClick = useCallback((e) => {
-    e?.preventDefault()
-    if (!seedInteraction.shouldTrigger()) return
-    triggerHaptic('medium')
-    onSeedRadio()
-  }, [seedInteraction, onSeedRadio])
-
-  const handleAnalyticsButtonClick = useCallback((e) => {
-    e?.preventDefault()
-    if (!analyticsInteraction.shouldTrigger()) return
-    triggerHaptic('medium')
-    onAnalytics()
-  }, [analyticsInteraction, onAnalytics])
 
   const rowColors = useMemo(() => ({
     panelBorder: getPanelBorder(),
@@ -513,58 +544,36 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
   }, [currentTrackId, loadingTrackId])
 
   const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
-  const SeedIcon = seedMeta?.icon || Radio
+  const activeCamp = activeSeedMode ? MODE_CAMPS[activeSeedMode] || 'seed' : null
+  const campLabel = (camp, name) => (activeCamp === camp ? `${name}: ${seedMeta.label}` : name)
 
   return (
     <div className="flex flex-col h-full relative">
         <PanelHeader title="Queue">
           {hasQueue && (
             <div className="flex items-center gap-2">
-              <button
-                onPointerDown={seedInteraction.onPointerDown}
-                onPointerMove={seedInteraction.onPointerMove}
-                onPointerUp={handleSeedButtonClick}
-                disabled={queue.length === 0}
-                className="ui-press flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
-                style={{
-                  color: activeSeedMode ? seedMeta.color : getPrimaryActionText(),
-                  backgroundColor: activeSeedMode ? `${seedMeta.color}15` : 'transparent',
-                  borderColor: activeSeedMode ? `${seedMeta.color}30` : 'transparent'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}25` : getButtonHoverBg()
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = activeSeedMode ? `${seedMeta.color}15` : 'transparent'
-                }}
-                title={activeSeedMode ? `Active Seed: ${seedMeta.label}` : "Seed Radio"}
-              >
-                <SeedIcon size={16} />
-                {activeSeedMode ? seedMeta.label : "Seed Radio"}
-              </button>
-              <button
-                onPointerDown={analyticsInteraction.onPointerDown}
-                onPointerMove={analyticsInteraction.onPointerMove}
-                onPointerUp={handleAnalyticsButtonClick}
-                disabled={queue.length === 0}
-                className="ui-tap p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
-                style={{
-                  color: getGrey400(),
-                  backgroundColor: 'transparent',
-                  borderColor: 'transparent'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = getButtonHoverBg()
-                  e.currentTarget.style.color = getWhite()
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                  e.currentTarget.style.color = getGrey400()
-                }}
-                title="Station Analytics"
-              >
-                <TrendingUp size={16} />
-              </button>
+              <QueueModeButton
+                icon={Library}
+                label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
+                active={activeCamp === 'mine'}
+                color={seedMeta?.color}
+                disabled={!isAuthenticated}
+                onOpen={() => onList('mine')}
+              />
+              <QueueModeButton
+                icon={Sprout}
+                label={campLabel('seed', 'Seed radio')}
+                active={activeCamp === 'seed'}
+                color={seedMeta?.color}
+                onOpen={onSeedRadio}
+              />
+              <QueueModeButton
+                icon={TrendingUp}
+                label={campLabel('charts', 'Charts')}
+                active={activeCamp === 'charts'}
+                color={seedMeta?.color}
+                onOpen={() => onList('charts')}
+              />
             </div>
           )}
         </PanelHeader>
@@ -626,5 +635,5 @@ function QueueComponent({ onSeedRadio, onAnalytics }) {
 
 export const Queue = memo(QueueComponent, (prevProps, nextProps) => {
   return prevProps.onSeedRadio === nextProps.onSeedRadio &&
-         prevProps.onAnalytics === nextProps.onAnalytics
+         prevProps.onList === nextProps.onList
 })

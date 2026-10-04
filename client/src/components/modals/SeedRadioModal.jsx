@@ -1,11 +1,8 @@
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useViewport } from '../../contexts/ViewportContext'
-import { useAuth } from '../../contexts/AuthContext'
 import { Modal, ModalSection, ModalOptionButton, ModalTitle } from './Modal'
 
 const SEED_OPTIONS = [
-  { id: 'favorites', label: 'My Favorites', description: 'Your library on shuffle' },
-  { id: 'discovery', label: 'Smart Discovery', description: 'Favorites + new gems' },
   { id: 'primary_genre', label: 'Main Genre', description: 'Same primary genre' },
   { id: 'secondary_genres', label: 'Sub-Genres', description: 'Similar sub-genres' },
   { id: 'mood', label: 'Mood', description: 'Similar vibes & feelings' },
@@ -20,7 +17,6 @@ const SEED_OPTIONS = [
 
 export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
   const { getCategoryMetadata } = useDynamicTheme()
-  const { isAuthenticated } = useAuth()
   const { isMobile } = useViewport()
 
   const handleSelect = (categoryId) => {
@@ -33,9 +29,6 @@ export function SeedRadioModal({ isOpen, onClose, onSelect, track }) {
   const availableCategories = SEED_OPTIONS.filter(option => {
     if (isInstrumental && (option.id === 'vocal' || option.id === 'lyrics')) {
       return false
-    }
-    if (option.id === 'favorites' || option.id === 'discovery') {
-      return isAuthenticated
     }
     return !(!hasArtist && (option.id === 'primary_artist' || option.id === 'similar_artists'));
   })

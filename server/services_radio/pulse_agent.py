@@ -9,7 +9,8 @@ from services import log_service
 from services.llm_router import LLM_INTERPRET
 from google.genai import types
 
-from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS, READ_TOOLS, DJToolRuntime, DJTurnContext
+from services_radio.dj_tool_registry import DJ_FUNCTION_DECLARATIONS, READ_TOOLS
+from services_radio.dj_tools import DJToolRuntime, DJTurnContext
 from services_radio.pulse import get_pulse
 
 AGENT_TOOLS = [

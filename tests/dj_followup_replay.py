@@ -28,7 +28,7 @@ from services_radio import context_nodes  # noqa: E402,F401
 from services_radio.context_node_registry import node_registry  # noqa: E402
 from services_radio.dj_prompt_helper_service import assemble_prompt  # noqa: E402
 from services.ai_service import HANDED_OFF_NOTE, LINE_AIRED_NOTE  # noqa: E402
-from services_radio.dj_tools import DJ_FUNCTION_DECLARATIONS, SEGMENT_TOOLS  # noqa: E402
+from services_radio.dj_tool_registry import DJ_FUNCTION_DECLARATIONS, SEGMENT_TOOLS  # noqa: E402
 
 SYSTEM_NODES = ['core_dj_identity', 'format_channels', 'format_tone',
                 'format_performance_tags_guide', 'format_performance_tag_examples', 'format_roles_detailed',

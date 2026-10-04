@@ -223,7 +223,6 @@ class TTSGenerationService:
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
         self._http_session = None
-        self.upscaler.close()
 
     def open_turn(self, group: Hashable):
         self.engine_slots.set_group_limit(group, TURN_GENERATION_PARALLEL_START)

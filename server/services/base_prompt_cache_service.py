@@ -232,7 +232,7 @@ class BasePromptCacheService(SingletonService):
         analysis = await self._call_gemini_for_analysis(query)
 
         if analysis and self.vector_db_service:
-            await self._save_to_cache(query, analysis)
+            spawn(self._save_to_cache(query, analysis), name=f"{self.table_name}_save")
             self._log_cache_performance()
 
         return analysis

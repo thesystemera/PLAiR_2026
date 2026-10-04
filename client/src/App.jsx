@@ -51,7 +51,7 @@ const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ defaul
 const LAZY_MODULE_LOADERS = [
   () => import('./components/AudioReactiveCanvas'),
   () => import('./components/modals/SeedRadioModal'),
-  () => import('./components/modals/TrackAnalyticsModal'),
+  () => import('./components/modals/ListModal'),
   () => import('./components/modals/ShoutoutModal'),
   () => import('./components/modals/ReviewModal'),
   () => import('./components/modals/GenerationModal'),
@@ -64,7 +64,7 @@ const LAZY_MODULE_LOADERS = [
 const [
   loadAudioReactiveCanvas,
   loadSeedRadioModal,
-  loadTrackAnalyticsModal,
+  loadListModal,
   loadShoutoutModal,
   loadReviewModal,
   loadGenerationModal,
@@ -76,7 +76,7 @@ const [
 
 const AudioReactiveCanvas = lazyNamed(loadAudioReactiveCanvas, 'AudioReactiveCanvas')
 const SeedRadioModal = lazyNamed(loadSeedRadioModal, 'SeedRadioModal')
-const TrackAnalyticsModal = lazyNamed(loadTrackAnalyticsModal, 'TrackAnalyticsModal')
+const ListModal = lazyNamed(loadListModal, 'ListModal')
 const ShoutoutModal = lazyNamed(loadShoutoutModal, 'ShoutoutModal')
 const ReviewModal = lazyNamed(loadReviewModal, 'ReviewModal')
 const GenerationModal = lazyNamed(loadGenerationModal, 'GenerationModal')
@@ -152,7 +152,7 @@ function App() {
   const [showRegister, setShowRegister] = useState(false)
   const [showSeedModal, setShowSeedModal] = useState(false)
   const [seedModalTrack, setSeedModalTrack] = useState(null)
-  const [showAnalyticsModal, setShowAnalyticsModal] = useState(false)
+  const [listModal, setListModal] = useState({ open: false, kind: 'charts' })
   const [showGenerationModal, setShowGenerationModal] = useState(false)
   const [generationModalTrack, setGenerationModalTrack] = useState(null)
   const [compatibilityWarningDismissed, setCompatibilityWarningDismissed] = useState(() => !!safeStorage.get('plair_compatibility_warning_dismissed'))
@@ -585,7 +585,7 @@ function App() {
   const handleCloseLogin = useCallback(() => setShowLogin(false), [])
   const handleCloseRegister = useCallback(() => setShowRegister(false), [])
   const handleCloseSeedModal = useCallback(() => setShowSeedModal(false), [])
-  const handleCloseAnalyticsModal = useCallback(() => setShowAnalyticsModal(false), [])
+  const handleCloseListModal = useCallback(() => setListModal(prev => ({ ...prev, open: false })), [])
   const handleCloseGenerationModal = useCallback(() => setShowGenerationModal(false), [])
   const handleCloseCompatibilityWarning = useCallback(() => {
     safeStorage.set('plair_compatibility_warning_dismissed', 'true')
@@ -607,9 +607,9 @@ function App() {
     })
   }, [getUIState])
 
-  const handleOpenAnalyticsModal = useCallback(() => {
+  const handleOpenListModal = useCallback((kind) => {
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
-    startTransition(() => setShowAnalyticsModal(true))
+    startTransition(() => setListModal({ open: true, kind }))
   }, [])
 
   const handleOpenGenerationModal = useCallback((track) => {
@@ -633,10 +633,10 @@ function App() {
     handleCloseSeedModal()
   }, [seedRadio, handleCloseSeedModal])
 
-  const handleAnalyticsSelect = useCallback(async (category) => {
+  const handleListSelect = useCallback(async (category) => {
     await seedRadio(category)
-    handleCloseAnalyticsModal()
-  }, [seedRadio, handleCloseAnalyticsModal])
+    handleCloseListModal()
+  }, [seedRadio, handleCloseListModal])
 
   const handleGenerateJobs = useCallback(async (jobs) => {
     if (!generationModalTrack || hasActiveJobs || jobs.length === 0) {
@@ -732,9 +732,9 @@ function App() {
   const QueuePanel = useMemo(() => (
     <Queue
       onSeedRadio={handleOpenSeedModal}
-      onAnalytics={handleOpenAnalyticsModal}
+      onList={handleOpenListModal}
     />
-  ), [handleOpenSeedModal, handleOpenAnalyticsModal])
+  ), [handleOpenSeedModal, handleOpenListModal])
 
   const LibraryPanel = useMemo(() => (
     <Catalog
@@ -1034,11 +1034,12 @@ function App() {
           />
         </LazyMount>
 
-        <LazyMount when={showAnalyticsModal}>
-          <TrackAnalyticsModal
-            isOpen={showAnalyticsModal}
-            onClose={handleCloseAnalyticsModal}
-            onSelect={handleAnalyticsSelect}
+        <LazyMount when={listModal.open}>
+          <ListModal
+            isOpen={listModal.open}
+            kind={listModal.kind}
+            onClose={handleCloseListModal}
+            onSelect={handleListSelect}
           />
         </LazyMount>
 

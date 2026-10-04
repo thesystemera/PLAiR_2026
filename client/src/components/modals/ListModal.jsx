@@ -1,14 +1,27 @@
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { Modal, ModalSection, ModalOptionButton } from './Modal'
 
-const ANALYTICS_OPTIONS = [
-  { id: 'top_hits_all', description: 'Most popular tracks ever' },
-  { id: 'top_hits_week', description: 'Hot tracks from the last 7 days' },
-  { id: 'top_hits_day', description: 'Trending tracks from today' },
-]
+const LIST_MODALS = {
+  mine: {
+    title: 'Your Music',
+    options: [
+      { id: 'favorites', description: 'Your library on shuffle' },
+      { id: 'discovery', description: 'Favorites + new gems' },
+    ],
+  },
+  charts: {
+    title: 'Charts',
+    options: [
+      { id: 'top_hits_all', description: 'Most popular tracks ever' },
+      { id: 'top_hits_week', description: 'Hot tracks from the last 7 days' },
+      { id: 'top_hits_day', description: 'Trending tracks from today' },
+    ],
+  },
+}
 
-export function TrackAnalyticsModal({ isOpen, onClose, onSelect }) {
+export function ListModal({ isOpen, kind, onClose, onSelect }) {
   const { getCategoryMetadata } = useDynamicTheme()
+  const list = LIST_MODALS[kind]
 
   const handleSelect = (categoryId) => {
     onSelect(categoryId)
@@ -19,12 +32,12 @@ export function TrackAnalyticsModal({ isOpen, onClose, onSelect }) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Station Analytics"
+      title={list?.title}
       maxWidth="max-w-md"
     >
       <ModalSection>
         <div className="grid gap-3 grid-cols-1">
-          {ANALYTICS_OPTIONS.map((option) => {
+          {(list?.options || []).map((option) => {
             const metadata = getCategoryMetadata(option.id)
 
             return (

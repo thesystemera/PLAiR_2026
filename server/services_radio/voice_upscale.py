@@ -1,12 +1,10 @@
 import contextlib
 import io
 import os
-import shutil
-import tempfile
 import threading
 import time
 import uuid
-from typing import Optional, Tuple
+from typing import Tuple
 
 import librosa
 import numpy as np
@@ -29,7 +27,6 @@ class VoiceUpscaler:
     def __init__(self):
         self._model = None
         self._lock = threading.Lock()
-        self._workdir: Optional[str] = None
 
     @property
     def ready(self) -> bool:
@@ -42,22 +39,19 @@ class VoiceUpscaler:
         started = time.perf_counter()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self._model = ClearVoice(task='speech_super_resolution', model_names=[settings.TTS_UPSCALE_MODEL])
-        self._workdir = tempfile.mkdtemp(prefix="voice_upscale_")
         log_service.success(f"✓ Voice upscaler ready ({settings.TTS_UPSCALE_MODEL}, "
                             f"{time.perf_counter() - started:.1f}s)")
-
-    def close(self):
-        if self._workdir:
-            shutil.rmtree(self._workdir, ignore_errors=True)
 
     def upscale(self, pcm: bytes, rate: int) -> Tuple[bytes, int]:
         samples = np.frombuffer(pcm[:len(pcm) - len(pcm) % 2], dtype=np.int16).astype(np.float32) / 32768
         if len(samples) == 0:
             return pcm, rate
         wide = librosa.resample(samples, orig_sr=rate, target_sr=UPSCALE_RATE) if rate != UPSCALE_RATE else samples
-        path = os.path.join(self._workdir, f"{uuid.uuid4().hex}.wav")
+        workdir = settings.VOICE_UPSCALE_DIR
+        path = os.path.join(str(workdir), f"{uuid.uuid4().hex}.wav")
         try:
             with self._lock:
+                os.makedirs(workdir, exist_ok=True)
                 sf.write(path, np.pad(wide, (0, max(0, int(MIN_MODEL_SECONDS * UPSCALE_RATE) - len(wide)))),
                          UPSCALE_RATE)
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

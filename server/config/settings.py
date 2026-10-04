@@ -82,6 +82,7 @@ class Settings:
     BREATH_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "breath_audio"
     AUDIO_EFFECT_DIR: Path = TTS_ENGINE_DATA_DIR / "audio_effect_audio"
     STUDIO_AUDIO_DIR: Path = TTS_ENGINE_DATA_DIR / "studio_audio"
+    VOICE_UPSCALE_DIR: Path = BASE_DIR / "data" / "tmp" / "voice_upscale"
 
     # All vector databases and embeddings stored here
     EMBEDDINGS_DIR: Path = Path(os.getenv("EMBEDDINGS_DIR") or BASE_DIR / "data" / "embeddings")

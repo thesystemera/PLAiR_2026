@@ -69,7 +69,7 @@ class NodeSelection(BaseModel):
 
 
 def tool_names() -> set:
-    from services_radio.dj_tools import TOOL_NAMES
+    from services_radio.dj_tool_registry import TOOL_NAMES
     return TOOL_NAMES
 
 
@@ -113,7 +113,7 @@ def stated_pulse(pulse: Dict, user_input: str) -> Dict:
 
 
 def tool_menu() -> str:
-    from services_radio.dj_tools import tool_catalog
+    from services_radio.dj_tool_registry import tool_catalog
     return tool_catalog()
 
 def _selection_pulse(selection) -> Dict:
@@ -346,7 +346,7 @@ class ContextRouterService(SingletonService):
 
         if selection:
             if use_cache:
-                await self._save_to_cache(user_input, selection, system_prompt, user_prompt)
+                spawn(self._save_to_cache(user_input, selection, system_prompt, user_prompt), name="producer_cache_save")
                 self._log_cache_performance()
             route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan,
                                 _selection_pulse(selection), "fresh plan")

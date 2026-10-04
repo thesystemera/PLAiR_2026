@@ -533,7 +533,8 @@ class ConversationService:
             log_service.error(f"{log_service.who(session_id)}: impulse failed: {e}")
 
     async def _process_tool_turn(self, transcription, user_id, session_id, is_guest, session_dict, origin):
-        from services_radio.dj_tools import DJToolRuntime, DJTurnContext, tool_activity
+        from services_radio.dj_tool_display import tool_activity
+        from services_radio.dj_tools import DJToolRuntime, DJTurnContext
 
         if self.dj_prompt_service is None:
             raise RuntimeError("dj_prompt_service not initialized")

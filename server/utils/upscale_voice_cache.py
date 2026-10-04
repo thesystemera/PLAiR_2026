@@ -54,7 +54,6 @@ def main():
             print(f'failed {path}: {e}', flush=True)
         if number % 50 == 0:
             print(f'{number}/{len(files)} checked, {done} upscaled', flush=True)
-    upscaler.close()
     print(f'{done} of {len(files)} takes upscaled in {time.perf_counter() - started:.0f}s')
 
 
