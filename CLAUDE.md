@@ -745,6 +745,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/offlineAPIWrites.js` - Offline part: likes, bans and profile changes queued for replay when back online, cached user.
 - `client/src/lib/offlineStorage.js` - IndexedDB store for downloaded tracks and metadata normalisation.
 - `client/src/lib/offlineVideoRenderer.js` - Renders share videos frame by frame with the shared shaders and encodes MP4.
+- `client/src/lib/panelReveal.js` - Panel slide reveal: fixes open panels' contents at their final width during a slide (no per-frame reflow), switched on automatically after janky slides (`plair_panel_reveal` = on/off overrides).
 - `client/src/lib/passkeys.js` - WebAuthn passkey helpers: login, sign-up, add and silent upgrade.
 - `client/src/lib/playbackSync.js` - Pure helpers ordering server playback snapshots against pending commands and acks.
 - `client/src/lib/renderPause.js` - Briefly pauses scene rendering while modals open or close.

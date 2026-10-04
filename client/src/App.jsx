@@ -45,6 +45,7 @@ import {KeyboardControls} from './components/KeyboardControls'
 import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, TrackDataLoader, UploadNotice} from './components/AppBridges'
 import {DepthArtBridge, ProfileArt} from './components/DepthArt'
 import {noteLayoutMotion} from './lib/lightProbe'
+import {finalPanelWidths, panelRevealEnabled, watchPanelSlide} from './lib/panelReveal'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -88,6 +89,7 @@ const UsageStatsModal = lazyNamed(() => import('./components/modals/UsageStatsMo
 const CostTicker = lazyNamed(() => import('./components/CostTicker'), 'CostTicker')
 
 const CONTENT_UPDATE_TYPES = { track: 'tracks', shoutout: 'shoutouts', reply: 'shoutouts', review: 'reviews' }
+const PANEL_FIT_HOLD_MS = 900
 
 const canvasFallback =<div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
 
@@ -167,6 +169,9 @@ function App() {
     nowPlaying: true,
     user: true
   })
+  const [panelFits, setPanelFits] = useState(null)
+  const panelRowRef = useRef(null)
+  const panelFitTimerRef = useRef(null)
 
   const { playTrack, seek, seedRadio, reloadCurrentTrackQuality, audio } = usePlaybackActions()
   const { user, isAuthenticated, logout, refreshUser, loading: authLoading, sessionExpiredCount } = useAuth()
@@ -785,6 +790,19 @@ function App() {
     ]
   }, [QueuePanel, CatalogPanel, RadioPanel, NowPlayingPanel, UserPanel])
 
+  const togglePanel = useCallback((stateKey) => {
+    const next = { ...panelStates, [stateKey]: !panelStates[stateKey] }
+    if (panelRevealEnabled() && panelRowRef.current) {
+      setPanelFits(finalPanelWidths(panelRowRef.current, panelStructure.map(panel => panel.stateKey), next))
+      clearTimeout(panelFitTimerRef.current)
+      panelFitTimerRef.current = setTimeout(() => setPanelFits(null), PANEL_FIT_HOLD_MS)
+    }
+    setPanelStates(next)
+    watchPanelSlide()
+  }, [panelStates, panelStructure])
+
+  useEffect(() => () => clearTimeout(panelFitTimerRef.current), [])
+
   return (
     <DialogProvider>
       <VoiceRecordingProvider mixerRef={audio?.mixerRef}>
@@ -848,6 +866,7 @@ function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: isFullscreenVisuals ? 0 : 1 }}
               transition={PANEL_FADE_TRANSITION}
+              ref={panelRowRef}
               className="flex flex-1 gap-4 p-4 relative z-10 overflow-hidden"
               style={{
                 paddingBottom: `${playerHeight + 16}px`,
@@ -859,7 +878,8 @@ function App() {
                   key={id}
                   {...PANEL_CONFIG[id]}
                   isOpen={panelStates[stateKey]}
-                  onToggle={() => setPanelStates(prev => ({ ...prev, [stateKey]: !prev[stateKey] }))}
+                  contentWidth={panelFits?.[stateKey]}
+                  onToggle={() => togglePanel(stateKey)}
                 >
                   {id === PANEL_IDS.RADIO ? <div className="h-full overflow-y-auto">{content}</div> : content}
                 </Panel>

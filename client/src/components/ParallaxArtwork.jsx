@@ -6,7 +6,7 @@ import { isSceneRenderingPaused } from '../lib/renderPause'
 import { logger } from '../lib/logger'
 import { CSS_TRANSITION } from '../lib/motion'
 import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
-import { noteLightConsumer, readLightProbe } from '../lib/lightProbe'
+import { layoutMotionAge, noteLightConsumer, readLightProbe } from '../lib/lightProbe'
 import { normalFullCache } from '../lib/mediaCache'
 import { useDepthMap } from '../hooks/useDepthMap'
 
@@ -15,7 +15,8 @@ const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
 const CACHE_AFTER_STILL_DRAWS = 2
-const RESIZE_SETTLE_MS = 150
+const RESIZE_SETTLE_MS = 300
+const RESIZE_IDLE_TIMEOUT_MS = 500
 const PLACEMENT_REFRESH_MS = 250
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: false }
 
@@ -543,14 +544,29 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     if (!canvas) return
 
     let settleTimer = null
+    let idleHandle = null
     let sized = false
     const applySize = (width, height) => {
       settleTimer = null
+      idleHandle = null
       sized = true
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width
         canvas.height = height
       }
+    }
+    const scheduleSize = (width, height) => {
+      if (settleTimer) clearTimeout(settleTimer)
+      if (idleHandle) cancelIdleCallback(idleHandle)
+      idleHandle = null
+      settleTimer = setTimeout(() => {
+        if (layoutMotionAge() < RESIZE_SETTLE_MS) {
+          scheduleSize(width, height)
+          return
+        }
+        if (typeof requestIdleCallback === 'function') idleHandle = requestIdleCallback(() => applySize(width, height), { timeout: RESIZE_IDLE_TIMEOUT_MS })
+        else applySize(width, height)
+      }, RESIZE_SETTLE_MS)
     }
 
     const resizeObserver = new ResizeObserver(entries => {
@@ -567,15 +583,15 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           height = Math.round(entry.contentRect.height * dpr)
         }
 
-        if (settleTimer) clearTimeout(settleTimer)
         if (!sized) applySize(width, height)
-        else settleTimer = setTimeout(applySize, RESIZE_SETTLE_MS, width, height)
+        else scheduleSize(width, height)
       }
     })
 
     resizeObserver.observe(canvas)
     return () => {
       if (settleTimer) clearTimeout(settleTimer)
+      if (idleHandle) cancelIdleCallback(idleHandle)
       resizeObserver.disconnect()
     }
   }, [parallaxDpr])

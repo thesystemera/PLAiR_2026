@@ -10,7 +10,7 @@ const CONTRAST_FLOOR = 0.03
 const MAX_INTENSITY = 2.5
 const CONSUMER_TIMEOUT_MS = 250
 const STALE_PROBE_MS = 1000
-const MOTION_QUIET_MS = 300
+const MOTION_QUIET_MS = 800
 
 const base = new Float32Array(CELLS * 3)
 const grid = new Float32Array(CELLS * 3)
@@ -49,6 +49,10 @@ export function noteLightConsumer(now) {
 
 export function noteLayoutMotion() {
   state.motionAt = performance.now()
+}
+
+export function layoutMotionAge() {
+  return performance.now() - state.motionAt
 }
 
 export function lightProbeWanted(now) {

@@ -186,7 +186,8 @@ export function Panel({
   children,
   collapsedWidth = '4%',
   expandedWidth = 'auto',
-  isFlexible = false
+  isFlexible = false,
+  contentWidth = null
 }) {
   const { getSecondaryText, getPrimaryText } = useDynamicTheme()
 
@@ -211,7 +212,8 @@ export function Panel({
           className="h-full flex flex-col relative"
           onClick={(e) => e.stopPropagation()}
           style={{
-            contain: 'layout paint'
+            contain: 'layout paint',
+            width: contentWidth ?? undefined
           }}
         >
           {children}

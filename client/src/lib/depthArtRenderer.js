@@ -12,6 +12,7 @@ const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
+const CANVAS_RESIZES_PER_FRAME = 3
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
@@ -318,6 +319,7 @@ class DepthArtRenderer {
     const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
     const batch = []
     let showing = false
+    let resized = 0
 
     for (const view of this.views) {
       const entry = view.entry
@@ -331,6 +333,10 @@ class DepthArtRenderer {
       showing = true
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
+      if (view.canvas.width !== width || view.canvas.height !== height) {
+        if (resized >= CANVAS_RESIZES_PER_FRAME) continue
+        resized++
+      }
       const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
       const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
       const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)

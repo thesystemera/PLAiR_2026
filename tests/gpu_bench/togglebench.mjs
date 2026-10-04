@@ -52,6 +52,7 @@ await evaluate(`(() => {
   localStorage.setItem('plair_settings', JSON.stringify({ ...saved, visualQuality: 'high', litArtwork: ${args.lit !== 'off'} }))
   localStorage.setItem('plair_quality_tier', '4')
   localStorage.setItem('plair_demo_mode_modal_seen', 'true')
+  ${args.reveal ? `localStorage.setItem('plair_panel_reveal', '${args.reveal}')` : ''}
 })()`)
 await send('Page.reload')
 await sleep(10000)
@@ -106,7 +107,7 @@ async function measure(label) {
       times.push(+(now - last).toFixed(1))
       last = now
       if (!action && now - start > 300) action = ${toggle}
-      if (now - start < 1800) requestAnimationFrame(step)
+      if (now - start < ${Number(args.ms || 1800)}) requestAnimationFrame(step)
       else resolve({ action, frames: times.length, over20: times.filter(t => t > 20).length, over34: times.filter(t => t > 34).length, max: Math.max(...times), times: times.slice(0, 80).join(' ') })
     }
     requestAnimationFrame(step)
@@ -121,7 +122,7 @@ async function measure(label) {
   for (const e of main) if (/^(Layout|UpdateLayoutTree|RecalcStyle|Paint|PrePaint|FunctionCall|EventDispatch|FireAnimationFrame|UpdateLayerTree|Commit|ParseHTML|IntersectionObserverController::computeIntersections|Blink.PrePaint.UpdateTime|LayerTreeHost::DoUpdateLayers|ScheduleStyleRecalculation|Document::recalcStyle|LocalFrameView::layout)$/.test(e.name)) totals[e.name] = (totals[e.name] || 0) + e.dur / 1000
   const layouts = main.filter(e => e.name === 'Layout')
   const longest = main.filter(e => e.dur > 16000).sort((a, b) => b.dur - a.dur).slice(0, 6).map(e => `${e.name} ${(e.dur / 1000).toFixed(1)}ms${e.args?.data?.functionName ? ' ' + e.args.data.functionName : ''}${e.args?.beginData?.stackTrace ? ' forced' : ''}`)
-  console.log(`--- ${label}: ${result.action}, ${result.frames} frames in 1.8 s, >20ms: ${result.over20}, >34ms: ${result.over34}, max ${result.max} ms`)
+  console.log(`--- ${label}: ${result.action}, ${result.frames} frames in ${Number(args.ms || 1800) / 1000} s, >20ms: ${result.over20}, >34ms: ${result.over34}, max ${result.max} ms`)
   console.log('   frame ms:', result.times)
   console.log('   main thread ms:', Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v.toFixed(1)}`).join(' | '))
   console.log(`   layouts: ${layouts.length}, total ${layouts.reduce((n, e) => n + e.dur, 0) / 1000} ms; longest tasks: ${longest.join(' ; ')}`)
@@ -129,6 +130,19 @@ async function measure(label) {
 }
 
 console.log('tiles:', await evaluate(`document.querySelectorAll('canvas[aria-hidden="true"]').length`), 'light:', await evaluate(`JSON.stringify(window.__plairLight?.read().level)`))
+if (args.shots) {
+  const { mkdirSync, writeFileSync } = await import('node:fs')
+  mkdirSync(args.shots, { recursive: true })
+  for (const label of ['close', 'open']) {
+    await evaluate(toggle)
+    for (const delay of [60, 160, 320, 1200]) {
+      await sleep(delay === 60 ? 60 : delay - [60, 160, 320, 1200][[60, 160, 320, 1200].indexOf(delay) - 1])
+      const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 70 })
+      writeFileSync(join(args.shots, `${label}-${delay}ms.jpg`), Buffer.from(shot.result.data, 'base64'))
+    }
+    await sleep(800)
+  }
+}
 await measure('close')
 await sleep(1500)
 await measure('open')
