@@ -151,7 +151,8 @@ class BackgroundTasksService:
 
     async def listener_request_maintainer(self):
         from service_registry import services
-        from services_radio.pulse import demand, place_shoutouts
+        from services_radio.pulse_demand import demand
+        from services_radio.pulse_sources import place_shoutouts
         last_prune = 0.0
         while True:
             try:

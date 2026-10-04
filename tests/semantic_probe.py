@@ -15,6 +15,7 @@ from services.listener_request_service import ListenerRequestPromptCache, Listen
 from services.semantic_source import SemanticSearch  # noqa: E402
 from services_radio import area_signals, listener_location, local_knowledge  # noqa: E402
 from services_radio import pulse as pulse_kb  # noqa: E402
+from services_radio import pulse_items  # noqa: E402
 from services_radio import regional_knowledge as regional_kb  # noqa: E402
 from services_radio.area_geocode import ReverseGeocodeSignal  # noqa: E402
 from services_radio.external_events_service import EventsService  # noqa: E402
@@ -110,7 +111,7 @@ async def main() -> None:
     print(f"region={listener.region.key} nuggets={len(local_knowledge.local_vector_db.metas())}")
     probes = [(q, None, None) for q in args.queries] if args.queries else PROBES
     for text, kinds, when in probes:
-        items = await pulse.query(pulse_kb.PulseQuery(listener=listener, text=text, kinds=set(kinds) if kinds else None,
+        items = await pulse.query(pulse_items.PulseQuery(listener=listener, text=text, kinds=set(kinds) if kinds else None,
                                                       when=when, record_demand=False, use_ai=args.ai))
         print(f"== '{text}': {len(items)}")
         for item in items:

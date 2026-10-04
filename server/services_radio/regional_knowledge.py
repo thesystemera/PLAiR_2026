@@ -220,7 +220,7 @@ def _days_ahead(item: KnowledgeItem, now: datetime) -> Optional[float]:
 
 
 async def hot_topics(region: Region, node: str) -> list[str]:
-    from services_radio.pulse import demand
+    from services_radio.pulse_demand import demand
     try:
         topics = await demand.hot(region.key, days=7, min_askers=settings.PULSE_PREFETCH_MIN_ASKERS,
                                   limit=settings.PULSE_PREFETCH_TOPICS, node=node)

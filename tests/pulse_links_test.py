@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
 from service_registry import services  # noqa: E402
 from services_radio import geo, local_knowledge  # noqa: E402
 from services_radio import pulse as pulse_kb  # noqa: E402
+from services_radio import pulse_items, pulse_sources  # noqa: E402
 from services_radio import regional_knowledge as rk  # noqa: E402
 from services_radio.listener_location import ListenerLocation  # noqa: E402
 
@@ -64,7 +65,7 @@ async def main():
     ]), FakeSearch())
     services.user_content_service = FakeShoutouts()
     pulse = pulse_kb.Pulse([])
-    listener = pulse_kb.PulseListener(user=None, user_id=None, session_id="guest_x",
+    listener = pulse_items.PulseListener(user=None, user_id=None, session_id="guest_x",
                                       location=ListenerLocation(latitude=-36.85, longitude=174.76, country_code="NZ"),
                                       region=REGION, taste=rk.Taste(), tz_name="Pacific/Auckland",
                                       where=geo.Where("Testville", -36.85, 174.76, 0, "spot"))
@@ -85,7 +86,7 @@ async def main():
     check("gig links to news that names it", any(l["id"] == "news:src:n9" for l in sonu), str(sonu))
     birthday = await pulse.related(listener, "community:shoutouts:1_2")
     check("unrelated shoutout has no links", not birthday, str(birthday))
-    items = [pulse_kb.shoutout_item(s, 0.5, listener) for s in FakeShoutouts.shoutouts.values()]
+    items = [pulse_sources.shoutout_item(s, 0.5, listener) for s in FakeShoutouts.shoutouts.values()]
     await pulse.annotate_links(listener, items)
     check("search results carry link notes", bool(items[0].links) and not items[1].links, str([i.links for i in items]))
     print(f"{sum(checks)}/{len(checks)} passed")

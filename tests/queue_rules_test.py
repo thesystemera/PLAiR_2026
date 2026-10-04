@@ -125,7 +125,7 @@ async def main():
     check("playlist switch starts a new song", state.current_track_id not in before)
 
     from services_radio import context_service
-    from services_radio.context_nodes import get_queue_playlist
+    from services_radio.context_nodes_track import get_queue_playlist
 
     class Playback:
         def get_state(self, _session_id, simplified=True):

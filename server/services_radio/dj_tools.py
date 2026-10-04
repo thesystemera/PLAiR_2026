@@ -219,7 +219,7 @@ class DJToolRuntime:
         return pulse, self.ctx.pulse_listener
 
     async def _pulse_search(self, args):
-        from services_radio.pulse import PulseQuery
+        from services_radio.pulse_items import PulseQuery
         pulse, listener = await self._pulse_listener()
         if pulse is None:
             return {"status": "empty", "note": EMPTY_NOTE}
@@ -303,7 +303,7 @@ class DJToolRuntime:
                 "note": "Those tools are now available: call them now."}
 
     async def _city_trends(self, args):
-        from services_radio.pulse import KIND_CHART, KIND_TREND, PulseQuery
+        from services_radio.pulse_items import KIND_CHART, KIND_TREND, PulseQuery
         pulse, listener = await self._pulse_listener()
         if pulse is None:
             return {"status": "empty", "note": EMPTY_NOTE}

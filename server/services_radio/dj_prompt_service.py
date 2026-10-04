@@ -467,7 +467,7 @@ class DJPromptService:
             dynamic_nodes = route["nodes"]
             if route_out is not None:
                 route_out.update(route)
-                from services_radio.context_nodes import resolve_tool_route
+                from services_radio.context_nodes_station import resolve_tool_route
                 await resolve_tool_route(route_out, **raw_data)
                 raw_data['route'] = route_out
 

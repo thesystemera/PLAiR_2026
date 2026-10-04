@@ -599,7 +599,8 @@ async def get_regional_events_data(
     from services_radio.external_events_service import GENERIC_EVENT_WORDS
     from services_radio.dj_bank_sources import listener_taste
 
-    from services_radio.pulse import KIND_EVENT as PULSE_EVENT, PulseQuery, get_pulse, note_request
+    from services_radio.pulse import get_pulse, note_request
+    from services_radio.pulse_items import KIND_EVENT as PULSE_EVENT, PulseQuery
 
     listener = await _listener(listener, user, session_id)
     regional = get_regional_knowledge()
