@@ -26,8 +26,13 @@ import { useViewport } from '../contexts/ViewportContext'
 import { MOTION } from '../lib/motion'
 import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
+import { useDepthMap } from '../hooks/useDepthMap'
+import { depthThumbCache } from '../lib/mediaCache'
+import { DepthArt } from './DepthArt'
 
 const CATALOG_ERROR_GRACE_MS = 4000
+
+const hideBrokenImage = (e) => { e.target.style.display = 'none' }
 
 function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
@@ -95,6 +100,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
   const [isLoading, setIsLoading] = useState(false)
   const cardInteraction = usePointerInteraction()
   const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
+  const depthUrl = useDepthMap(depthThumbCache, track.id, track.has_artwork !== false)
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
   useEffect(() => {
@@ -148,12 +154,12 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
       onPointerUp={handlePlayNow}
     >
       <div ref={artBoxRef} className="aspect-square bg-gradient-to-br from-white/[0.06] to-white/[0.03] rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">
-        <img
-          src={artworkUrl}
+        <DepthArt
+          colorUrl={artworkUrl}
+          depthUrl={depthUrl}
           alt={params.title || 'Track artwork'}
-          className="absolute inset-0 w-full h-full object-cover"
           onLoad={onArtLoad}
-          onError={(e) => { e.target.style.display = 'none' }}
+          onError={hideBrokenImage}
         />
         {isPlaying && <MediaPlayingOverlay />}
 

@@ -1,0 +1,329 @@
+import { POM, createDepthArtProgram, parallaxSteps, setLightUniforms } from './depthArtShader'
+import { readLightProbe } from './lightProbe'
+import { isSceneRenderingPaused } from './renderPause'
+import { logger } from './logger'
+
+const INTENSITY = 0.05
+const SCROLL_TILT = 0.9
+const MAX_PARALLAX = 1.6
+const MAX_IDLE_TEXTURES = 48
+const UPLOADS_PER_FRAME = 2
+const REDRAW_SHIFT_PX = 0.1
+const FRAME_CAP_SLACK_MS = 4
+const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true }
+const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
+
+function loadImage(url) {
+  const image = new Image()
+  image.decoding = 'async'
+  image.src = url
+  return image.decode().then(() => image)
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value))
+}
+
+class DepthArtRenderer {
+  constructor() {
+    this.views = new Set()
+    this.textures = new Map()
+    this.uploads = []
+    this.settings = { dpr: Infinity, fpsCap: 0, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
+    this.canvas = null
+    this.gl = null
+    this.uniforms = null
+    this.maxSize = 4096
+    this.unavailable = false
+    this.contextLost = false
+    this.frame = null
+    this.lastDrawAt = 0
+    this.observer = null
+    this.tick = this.tick.bind(this)
+  }
+
+  configure(settings) {
+    Object.assign(this.settings, settings)
+    for (const view of this.views) view.last = null
+  }
+
+  attach({ host, canvas, colorUrl, depthUrl, onDrawn }) {
+    if (!this.ensureContext()) return () => {}
+    const view = { host, canvas, ctx: null, colorUrl, depthUrl, onDrawn, visible: false, entry: null, last: null, drawn: false }
+    view.entry = this.acquire(`${colorUrl}|${depthUrl}`, colorUrl, depthUrl)
+    this.views.add(view)
+    this.observe(view)
+    this.schedule()
+    return () => this.detach(view)
+  }
+
+  detach(view) {
+    if (!this.views.delete(view)) return
+    this.observer?.unobserve(view.host)
+    if (view.entry) view.entry.refs--
+    view.entry = null
+    this.evictIdle()
+  }
+
+  observe(view) {
+    if (typeof IntersectionObserver === 'undefined') {
+      view.visible = true
+      return
+    }
+    if (!this.observer) {
+      this.observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          for (const view of this.views) {
+            if (view.host === entry.target) view.visible = entry.isIntersecting
+          }
+        }
+        this.schedule()
+      })
+    }
+    this.observer.observe(view.host)
+  }
+
+  ensureContext() {
+    if (this.gl) return true
+    if (this.unavailable) return false
+    try {
+      const canvas = document.createElement('canvas')
+      const gl = canvas.getContext('webgl2', CONTEXT_OPTIONS) || canvas.getContext('webgl', CONTEXT_OPTIONS)
+      if (!gl) throw new Error('WebGL unavailable')
+      this.canvas = canvas
+      this.setupContext(gl)
+      canvas.addEventListener('webglcontextlost', (event) => {
+        event.preventDefault()
+        logger.warn('[DepthArt] WebGL context lost')
+        this.contextLost = true
+        this.textures.clear()
+        this.uploads = []
+        for (const view of this.views) {
+          view.entry = null
+          view.last = null
+        }
+      })
+      canvas.addEventListener('webglcontextrestored', () => {
+        try {
+          this.setupContext(canvas.getContext(gl instanceof WebGLRenderingContext ? 'webgl' : 'webgl2', CONTEXT_OPTIONS))
+          this.contextLost = false
+          for (const view of this.views) view.entry = this.acquire(`${view.colorUrl}|${view.depthUrl}`, view.colorUrl, view.depthUrl)
+          this.schedule()
+        } catch (error) {
+          logger.error('[DepthArt] WebGL restore failed:', error)
+          this.unavailable = true
+        }
+      })
+      window.registerRAFSource?.('DepthArt')
+      return true
+    } catch (error) {
+      logger.warn('[DepthArt] Depth tiles unavailable:', error)
+      this.unavailable = true
+      return false
+    }
+  }
+
+  setupContext(gl) {
+    const { uniforms } = createDepthArtProgram(gl)
+    this.gl = gl
+    this.uniforms = uniforms
+    const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS)
+    this.maxSize = Math.min(4096, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), dims[0], dims[1])
+    gl.enable(gl.SCISSOR_TEST)
+    gl.clearColor(0, 0, 0, 1)
+  }
+
+  acquire(key, colorUrl, depthUrl) {
+    let entry = this.textures.get(key)
+    if (!entry) {
+      entry = { key, refs: 0, state: 'loading', color: null, depth: null, usedAt: 0 }
+      this.textures.set(key, entry)
+      Promise.all([loadImage(colorUrl), loadImage(depthUrl)])
+        .then(([color, depth]) => {
+          if (this.textures.get(key) !== entry) return
+          this.uploads.push({ entry, color, depth })
+          this.schedule()
+        })
+        .catch((error) => {
+          logger.debug('[DepthArt] Image load failed:', error)
+          entry.state = 'failed'
+        })
+    }
+    entry.refs++
+    entry.usedAt = performance.now()
+    return entry
+  }
+
+  evictIdle() {
+    let idle = 0
+    for (const entry of this.textures.values()) if (entry.refs <= 0) idle++
+    if (idle <= MAX_IDLE_TEXTURES) return
+    const byAge = [...this.textures.values()].filter(entry => entry.refs <= 0).sort((a, b) => a.usedAt - b.usedAt)
+    for (const entry of byAge.slice(0, idle - MAX_IDLE_TEXTURES)) this.release(entry)
+  }
+
+  release(entry) {
+    this.textures.delete(entry.key)
+    if (this.gl && !this.contextLost) {
+      if (entry.color) this.gl.deleteTexture(entry.color)
+      if (entry.depth) this.gl.deleteTexture(entry.depth)
+    }
+  }
+
+  createTexture(source, format) {
+    const gl = this.gl
+    const texture = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, format, format, gl.UNSIGNED_BYTE, source)
+    return texture
+  }
+
+  processUploads() {
+    const gl = this.gl
+    for (let i = 0; i < UPLOADS_PER_FRAME && this.uploads.length; i++) {
+      const { entry, color, depth } = this.uploads.shift()
+      if (this.textures.get(entry.key) !== entry) continue
+      gl.activeTexture(gl.TEXTURE0)
+      entry.color = this.createTexture(color, gl.RGBA)
+      entry.depth = this.createTexture(depth, gl.LUMINANCE)
+      entry.state = 'ready'
+    }
+  }
+
+  schedule() {
+    if (!this.frame && this.views.size) this.frame = requestAnimationFrame(this.tick)
+  }
+
+  baseParallax() {
+    if (this.settings.reduceMotion) return NO_PARALLAX
+    const gyro = this.settings.gyroRef?.current || NO_PARALLAX
+    const mouse = this.settings.mouseRef?.current || NO_PARALLAX
+    const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
+    return hasGyro ? gyro : mouse
+  }
+
+  tick(timestamp) {
+    this.frame = null
+    if (!this.views.size) return
+    this.schedule()
+    if (!this.gl || this.contextLost) return
+    if (this.uploads.length) this.processUploads()
+
+    const { fpsCap, stepPx, reduceMotion } = this.settings
+    if (fpsCap > 0 && timestamp - this.lastDrawAt < 1000 / fpsCap - FRAME_CAP_SLACK_MS) return
+    if (isSceneRenderingPaused(timestamp)) return
+
+    const probe = readLightProbe(timestamp)
+    const base = this.baseParallax()
+    const viewportHalf = Math.max(1, window.innerHeight / 2)
+    const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
+    const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
+    const batch = []
+
+    for (const view of this.views) {
+      const entry = view.entry
+      if (!view.visible || !entry || entry.state !== 'ready') continue
+      const rect = view.host.getBoundingClientRect()
+      if (rect.width < 2 || rect.height < 2) continue
+      const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
+      const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
+      const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
+      const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
+      const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)
+      const pixelsPerUnit = INTENSITY * Math.max(width, height) * zoom
+      const epsilon = REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit)
+      const last = view.last
+      if (last && last.entry === entry && last.width === width && last.height === height &&
+        Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon &&
+        last.probe === probe.version && last.kick === probe.kick && last.pulse === probe.pulse &&
+        last.left === rect.left && last.top === rect.top) continue
+      batch.push({ view, entry, rect, width, height, px, py, steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) })
+    }
+
+    if (!batch.length) return
+    this.lastDrawAt = timestamp
+    this.drawBatch(batch, probe)
+  }
+
+  drawBatch(batch, probe) {
+    let group = []
+    let x = 0
+    let y = 0
+    let rowHeight = 0
+    let usedWidth = 0
+    for (const item of batch) {
+      if (x + item.width > this.maxSize) {
+        y += rowHeight
+        x = 0
+        rowHeight = 0
+      }
+      if (y + item.height > this.maxSize) {
+        this.drawGroup(group, usedWidth, y + rowHeight, probe)
+        group = []
+        x = 0
+        y = 0
+        rowHeight = 0
+        usedWidth = 0
+      }
+      item.x = x
+      item.y = y
+      group.push(item)
+      x += item.width
+      usedWidth = Math.max(usedWidth, x)
+      rowHeight = Math.max(rowHeight, item.height)
+    }
+    if (group.length) this.drawGroup(group, usedWidth, y + rowHeight, probe)
+  }
+
+  drawGroup(group, width, height, probe) {
+    const gl = this.gl
+    const canvas = this.canvas
+    if (canvas.width < width || canvas.height < height) {
+      canvas.width = Math.max(canvas.width, Math.min(this.maxSize, Math.ceil(width / 256) * 256))
+      canvas.height = Math.max(canvas.height, Math.min(this.maxSize, Math.ceil(height / 256) * 256))
+    }
+    const uniforms = this.uniforms
+    gl.uniform1f(uniforms.intensity, INTENSITY)
+    gl.uniform1f(uniforms.zoom, 1)
+
+    for (const item of group) {
+      const glY = canvas.height - item.y - item.height
+      gl.viewport(item.x, glY, item.width, item.height)
+      gl.scissor(item.x, glY, item.width, item.height)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+      gl.uniform2f(uniforms.gyro, item.px, item.py)
+      gl.uniform1f(uniforms.steps, item.steps)
+      setLightUniforms(gl, uniforms, probe, item.rect)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+    }
+
+    for (const item of group) {
+      const view = item.view
+      if (view.canvas.width !== item.width || view.canvas.height !== item.height) {
+        view.canvas.width = item.width
+        view.canvas.height = item.height
+      }
+      if (!view.ctx) view.ctx = view.canvas.getContext('2d', { alpha: false })
+      if (!view.ctx) continue
+      view.ctx.drawImage(canvas, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
+      view.last = {
+        entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
+        probe: probe.version, kick: probe.kick, pulse: probe.pulse, left: item.rect.left, top: item.rect.top,
+      }
+      if (!view.drawn) {
+        view.drawn = true
+        view.onDrawn?.(true)
+      }
+    }
+  }
+}
+
+export const depthArtRenderer = new DepthArtRenderer()

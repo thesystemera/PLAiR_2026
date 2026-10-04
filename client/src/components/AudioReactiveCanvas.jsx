@@ -28,6 +28,7 @@ import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
+import {publishBeat, publishLightProbe, setLightGlow} from '../lib/lightProbe'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -588,6 +589,28 @@ const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BAC
     gl_FragColor = vec4(applyAmbientGlow(color, vUv, glass.a), 1.0);
   }
 `
+const probeVertexShader = `
+  void main() {
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`
+
+const probeFragmentShader = `
+  uniform sampler2D u_source;
+
+  void main() {
+    vec2 cell = floor(gl_FragCoord.xy);
+    vec3 sum = vec3(0.0);
+    for (int y = 0; y < 4; y++) {
+      for (int x = 0; x < 4; x++) {
+        vec2 uv = (cell + (vec2(float(x), float(y)) + 0.5) / 4.0) / 3.0;
+        sum += texture2D(u_source, uv).rgb;
+      }
+    }
+    gl_FragColor = vec4(sum / 16.0, 1.0);
+  }
+`
+
 const transparentPixel = new DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, RGBAFormat)
 const defaultGeometry = new PlaneGeometry(2, 2)
 
@@ -1030,6 +1053,52 @@ function MultiPassPlane({
   const captureMesh = useMemo(() => new Mesh(defaultGeometry, bgMaterial), [bgMaterial])
   useEffect(() => { captureScene.add(captureMesh); return () => captureScene.remove(captureMesh) }, [captureScene, captureMesh])
 
+  const probeScene = useMemo(() => new Scene(), [])
+  const probeTarget = useMemo(() => new WebGLRenderTarget(3, 3, {
+    minFilter: LinearFilter,
+    magFilter: LinearFilter,
+    format: RGBAFormat,
+    generateMipmaps: false,
+    stencilBuffer: false,
+    depthBuffer: false
+  }), [])
+  const probeMaterial = useMemo(() => new ShaderMaterial({
+    vertexShader: probeVertexShader,
+    fragmentShader: probeFragmentShader,
+    uniforms: { u_source: { value: captureRenderTarget.texture } }
+  }), [captureRenderTarget])
+  const probeMesh = useMemo(() => new Mesh(defaultGeometry, probeMaterial), [probeMaterial])
+  useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
+  useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
+  useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
+  const probeReadRef = useRef({ pending: false, buffer: new Uint8Array(36) })
+  const lastKickBeatRef = useRef(-1)
+
+  const glowAt = useMemo(() => {
+    const out = [0, 0, 0]
+    const u = fgMaterial.uniforms
+    return (col, row) => {
+      if (u.u_glow_active.value < 0.5) {
+        out[0] = 0; out[1] = 0; out[2] = 0
+        return out
+      }
+      const x = (col + 0.5) / 3
+      const y = 1 - (row + 0.5) / 3
+      const dx = (x - u.u_glow_center.value.x) * u.u_glow_scale.value.x
+      const dy = (y - u.u_glow_center.value.y) * u.u_glow_scale.value.y
+      const voice = Math.pow(2, -(dx * dx + dy * dy))
+      const edge = MathUtils.smoothstep(Math.max(Math.abs(x - 0.5), Math.abs(y - 0.5)), 0.225, 0.5)
+      const air = 0.06 + 0.2 * edge
+      const voiceGlow = u.u_voice_glow.value
+      const onAirGlow = u.u_on_air_glow.value
+      out[0] = onAirGlow.x * air + voiceGlow.x * voice
+      out[1] = onAirGlow.y * air + voiceGlow.y * voice
+      out[2] = onAirGlow.z * air + voiceGlow.z * voice
+      return out
+    }
+  }, [fgMaterial])
+  useEffect(() => setLightGlow(glowAt), [glowAt])
+
   useEffect(() => {
     let cancelled = false
     Promise.all([
@@ -1279,11 +1348,13 @@ function MultiPassPlane({
                 const intensity = Math.max(0, (rawEnergy - energyThreshold) / (1.0 - energyThreshold))
 
                 let onBeat = false
+                let beatHit = -1
                 for (let i = lastBeatIndexRef.current; i < beats.length; i++) {
                     const beatTime = beats[i]
                     if (beatTime > currentTime + 0.08) break
                     if (Math.abs(beatTime - currentTime) < 0.08) {
                         onBeat = true
+                        beatHit = beatTime
                         lastBeatIndexRef.current = Math.max(0, i - 1)
 
                         const cues = visualCueMapRef.current.get(beatTime)
@@ -1338,6 +1409,10 @@ function MultiPassPlane({
                 effects.beatPulse = breathing * (0.2 + rawEnergy * 0.8);
                 effects.flicker += ((1.0 - (breathing * rawEnergy * 0.2)) - effects.flicker) * 0.2
                 effects.scale += ((1.0 + (breathing * rawEnergy * 0.1)) - effects.scale) * 0.05
+
+                const kick = onBeat && beatHit !== lastKickBeatRef.current && rawEnergy > energyThreshold
+                if (kick) lastKickBeatRef.current = beatHit
+                publishBeat(reduceMotion || !kick ? 0 : Math.min(1, 0.5 + intensity * 0.5), reduceMotion ? 0 : effects.beatPulse)
              }
         } else {
             effects.chromatic *= (1.0 - fastDecay)
@@ -1355,6 +1430,7 @@ function MultiPassPlane({
             effects.frameOffset.copy(effects.targetFrameOffset);
             effects.frameScale = effects.targetFrameScale;
             effects.beatPulse = 0.0;
+            publishBeat(0, 0)
         }
     }
 
@@ -1706,6 +1782,16 @@ function MultiPassPlane({
         bgUniforms.u_is_capture.value = 1.0
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
+        const probeRead = probeReadRef.current
+        if (!probeRead.pending) {
+          probeRead.pending = true
+          gl.setRenderTarget(probeTarget)
+          gl.render(probeScene, captureCamera)
+          gl.readRenderTargetPixelsAsync(probeTarget, 0, 0, 3, 3, probeRead.buffer)
+            .then(() => publishLightProbe(probeRead.buffer))
+            .catch(() => {})
+            .finally(() => { probeRead.pending = false })
+        }
         gl.setRenderTarget(null)
         bgUniforms.u_is_capture.value = 0.0
         bgUniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)

@@ -6,7 +6,7 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
-import { profilePictureCache } from '../lib/mediaCache'
+import { profileDepthCache, profilePictureCache } from '../lib/mediaCache'
 import { addPasskey, passkeyCancelled, passkeysSupported } from '../lib/passkeys'
 import { safeStorage } from '../lib/safeStorage'
 import { formatTimeAgo } from '../lib/utils'
@@ -150,7 +150,7 @@ export function AccountSettings({ onLogout }) {
     try {
       const result = await api.deleteProfilePicture()
       if (!result.ok) throw new Error('Delete failed')
-      await profilePictureCache.invalidate(user?.id)
+      await Promise.all([profilePictureCache.invalidate(user?.id), profileDepthCache.invalidate(user?.id)])
       await refreshUser()
       toastSuccess('Profile photo removed')
     } catch (err) {

@@ -237,6 +237,28 @@ async def get_artwork_thumbnail(track_id: str, size: int):
         }
     )
 
+@router.get("/api/artwork/{track_id}/depth/thumb/{size}")
+async def get_artwork_depth_thumbnail(track_id: str, size: int):
+    if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
+        raise HTTPException(status_code=404, detail="Depth map not found")
+    enriched_path = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
+    if not enriched_path.exists():
+        raise HTTPException(status_code=404, detail="Depth map not found")
+
+    try:
+        thumb_path = await ensure_thumbnail(track_id, enriched_path, size, variant="depth")
+    except Exception as e:
+        log_service.error(f"Depth thumbnail failed for {track_id} ({size}px): {e}")
+        raise HTTPException(status_code=404, detail="Depth map not found")
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000"
+        }
+    )
+
 @router.api_route("/api/artwork/{track_id}/enriched", methods=["GET", "HEAD"])
 async def get_enriched_artwork(track_id: str):
     assert services.catalog_service is not None

@@ -86,6 +86,19 @@ async def get_profile_picture(
 
     return FileResponse(file_path, media_type="image/jpeg")
 
+@router.get("/api/user/{user_id}/profile-picture/depth")
+async def get_profile_picture_depth(
+        user_id: int,
+        db: AsyncSession = Depends(get_db)
+):
+    assert profile_picture_service is not None
+    file_path = await profile_picture_service.get_depth_path(user_id, db)
+
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Depth map not found")
+
+    return FileResponse(file_path, media_type="image/jpeg")
+
 @router.delete("/api/user/profile-picture")
 async def delete_profile_picture(
         current_user: User = Depends(get_current_user),

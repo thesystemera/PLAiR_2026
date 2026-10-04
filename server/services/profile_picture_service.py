@@ -12,8 +12,10 @@ from database.models import User
 from config import settings
 from services import log_service
 from services.base_service import SingletonService
+from services.suno_artwork_enrichment_service import artwork_enrichment_service
 
 Image.MAX_IMAGE_PIXELS = 40_000_000
+DEPTH_FILENAME = "profile_depth.jpg"
 
 class ProfilePictureService(SingletonService):
     def __init__(self):
@@ -24,7 +26,31 @@ class ProfilePictureService(SingletonService):
         self.max_size_bytes = 5 * 1024 * 1024  # 5MB
         self.target_size = (512, 512)
         self.jpeg_quality = 90
+        self._depth_jobs: Dict[int, asyncio.Task] = {}
         self._initialized = True
+
+    @staticmethod
+    def depth_path(user_id: int) -> Path:
+        return settings.get_user_profile_picture_path(user_id, DEPTH_FILENAME)
+
+    def _depth_job(self, user_id: int, picture_path: Path) -> asyncio.Task:
+        job = self._depth_jobs.get(user_id)
+        if job is None:
+            job = asyncio.create_task(
+                artwork_enrichment_service.write_depth_map(picture_path, self.depth_path(user_id))
+            )
+            self._depth_jobs[user_id] = job
+            job.add_done_callback(lambda _t: self._depth_jobs.pop(user_id, None))
+        return job
+
+    async def get_depth_path(self, user_id: int, db: AsyncSession) -> Optional[Path]:
+        picture_path = await self.get_profile_picture_path(user_id, db)
+        if not picture_path or not artwork_enrichment_service.available:
+            return None
+        target = self.depth_path(user_id)
+        if target.exists() and target.stat().st_mtime >= picture_path.stat().st_mtime:
+            return target
+        return await asyncio.shield(self._depth_job(user_id, picture_path))
 
     def _render_profile_jpeg(self, file_contents: bytes) -> bytes:
         image = Image.open(io.BytesIO(file_contents))
@@ -74,6 +100,9 @@ class ProfilePictureService(SingletonService):
                 await db.commit()
                 log_service.api(f"Profile picture uploaded for user {user.id}")
 
+            if artwork_enrichment_service.available:
+                self._depth_job(user_id, file_path)
+
             return {
                 "status": "success",
                 "message": "Profile picture uploaded",
@@ -121,6 +150,7 @@ class ProfilePictureService(SingletonService):
         if file_path.exists():
             file_path.unlink()
             log_service.api(f"Profile picture deleted for user {user_id_val}")
+        self.depth_path(user_id_val).unlink(missing_ok=True)
 
         user.profile_picture = None  # type: ignore
         await db.commit()

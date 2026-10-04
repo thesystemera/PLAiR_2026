@@ -95,6 +95,40 @@ class ArtworkEnrichmentService(SingletonService):
         sbs_image.paste(depth_pil, (w, 0))
         return sbs_image
 
+    @property
+    def available(self) -> bool:
+        return self._model_loaded
+
+    async def depth_image(self, image: Image.Image) -> Image.Image:
+        loop = asyncio.get_event_loop()
+        async with gpu_lease("Depth-Anything"):
+            depth_map = await loop.run_in_executor(None, self._generate_depth_map, image)
+        return Image.fromarray(depth_map, mode='L')
+
+    async def write_depth_map(self, source: Path, target: Path, quality: int = 90) -> Optional[Path]:
+        if not self._model_loaded or not source.exists():
+            return None
+        if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
+            return target
+        try:
+            loop = asyncio.get_event_loop()
+            image = await loop.run_in_executor(None, lambda: Image.open(str(source)).convert('RGB'))
+            depth = await self.depth_image(image)
+            temp = target.with_name(f"{target.stem}.tmp.jpg")
+
+            def save_image():
+                depth.save(str(temp), 'JPEG', quality=quality, optimize=True)
+                temp.replace(target)
+
+            await loop.run_in_executor(None, save_image)
+            return target
+        except GPUOutOfMemoryError:
+            raise
+        except Exception as e:
+            log_service.error(f"Failed to make depth map for {source.name}: {str(e)}")
+            raise_if_cuda_oom(e, "Depth-Anything")
+            return None
+
     async def enrich_artwork(
         self,
         unique_id: str,
@@ -121,14 +155,13 @@ class ArtworkEnrichmentService(SingletonService):
 
             log_service.info(f"Processing artwork: {unique_id} ({image.size[0]}x{image.size[1]})")
 
-            async with gpu_lease("Depth-Anything"):
-                depth_map = await loop.run_in_executor(None, self._generate_depth_map, image)
+            depth = await self.depth_image(image)
 
             sbs_image = await loop.run_in_executor(
                 None,
                 self._create_side_by_side_jpeg,
                 image,
-                depth_map
+                np.array(depth)
             )
 
             def save_image():

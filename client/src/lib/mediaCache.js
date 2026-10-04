@@ -59,6 +59,23 @@ const CACHE_CONFIGS = {
     metadataKey: 'profile-picture-metadata',
     getUrl: (id) => `/api/user/${id}/profile-picture`,
     logPrefix: '[ProfilePictureCache]'
+  },
+  depth_thumb: {
+    cacheName: 'depth-thumb-cache-v1',
+    maxItems: 1500,
+    maxMemoryItems: 300,
+    expiryMs: 14 * 24 * 60 * 60 * 1000,
+    metadataKey: 'depth-thumb-metadata',
+    getUrl: (id) => `/api/artwork/${id}/depth/thumb/${ARTWORK_THUMB_SIZE}`,
+    logPrefix: '[DepthThumbCache]'
+  },
+  profile_depth: {
+    cacheName: 'profile-depth-cache-v1',
+    maxItems: 500,
+    expiryMs: 7 * 24 * 60 * 60 * 1000,
+    metadataKey: 'profile-depth-metadata',
+    getUrl: (id) => `/api/user/${id}/profile-picture/depth`,
+    logPrefix: '[ProfileDepthCache]'
   }
 }
 
@@ -399,3 +416,5 @@ export const artworkCache = new MediaCache('artwork')
 export const artworkThumbCache = new MediaCache('artwork_thumb')
 export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
+export const depthThumbCache = new MediaCache('depth_thumb')
+export const profileDepthCache = new MediaCache('profile_depth')

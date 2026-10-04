@@ -21,7 +21,11 @@ import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from
 import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
 import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
+import { useDepthMap } from '../hooks/useDepthMap'
+import { profileDepthCache } from '../lib/mediaCache'
+import { DepthArt } from './DepthArt'
 
+const hideBrokenImage = (e) => { e.target.style.display = 'none' }
 
 const CategoryCard = memo(function CategoryCard({ category, count, onSelectCategory, index }) {
   const { getWhite, getGrey400, getCategoryMetadata } = useDynamicTheme()
@@ -78,6 +82,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
     shoutout.user_id,
     !!shoutout.profile_picture
   )
+  const profileDepthUrl = useDepthMap(profileDepthCache, shoutout.user_id, !!shoutout.profile_picture)
 
   const getUserInitial = () => {
     return shoutout.username?.charAt(0).toUpperCase() || user?.username?.charAt(0).toUpperCase() || 'U'
@@ -129,11 +134,11 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
           {getUserInitial()}
         </div>
         {profilePictureUrl && (
-          <img
-            src={profilePictureUrl}
+          <DepthArt
+            colorUrl={profilePictureUrl}
+            depthUrl={profileDepthUrl}
             alt={shoutout.username || 'User'}
-            className="absolute inset-0 w-full h-full object-cover"
-            onError={(e) => { e.target.style.display = 'none' }}
+            onError={hideBrokenImage}
           />
         )}
 
