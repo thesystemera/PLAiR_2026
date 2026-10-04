@@ -919,7 +919,7 @@ function MultiPassPlane({
   const isFullscreen = interfaceState?.isFullscreenVisuals ?? false
 
   const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
-  const { glassTaps, reduceMotion, reportFrame, reportRenderer, tier } = useQuality()
+  const { glassTaps, reduceMotion, reportFrame, reportRenderer, levelIndex } = useQuality()
   const renderer = useThree(state => state.gl)
   const mainScene = useThree(state => state.scene)
   const mainCamera = useThree(state => state.camera)
@@ -1622,7 +1622,7 @@ function MultiPassPlane({
     const ambient = ambientRef.current
     const onAirColor = radioProgressData?.onAirColor || null
     const speaking = radioProgressData?.stateInt === 3
-    const steadyAmbient = reduceMotion || tier === 0
+    const steadyAmbient = reduceMotion
     const voiceTarget = speaking ? (steadyAmbient ? VOICE_STEADY : averageLevel(djFftDataRef?.current)) : 0
     ambient.voice = approach(ambient.voice, voiceTarget, voiceTarget > ambient.voice ? VOICE_ATTACK : VOICE_RELEASE, delta)
     if (ambient.voice < AMBIENT_FLOOR && voiceTarget === 0) ambient.voice = 0
@@ -1638,7 +1638,7 @@ function MultiPassPlane({
     ambient.onAir = approach(ambient.onAir, onAirTarget, ON_AIR_RATE, delta)
     if (ambient.onAir < AMBIENT_FLOOR && onAirTarget === 0) ambient.onAir = 0
     let breathe = 1
-    if (ambient.onAir > 0 && !talkBreak?.paused && !reduceMotion && tier >= 2) {
+    if (ambient.onAir > 0 && !talkBreak?.paused && !reduceMotion && levelIndex >= 1) {
       ambient.breatheTime += delta
       breathe = 0.8 + 0.2 * Math.sin(ambient.breatheTime * Math.PI * 2 / ON_AIR_BREATHE_SECONDS)
     }
@@ -2027,21 +2027,18 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     lyricTimestamps,
     engineState,
     isOfflineRendering,
-    settingsState,
     isScreenVisible,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
     engineState: state.engineState,
     isOfflineRendering: state.isOfflineRendering,
-    settingsState: state.settingsState,
     isScreenVisible: state.isScreenVisible,
   }))
-  const { sceneDpr } = useQuality()
-  const visualQuality = settingsState.visualQuality || 'high'
+  const { sceneDpr, level: visualQuality } = useQuality()
   const deviceDpr = window.devicePixelRatio || 1
   const referenceDpr = Math.min(deviceDpr, visualQuality === 'high' ? REFERENCE_SCENE_DPR : 1.0)
-  const canvasDpr = Math.min(referenceDpr, sceneDpr)
+  const canvasDpr = Math.min(deviceDpr, sceneDpr)
 
   const currentTrackId = engineState?.currentTrack?.id
   const videoClips = useVideoClips(currentTrackId)

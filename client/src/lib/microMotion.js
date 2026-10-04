@@ -1,6 +1,6 @@
 import { CSS_EASE, MICRO } from './motion'
 
-const TOP_TIER = 4
+const TOP_TIER = 2
 const noop = () => {}
 
 const policy = {

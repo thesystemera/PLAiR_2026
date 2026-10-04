@@ -6,19 +6,16 @@ import { pauseSceneRendering } from '../lib/renderPause'
 import { setMotionPolicy } from '../lib/microMotion'
 import { screenRefreshMs, watchScreenRefresh } from '../lib/screenRefresh'
 
-const QUALITY_TIERS = [
-  { name: 'minimal', sceneDpr: 0.7, glassTaps: 1, parallaxDpr: 1, parallaxStepPx: 2 },
-  { name: 'low', sceneDpr: 0.85, glassTaps: 1, parallaxDpr: 1.5, parallaxStepPx: 1.5 },
-  { name: 'balanced', sceneDpr: 1.0, glassTaps: 3, parallaxDpr: 2, parallaxStepPx: 1 },
-  { name: 'sharp', sceneDpr: 1.25, glassTaps: 3, parallaxDpr: 2.5, parallaxStepPx: 1 },
-  { name: 'high', sceneDpr: 1.5, glassTaps: 3, parallaxDpr: Infinity, parallaxStepPx: 0 },
-]
+const LEVELS = ['low', 'medium', 'high']
+const LEVEL_SETTINGS = {
+  low: { sceneDpr: 0.85, glassTaps: 1, parallaxDpr: 1.5, parallaxStepPx: 1.5 },
+  medium: { sceneDpr: 1.0, glassTaps: 3, parallaxDpr: 2, parallaxStepPx: 1 },
+  high: { sceneDpr: 1.5, glassTaps: 3, parallaxDpr: Infinity, parallaxStepPx: 0 },
+}
+const TOP_LEVEL = LEVELS.length - 1
+export const REFERENCE_SCENE_DPR = LEVEL_SETTINGS.high.sceneDpr
 
-const TOP_TIER = QUALITY_TIERS.length - 1
-export const REFERENCE_SCENE_DPR = QUALITY_TIERS[TOP_TIER].sceneDpr
-
-const FORCED_TIER_KEY = 'plair_quality_tier'
-const LEARNED_TIER_KEY = 'plair_quality_auto_v1'
+const LEARNED_LEVEL_KEY = 'plair_quality_auto_v2'
 const WINDOW_FRAMES = 90
 const SLOW_FRAME_RATIO = 1.5
 const FAST_FRAME_RATIO = 1.11
@@ -32,39 +29,30 @@ const WEAK_GPU = /mali-(4\d\d|t[678]\d\d|g31|g51|g52|g57|g68)|adreno \(tm\) (3\d
 
 const QualityContext = createContext(null)
 
-function clampTier(tier) {
-  return Math.max(0, Math.min(TOP_TIER, Math.round(tier)))
+function clampLevel(level) {
+  return Math.max(0, Math.min(TOP_LEVEL, Math.round(level)))
 }
 
-function readForcedTier() {
-  const raw = safeStorage.get(FORCED_TIER_KEY)
-  if (raw === null || raw === '' || raw === 'auto') return null
-  const value = Number(raw)
-  return Number.isFinite(value) ? clampTier(value) : null
-}
-
-function readLearnedTier() {
-  const raw = safeStorage.get(LEARNED_TIER_KEY)
+function readLearnedLevel() {
+  const raw = safeStorage.get(LEARNED_LEVEL_KEY)
   if (raw === null || raw === '') return null
   const value = Number(raw)
-  return Number.isFinite(value) ? clampTier(value) : null
+  return Number.isFinite(value) ? clampLevel(value) : null
 }
 
-function heuristicTier() {
+function heuristicLevel() {
   const memory = navigator.deviceMemory || 8
   const cores = navigator.hardwareConcurrency || 8
   const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
-  if (memory <= 2 || cores <= 2) return 1
-  if (coarse && (memory <= 3 || cores <= 4)) return 2
-  if (coarse && !navigator.deviceMemory) return TOP_TIER - 1
-  return TOP_TIER
+  if (memory <= 2 || cores <= 2) return 0
+  if (coarse && (memory <= 4 || cores <= 4 || !navigator.deviceMemory)) return 1
+  return TOP_LEVEL
 }
 
-function tierForRenderer(renderer) {
-  if (!renderer) return TOP_TIER
-  if (SOFTWARE_GPU.test(renderer)) return 0
-  if (WEAK_GPU.test(renderer)) return 1
-  return TOP_TIER
+function levelForRenderer(renderer) {
+  if (!renderer) return TOP_LEVEL
+  if (SOFTWARE_GPU.test(renderer) || WEAK_GPU.test(renderer)) return 0
+  return TOP_LEVEL
 }
 
 function useMediaQuery(query) {
@@ -93,17 +81,19 @@ function useSaveData() {
 }
 
 export function QualityProvider({ children }) {
-  const { settingsState } = useUISelector(state => ({ settingsState: state.settingsState }))
+  const { visualQuality, dataSaverMode } = useUISelector(state => ({
+    visualQuality: state.settingsState.visualQuality,
+    dataSaverMode: state.settingsState.dataSaverMode,
+  }))
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const saveData = useSaveData()
-  const [forcedTier] = useState(readForcedTier)
-  const [autoTier, setAutoTier] = useState(() => readLearnedTier() ?? heuristicTier())
+  const [autoLevel, setAutoLevel] = useState(() => readLearnedLevel() ?? heuristicLevel())
 
-  const visualQuality = settingsState.visualQuality || 'high'
-  const userCeiling = visualQuality === 'low' ? 1 : visualQuality === 'medium' ? 2 : TOP_TIER
-  const environmentCeiling = (reduceMotion || saveData || settingsState.dataSaverMode) ? 2 : TOP_TIER
-  const ceiling = Math.min(userCeiling, environmentCeiling)
-  const tier = forcedTier ?? Math.min(autoTier, ceiling)
+  const auto = !LEVELS.includes(visualQuality)
+  const autoCeiling = (reduceMotion || saveData || dataSaverMode) ? 1 : TOP_LEVEL
+  const autoIndex = Math.min(autoLevel, autoCeiling)
+  const levelIndex = auto ? autoIndex : LEVELS.indexOf(visualQuality)
+  const level = LEVELS[levelIndex]
 
   const governorRef = useRef({
     total: 0,
@@ -111,29 +101,29 @@ export function QualityProvider({ children }) {
     active: 0,
     slowWindows: 0,
     fastWindows: 0,
-    failures: new Array(QUALITY_TIERS.length).fill(0),
+    failures: new Array(LEVELS.length).fill(0),
     rendererChecked: false,
-    tier,
-    ceiling,
+    auto,
+    autoIndex,
+    ceiling: autoCeiling,
   })
 
   useEffect(() => {
-    governorRef.current.tier = tier
-    governorRef.current.ceiling = ceiling
-  }, [tier, ceiling])
+    Object.assign(governorRef.current, { auto, autoIndex, ceiling: autoCeiling })
+  }, [auto, autoIndex, autoCeiling])
 
   useEffect(() => {
-    setMotionPolicy({ tier, reduceMotion })
-  }, [tier, reduceMotion])
+    setMotionPolicy({ tier: levelIndex, reduceMotion })
+  }, [levelIndex, reduceMotion])
 
   useEffect(() => watchScreenRefresh(), [])
 
-  const changeTier = useCallback((next, reason) => {
-    setAutoTier(prev => {
-      const value = clampTier(next)
+  const changeLevel = useCallback((next, reason) => {
+    setAutoLevel(prev => {
+      const value = clampLevel(next)
       if (value === prev) return prev
-      logger.info(`[Quality] tier ${QUALITY_TIERS[prev].name} -> ${QUALITY_TIERS[value].name} (${reason})`)
-      safeStorage.set(LEARNED_TIER_KEY, String(value))
+      logger.info(`[Quality] auto ${LEVELS[prev]} -> ${LEVELS[value]} (${reason})`)
+      safeStorage.set(LEARNED_LEVEL_KEY, String(value))
       return value
     })
   }, [])
@@ -142,14 +132,14 @@ export function QualityProvider({ children }) {
     const governor = governorRef.current
     if (governor.rendererChecked) return
     governor.rendererChecked = true
-    if (readLearnedTier() !== null) return
-    const limit = tierForRenderer(renderer)
-    if (limit < governor.tier) changeTier(limit, `gpu ${renderer}`)
-  }, [changeTier])
+    if (readLearnedLevel() !== null) return
+    const limit = levelForRenderer(renderer)
+    if (limit < governor.autoIndex) changeLevel(limit, `gpu ${renderer}`)
+  }, [changeLevel])
 
   const reportFrame = useCallback((deltaSeconds, wantedRender) => {
     const governor = governorRef.current
-    if (forcedTier !== null) return
+    if (!governor.auto) return
     governor.total += Math.min(deltaSeconds, 0.1)
     governor.count++
     if (wantedRender) governor.active++
@@ -167,14 +157,14 @@ export function QualityProvider({ children }) {
       return
     }
 
-    const current = governor.tier
+    const current = governor.autoIndex
     if (average > refresh * SLOW_FRAME_RATIO) {
       governor.fastWindows = 0
       governor.slowWindows++
       if (governor.slowWindows >= SLOW_WINDOWS_TO_DROP && current > 0) {
         governor.slowWindows = 0
         governor.failures[current]++
-        changeTier(current - 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
+        changeLevel(current - 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
       }
       return
     }
@@ -184,30 +174,29 @@ export function QualityProvider({ children }) {
       governor.fastWindows++
       if (governor.fastWindows >= FAST_WINDOWS_TO_RAISE) {
         governor.fastWindows = 0
-        changeTier(current + 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
+        changeLevel(current + 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
       }
     } else {
       governor.fastWindows = 0
     }
-  }, [changeTier, forcedTier])
+  }, [changeLevel])
 
-  const value = useMemo(() => {
-    const settings = QUALITY_TIERS[tier]
-    return {
-      tier,
-      ...settings,
-      isTopTier: tier === TOP_TIER,
-      reduceMotion,
-      reportFrame,
-      reportRenderer,
-      pauseRendering: pauseSceneRendering,
-    }
-  }, [tier, reduceMotion, reportFrame, reportRenderer])
+  const value = useMemo(() => ({
+    level,
+    levelIndex,
+    auto,
+    ...LEVEL_SETTINGS[level],
+    isHigh: level === 'high',
+    reduceMotion,
+    reportFrame,
+    reportRenderer,
+    pauseRendering: pauseSceneRendering,
+  }), [level, levelIndex, auto, reduceMotion, reportFrame, reportRenderer])
 
   useEffect(() => {
-    window.__plairQuality = () => ({ tier, name: QUALITY_TIERS[tier].name, forced: forcedTier !== null, ceiling, reduceMotion, saveData })
+    window.__plairQuality = () => ({ level, auto, autoLevel: LEVELS[autoIndex], ceiling: LEVELS[autoCeiling], reduceMotion, saveData })
     return () => { delete window.__plairQuality }
-  }, [tier, forcedTier, ceiling, reduceMotion, saveData])
+  }, [level, auto, autoIndex, autoCeiling, reduceMotion, saveData])
 
   return (
     <QualityContext.Provider value={value}>

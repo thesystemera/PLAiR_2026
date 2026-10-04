@@ -16,7 +16,7 @@ Device IDs live in local storage and change whenever a browser's site data is cl
 | `audioQuality` | auto |
 | `fpsEnabled` | off |
 | `videoClipsEnabled` | off |
-| `visualQuality` | high |
+| `visualQuality` (High / Medium / Low / Auto; only Auto adapts, `QualityContext`) | high |
 | `litArtwork` (3D Lit Artwork) | on |
 | `dataSaverMode` | off |
 | `costTickerEnabled` | off |

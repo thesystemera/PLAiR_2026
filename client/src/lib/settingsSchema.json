@@ -4,7 +4,7 @@
   "audioQuality": { "default": "auto", "options": ["auto", "128k", "192k", "256k"] },
   "fpsEnabled": { "default": false },
   "videoClipsEnabled": { "default": false },
-  "visualQuality": { "default": "high", "options": ["high", "medium", "low"] },
+  "visualQuality": { "default": "high", "options": ["high", "medium", "low", "auto"] },
   "litArtwork": { "default": true },
   "dataSaverMode": { "default": false },
   "costTickerEnabled": { "default": false },

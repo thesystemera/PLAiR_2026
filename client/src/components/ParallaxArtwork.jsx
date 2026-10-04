@@ -59,7 +59,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
   const { gyroscopeRef, mouseRef, litArtwork } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef, litArtwork: state.settingsState.litArtwork !== false }))
   const { isMobile } = useViewport()
-  const { parallaxDpr, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
+  const { parallaxDpr, parallaxStepPx, reduceMotion, isHigh } = useQuality()
   const loadKey = `${trackId}|${enrichedArtworkUrl}|${artworkUrl}`
   const texturesReady = texturesKey === loadKey
   const isVisible = !isMobile || onScreen
@@ -361,7 +361,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       gl.bindTexture(gl.TEXTURE_2D, colorTextureRef.current)
       const colorInfo = colorTextureInfoRef.current
       if (colorInfo) {
-        const minify = !isTopTier && colorInfo.canMipmap && canvas.width < colorInfo.width * MIPMAP_BELOW_RATIO
+        const minify = !isHigh && colorInfo.canMipmap && canvas.width < colorInfo.width * MIPMAP_BELOW_RATIO
         const filter = minify ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR
         if (colorInfo.filter !== filter) {
           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
@@ -540,7 +540,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       }
       gpuTimer.dispose()
     }
-  }, [glReady, texturesReady, hasNormals, litArtwork, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxStepPx, reduceMotion, isTopTier])
+  }, [glReady, texturesReady, hasNormals, litArtwork, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxStepPx, reduceMotion, isHigh])
 
   useEffect(() => {
     const canvas = canvasRef.current

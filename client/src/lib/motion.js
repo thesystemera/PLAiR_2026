@@ -282,8 +282,8 @@ export const CSS_TRANSITION = {
 }
 
 export const MICRO = {
-  richTier: 2,
-  artScrollTier: 1,
+  richTier: 1,
+  artScrollTier: 0,
   artMemory: 4000,
   tapSlop: 10,
   release: {

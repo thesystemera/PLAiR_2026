@@ -41,8 +41,8 @@ export function InteractiveEngagementButton({
   title = 'Hold to record voice'
 }) {
   const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef } = useRadioUI()
-  const { isTopTier } = useQuality()
-  const blobDprCap = isTopTier ? Infinity : 2
+  const { isHigh } = useQuality()
+  const blobDprCap = isHigh ? Infinity : 2
   const { isRecording, recordingSource: activeRecordingSource, startRecording, stopRecording, abortRecording } = useVoiceRecording()
   const { getRadioButtonBaseRgb } = useDynamicTheme()
 

@@ -145,7 +145,7 @@ function summarizeTrace(events, title, frames) {
       const over2 = waits.filter(e => e.dur > 2000).length
       console.log(`GPU waits on main: ${waits.length} (${(waits.length / seconds).toFixed(1)}/s), ${(total / seconds).toFixed(2)} ms/s, max ${max.toFixed(2)} ms, >2ms: ${over2}`)
     }
-    const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([n, us]) => `${n} ${(us / 1000 / frames).toFixed(3)}`)
+    const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, Number(args.ttop || 12)).map(([n, us]) => `${n} ${(us / 1000 / frames).toFixed(3)}`)
     console.log(`${name} busy ${(busy / 1000 / frames).toFixed(2)} ms/frame | self ms/frame: ${top.join(' | ')}`)
   }
 }
@@ -202,6 +202,17 @@ async function run(url, lit) {
         }
       }
     })()` })
+    if (args.uniforms) await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+      const forced = Object.fromEntries(${JSON.stringify(String(args.uniforms))}.split(',').map(kv => kv.split('=')).map(([k, v]) => [k, Number(v)]))
+      for (const proto of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
+        const getLoc = proto.getUniformLocation
+        proto.getUniformLocation = function (program, name) { const loc = getLoc.call(this, program, name); if (loc && name in forced) loc.__forced = forced[name]; return loc }
+        const set1f = proto.uniform1f
+        proto.uniform1f = function (loc, v) { return set1f.call(this, loc, loc && loc.__forced !== undefined ? loc.__forced : v) }
+      }
+    })()` })
+    if (args.block) { await send('Network.enable'); await send('Network.setBlockedURLs', { urls: String(args.block).split(',') }) }
+    if (args.css) await send('Page.addScriptToEvaluateOnNewDocument', { source: `document.addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(String(args.css))}; document.head.appendChild(s) })` })
     await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true })
     await send('Emulation.setUserAgentOverride', { userAgent: UA, platform: 'Android' })
     await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
@@ -212,8 +223,7 @@ async function run(url, lit) {
     if (args.gpu && !renderer.includes(args.gpu)) throw new Error(`wrong GPU: ${renderer}`)
     await evaluate(`(() => {
       const saved = JSON.parse(localStorage.getItem('plair_settings') || '{}')
-      localStorage.setItem('plair_settings', JSON.stringify({ ...saved, litArtwork: ${lit}, visualQuality: 'high'${args.fps ? ', fpsEnabled: true' : ''} }))
-      localStorage.setItem('plair_quality_tier', '${args.tier ?? 4}')
+      localStorage.setItem('plair_settings', JSON.stringify({ ...saved, litArtwork: ${lit}, visualQuality: '${args.quality || 'high'}'${args.fps ? ', fpsEnabled: true' : ''} }))
       localStorage.setItem('plair_demo_mode_modal_seen', 'true')
     })()`)
     await send('Page.reload')
@@ -221,6 +231,10 @@ async function run(url, lit) {
     for (const tab of TABS) {
       await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(tab)}); if (b) b.click() })()`)
       await sleep(3000)
+      if (args.fullscreen) {
+        await evaluate(`document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }))`)
+        await sleep(3000)
+      }
       for (const mode of MODES) {
         for (let r = 0; r < REPEAT; r++) {
           const tilt = mode.includes('tilt')

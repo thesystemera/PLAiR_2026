@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useUISelector } from '../contexts/UIStateContext'
+import { useQuality } from '../contexts/QualityContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { useDeviceSelector } from '../hooks/useDeviceSelector'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
@@ -569,6 +570,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { getPreferences, removePreference, isPending } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
+  const { level: qualityLevel } = useQuality()
   const {
     audioState,
     downloadState,
@@ -1320,11 +1322,19 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                 >
                   LOW
                 </button>
+                <button
+                  onClick={() => handleSetVisualQuality('auto')}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'auto' ? 'bg-sky-500/30 text-sky-300 border border-sky-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                >
+                  AUTO
+                </button>
               </div>
             }
           >
             <div className="text-xs text-gray-400">
-              Controls background visual effects intensity. Use LOW for better battery life on mobile devices.
+              {settingsState.visualQuality === 'auto'
+                ? `Auto picks the level this device keeps at full frame rate (now ${qualityLevel.toUpperCase()}).`
+                : 'Controls background visual effects intensity. Use LOW for better battery life on mobile devices.'}
             </div>
           </SettingRow>
 
