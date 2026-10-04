@@ -12,7 +12,6 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, i, all
 const URL = args.url || 'https://plair.live'
 const CPU = Number(args.cpu || 4)
 const SECONDS = Number(args.seconds || 8)
-
 const PORT = 9333
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 const UA = 'Mozilla/5.0 (Linux; Android 12; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36'
@@ -90,7 +89,6 @@ async function openTab(label) {
 async function measure(tilt = true, level = 1) {
   return evaluate(`new Promise(resolve => {
     window.__plairLight?.debug({ level: ${level} })
-    if (${args.probeMs !== undefined ? 'true' : 'false'}) window.__plairProbeIntervalMs = ${Number(args.probeMs || 0)}
     window.__plairProfile = {}
     const times = []
     const start = performance.now()
@@ -121,50 +119,6 @@ async function measure(tilt = true, level = 1) {
     }
     requestAnimationFrame(step)
   })`)
-}
-
-if (args.trace) {
-  await load(true)
-  await openTab(args.trace)
-  const events = []
-  socket.addEventListener('message', event => {
-    const message = JSON.parse(event.data)
-    if (message.method === 'Tracing.dataCollected') events.push(...message.params.value)
-  })
-  await send('Profiler.enable')
-  await send('Profiler.start')
-  await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,gpu,viz,cc,blink', transferMode: 'ReportEvents' })
-  const run = await measure(true, 1)
-  const done = new Promise(resolve => socket.addEventListener('message', event => {
-    if (JSON.parse(event.data).method === 'Tracing.tracingComplete') resolve()
-  }))
-  await send('Tracing.end')
-  await done
-  const profile = (await send('Profiler.stop')).result.profile
-  const self = new Map()
-  const byId = new Map(profile.nodes.map(node => [node.id, node]))
-  const interval = (profile.endTime - profile.startTime) / profile.samples.length / 1000
-  for (const id of profile.samples) {
-    const node = byId.get(id)
-    const key = `${node.callFrame.functionName || '(anonymous)'} ${node.callFrame.url.split('/').pop()}:${node.callFrame.lineNumber}`
-    self.set(key, (self.get(key) || 0) + interval)
-  }
-  const frames = run.fps * SECONDS
-  console.log('run', run)
-  console.log('main thread self time per frame (ms):')
-  console.table([...self].sort((a, b) => b[1] - a[1]).slice(0, 18).map(([fn, ms]) => ({ fn, msPerFrame: +(ms / frames).toFixed(2) })))
-  const threads = new Map(events.filter(e => e.ph === 'M' && e.name === 'thread_name').map(e => [`${e.pid}:${e.tid}`, e.args.name]))
-  const totals = new Map()
-  for (const e of events) {
-    if (e.ph !== 'X' || !e.dur) continue
-    const key = `${e.name} [${threads.get(`${e.pid}:${e.tid}`) || e.tid}]`
-    totals.set(key, (totals.get(key) || 0) + e.dur / 1000)
-  }
-  console.log('trace events, total ms per frame:')
-  console.table([...totals].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([event, ms]) => ({ event, msPerFrame: +(ms / frames).toFixed(2) })))
-  socket.close()
-  chrome.kill()
-  process.exit(0)
 }
 
 const results = []

@@ -45,7 +45,6 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const [glReady, setGlReady] = useState(false)
   const [texturesKey, setTexturesKey] = useState(null)
   const [normalKey, setNormalKey] = useState(null)
-  const [settledKey, setSettledKey] = useState(null)
   const [fallbackMode, setFallbackMode] = useState(false)
   const [contextLost, setContextLost] = useState(false)
   const [onScreen, setOnScreen] = useState(true)
@@ -509,7 +508,6 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   }, [parallaxDpr])
 
   const useStandardArtwork = fallbackMode || contextLost || !isVisible || !isActive || !texturesReady || !litArtwork
-  const imageCovered = !useStandardArtwork && settledKey === texturesKey
 
   if (fallbackMode || contextLost) {
     return (
@@ -536,8 +534,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           inset: 0,
           width: '100%',
           height: '100%',
-          objectFit: 'cover',
-          visibility: imageCovered ? 'hidden' : 'visible'
+          objectFit: 'cover'
         }}
         onLoad={!texturesReady ? onLoad : undefined}
       />
@@ -551,7 +548,6 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           opacity: useStandardArtwork ? 0 : 1,
           transition: CSS_TRANSITION.fadeOpacity
         }}
-        onTransitionEnd={() => { if (!useStandardArtwork) setSettledKey(texturesKey) }}
       />
     </div>
   )

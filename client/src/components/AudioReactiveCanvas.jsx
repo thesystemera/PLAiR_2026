@@ -1831,7 +1831,7 @@ function MultiPassPlane({
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
         const probeRead = probeReadRef.current
-        if (!probeRead.pending && frameStart - probeRead.at >= (window.__plairProbeIntervalMs ?? PROBE_INTERVAL_MS)) {
+        if (!probeRead.pending && frameStart - probeRead.at >= PROBE_INTERVAL_MS) {
           probeRead.pending = true
           probeRead.at = frameStart
           gl.setRenderTarget(probeTarget)
