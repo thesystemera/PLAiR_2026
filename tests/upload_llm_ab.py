@@ -13,7 +13,7 @@ from config import settings
 from services import human_metadata_extraction_service as extraction
 from services import llm_telemetry
 from services.catalog_database_service import CatalogDatabaseService
-from services.human_music_upload_service import read_embedded_tags
+from services.human_music_upload_service_common import read_embedded_tags
 
 usage_log = []
 _record = extraction.record_gemini_usage

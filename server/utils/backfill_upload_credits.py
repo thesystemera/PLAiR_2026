@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import settings
 from services import artist_profile_service as artists
 from services.catalog_database_service import CatalogDatabaseService
-from services.human_music_upload_service import read_embedded_tags
+from services.human_music_upload_service_common import read_embedded_tags
 
 JUNK_NAME = re.compile(r"youtube|ytdown|\b(360|480|720|1080)p\b|\bmedia\b", re.I)
 NOISE = re.compile(r"^(orig(i|io)nal|final|master(ed)?|mix(down)?|demo|draft|copy|v\d+|\d{2,4}|remaster(ed)?)$", re.I)
