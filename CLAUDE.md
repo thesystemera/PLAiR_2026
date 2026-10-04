@@ -625,7 +625,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/DevicePicker.jsx` - Multi-device picker hook, button, panel and "Playing on another device" notice with Play here.
 - `client/src/components/DJActivity.jsx` - DJ tool activity cards (plan, calls, results) and the bridge that pops tool chips as notices.
 - `client/src/components/DJTextComposer.jsx` - Text input box for typing messages to the DJs in text mode.
-- `client/src/components/FPSCounter.jsx` - Developer overlay showing the current frames per second.
+- `client/src/components/FPSCounter.jsx` - Developer overlay: frames per second, the screen's refresh rate (fastest frame seen this session), frames dropped against it and the worst frame each second.
 - `client/src/components/GenerationQueuePanel.jsx` - Panel listing Suno generation jobs with progress, cancel and remove.
 - `client/src/components/GestureGuide.jsx` - One-time onboarding overlay for guests showing swipe gestures for play, pause, previous, next.
 - `client/src/components/InteractiveEngagementButton.jsx` - Animated canvas-blob engagement button with haptics and visual feedback.

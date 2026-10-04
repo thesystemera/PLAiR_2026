@@ -1,33 +1,54 @@
 import { useState, useEffect } from 'react'
 
 const DROPPED_FACTOR = 1.5
+const NEAR_FASTEST = 1.15
+const FASTEST_CONFIRMATIONS = 3
+const MAX_INTERVALS = 4096
 
 export function FPSCounter() {
-  const [stats, setStats] = useState({ fps: 60, dropped: 0, worst: 0 })
+  const [stats, setStats] = useState({ fps: 60, screenHz: 0, dropped: 0, worst: 0 })
 
   useEffect(() => {
+    const intervals = new Float32Array(MAX_INTERVALS)
+    let count = 0
     let frames = 0
-    let dropped = 0
     let worst = 0
-    let interval = Infinity
+    let fastest = Infinity
     let last = null
     let windowStart = performance.now()
     let rafId
+    const closeWindow = () => {
+      let windowMin = Infinity
+      for (let i = 0; i < count; i++) windowMin = Math.min(windowMin, intervals[i])
+      let near = 0
+      for (let i = 0; i < count; i++) if (intervals[i] <= windowMin * NEAR_FASTEST) near++
+      if (near >= FASTEST_CONFIRMATIONS) fastest = Math.min(fastest, windowMin)
+      const refresh = Number.isFinite(fastest) ? fastest : windowMin
+      let dropped = 0
+      for (let i = 0; i < count; i++) {
+        if (intervals[i] > refresh * DROPPED_FACTOR) dropped += Math.round(intervals[i] / refresh) - 1
+      }
+      return { refresh, dropped }
+    }
     const tick = (now) => {
       if (last !== null) {
         const delta = now - last
-        interval = Math.min(interval, delta)
-        if (delta > interval * DROPPED_FACTOR) dropped += Math.round(delta / interval) - 1
+        if (count < MAX_INTERVALS) intervals[count++] = delta
         worst = Math.max(worst, delta)
       }
       last = now
       frames++
       if (now - windowStart >= 1000) {
-        setStats({ fps: Math.round((frames * 1000) / (now - windowStart)), dropped, worst: Math.round(worst) })
+        const { refresh, dropped } = closeWindow()
+        setStats({
+          fps: Math.round((frames * 1000) / (now - windowStart)),
+          screenHz: Number.isFinite(refresh) ? Math.round(1000 / refresh) : 0,
+          dropped,
+          worst: Math.round(worst)
+        })
+        count = 0
         frames = 0
-        dropped = 0
         worst = 0
-        interval = Infinity
         windowStart = now
       }
       rafId = requestAnimationFrame(tick)
@@ -55,7 +76,7 @@ export function FPSCounter() {
         pointerEvents: 'none',
       }}
     >
-      {stats.fps} FPS · {stats.dropped} dropped · worst {stats.worst} ms
+      {stats.fps} FPS · screen {stats.screenHz} Hz · {stats.dropped} dropped · worst {stats.worst} ms
     </div>
   )
 }

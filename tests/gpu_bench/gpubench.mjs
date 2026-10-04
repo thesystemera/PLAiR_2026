@@ -212,7 +212,7 @@ async function run(url, lit) {
     if (args.gpu && !renderer.includes(args.gpu)) throw new Error(`wrong GPU: ${renderer}`)
     await evaluate(`(() => {
       const saved = JSON.parse(localStorage.getItem('plair_settings') || '{}')
-      localStorage.setItem('plair_settings', JSON.stringify({ ...saved, litArtwork: ${lit}, visualQuality: 'high' }))
+      localStorage.setItem('plair_settings', JSON.stringify({ ...saved, litArtwork: ${lit}, visualQuality: 'high'${args.fps ? ', fpsEnabled: true' : ''} }))
       localStorage.setItem('plair_quality_tier', '4')
       localStorage.setItem('plair_demo_mode_modal_seen', 'true')
     })()`)
