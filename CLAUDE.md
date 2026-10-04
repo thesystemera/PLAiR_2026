@@ -733,7 +733,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/errorReporter.js` - Collects log breadcrumbs and sends client errors and events to the server.
 - `client/src/lib/haptics.js` - Triggers device vibration patterns for haptic feedback.
 - `client/src/lib/lightProbe.js` - Turns the background's 16x16 light grid into tracked lights for depth artwork; says when a probe is worth reading (lit art on screen, light up, no panel resizing).
-- `client/src/lib/lightProbeReader.js` - Reads the 16x16 probe back from the scene's WebGL context through a persistent pixel buffer and a fence.
+- `client/src/lib/backgroundProbe.js` - Computes the 16x16 light probe on the CPU from small copies of the artwork and lyric word plus the background's own transform and colour uniforms (no GPU readback; Chrome's readback stalled the main thread behind every queued frame).
 - `client/src/lib/logger.js` - Logger with levels and a sink hook used by the error reporter.
 - `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for artwork, depth and profile images.
 - `client/src/lib/mediaSupport.js` - Detects MSE and WebM/Opus support and picks streaming and download formats.

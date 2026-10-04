@@ -28,8 +28,8 @@ import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
-import {PROBE_GRID, lightProbeWanted, publishBeat, publishLightLevel, setLightGlow} from '../lib/lightProbe'
-import {LightProbeReader} from '../lib/lightProbeReader'
+import {lightProbeWanted, publishBeat, publishLightLevel, publishLightProbe, setLightGlow} from '../lib/lightProbe'
+import {artworkPixels, sampleBackgroundProbe, textPixels} from '../lib/backgroundProbe'
 import { addFrameWork, createGpuTimer, frameStatsActive } from '../lib/frameStats'
 
 const backgroundVertexShader = `
@@ -591,28 +591,6 @@ const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BAC
     gl_FragColor = vec4(applyAmbientGlow(color, vUv, glass.a), 1.0);
   }
 `
-const probeVertexShader = `
-  void main() {
-    gl_Position = vec4(position.xy, 0.0, 1.0);
-  }
-`
-
-const probeFragmentShader = `
-  uniform sampler2D u_source;
-
-  void main() {
-    vec2 cell = floor(gl_FragCoord.xy);
-    vec3 sum = vec3(0.0);
-    for (int y = 0; y < 3; y++) {
-      for (int x = 0; x < 3; x++) {
-        vec2 uv = (cell + (vec2(float(x), float(y)) + 0.5) / 3.0) / ${PROBE_GRID}.0;
-        sum += texture2D(u_source, uv).rgb;
-      }
-    }
-    gl_FragColor = vec4(sum / 9.0, 1.0);
-  }
-`
-
 const transparentPixel = new DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1, RGBAFormat)
 const defaultGeometry = new PlaneGeometry(2, 2)
 
@@ -679,6 +657,8 @@ const CROSSFADE_RELEASE = 1.2
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
 const PROBE_INTERVAL_MS = 66
+const LYRIC_PROBE_WIDTH = 64
+const LYRIC_PROBE_HEIGHT = 32
 const REFERENCE_FPS = 60
 const ENERGY_WINDOW_MS = 1667
 const LIGHT_CURVE_STEP_S = 0.5
@@ -1097,34 +1077,8 @@ function MultiPassPlane({
   const captureMesh = useMemo(() => Object.assign(new Mesh(defaultGeometry, bgMaterial), { frustumCulled: false }), [bgMaterial])
   useEffect(() => { captureScene.add(captureMesh); return () => captureScene.remove(captureMesh) }, [captureScene, captureMesh])
 
-  const probeScene = useMemo(() => new Scene(), [])
-  const probeTarget = useMemo(() => new WebGLRenderTarget(PROBE_GRID, PROBE_GRID, {
-    minFilter: LinearFilter,
-    magFilter: LinearFilter,
-    format: RGBAFormat,
-    generateMipmaps: false,
-    stencilBuffer: false,
-    depthBuffer: false
-  }), [])
-  const probeMaterial = useMemo(() => new ShaderMaterial({
-    vertexShader: probeVertexShader,
-    fragmentShader: probeFragmentShader,
-    uniforms: { u_source: { value: captureRenderTarget.texture } }
-  }), [captureRenderTarget])
-  const probeMesh = useMemo(() => Object.assign(new Mesh(defaultGeometry, probeMaterial), { frustumCulled: false }), [probeMaterial])
-  useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
-  useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
-  useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
-  const probeReaderRef = useRef(null)
   const probeAtRef = useRef(0)
-  useEffect(() => {
-    const reader = new LightProbeReader(renderer.getContext())
-    probeReaderRef.current = reader
-    return () => {
-      probeReaderRef.current = null
-      reader.dispose()
-    }
-  }, [renderer])
+  const probeParamsRef = useRef({})
   const lightCurveRef = useRef(null)
   const lightLevelRef = useRef(0)
   const lastKickBeatRef = useRef(-1)
@@ -1154,9 +1108,9 @@ function MultiPassPlane({
 
   useEffect(() => {
     renderer.sortObjects = false
-    for (const node of [mainScene, captureScene, probeScene, mainCamera, captureCamera]) node.matrixWorldAutoUpdate = false
+    for (const node of [mainScene, captureScene, mainCamera, captureCamera]) node.matrixWorldAutoUpdate = false
     for (const mesh of [glassMeshRef.current, backdropMeshRef.current]) if (mesh) mesh.frustumCulled = false
-  }, [renderer, mainScene, captureScene, probeScene, mainCamera, captureCamera])
+  }, [renderer, mainScene, captureScene, mainCamera, captureCamera])
 
   useEffect(() => {
     let cancelled = false
@@ -1355,7 +1309,6 @@ function MultiPassPlane({
 
     if (isUnmountedRef.current || !engineRef || !interfaceRef || !programsReadyRef.current) return
 
-    probeReaderRef.current?.collect()
     const context = gl.getContext()
     if (sceneTimerRef.current?.gl !== context) sceneTimerRef.current = { gl: context, timer: createGpuTimer(context, 'scene gpu') }
     const sceneTimer = sceneTimerRef.current.timer
@@ -1838,6 +1791,35 @@ function MultiPassPlane({
       captureLength !== signature.captureLength ||
       signatureChanged(signature.current, signature.captured, captureLength)
 
+    if (frameStart - probeAtRef.current >= PROBE_INTERVAL_MS && lightProbeWanted(frameStart)) {
+      probeAtRef.current = frameStart
+      const u = bgMaterial.uniforms
+      const probe = probeParamsRef.current
+      probe.current = artworkPixels(u.u_texture.value?.image)
+      probe.previous = artworkPixels(u.u_texture_prev.value?.image)
+      probe.transition = u.u_transition.value
+      probe.width = rtWidth
+      probe.height = rtHeight
+      probe.texWidth = u.u_tex_resolution.value.x
+      probe.texHeight = u.u_tex_resolution.value.y
+      probe.parallaxX = u.u_parallax.value.x
+      probe.parallaxY = u.u_parallax.value.y
+      probe.glitchX = u.u_glitch.value.x
+      probe.glitchY = u.u_glitch.value.y
+      probe.frameScale = u.u_frame_scale.value
+      probe.frameOffsetX = u.u_frame_offset.value.x
+      probe.frameOffsetY = u.u_frame_offset.value.y
+      probe.scale = u.u_scale.value
+      probe.rotation = u.u_rotation.value
+      probe.contrast = u.u_contrast.value
+      probe.brightness = u.u_brightness.value
+      probe.saturation = u.u_saturation.value
+      probe.hue = u.u_hue.value
+      probe.flicker = u.u_flicker.value
+      probe.text = u.u_text_empty.value < 0.5 ? u.u_text_texture.value?.userData?.probe ?? null : null
+      publishLightProbe(sampleBackgroundProbe(probe))
+    }
+
     const paused = !signature.force && isSceneRenderingPaused(frameStart)
     reportFrame(delta, wantsRender && !paused)
     const needsRender = wantsRender && !paused
@@ -1861,13 +1843,6 @@ function MultiPassPlane({
         bgUniforms.u_is_capture.value = 1.0
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
-        const probeReader = probeReaderRef.current
-        if (probeReader?.ready && frameStart - probeAtRef.current >= PROBE_INTERVAL_MS && lightProbeWanted(frameStart)) {
-          probeAtRef.current = frameStart
-          gl.setRenderTarget(probeTarget)
-          gl.render(probeScene, captureCamera)
-          probeReader.request()
-        }
         gl.setRenderTarget(null)
         bgUniforms.u_is_capture.value = 0.0
         bgUniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
@@ -2002,6 +1977,9 @@ const LyricsRenderer = memo(function LyricsRenderer({
         const textToDraw = currentIndex >= 0 ? lyricData[currentIndex].text : null
 
         renderLyricToCanvas(ctx, textToDraw, canvas.width, canvas.height)
+        texture.userData.probe = textToDraw
+          ? textPixels((probeCtx, width, height) => renderLyricToCanvas(probeCtx, textToDraw, width, height), canvas.width, canvas.height, LYRIC_PROBE_WIDTH, LYRIC_PROBE_HEIGHT)
+          : null
         texture.userData.empty = !textToDraw
         texture.needsUpdate = true
         lastWordRef.current = textToDraw

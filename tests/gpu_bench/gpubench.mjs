@@ -12,6 +12,11 @@ const SECONDS = Number(args.seconds || 6)
 const TABS = (args.tabs || 'Catalog,Playing').split(',')
 const LIT = (args.lit || 'on').split(',').map(v => v === 'on')
 const MODES = (args.modes || 'tilt+light').split(',')
+const VIEW = (() => {
+  if (!args.viewport) return { width: 412, height: 915, dpr: 2.625, mobile: true }
+  const [width, height, dpr] = String(args.viewport).split('x').map(Number)
+  return { width, height, dpr: dpr || 1, mobile: false }
+})()
 const REPEAT = Number(args.repeat || 1)
 const PORT = 9335
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
@@ -177,7 +182,7 @@ async function run(url, lit) {
   const chrome = spawn(CHROME, [
     '--headless=new', ...gpuFlags, ...pacing,
     `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
-    '--window-size=412,915', '--autoplay-policy=no-user-gesture-required', 'about:blank',
+    `--window-size=${VIEW.width},${VIEW.height}`, '--autoplay-policy=no-user-gesture-required', 'about:blank',
   ], { stdio: 'ignore' })
   let wsUrl
   for (let i = 0; i < 50 && !wsUrl; i++) {
@@ -235,9 +240,11 @@ async function run(url, lit) {
     })()` })
     if (args.block) { await send('Network.enable'); await send('Network.setBlockedURLs', { urls: String(args.block).split(',') }) }
     if (args.css) await send('Page.addScriptToEvaluateOnNewDocument', { source: `document.addEventListener('DOMContentLoaded', () => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(String(args.css))}; document.head.appendChild(s) })` })
-    await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true })
-    await send('Emulation.setUserAgentOverride', { userAgent: UA, platform: 'Android' })
-    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+    await send('Emulation.setDeviceMetricsOverride', { width: VIEW.width, height: VIEW.height, deviceScaleFactor: VIEW.dpr, mobile: VIEW.mobile })
+    if (VIEW.mobile) {
+      await send('Emulation.setUserAgentOverride', { userAgent: UA, platform: 'Android' })
+      await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+    }
     await send('Emulation.setCPUThrottlingRate', { rate: CPU })
     await send('Page.navigate', { url })
     await sleep(4000)
