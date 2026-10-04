@@ -7,14 +7,10 @@ Uses Gemini Flash Lite (fast, cheap) with PostgreSQL caching.
 This is the brain that makes the node system efficient - it only requests what's needed.
 """
 
-import asyncio
 import re
 import time
-import os
 import json
-import psycopg2
 import hashlib
-import numpy as np
 import aiofiles
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -22,13 +18,21 @@ from pydantic import BaseModel, Field
 
 from services.base_service import SingletonService
 from services import log_service
-from services import usage_tracking
 from services.llm_router import LLM_LIVE
 from services_radio.context_node_registry import node_registry
 from config.settings import settings
-from database.pg_pool import get_pooled_connection
-from models_global import run_on_gpu_executor
 from services.task_utils import spawn
+from services.semantic_cache import SemanticCache
+
+ROUTE_COLUMNS = {
+    "selected_nodes": "TEXT",
+    "reasoning": "TEXT",
+    "confidence": "REAL",
+    "needs_tools": "BOOLEAN DEFAULT FALSE",
+    "tool_plan": "TEXT DEFAULT '[]'",
+    "pulse_json": "TEXT DEFAULT '{}'",
+    "prompt_hash": "TEXT DEFAULT ''",
+}
 
 class NodeSelection(BaseModel):
     selected_nodes: List[str] = Field(
@@ -130,147 +134,26 @@ class ContextRouterService(SingletonService):
             return
 
         self.ai_service = None
-        self.vector_db_service = None
-        self.json_dir = str(settings.CONTEXT_ROUTING_CACHE_DIR)
-        self.route_cache: Dict[str, Dict] = {}
-
-        self.exact_hits = 0
-        self.semantic_hits = 0
-        self.llm_calls = 0
+        self.cache = SemanticCache("context_routing_cache", "input_hash", "user_input", ROUTE_COLUMNS,
+                                   "Producer route cache", log_service.node_producer)
 
         self._initialized = True
 
-    def _get_connection(self):
-        return get_pooled_connection(settings.EMBEDDINGS_DATABASE_URL)
-
-    async def initialize(self, ai_service, vector_db_service=None):
+    async def initialize(self, ai_service):
         self.ai_service = ai_service
-        self.vector_db_service = vector_db_service
-
-        os.makedirs(self.json_dir, exist_ok=True)
-
-        self._initialize_database()
-        self._load_cache_from_disk()
-        await self._reembed_stale()
-
+        await self.cache.prepare(self._drop_routes_from_old_prompts)
         log_service.node_producer("✓ Context Router Service (Producer AI) initialized")
-        log_service.node_producer("  📂 Database:   PostgreSQL (ai_radio_embeddings)")
-        log_service.node_producer(f"  📂 JSON Cache: {self.json_dir}")
 
-    async def _reembed_stale(self) -> None:
-        if not self.vector_db_service:
-            return
-        dim = self.vector_db_service.embedding_dim
-        stale = [(input_hash, cached) for input_hash, cached in self.route_cache.items()
-                 if cached["embedding"] is None or cached["embedding"].shape[0] != dim]
-        if not stale:
-            return
-        for _, cached in stale:
-            cached["embedding"] = await run_on_gpu_executor(self.vector_db_service._generate_embedding,
-                                                            cached["user_input"])
-
-        def _update():
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                for input_hash, cached in stale:
-                    c.execute("UPDATE context_routing_cache SET embedding = %s WHERE input_hash = %s",
-                              (cached["embedding"].tobytes(), input_hash))
-                conn.commit()
-            finally:
-                conn.close()
-
-        await asyncio.to_thread(_update)
-        log_service.node_producer(f"  Re-embedded {len(stale)} cached routes for the current encoder")
-
-    def _initialize_database(self):
-        conn = self._get_connection()
-        try:
-            c = conn.cursor()
-            c.execute('''
-                CREATE TABLE IF NOT EXISTS context_routing_cache (
-                    input_hash TEXT PRIMARY KEY,
-                    user_input TEXT,
-                    embedding BYTEA,
-                    selected_nodes TEXT,
-                    reasoning TEXT,
-                    confidence REAL,
-                    created_at REAL,
-                    times_reused INTEGER DEFAULT 0,
-                    last_used REAL
-                )
-            ''')
-            c.execute("SELECT 1 FROM information_schema.columns WHERE table_name = 'context_routing_cache' "
-                      "AND column_name = 'pulse_json'")
-            if c.fetchone() is None:
-                c.execute("DELETE FROM context_routing_cache")
-                c.execute("ALTER TABLE context_routing_cache ADD COLUMN IF NOT EXISTS needs_tools BOOLEAN DEFAULT FALSE, "
-                          "ADD COLUMN IF NOT EXISTS tool_plan TEXT DEFAULT '[]', "
-                          "ADD COLUMN IF NOT EXISTS pulse_json TEXT DEFAULT '{}'")
-                log_service.node_producer("  Routing cache reset for tool planning")
-            c.execute("ALTER TABLE context_routing_cache ADD COLUMN IF NOT EXISTS prompt_hash TEXT DEFAULT ''")
-            c.execute("DELETE FROM context_routing_cache WHERE prompt_hash IS DISTINCT FROM %s", (self._prompt_hash(),))
-            if c.rowcount:
-                log_service.node_producer(f"  Producer prompt changed: dropped {c.rowcount} cached routes")
-            conn.commit()
-        finally:
-            conn.close()
-
-    def _load_cache_from_disk(self):
-        start_time = time.perf_counter()
-
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute("SELECT input_hash, user_input, embedding, selected_nodes, reasoning, "
-                          "confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json "
-                          "FROM context_routing_cache")
-
-                rows = c.fetchall()
-            finally:
-                conn.close()
-
-            for row in rows:
-                input_hash, user_input, embedding_blob, selected_nodes_json, reasoning, \
-                    confidence, created_at, times_reused, last_used, needs_tools, tool_plan_json, pulse_json = row
-
-                if embedding_blob:
-                    embedding = np.frombuffer(bytes(embedding_blob), dtype=np.float32)
-                else:
-                    embedding = None
-
-                selected_nodes = json.loads(selected_nodes_json)
-
-                self.route_cache[input_hash] = {
-                    "user_input": user_input,
-                    "embedding": embedding,
-                    "selected_nodes": selected_nodes,
-                    "reasoning": reasoning,
-                    "confidence": confidence,
-                    "created_at": created_at,
-                    "times_reused": times_reused,
-                    "last_used": last_used,
-                    "needs_tools": bool(needs_tools),
-                    "tool_plan": json.loads(tool_plan_json or "[]"),
-                    "pulse": clean_pulse(**json.loads(pulse_json or "{}")),
-                }
-
-            elapsed = time.perf_counter() - start_time
-            log_service.node_producer(
-                f"✓ Loaded {len(self.route_cache)} cached routing decisions ({elapsed:.2f}s)"
-            )
-        except Exception as e:
-            log_service.error(f"[PRODUCER] Failed to load cache: {e}")
+    def _drop_routes_from_old_prompts(self, cursor) -> None:
+        cursor.execute("DELETE FROM context_routing_cache WHERE prompt_hash IS DISTINCT FROM %s",
+                       (self._prompt_hash(),))
+        if cursor.rowcount:
+            log_service.node_producer(f"  Producer prompt changed: dropped {cursor.rowcount} cached routes")
 
     def _prompt_hash(self) -> str:
         if not getattr(self, "_prompt_hash_value", None):
             self._prompt_hash_value = hashlib.md5(self._build_producer_prompt().encode()).hexdigest()
         return self._prompt_hash_value
-
-    @staticmethod
-    def _hash_input(user_input: str) -> str:
-        return hashlib.md5(user_input.lower().strip().encode()).hexdigest()
 
     async def determine_nodes(self, user_input: str, use_cache: bool = True,
                               similarity_threshold: Optional[float] = None) -> List[str]:
@@ -297,57 +180,43 @@ class ContextRouterService(SingletonService):
             return self._route(DEFAULT_NODES)
 
         user_input = user_input.strip()
-        input_hash = self._hash_input(user_input)
-
         log_service.node_producer(f"🧠 Analyzing: '{user_input[:60]}...'")
 
-        if use_cache and input_hash in self.route_cache:
-            cached = self.route_cache[input_hash]
-            self._update_cache_stats(input_hash)
-            self.exact_hits += 1
+        if use_cache:
+            found = await self.cache.find(user_input, similarity_threshold)
+            if found is not None:
+                kind, cached, similarity = found
+                row = cached["row"]
+                nodes = json.loads(row["selected_nodes"] or "[]")
+                pulse = clean_pulse(**json.loads(row["pulse_json"] or "{}"))
+                log_service.node_producer(f"  ✅ CACHE HIT ({kind}, {similarity:.3f}) → {nodes}")
+                if kind == "exact":
+                    return self._route(nodes, row["needs_tools"], json.loads(row["tool_plan"] or "[]"), pulse,
+                                       "cached plan")
+                return self._route(nodes, row["needs_tools"], json.loads(row["tool_plan"] or "[]"),
+                                   stated_pulse(pulse, user_input), f"cached plan, {similarity:.0%} match")
 
-            log_service.node_producer(
-                f"  ✅ CACHE HIT (Exact) - Reused {cached['times_reused']}x → {cached['selected_nodes']}"
-            )
-
-            return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
-                               cached.get("pulse"), "cached plan")
-
-        if use_cache and self.vector_db_service:
-            input_embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
-
-            best_match = None
-            best_similarity = 0.0
-
-            for cache_hash, cached in self.route_cache.items():
-                if cached["embedding"] is not None:
-                    similarity = float(np.dot(input_embedding, cached["embedding"]))
-                    if similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = (cache_hash, cached)
-
-            if best_match and best_similarity >= similarity_threshold:
-                cache_hash, cached = best_match
-                self._update_cache_stats(cache_hash)
-                self.semantic_hits += 1
-
-                log_service.node_producer(
-                    f"  ✅ CACHE HIT (Semantic {best_similarity:.3f}) → {cached['selected_nodes']}"
-                )
-
-                return self._route(cached['selected_nodes'], cached.get('needs_tools'), cached.get('tool_plan'),
-                                   stated_pulse(cached.get('pulse') or clean_pulse(), user_input),
-                                   f"cached plan, {best_similarity:.0%} match")
-
-        self.llm_calls += 1
         log_service.node_producer("  🤖 CACHE MISS - Calling Producer AI...")
 
         selection, system_prompt, user_prompt = await self._call_producer_ai(user_input)
 
         if selection:
             if use_cache:
-                spawn(self._save_to_cache(user_input, selection, system_prompt, user_prompt), name="producer_cache_save")
-                self._log_cache_performance()
+                spawn(self.cache.save(user_input, {
+                    "selected_nodes": json.dumps(selection.selected_nodes),
+                    "reasoning": selection.reasoning,
+                    "confidence": selection.confidence,
+                    "needs_tools": bool(selection.needs_tools),
+                    "tool_plan": json.dumps(clean_plan(selection.tool_plan)),
+                    "pulse_json": json.dumps(_selection_pulse(selection)),
+                    "prompt_hash": self._prompt_hash(),
+                }), name="producer_cache_save")
+                if system_prompt and user_prompt:
+                    spawn(self._save_prompt_debug(user_input, selection, system_prompt, user_prompt),
+                          name="producer_prompt_debug")
+                line = self.cache.hit_rate_line()
+                if line:
+                    log_service.node_performance(line)
             route = self._route(selection.selected_nodes, selection.needs_tools, selection.tool_plan,
                                 _selection_pulse(selection), "fresh plan")
             log_service.node_producer(f"  📌 Selected {len(selection.selected_nodes)} nodes → {selection.selected_nodes}"
@@ -485,108 +354,6 @@ Examples:
 "is it going to rain tonight" -> topic "rain", kinds [weather], when "tonight"
 "hey how's it going" -> topic "", kinds []"""
 
-    def _update_cache_stats(self, input_hash: str):
-        usage_tracking.record_cache_hit("context_router")
-        if input_hash in self.route_cache:
-            cached = self.route_cache[input_hash]
-            cached["times_reused"] += 1
-            cached["last_used"] = time.time()
-
-            spawn(
-                asyncio.to_thread(self._persist_cache_stats, input_hash, cached["times_reused"], cached["last_used"]),
-                name="context_router_cache_stats"
-            )
-
-    def _persist_cache_stats(self, input_hash: str, times_reused: int, last_used: float):
-        try:
-            conn = self._get_connection()
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "UPDATE context_routing_cache SET times_reused = %s, last_used = %s WHERE input_hash = %s",
-                    (times_reused, last_used, input_hash)
-                )
-                conn.commit()
-            finally:
-                conn.close()
-        except Exception as e:
-            log_service.error(f"[PRODUCER] Failed to update cache stats: {e}")
-
-    async def _save_to_cache(self, user_input: str, selection: NodeSelection, system_prompt: Optional[str] = None, user_prompt: Optional[str] = None):
-        input_hash = self._hash_input(user_input)
-
-        embedding = None
-        if self.vector_db_service:
-            embedding = await run_on_gpu_executor(self.vector_db_service._generate_embedding, user_input)
-
-        selected_nodes_json = json.dumps(selection.selected_nodes)
-        current_time = time.time()
-
-        self.route_cache[input_hash] = {
-            "user_input": user_input,
-            "embedding": embedding,
-            "selected_nodes": selection.selected_nodes,
-            "reasoning": selection.reasoning,
-            "confidence": selection.confidence,
-            "created_at": current_time,
-            "times_reused": 0,
-            "last_used": current_time,
-            "needs_tools": selection.needs_tools,
-            "tool_plan": clean_plan(selection.tool_plan),
-            "pulse": _selection_pulse(selection),
-        }
-
-        await asyncio.to_thread(
-            self._insert_cache_row, input_hash, user_input, embedding, selected_nodes_json, selection, current_time
-        )
-
-        if system_prompt and user_prompt:
-            await self._save_prompt_debug(user_input, selection, system_prompt, user_prompt)
-
-        log_service.system(
-            f"[PRODUCER] Cached new routing decision for '{user_input[:40]}...'"
-        )
-
-    def _insert_cache_row(self, input_hash: str, user_input: str, embedding, selected_nodes_json: str,
-                          selection: NodeSelection, current_time: float):
-        try:
-            conn = self._get_connection()
-        except Exception as e:
-            log_service.error(f"[PRODUCER] DB Write error: {e}")
-            return
-        c = conn.cursor()
-        try:
-            c.execute(
-                """
-                INSERT INTO context_routing_cache (input_hash, user_input, embedding, selected_nodes, reasoning, confidence, created_at, times_reused, last_used, needs_tools, tool_plan, pulse_json, prompt_hash)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (input_hash) DO NOTHING
-                """,
-                (
-                    input_hash,
-                    user_input,
-                    embedding.tobytes() if embedding is not None else None,
-                    selected_nodes_json,
-                    selection.reasoning,
-                    selection.confidence,
-                    current_time,
-                    0,
-                    current_time,
-                    bool(selection.needs_tools),
-                    json.dumps(clean_plan(selection.tool_plan)),
-                    json.dumps(_selection_pulse(selection)),
-                    self._prompt_hash()
-                )
-            )
-            conn.commit()
-        except psycopg2.IntegrityError:
-            conn.rollback()
-        except Exception as e:
-            log_service.error(f"[PRODUCER] DB Write error: {e}")
-            conn.rollback()
-        finally:
-            conn.close()
-
     async def _save_prompt_debug(self, user_input: str, selection: NodeSelection, system_prompt: str, user_prompt: str):
         try:
             from pathlib import Path
@@ -650,39 +417,5 @@ Examples:
 
         except Exception as e:
             log_service.error(f"[PRODUCER] Failed to save prompt debug: {e}")
-
-    def _log_cache_performance(self):
-        total = self.exact_hits + self.semantic_hits + self.llm_calls
-        if total > 0 and total % 5 == 0:
-            hit_rate = ((self.exact_hits + self.semantic_hits) / total) * 100
-            log_service.node_performance(
-                f"📊 Cache: {hit_rate:.1f}% hit rate | "
-                f"Exact: {self.exact_hits} | Semantic: {self.semantic_hits} | LLM: {self.llm_calls}"
-            )
-
-    def get_cache_stats(self) -> Dict:
-        total_requests = self.exact_hits + self.semantic_hits + self.llm_calls
-        exact_rate = (self.exact_hits / total_requests * 100) if total_requests > 0 else 0
-        semantic_rate = (self.semantic_hits / total_requests * 100) if total_requests > 0 else 0
-        combined_rate = exact_rate + semantic_rate
-
-        popular_decisions = sorted(
-            [(v["user_input"], v["times_reused"]) for v in self.route_cache.values()],
-            key=lambda x: x[1],
-            reverse=True
-        )[:10]
-
-        return {
-            "total_cached_decisions": len(self.route_cache),
-            "exact_hits": self.exact_hits,
-            "semantic_hits": self.semantic_hits,
-            "llm_calls": self.llm_calls,
-            "exact_hit_rate": exact_rate,
-            "semantic_hit_rate": semantic_rate,
-            "combined_hit_rate": combined_rate,
-            "popular_decisions": popular_decisions,
-            "database_url": settings.EMBEDDINGS_DATABASE_URL,
-            "json_dir": self.json_dir
-        }
 
 context_router_service = ContextRouterService()

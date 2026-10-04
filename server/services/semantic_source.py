@@ -1,10 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-import psycopg2
 from pydantic import Field, create_model
 
-from config import settings
 from models_global import run_on_gpu_executor
 from services import log_service
 from services.base_prompt_cache_service import BasePromptCacheService
@@ -67,23 +65,10 @@ def make_prompt_cache(vector_cls, table_name: str, domain: str, examples: str, l
 
     PromptCache.__name__ = f"{vector_cls.__name__}PromptCache"
     PromptCache.table_name = table_name
-    PromptCache.stats_task_name = f"{table_name}_stats"
     PromptCache.ready_message = f"✓ {vector_cls.display_name} query intent cache ready"
     PromptCache.log_channel = log_channel
     PromptCache.analysis_model = analysis_model
     PromptCache.weights_model = weights_model
-    PromptCache._json_cache_dir = lambda self: settings.USER_CONTENT_QUERY_CACHE_DIR.parent / table_name
-
-    def _insert_cache_row(self, conn, params: tuple):
-        c = conn.cursor()
-        try:
-            c.execute(f"INSERT INTO {table_name} VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", params)
-            conn.commit()
-        except psycopg2.IntegrityError:
-            conn.rollback()
-
-    PromptCache._insert_cache_row = _insert_cache_row
-    PromptCache._stats_database_entry = lambda self: ("database_url", settings.EMBEDDINGS_DATABASE_URL)
     PromptCache._build_system_prompt = staticmethod(lambda: (
         f"You analyse search queries for {domain} at PLAiR, an AI radio station.\n\n"
         f"Decide which aspects of an item the query is about and weight these categories (weights sum to 1.0):\n"

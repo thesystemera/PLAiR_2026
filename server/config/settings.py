@@ -109,8 +109,6 @@ class Settings:
         }
 
 
-    QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "query_cache"
-    CONTEXT_ROUTING_CACHE_DIR: Path = BASE_DIR / "data" / "context_routing_cache"
 
     # YouTube video clips cache (background video art for tracks)
     YOUTUBE_CLIPS_DIR: Path = BASE_DIR / "data" / "youtube_clips"
@@ -127,7 +125,6 @@ class Settings:
     SEMANTIC_ENCODER_DIM: int = int(os.getenv("SEMANTIC_ENCODER_DIM", "768"))
     SEMANTIC_ENCODER_SLUG: str = os.getenv("SEMANTIC_ENCODER_SLUG", "mpnet")
 
-    USER_CONTENT_QUERY_CACHE_DIR: Path = BASE_DIR / "data" / "user_content_query_cache"
 
     FILLER_LEARN_BELOW: float = float(os.getenv("FILLER_LEARN_BELOW", "0.6"))
     FILLER_LEARN_MAX_PENDING: int = int(os.getenv("FILLER_LEARN_MAX_PENDING", "4"))
@@ -830,9 +827,6 @@ class Settings:
         cls.STUDIO_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
         # Cache directories
-        cls.QUERY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cls.CONTEXT_ROUTING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cls.USER_CONTENT_QUERY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cls.PROMPT_DEBUG_DIR.mkdir(parents=True, exist_ok=True)
         cls.LLM_RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cls.YOUTUBE_CLIPS_DIR.mkdir(parents=True, exist_ok=True)

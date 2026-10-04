@@ -379,6 +379,10 @@ class TTSGenerationService:
 
     async def save_generated_clip(self, pcm: bytes, sample_rate: int, audio_path: str, tag: str,
                                   audio_description: Optional[str], content_voice: str, embeddings_type: str):
+        if sample_rate < self.output_rate:
+            log_service.warning(f"Clip cache: '{tag[:40]}' missed the upscaler - aired, not cached (renders fresh "
+                                f"next time)")
+            return
         try:
             await asyncio.to_thread(write_clip, audio_path, pcm, sample_rate, tag, audio_description)
             await asyncio.to_thread(

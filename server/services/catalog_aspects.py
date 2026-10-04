@@ -1,4 +1,7 @@
-from dataclasses import dataclass
+import itertools
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -7,6 +10,7 @@ from services.catalog_names import NameLookup, track_names
 from services.catalog_vector_database_service import TAG_LISTS
 
 LABEL_ASPECTS = set(TAG_LISTS) | {"primary_genre", "vocal"}
+ANCHOR_SCORES_KEPT = 512
 NAME_ASPECTS = {"primary_artist", "similar_artists"}
 
 
@@ -17,12 +21,16 @@ class Aspect:
     words: Optional[str] = None
 
 
+INDEX_SERIALS = itertools.count()
+
+
 @dataclass
 class TagIndex:
     rows: np.ndarray
     starts: np.ndarray
     counts: np.ndarray
     vectors: np.ndarray
+    serial: int = field(default_factory=lambda: next(INDEX_SERIALS))
 
 
 def _unit(vectors: np.ndarray) -> np.ndarray:
@@ -74,6 +82,21 @@ class AspectRanker:
     def __init__(self, vector_db, names: NameLookup):
         self.vector_db = vector_db
         self.names = names
+        self._anchor_scores: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+        self._anchor_lock = Lock()
+
+    def _remembered(self, key: tuple, compute: Callable[[], np.ndarray]) -> np.ndarray:
+        with self._anchor_lock:
+            found = self._anchor_scores.get(key)
+            if found is not None:
+                self._anchor_scores.move_to_end(key)
+                return found
+        found = compute()
+        with self._anchor_lock:
+            self._anchor_scores[key] = found
+            while len(self._anchor_scores) > ANCHOR_SCORES_KEPT:
+                self._anchor_scores.popitem(last=False)
+        return found
 
     def categories(self) -> List[str]:
         return station_categories(self.vector_db)
@@ -83,12 +106,17 @@ class AspectRanker:
         anchors = [(tags, whole) for tags, whole in anchors if tags]
         if index is None or not anchors:
             return None
+        def one(tags: List[str], whole: bool) -> np.ndarray:
+            anchor = _unit(np.array(self.vector_db.ensure_embeddings(category, tags, persist=False),
+                                    dtype=np.float32))
+            similarity = anchor @ index.vectors.T
+            return (_match(similarity, index.starts, index.counts) if whole
+                    else np.maximum.reduceat(similarity, index.starts, axis=1).mean(axis=0))
+
         total = np.zeros(len(index.rows), dtype=np.float32)
         for tags, whole in anchors:
-            anchor = _unit(np.array(self.vector_db.ensure_embeddings(category, tags), dtype=np.float32))
-            similarity = anchor @ index.vectors.T
-            total += (_match(similarity, index.starts, index.counts) if whole
-                      else np.maximum.reduceat(similarity, index.starts, axis=1).mean(axis=0))
+            total += self._remembered((index.serial, "meaning", category, tuple(tags), whole),
+                                      lambda tags=tags, whole=whole: one(tags, whole))
         scores = np.full(len(slot.metas), np.nan, dtype=np.float32)
         scores[index.rows] = total / len(anchors)
         return scores
@@ -100,7 +128,10 @@ class AspectRanker:
             return None
         total = np.zeros(len(index.rows), dtype=np.float32)
         for names in anchors:
-            total += _match(self.names.similarity(field, names, slot)[1], index.starts, index.counts, both)
+            total += self._remembered(
+                (index.serial, "spelling", field, tuple(names), both),
+                lambda names=names: _match(self.names.similarity(field, names, slot)[1], index.starts, index.counts,
+                                           both))
         scores = np.full(len(slot.metas), np.nan, dtype=np.float32)
         scores[index.rows] = total / len(anchors)
         return scores
@@ -135,8 +166,8 @@ class AspectRanker:
             scores = np.fmax.reduce(np.vstack(parts), axis=0)
         if aspect.category == "similar_artists":
             own = {name.lower() for names in artists for name in names}
-            for i, meta in enumerate(slot.metas):
-                if own & {name.lower() for name in track_names(meta, "artist")}:
+            for i, credited in enumerate(slot.names.artists):
+                if own & credited:
                     scores[i] = np.nan
         return scores, same
 

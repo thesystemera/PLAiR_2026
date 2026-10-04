@@ -1,8 +1,6 @@
-import psycopg2
 from typing import Optional
 from pydantic import BaseModel, Field
 from services.base_prompt_cache_service import BasePromptCacheService
-from config import settings
 
 class CategoryWeights(BaseModel):
     transcription: float = Field(ge=0.0, le=1.0, description="Weight for transcription content")
@@ -38,26 +36,10 @@ class QueryIntentAnalysis(BaseModel):
 
 class UserContentVectorSearchPromptCacheService(BasePromptCacheService):
     table_name = "user_content_query_intent_cache"
-    stats_task_name = "user_content_query_intent_cache_stats"
     ready_message = "✓ User Content Cache Service Ready"
     log_channel = "user_content"
     analysis_model = QueryIntentAnalysis
     weights_model = CategoryWeights
-
-    def _json_cache_dir(self):
-        return settings.USER_CONTENT_QUERY_CACHE_DIR
-
-    def _insert_cache_row(self, conn, params: tuple):
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO user_content_query_intent_cache VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                      params)
-            conn.commit()
-        except psycopg2.IntegrityError:
-            conn.rollback()
-
-    def _stats_database_entry(self):
-        return "database_url", settings.EMBEDDINGS_DATABASE_URL
 
     @staticmethod
     def _build_system_prompt() -> str:

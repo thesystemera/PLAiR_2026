@@ -4,6 +4,7 @@ import re
 from services_radio.conversation_service import save_conversation_to_database
 from database.models import User
 from services import log_service
+from services.catalog_names import spelled_alike, track_names
 
 SEED_MODE_DISPLAY = {
     "mood": "mood",
@@ -33,10 +34,14 @@ class ExecutorPlayback:
         start = (state.get('current_index') or 0) + 1 if state.get('current_track') else 0
         upcoming = [self._track_id_of(item) for item in queue[start:]]
         if not title:
-            return upcoming[0] if upcoming else None
-        return next((track_id for track_id in upcoming
-                     if self._name_matches(title, track_id, "title") or self._name_matches(title, track_id, "artist")),
-                    None)
+            return (upcoming[0], None) if upcoming else (None, None)
+        candidates = {}
+        for track_id in upcoming:
+            track = self.catalog_service.get_track(track_id) if self.catalog_service else None
+            if track:
+                candidates[track_id] = track_names(track, "title") + track_names(track, "artist")
+        best = self.vector_search_service.names.best_match(title, candidates)
+        return best if best else (None, None)
 
     async def execute_playback_control(self, session_dict, action, position_s=None, title=None):
         session_id = session_dict.get('session_id')
@@ -54,7 +59,7 @@ class ExecutorPlayback:
                     "track": self._track_label(self._resolve_track_id(session_id, "current"))}
 
         if action == "remove":
-            track_id = self._upcoming_track_id(session_id, title)
+            track_id, spelling = self._upcoming_track_id(session_id, title)
             if not track_id:
                 return {"status": "not_found", "up_next": self._upcoming_labels(session_id, limit=8),
                         "reason": "No upcoming track matches that" if title else "Nothing is queued after this track"}
@@ -62,7 +67,12 @@ class ExecutorPlayback:
             log_service.detail(f"[COMMAND EXECUTOR] Executing: Remove {label} from the queue", "commands")
             if not await self.playback_service.remove_from_queue(session_id, track_id, user_id=user_id):
                 return {"status": "error", "reason": "That track is no longer in the queue"}
-            return {"status": "ok", "action": action, "removed": label, "up_next": self._upcoming_labels(session_id)}
+            result = {"status": "ok", "action": action, "removed": label, "up_next": self._upcoming_labels(session_id)}
+            if spelling is not None and not spelled_alike(spelling):
+                result["note"] = (f"Nothing queued is spelled exactly like '{title}'; this was the closest by spelling "
+                                  f"({spelling:.2f}, 1.0 = the same). If the listener meant another one, say so and "
+                                  "put this one back with search_and_play.")
+            return result
 
         if action == "next":
             log_service.detail("[COMMAND EXECUTOR] Executing: Skip to next track", "commands")

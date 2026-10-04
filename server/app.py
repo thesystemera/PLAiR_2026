@@ -233,7 +233,7 @@ async def lifespan(_app: FastAPI):
     log_service.system("Initializing catalog vector search prompt cache service...")
     try:
         services.vector_search_prompt_cache_service = vector_search_prompt_cache_service = CatalogVectorSearchPromptCacheService()
-        await vector_search_prompt_cache_service.initialize(ai_service, catalog_vector_db_service)
+        await vector_search_prompt_cache_service.initialize(ai_service)
         log_service.success("✓ Catalog vector search prompt cache service initialized")
     except Exception as e:
         log_service.error(f"❌ FATAL: Prompt cache service initialization failed: {e}")
@@ -244,7 +244,7 @@ async def lifespan(_app: FastAPI):
     log_service.system("Initializing context router service (Producer AI)...")
     try:
         from services_radio.context_router_service import context_router_service
-        await context_router_service.initialize(ai_service, catalog_vector_db_service)  # type: ignore
+        await context_router_service.initialize(ai_service)  # type: ignore
         log_service.success("✓ Context router service initialized (Node system ready)")
     except Exception as e:
         log_service.error(f"❌ WARNING: Context router service initialization failed: {e}")
@@ -280,7 +280,7 @@ async def lifespan(_app: FastAPI):
 
         log_service.system("Initializing user content prompt cache service...")
         services.user_content_prompt_cache_service = user_content_prompt_cache_service = UserContentVectorSearchPromptCacheService()
-        await user_content_prompt_cache_service.initialize(ai_service, user_content_vector_db_service)
+        await user_content_prompt_cache_service.initialize(ai_service)
         log_service.success("✓ User content prompt cache service initialized")
 
         log_service.system("Initializing user content vector search service...")
@@ -302,7 +302,7 @@ async def lifespan(_app: FastAPI):
         services.request_vector_db_service = ListenerRequestVectorDatabaseService(request_store)
         await asyncio.to_thread(services.request_vector_db_service.load)
         services.request_search = SemanticSearch(services.request_vector_db_service, ListenerRequestPromptCache())
-        await services.request_search.prompt_cache.initialize(ai_service, services.request_vector_db_service)
+        await services.request_search.prompt_cache.initialize(ai_service)
         log_service.success("✓ Listener request vectors initialized")
     except Exception as e:
         log_service.warning(f"⚠️  Listener request vectors unavailable: {e}")
@@ -314,15 +314,15 @@ async def lifespan(_app: FastAPI):
         local_vector_db = local_knowledge.LocalKnowledgeVectorDatabaseService(nugget_source)
         await asyncio.to_thread(local_vector_db.load)
         local_search = SemanticSearch(local_vector_db, local_knowledge.LocalKnowledgePromptCache())
-        await local_search.prompt_cache.initialize(ai_service, local_vector_db)
+        await local_search.prompt_cache.initialize(ai_service)
         news_vector_db = local_knowledge.NewsVectorDatabaseService(nugget_source)
         await asyncio.to_thread(news_vector_db.load)
         news_search = SemanticSearch(news_vector_db, local_knowledge.NewsPromptCache())
-        await news_search.prompt_cache.initialize(ai_service, news_vector_db)
+        await news_search.prompt_cache.initialize(ai_service)
         place_vector_db = local_knowledge.PlaceVectorDatabaseService(nugget_source)
         await asyncio.to_thread(place_vector_db.load)
         place_search = SemanticSearch(place_vector_db, local_knowledge.PlacePromptCache())
-        await place_search.prompt_cache.initialize(ai_service, place_vector_db)
+        await place_search.prompt_cache.initialize(ai_service)
         local_knowledge.install(local_vector_db, local_search, news_vector_db, news_search, place_vector_db,
                                 place_search)
         log_service.success("✓ Local knowledge vectors initialized")

@@ -1,5 +1,4 @@
 import asyncio
-import re
 
 from services_radio.conversation_service import save_conversation_to_database
 from services.task_utils import spawn
@@ -92,19 +91,6 @@ class CommandExecutorService(ExecutorSearch, ExecutorPlayback, ExecutorCommunity
             turn_tasks.add(task)
             task.add_done_callback(turn_tasks.discard)
         return task
-
-    def _name_matches(self, value, track_id, field):
-        def norm(text):
-            return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
-        track = self.catalog_service.get_track(track_id) if self.catalog_service else None
-        if field == "artist":
-            names = log_service.track_artists(track)
-        else:
-            names = [((track or {}).get("generation_params") or {}).get("title"),
-                     ((track or {}).get("track_info") or {}).get("title")]
-        wanted = norm(value)
-        return bool(wanted) and any(
-            f" {wanted} " in f" {name} " or f" {name} " in f" {wanted} " for name in map(norm, names) if name)
 
     RATINGS = ("like", "super_like", "clear", "ban")
 

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+import itertools
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -8,6 +9,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from services.catalog_credit import credited_artists
 
 NAME_FIELDS = ("artist", "title", "similar_artists")
+INDEX_SERIALS = itertools.count()
 
 
 def track_names(track: Dict[str, Any], field: str) -> List[str]:
@@ -28,31 +30,38 @@ class NameIndex:
     counts: np.ndarray
     vectors: sparse.csr_matrix
     names: List[str]
+    serial: int = field(default_factory=lambda: next(INDEX_SERIALS))
+    columns: Optional[sparse.csr_matrix] = None
+
+    def __post_init__(self):
+        self.columns = self.vectors.T.tocsr()
 
 
 @dataclass
 class NameSpace:
     spelling: TfidfVectorizer
     indexes: Dict[str, Optional[NameIndex]]
+    artists: List[set] = field(default_factory=list)
 
 
 def build_name_space(metas: List[Dict[str, Any]], spelling: Optional[TfidfVectorizer] = None) -> NameSpace:
     if spelling is None:
-        every = sorted({name for meta in metas for field in NAME_FIELDS for name in track_names(meta, field)})
+        every = sorted({name for meta in metas for kind in NAME_FIELDS for name in track_names(meta, kind)})
         spelling = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True,
                                    strip_accents="unicode").fit(every or [" "])
     indexes: Dict[str, Optional[NameIndex]] = {}
-    for field in NAME_FIELDS:
+    for kind in NAME_FIELDS:
         rows, starts, names = [], [], []
         for row, meta in enumerate(metas):
-            found = track_names(meta, field)
+            found = track_names(meta, kind)
             if found:
                 rows.append(row)
                 starts.append(len(names))
                 names.extend(found)
-        indexes[field] = NameIndex(np.array(rows), np.array(starts), np.diff(np.array(starts + [len(names)])),
+        indexes[kind] = NameIndex(np.array(rows), np.array(starts), np.diff(np.array(starts + [len(names)])),
                                    spelling.transform(names), names) if names else None
-    return NameSpace(spelling, indexes)
+    artists = [{name.lower() for name in track_names(meta, "artist")} for meta in metas]
+    return NameSpace(spelling, indexes, artists)
 
 
 class NameLookup:
@@ -69,7 +78,7 @@ class NameLookup:
         names = [name.strip() for name in names if name and name.strip()]
         if index is None or not names:
             return None
-        return index, (slot.names.spelling.transform(names) @ index.vectors.T).toarray()
+        return index, (slot.names.spelling.transform(names) @ index.columns).toarray()
 
     def closest(self, field: str, text: str, how_many: int) -> List[Tuple[str, float]]:
         slots, _hidden = self.vector_db.views()
@@ -82,6 +91,17 @@ class NameLookup:
             for name, score in zip(index.names, similarity[0]):
                 best[name] = max(best.get(name, 0.0), float(score))
         return sorted(best.items(), key=lambda item: item[1], reverse=True)[:how_many]
+
+    def best_match(self, text: str, candidates: Dict[str, List[str]]) -> Optional[Tuple[str, float]]:
+        slot = self.vector_db.live()
+        keys = [key for key, names in candidates.items() for name in names if name and name.strip()]
+        names = [name for key, names in candidates.items() for name in names if name and name.strip()]
+        if slot is None or slot.names is None or not names or not text or not text.strip():
+            return None
+        spelling = slot.names.spelling
+        scores = (spelling.transform([text]) @ spelling.transform(names).T).toarray()[0]
+        best = int(np.argmax(scores))
+        return keys[best], float(scores[best])
 
     def find(self, field: str, text: str, n_results: int,
              allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:

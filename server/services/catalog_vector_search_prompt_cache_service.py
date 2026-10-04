@@ -1,7 +1,6 @@
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from services.base_prompt_cache_service import BasePromptCacheService
-from config import settings
 
 class CategoryWeights(BaseModel):
     song_title: float = Field(ge=0.0, le=1.0, description="Weight for specific song title matches")
@@ -42,28 +41,11 @@ class QueryIntentAnalysis(BaseModel):
 
 class CatalogVectorSearchPromptCacheService(BasePromptCacheService):
     table_name = "query_intent_cache"
-    stats_task_name = "query_intent_cache_stats"
     ready_message = "✓ Cache Service Ready"
     log_channel = "vector_music"
     analysis_model = QueryIntentAnalysis
     weights_model = CategoryWeights
     filter_fields = ("vocals",)
-
-    def _json_cache_dir(self):
-        return settings.QUERY_CACHE_DIR
-
-    def _insert_cache_row(self, conn, params: tuple):
-        c = conn.cursor()
-        try:
-            c.execute("INSERT INTO query_intent_cache VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                      "ON CONFLICT (query_hash) DO NOTHING",
-                      params)
-            conn.commit()
-        except Exception:
-            pass
-
-    def _stats_database_entry(self):
-        return "database", "ai_radio_embeddings (PostgreSQL)"
 
     def _build_system_prompt(self) -> str:
         return """You are a music search intent analyzer for an AI-powered radio station.
