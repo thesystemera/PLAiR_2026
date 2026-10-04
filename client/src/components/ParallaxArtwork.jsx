@@ -15,6 +15,7 @@ const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
 const CACHE_AFTER_STILL_DRAWS = 2
+const RESIZE_SETTLE_MS = 150
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: false }
 
 const getContext = canvas => canvas.getContext('webgl2', CONTEXT_OPTIONS) || canvas.getContext('webgl', CONTEXT_OPTIONS)
@@ -516,6 +517,17 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     const canvas = canvasRef.current
     if (!canvas) return
 
+    let settleTimer = null
+    let sized = false
+    const applySize = (width, height) => {
+      settleTimer = null
+      sized = true
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+      }
+    }
+
     const resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
         const deviceDpr = window.devicePixelRatio || 1
@@ -530,15 +542,17 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           height = Math.round(entry.contentRect.height * dpr)
         }
 
-        if (canvas.width !== width || canvas.height !== height) {
-          canvas.width = width
-          canvas.height = height
-        }
+        if (settleTimer) clearTimeout(settleTimer)
+        if (!sized) applySize(width, height)
+        else settleTimer = setTimeout(applySize, RESIZE_SETTLE_MS, width, height)
       }
     })
 
     resizeObserver.observe(canvas)
-    return () => resizeObserver.disconnect()
+    return () => {
+      if (settleTimer) clearTimeout(settleTimer)
+      resizeObserver.disconnect()
+    }
   }, [parallaxDpr])
 
   const useStandardArtwork = fallbackMode || contextLost || !isVisible || !isActive || !texturesReady || !litArtwork

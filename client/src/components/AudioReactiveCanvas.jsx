@@ -673,7 +673,7 @@ const CROSSFADE_RELEASE = 1.2
 
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
-const PROBE_INTERVAL_MS = 66
+const PROBE_INTERVAL_MS = 250
 const LIGHT_CURVE_STEP_S = 0.5
 const LIGHT_CURVE_WINDOW_S = 4
 const LIGHT_IN_RANK = 0.55

@@ -44,6 +44,7 @@ import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
 import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, TrackDataLoader, UploadNotice} from './components/AppBridges'
 import {DepthArtBridge, ProfileArt} from './components/DepthArt'
+import {noteLayoutMotion} from './lib/lightProbe'
 
 const lazyNamed = (loader, name) => lazy(() => loader().then(module => ({ default: module[name] })))
 
@@ -396,80 +397,93 @@ function App() {
   }, [isMobile, isFullscreenVisuals, showUIControls])
 
   useEffect(() => {
-    const updateShaderPositions = () => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const windowWidth = window.innerWidth
-          const windowHeight = window.innerHeight
+    const measureShaderPositions = () => {
+      const windowWidth = window.innerWidth
+      const windowHeight = window.innerHeight
 
-          const panelOrder = isMobile
-            ? ['queue', 'catalog', 'radio', 'nowPlaying', 'user', 'player']
-            : ['queue', 'catalog', 'radio', 'nowPlaying', 'user', 'player']
+      const panelOrder = isMobile
+        ? ['queue', 'catalog', 'radio', 'nowPlaying', 'user', 'player']
+        : ['queue', 'catalog', 'radio', 'nowPlaying', 'user', 'player']
 
-          const regions = []
-          const opacities = []
+      const regions = []
+      const opacities = []
 
-          panelOrder.forEach((panelId) => {
-            const { region, opacity } = calculatePanelRegion(panelId, windowWidth, windowHeight)
-            regions.push(region)
-            opacities.push(opacity)
-          })
-
-          if (isMobile && regions.length === 6) {
-            regions.push({ x: 0, y: 0, z: 0, w: 0 })
-            opacities.push(0)
-          }
-
-          updateShaderRegions(regions, opacities)
-
-          const radioButton = document.querySelector('[data-shader-element="radio-button"]')
-          if (radioButton && radioButton.offsetWidth > 0 && radioButton.offsetHeight > 0) {
-            const rect = radioButton.getBoundingClientRect()
-            const baseWidth = radioButton.offsetWidth
-            const baseHeight = radioButton.offsetHeight
-
-            let slideOffset = 0
-            if (isMobile) {
-              const radioPanel = radioButton.closest('[data-shader-panel="radio"]')
-              const mobileViewport = document.querySelector('[data-mobile-viewport]')
-              if (radioPanel && mobileViewport) {
-                slideOffset = radioPanel.getBoundingClientRect().left - mobileViewport.getBoundingClientRect().left
-              }
-            }
-
-            const centerX = (rect.left - slideOffset + rect.width / 2) / windowWidth
-            const centerY = 1.0 - ((rect.top + rect.height / 2) / windowHeight)
-
-            const host = radioButton.parentElement
-            const hostScale = host && host.offsetWidth > 0 ? host.getBoundingClientRect().width / host.offsetWidth : 1
-            const borderWidth = 4
-            const innerWidth = (baseWidth - borderWidth) * hostScale
-            const innerHeight = (baseHeight - borderWidth) * hostScale
-
-            const radiusX = (innerWidth / 2) / windowWidth
-            const radiusY = (innerHeight / 2) / windowHeight
-
-            updateShaderRadioButtonPos({ x: centerX, y: centerY, radiusX, radiusY })
-          }
-        })
+      panelOrder.forEach((panelId) => {
+        const { region, opacity } = calculatePanelRegion(panelId, windowWidth, windowHeight)
+        regions.push(region)
+        opacities.push(opacity)
       })
+
+      if (isMobile && regions.length === 6) {
+        regions.push({ x: 0, y: 0, z: 0, w: 0 })
+        opacities.push(0)
+      }
+
+      updateShaderRegions(regions, opacities)
+
+      const radioButton = document.querySelector('[data-shader-element="radio-button"]')
+      if (radioButton && radioButton.offsetWidth > 0 && radioButton.offsetHeight > 0) {
+        const rect = radioButton.getBoundingClientRect()
+        const baseWidth = radioButton.offsetWidth
+        const baseHeight = radioButton.offsetHeight
+
+        let slideOffset = 0
+        if (isMobile) {
+          const radioPanel = radioButton.closest('[data-shader-panel="radio"]')
+          const mobileViewport = document.querySelector('[data-mobile-viewport]')
+          if (radioPanel && mobileViewport) {
+            slideOffset = radioPanel.getBoundingClientRect().left - mobileViewport.getBoundingClientRect().left
+          }
+        }
+
+        const centerX = (rect.left - slideOffset + rect.width / 2) / windowWidth
+        const centerY = 1.0 - ((rect.top + rect.height / 2) / windowHeight)
+
+        const host = radioButton.parentElement
+        const hostScale = host && host.offsetWidth > 0 ? host.getBoundingClientRect().width / host.offsetWidth : 1
+        const borderWidth = 4
+        const innerWidth = (baseWidth - borderWidth) * hostScale
+        const innerHeight = (baseHeight - borderWidth) * hostScale
+
+        const radiusX = (innerWidth / 2) / windowWidth
+        const radiusY = (innerHeight / 2) / windowHeight
+
+        updateShaderRadioButtonPos({ x: centerX, y: centerY, radiusX, radiusY })
+      }
     }
 
-    setTimeout(updateShaderPositions, 100)
-    setTimeout(updateShaderPositions, 350)
+    let frame = null
+    const updateShaderPositions = () => {
+      if (frame === null) {
+        frame = requestAnimationFrame(() => {
+          frame = null
+          measureShaderPositions()
+        })
+      }
+    }
+
+    updateShaderPositions()
+    const timers = [setTimeout(updateShaderPositions, 100), setTimeout(updateShaderPositions, 350)]
 
     const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(updateShaderPositions)
+      noteLayoutMotion()
+      measureShaderPositions()
     })
-
-    const appRoot = document.getElementById('root')
-    if (appRoot) {
-      resizeObserver.observe(appRoot)
+    const tracked = [
+      document.getElementById('root'),
+      document.querySelector('[data-mobile-viewport]'),
+      document.querySelector('[data-shader-element="radio-button"]'),
+      ...document.querySelectorAll('[data-shader-panel]'),
+    ]
+    for (const element of tracked) {
+      if (element) resizeObserver.observe(element)
     }
 
     window.addEventListener('resize', updateShaderPositions)
 
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      timers.forEach(clearTimeout)
       resizeObserver.disconnect()
       window.removeEventListener('resize', updateShaderPositions)
     }

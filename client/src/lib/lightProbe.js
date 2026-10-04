@@ -2,14 +2,15 @@ export const PROBE_GRID = 16
 export const MAX_LIGHTS = 4
 
 const CELLS = PROBE_GRID * PROBE_GRID
-const GRID_SMOOTHING_PER_SECOND = 14
+const GRID_SMOOTHING_PER_SECOND = 4
 const LIGHT_FOLLOW_PER_SECOND = 10
 const KICK_DECAY_SECONDS = 0.18
 const MIN_LIGHT_SPACING = 0.22
 const CONTRAST_FLOOR = 0.03
 const MAX_INTENSITY = 2.5
 const CONSUMER_TIMEOUT_MS = 250
-const STALE_PROBE_MS = 250
+const STALE_PROBE_MS = 1000
+const MOTION_QUIET_MS = 300
 
 const base = new Float32Array(CELLS * 3)
 const grid = new Float32Array(CELLS * 3)
@@ -20,7 +21,7 @@ const lightColors = new Float32Array(MAX_LIGHTS * 3)
 const picked = Array.from({ length: MAX_LIGHTS }, () => ({ x: 0, y: 0, r: 0, g: 0, b: 0, intensity: 0, taken: false }))
 const state = {
   version: 0, lastBlendAt: 0, kickLevel: 0, kickAt: 0, pulse: 0, level: 0, target: 0, hasProbe: false, glow: null,
-  consumerAt: -Infinity, probeAt: -Infinity, wasActive: false, snap: false,
+  consumerAt: -Infinity, probeAt: -Infinity, motionAt: -Infinity, wasActive: false, snap: false,
 }
 const debug = { off: false, kick: null, level: null }
 
@@ -45,8 +46,12 @@ export function noteLightConsumer(now) {
   state.consumerAt = now
 }
 
+export function noteLayoutMotion() {
+  state.motionAt = performance.now()
+}
+
 export function lightProbeWanted(now) {
-  if (debug.off || now - state.consumerAt > CONSUMER_TIMEOUT_MS) return false
+  if (debug.off || now - state.consumerAt > CONSUMER_TIMEOUT_MS || now - state.motionAt < MOTION_QUIET_MS) return false
   return (debug.level ?? Math.max(state.level, state.target)) > 0
 }
 
@@ -174,6 +179,7 @@ export function readLightProbe(now) {
 }
 
 if (typeof window !== 'undefined') {
+  document.addEventListener('scroll', noteLayoutMotion, { capture: true, passive: true })
   window.__plairLight = {
     read: () => {
       const probe = readLightProbe(performance.now())
