@@ -6,6 +6,8 @@ import { CSS_TRANSITION } from '../lib/motion'
 import { useDepthMap } from '../hooks/useDepthMap'
 import { depthThumbCache, normalThumbCache, profileDepthCache, profileNormalCache } from '../lib/mediaCache'
 
+const HIDDEN = { visibility: 'hidden' }
+
 const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('http') || url.startsWith('/'))
 
 export function DepthArtBridge() {
@@ -33,6 +35,7 @@ export const DepthArt = memo(function DepthArt({
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const [drawnKey, setDrawnKey] = useState(null)
+  const [settledKey, setSettledKey] = useState(null)
   const litArtwork = useUISelector(state => state.settingsState.litArtwork)
   const usable = litArtwork && isLoadedImage(colorUrl) && isLoadedImage(depthUrl) && isLoadedImage(normalUrl)
   const key = usable ? `${colorUrl}|${depthUrl}|${normalUrl}` : null
@@ -50,6 +53,7 @@ export const DepthArt = memo(function DepthArt({
   }, [key, colorUrl, depthUrl, normalUrl])
 
   const drawn = key !== null && drawnKey === key
+  const imageCovered = drawn && settledKey === key
 
   return (
     <div ref={hostRef} className={className}>
@@ -61,6 +65,7 @@ export const DepthArt = memo(function DepthArt({
         className={imgClassName}
         onLoad={onLoad}
         onError={onError}
+        style={imageCovered ? HIDDEN : undefined}
         {...imgProps}
       />
       <canvas
@@ -68,6 +73,7 @@ export const DepthArt = memo(function DepthArt({
         aria-hidden="true"
         className="absolute inset-0 w-full h-full pointer-events-none"
         style={{ opacity: drawn ? 1 : 0, transition: CSS_TRANSITION.fadeOpacity }}
+        onTransitionEnd={() => { if (drawn) setSettledKey(key) }}
       />
     </div>
   )
