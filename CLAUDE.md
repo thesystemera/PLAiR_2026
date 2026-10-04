@@ -672,6 +672,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/modals/ShareModal.jsx` - Share a track by link or exported music video, with download and copy.
 - `client/src/components/modals/ShoutoutModal.jsx` - Shoutout playback modal with transcript, analytics, replies and reply recording.
 - `client/src/components/modals/UploadMusicModal.jsx` - Human music upload and edit: drag/drop, rights, credits, analysis progress, metadata preview.
+- `client/src/components/modals/UploadMusicModalFields.jsx` - The upload modal's editable fields: metadata and tag editors, visibility, description, artist chooser, quality badge, artwork, audio features.
 - `client/src/components/modals/UsageStatsModal.jsx` - Admin view of AI usage and costs by scope and period.
 
 #### client/src/contexts
@@ -711,7 +712,11 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 
 #### client/src/lib
 
-- `client/src/lib/api.js` - API client: every backend call, offline routing via _routeRequest, connectivity events. Every backend call goes through it, never a direct `fetch()`.
+- `client/src/lib/api.js` - API client core: requests, auth token, offline routing via `_routeRequest`, connectivity events, offline write replay; assigns the method groups of its parts onto the `API` class. Every backend call goes through it, never a direct `fetch()`.
+- `client/src/lib/apiAccount.js` - API part: sign-up and sign-in (passwords, passkeys, device links), account, device settings, likes and bans, profile picture, billing, usage.
+- `client/src/lib/apiCommunity.js` - API part: shoutouts, replies, reviews and their stats.
+- `client/src/lib/apiMusic.js` - API part: catalog, queue, search, stream and artwork URLs, track data, song generation, uploads, artist profiles, share videos.
+- `client/src/lib/apiStation.js` - API part: devices, DJ conversation and timeline, transcription, Radio Mode, music beds.
 - `client/src/lib/artworkPrefetcher.js` - Prioritised, concurrent artwork thumbnail prefetching and decoding queue.
 - `client/src/lib/audioEngine.js` - Dual-slot audio engine: A/B crossfades, gain ramps, streaming, device enforcement, iOS unlock. All gain automation goes through `_rampGain()`.
 - `client/src/lib/audioInteractionManager.js` - Unlocks audio on user gestures: resumes contexts, runs hooks, primes media elements.
@@ -732,7 +737,10 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/microMotion.js` - Web Animations micro-interactions: press pop, nope, burst, art pop, arrival glow.
 - `client/src/lib/motion.js` - Motion tokens: durations, easings, springs, variants, presets and CSS transitions.
 - `client/src/lib/musicBed.js` - Plays and fades music beds under Radio Mode talk breaks.
-- `client/src/lib/offlineAPI.js` - Offline backend answering API calls from downloads, including the local radio queue.
+- `client/src/lib/offlineAPI.js` - Offline backend core: the local radio session and queue on the downloads; assigns its parts' method groups onto `OfflineBackend`.
+- `client/src/lib/offlineAPILibrary.js` - Offline part: the downloads library (tracks, stats, genres, search, cache validation, features, lyric timing).
+- `client/src/lib/offlineAPIUnavailable.js` - Offline part: every call that needs a connection, answered with an empty result or a friendly error.
+- `client/src/lib/offlineAPIWrites.js` - Offline part: likes, bans and profile changes queued for replay when back online, cached user.
 - `client/src/lib/offlineStorage.js` - IndexedDB store for downloaded tracks and metadata normalisation.
 - `client/src/lib/offlineVideoRenderer.js` - Renders share videos frame by frame with the shared shaders and encodes MP4.
 - `client/src/lib/passkeys.js` - WebAuthn passkey helpers: login, sign-up, add and silent upgrade.
