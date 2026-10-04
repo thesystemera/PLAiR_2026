@@ -5,14 +5,14 @@ import numpy as np
 from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from services import log_service
+from services.catalog_credit import credited_artists
 
 NAME_FIELDS = ("artist", "title", "similar_artists")
 
 
 def track_names(track: Dict[str, Any], field: str) -> List[str]:
     if field == "artist":
-        names = log_service.track_artists(track)
+        names = credited_artists(track)
     elif field == "title":
         names = [(track.get("generation_params") or {}).get("title"), (track.get("track_info") or {}).get("title")]
     else:
@@ -23,7 +23,6 @@ def track_names(track: Dict[str, Any], field: str) -> List[str]:
 
 @dataclass
 class NameIndex:
-    metas: List[Dict[str, Any]]
     rows: np.ndarray
     starts: np.ndarray
     counts: np.ndarray
@@ -31,53 +30,45 @@ class NameIndex:
     names: List[str]
 
 
+@dataclass
+class NameSpace:
+    spelling: TfidfVectorizer
+    indexes: Dict[str, Optional[NameIndex]]
+
+
+def build_name_space(metas: List[Dict[str, Any]]) -> NameSpace:
+    every = sorted({name for meta in metas for field in NAME_FIELDS for name in track_names(meta, field)})
+    spelling = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True,
+                               strip_accents="unicode").fit(every or [" "])
+    indexes: Dict[str, Optional[NameIndex]] = {}
+    for field in NAME_FIELDS:
+        rows, starts, names = [], [], []
+        for row, meta in enumerate(metas):
+            found = track_names(meta, field)
+            if found:
+                rows.append(row)
+                starts.append(len(names))
+                names.extend(found)
+        indexes[field] = NameIndex(np.array(rows), np.array(starts), np.diff(np.array(starts + [len(names)])),
+                                   spelling.transform(names), names) if names else None
+    return NameSpace(spelling, indexes)
+
+
 class NameLookup:
     """Names compared by spelling, not meaning: character n-gram vectors, so typos, spacing, accents and a leading
-    'the' still find the name, and two different names never match just because their words mean something alike."""
+    'the' still find the name, and two different names never match just because their words mean something alike.
+    Reads the live catalog index slot."""
 
     def __init__(self, vector_db):
         self.vector_db = vector_db
-        self._source = None
-        self._spelling: Optional[TfidfVectorizer] = None
-        self._indexes: Dict[str, NameIndex] = {}
 
-    def _fresh(self) -> Dict[int, Dict[str, Any]]:
-        source = self.vector_db._metadata_cache
-        if self._source is not source:
-            self._source, self._spelling, self._indexes = source, None, {}
-        return source
-
-    def spell(self, names: List[str]) -> sparse.csr_matrix:
-        self._fresh()
-        if self._spelling is None:
-            every = {name for meta in self._source.values() for field in NAME_FIELDS
-                     for name in track_names(meta, field)}
-            self._spelling = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True,
-                                             strip_accents="unicode").fit(sorted(every) or [" "])
-        return self._spelling.transform(names)
-
-    def index(self, field: str) -> Optional[NameIndex]:
-        source = self._fresh()
-        if field not in self._indexes:
-            metas = list(source.values())
-            rows, starts, names = [], [], []
-            for row, meta in enumerate(metas):
-                found = track_names(meta, field)
-                if found:
-                    rows.append(row)
-                    starts.append(len(names))
-                    names.extend(found)
-            self._indexes[field] = NameIndex(
-                metas, np.array(rows), np.array(starts), np.diff(np.array(starts + [len(names)])),
-                self.spell(names) if names else sparse.csr_matrix((0, 0)), names) if names else None
-        return self._indexes[field]
-
-    def similarity(self, field: str, names: List[str]) -> Optional[Tuple[NameIndex, np.ndarray]]:
-        index = self.index(field)
+    def similarity(self, field: str, names: List[str], slot=None) -> Optional[Tuple[NameIndex, np.ndarray]]:
+        slot = slot or self.vector_db.current()
+        index = slot.names.indexes.get(field) if slot is not None else None
         names = [name.strip() for name in names if name and name.strip()]
         if index is None or not names:
             return None
-        return index, (self.spell(names) @ index.vectors.T).toarray()
+        return index, (slot.names.spelling.transform(names) @ index.vectors.T).toarray()
 
     def closest(self, field: str, text: str, how_many: int) -> List[Tuple[str, float]]:
         found = self.similarity(field, [text])
@@ -91,15 +82,15 @@ class NameLookup:
 
     def find(self, field: str, text: str, n_results: int,
              allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        found = self.similarity(field, [text])
+        slot = self.vector_db.current()
+        found = self.similarity(field, [text], slot)
         if found is None:
             return []
         index, similarity = found
         per_track = np.maximum.reduceat(similarity[0], index.starts)
-        order = np.argsort(-per_track, kind="stable")
         out = []
-        for i in order:
-            meta = index.metas[index.rows[i]]
+        for i in np.argsort(-per_track, kind="stable"):
+            meta = slot.metas[index.rows[i]]
             if allowed(meta):
                 out.append({**meta, "similarity_score": float(per_track[i])})
                 if len(out) >= n_results:

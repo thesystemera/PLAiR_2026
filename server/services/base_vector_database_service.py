@@ -38,7 +38,6 @@ class BaseVectorDatabaseService:
     source_db_label: str = ""
     item_noun: str = "items"
     single_item_noun: str = "item"
-    builds_index: bool = True
 
     def __init__(self, source_service=None):
         self._log(f"Initializing {type(self).__name__} (using global models)")
@@ -130,9 +129,7 @@ class BaseVectorDatabaseService:
         else:
             self._log("  No cached embeddings found (will generate on first use)")
 
-        if self.builds_index:
-            self._log("\nLoading Annoy indexes from disk...")
-            self._load_annoy_indexes()
+        self._load_indexes()
         if not self._metadata_cache and self.source_service is not None:
             try:
                 self.load_metadata()
@@ -145,6 +142,10 @@ class BaseVectorDatabaseService:
 
     def _trigger_rebuild(self):
         raise NotImplementedError
+
+    def _load_indexes(self):
+        self._log("\nLoading Annoy indexes from disk...")
+        self._load_annoy_indexes()
 
     def _load_annoy_indexes(self):
         ann_file_1, ann_file_2 = self._index_files()
@@ -234,7 +235,7 @@ class BaseVectorDatabaseService:
         return self._create_weighted_embedding(
             self.get_category_embeddings(self._extract_category_texts(item)), weights)
 
-    def load_metadata(self) -> None:
+    def read_rows(self) -> Tuple[Dict[int, str], Dict[int, Dict]]:
         conn = self.source_service._get_connection()
         try:
             c = conn.cursor()
@@ -242,8 +243,11 @@ class BaseVectorDatabaseService:
             rows = c.fetchall()
         finally:
             conn.close()
-        self._rowid_cache = {rowid: item_id for rowid, item_id, _ in rows}
-        self._metadata_cache = {rowid: json.loads(metadata_json) for rowid, _, metadata_json in rows}
+        return ({rowid: item_id for rowid, item_id, _ in rows},
+                {rowid: json.loads(metadata_json) for rowid, _, metadata_json in rows})
+
+    def load_metadata(self) -> None:
+        self._rowid_cache, self._metadata_cache = self.read_rows()
 
     def get_or_create_embedding(self, text: str, db_type: str, cache: Dict[str, np.ndarray]) -> np.ndarray:
         if not text or not text.strip():

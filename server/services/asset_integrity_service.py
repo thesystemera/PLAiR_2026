@@ -81,7 +81,7 @@ TRACK_CHECKS: Tuple[AssetCheck, ...] = (
     AssetCheck("audio_features", "track", "Audio features JSON", ("master_wav",), False, True),
     AssetCheck("lyric_timestamps", "track", "Lyric timestamps JSON", ("metadata", "master_wav"), True, True),
     AssetCheck("db_flags", "track", "DB has_mp3/has_wav/has_artwork flags", ("db_row",), False, False),
-    AssetCheck("vector_index", "track", "Catalog vectors entry", ("db_row",), False, False),
+    AssetCheck("vector_index", "track", "Catalog vector index entry", ("db_row",), True, True),
 )
 
 SHOUTOUT_CHECKS: Tuple[AssetCheck, ...] = (
@@ -557,9 +557,9 @@ class AssetIntegrityService:
 
     def _detect_vector_index(self, subject: Subject) -> Finding:
         if subject.db is None or self._indexed_ids is None:
-            return Finding(OK, "catalog vectors not loaded yet")
+            return Finding(OK, "index state unknown")
         if subject.id not in self._indexed_ids:
-            return Finding(MISSING, "not in the catalog vectors (search and stations can't find it)")
+            return Finding(MISSING, "not in the live catalog index slot (search and stations can't find it)")
         return Finding(OK)
 
     def _detect_shoutout(self, subject: Subject):
@@ -719,9 +719,8 @@ class AssetIntegrityService:
 
     def _current_indexed_ids(self) -> Optional[set]:
         vector_db = self._svc("vector_db")
-        if vector_db is None or not vector_db._metadata_cache:
-            return None
-        return {meta.get("id") for meta in list(vector_db._metadata_cache.values())}
+        live = vector_db.current() if vector_db is not None else None
+        return live.ids if live is not None else None
 
     def _is_gpu(self, check: AssetCheck, subject: Subject) -> bool:
         if check.key == "lyric_timestamps" and subject.info.get("lyrics_placeholder"):
@@ -1175,7 +1174,8 @@ class AssetIntegrityService:
             return
         vector_db = self._svc("vector_db")
         catalog = self._svc("catalog")
-        await asyncio.to_thread(vector_db.refresh, catalog)
+        async with models_global.gpu_lease("Asset doctor vector index"):
+            await asyncio.to_thread(vector_db.rebuild_indexes, catalog)
         self._vector_rebuilt_at = time.monotonic()
         self._indexed_ids = await asyncio.to_thread(self._current_indexed_ids)
 

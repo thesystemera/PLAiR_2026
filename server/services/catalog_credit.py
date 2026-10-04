@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 NAME_MAX_CHARS = 60
 SOURCE_DEPTH = 5
@@ -83,11 +83,10 @@ def settle_ai_credit(track: Dict[str, Any], tracks: Optional[Dict[str, Dict[str,
     return artist, source, True
 
 
-def search_artist_text(track: Dict[str, Any]) -> str:
+def credited_artists(track: Dict[str, Any]) -> List[str]:
     params, derived = track.get("generation_params") or {}, track.get("derived_tags") or {}
     credit = (params.get("artist_name") or "").strip()
     if not is_ai_track(track):
-        return credit
+        return [credit] if credit else []
     inspired = (derived.get("inspired_artist") or "").strip()
-    names = [name for name in (credit, inspired) if name]
-    return ", ".join(dict.fromkeys(names))
+    return list(dict.fromkeys(name for name in (credit, inspired) if name))

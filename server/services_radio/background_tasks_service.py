@@ -201,13 +201,18 @@ class BackgroundTasksService:
 
                 current_size = len(self.catalog_service.tracks)
 
-                if current_size != last_catalog_size:
+                if current_size != last_catalog_size or self.catalog_vector_db_service.dirty:
                     log_service.vector_music(
                         f"🔄 Catalog size changed ({last_catalog_size} → {current_size}), "
-                        f"refreshing the catalog vectors..."
+                        f"rebuilding indexes in background..."
+                        if current_size != last_catalog_size else "🔄 Catalog tracks edited, rebuilding indexes in background..."
                     )
-                    await asyncio.to_thread(self.catalog_vector_db_service.refresh, self.catalog_service)
+                    await asyncio.to_thread(
+                        self.catalog_vector_db_service.rebuild_indexes,
+                        self.catalog_service
+                    )
                     last_catalog_size = current_size
+                    log_service.success("✓ Catalog vector indexes rebuilt and swapped")
 
                 await asyncio.sleep(300)
 

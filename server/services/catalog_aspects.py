@@ -43,50 +43,42 @@ def _match(similarity: np.ndarray, starts: np.ndarray, counts: np.ndarray, both:
     return (forward + backward) / 2
 
 
+def station_categories(vector_db) -> List[str]:
+    return [category for category in vector_db.categories if category != "song_title"]
+
+
+def build_tag_indexes(vector_db, metas: List[Dict[str, Any]]) -> Dict[str, Optional[TagIndex]]:
+    indexes: Dict[str, Optional[TagIndex]] = {}
+    for category in station_categories(vector_db):
+        if category in NAME_ASPECTS:
+            continue
+        rows, starts, texts = [], [], []
+        for row, meta in enumerate(metas):
+            tags = vector_db.category_tags(meta).get(category) or []
+            if tags:
+                rows.append(row)
+                starts.append(len(texts))
+                texts.extend(tags)
+        indexes[category] = TagIndex(
+            np.array(rows), np.array(starts), np.diff(np.array(starts + [len(texts)])),
+            _unit(np.array(vector_db.ensure_embeddings(category, texts), dtype=np.float32))) if texts else None
+    return indexes
+
+
 class AspectRanker:
     """Stations built from aspects of songs (or from words): each aspect scores every song on its own - genre,
     mood, style and the rest by meaning, tag by tag; artists by spelling - and a blend is those scores weighted.
-    Every anchor (the seed, each recent song) counts equally."""
+    Every anchor (the seed, each recent song) counts equally. Reads the live catalog index slot."""
 
     def __init__(self, vector_db, names: NameLookup):
         self.vector_db = vector_db
         self.names = names
-        self._source = None
-        self._indexes: Dict[str, Optional[TagIndex]] = {}
 
     def categories(self) -> List[str]:
-        return [category for category in self.vector_db.categories if category != "song_title"]
+        return station_categories(self.vector_db)
 
-    def _metas(self) -> List[Dict[str, Any]]:
-        source = self.vector_db._metadata_cache
-        if self._source is not source:
-            self._source, self._indexes = source, {}
-        return list(source.values())
-
-    def _tag_index(self, category: str) -> Optional[TagIndex]:
-        metas = self._metas()
-        if category not in self._indexes:
-            rows, starts, texts = [], [], []
-            for row, meta in enumerate(metas):
-                tags = self.vector_db.category_tags(meta).get(category) or []
-                if tags:
-                    rows.append(row)
-                    starts.append(len(texts))
-                    texts.extend(tags)
-            self._indexes[category] = TagIndex(
-                np.array(rows), np.array(starts), np.diff(np.array(starts + [len(texts)])),
-                _unit(np.array(self.vector_db.ensure_embeddings(category, texts), dtype=np.float32))) if texts else None
-        return self._indexes[category]
-
-    def warm(self) -> None:
-        for category in self.categories():
-            if category not in NAME_ASPECTS:
-                self._tag_index(category)
-        self.names.index("artist")
-        self.names.index("similar_artists")
-
-    def _meaning(self, category: str, anchors: List[Tuple[List[str], bool]]) -> Optional[np.ndarray]:
-        index = self._tag_index(category)
+    def _meaning(self, slot, category: str, anchors: List[Tuple[List[str], bool]]) -> Optional[np.ndarray]:
+        index = slot.tags.get(category)
         anchors = [(tags, whole) for tags, whole in anchors if tags]
         if index is None or not anchors:
             return None
@@ -96,45 +88,44 @@ class AspectRanker:
             similarity = anchor @ index.vectors.T
             total += (_match(similarity, index.starts, index.counts) if whole
                       else np.maximum.reduceat(similarity, index.starts, axis=1).mean(axis=0))
-        scores = np.full(len(self._metas()), np.nan, dtype=np.float32)
+        scores = np.full(len(slot.metas), np.nan, dtype=np.float32)
         scores[index.rows] = total / len(anchors)
         return scores
 
-    def _spelling(self, field: str, anchors: List[List[str]], both: bool = True) -> Optional[np.ndarray]:
+    def _spelling(self, slot, field: str, anchors: List[List[str]], both: bool = True) -> Optional[np.ndarray]:
         anchors = [names for names in anchors if names]
-        index = self.names.index(field)
+        index = slot.names.indexes.get(field)
         if index is None or not anchors:
             return None
         total = np.zeros(len(index.rows), dtype=np.float32)
         for names in anchors:
-            total += _match(self.names.similarity(field, names)[1], index.starts, index.counts, both)
-        scores = np.full(len(self._metas()), np.nan, dtype=np.float32)
+            total += _match(self.names.similarity(field, names, slot)[1], index.starts, index.counts, both)
+        scores = np.full(len(slot.metas), np.nan, dtype=np.float32)
         scores[index.rows] = total / len(anchors)
         return scores
 
-    def _named_artist_scene(self, words: List[str]) -> List[str]:
-        artist = self._spelling("artist", [words])
+    def _named_artist_scene(self, slot, words: List[str]) -> List[str]:
+        artist = self._spelling(slot, "artist", [words])
         if artist is None or np.all(np.isnan(artist)):
             return []
         best = np.nanmax(artist)
-        metas = self._metas()
         return list(dict.fromkeys(name for i in np.flatnonzero(artist == best)
-                                  for name in track_names(metas[i], "similar_artists")))
+                                  for name in track_names(slot.metas[i], "similar_artists")))
 
-    def _names(self, aspect: Aspect, seed: Optional[Dict[str, Any]],
+    def _names(self, slot, aspect: Aspect, seed: Optional[Dict[str, Any]],
                recent: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if aspect.words:
             artists = [_words(aspect.category, aspect.words)]
-            similar = [self._named_artist_scene(artists[0])]
+            similar = [self._named_artist_scene(slot, artists[0])]
         else:
             artists = [track_names(seed, "artist")] if seed else []
             similar = [track_names(seed, "similar_artists")] if seed else []
         artists += [track_names(track, "artist") for track in recent]
         similar += [track_names(track, "similar_artists") for track in recent]
 
-        same = self._spelling("artist", artists)
-        named = self._spelling("artist", similar, both=False)
-        scene = self._spelling("similar_artists", similar)
+        same = self._spelling(slot, "artist", artists)
+        named = self._spelling(slot, "artist", similar, both=False)
+        scene = self._spelling(slot, "similar_artists", similar)
         parts = [part for part in ((same,) if aspect.category == "primary_artist" else ()) + (named, scene)
                  if part is not None]
         if not parts:
@@ -143,27 +134,30 @@ class AspectRanker:
             scores = np.fmax.reduce(np.vstack(parts), axis=0)
         if aspect.category == "similar_artists":
             own = {name.lower() for names in artists for name in names}
-            for i, meta in enumerate(self._metas()):
+            for i, meta in enumerate(slot.metas):
                 if own & {name.lower() for name in track_names(meta, "artist")}:
                     scores[i] = np.nan
         return scores, same
 
-    def _scores(self, aspect: Aspect, seed: Optional[Dict[str, Any]],
+    def _scores(self, slot, aspect: Aspect, seed: Optional[Dict[str, Any]],
                 recent: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if aspect.category in NAME_ASPECTS:
-            return self._names(aspect, seed, recent)
+            return self._names(slot, aspect, seed, recent)
         tags = self.vector_db.category_tags
         anchors = [(_words(aspect.category, aspect.words), False)] if aspect.words else (
             [(tags(seed).get(aspect.category) or [], True)] if seed else [])
         anchors += [(tags(track).get(aspect.category) or [], True) for track in recent]
-        return self._meaning(aspect.category, anchors), None
+        return self._meaning(slot, aspect.category, anchors), None
 
     def rank(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
              n_results: int, allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        metas = self._metas()
+        slot = self.vector_db.current()
+        if slot is None:
+            return []
+        metas = slot.metas
         weighted, weights, artist = [], [], np.zeros(len(metas), dtype=np.float32)
         for aspect in aspects:
-            scores, same = self._scores(aspect, seed, recent)
+            scores, same = self._scores(slot, aspect, seed, recent)
             if scores is None or aspect.weight <= 0:
                 continue
             weighted.append(scores * aspect.weight)
