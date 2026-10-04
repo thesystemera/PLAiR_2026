@@ -2,7 +2,7 @@ export const PROBE_GRID = 16
 export const MAX_LIGHTS = 4
 
 const CELLS = PROBE_GRID * PROBE_GRID
-const GRID_SMOOTHING_PER_SECOND = 4
+const GRID_SMOOTHING_PER_SECOND = 14
 const LIGHT_FOLLOW_PER_SECOND = 10
 const KICK_DECAY_SECONDS = 0.18
 const MIN_LIGHT_SPACING = 0.22
@@ -179,7 +179,6 @@ export function readLightProbe(now) {
 }
 
 if (typeof window !== 'undefined') {
-  document.addEventListener('scroll', noteLayoutMotion, { capture: true, passive: true })
   window.__plairLight = {
     read: () => {
       const probe = readLightProbe(performance.now())

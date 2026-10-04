@@ -16,6 +16,7 @@ const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
 const CACHE_AFTER_STILL_DRAWS = 2
 const RESIZE_SETTLE_MS = 150
+const PLACEMENT_REFRESH_MS = 250
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, preserveDrawingBuffer: false }
 
 const getContext = canvas => canvas.getContext('webgl2', CONTEXT_OPTIONS) || canvas.getContext('webgl', CONTEXT_OPTIONS)
@@ -343,6 +344,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     lastDrawRef.current = null
     let errorCheckPending = true
     let stillDraws = 0
+    const placement = { rect: null, at: 0, dirty: true }
     const minFrameMs = parallaxFpsCap > 0 ? 1000 / parallaxFpsCap - FRAME_CAP_SLACK_MS : 0
 
     const bindArtwork = () => {
@@ -399,7 +401,12 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         const now = timestamp ?? performance.now()
         if (hasNormals) noteLightConsumer(now)
         const probe = readLightProbe(now)
-        const rect = canvas.getBoundingClientRect()
+        if (placement.dirty || !placement.rect || now - placement.at > PLACEMENT_REFRESH_MS) {
+          placement.rect = canvas.getBoundingClientRect()
+          placement.at = now
+          placement.dirty = false
+        }
+        const rect = placement.rect
 
         const last = lastDrawRef.current
         const tiltStill = last &&
@@ -504,9 +511,18 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       }
     }
 
+    const markMoved = (event) => {
+      const target = event?.target
+      if (!target || target === document || typeof target.contains !== 'function' || target.contains(canvas)) placement.dirty = true
+    }
+    document.addEventListener('scroll', markMoved, { capture: true, passive: true })
+    window.addEventListener('resize', markMoved, { passive: true })
+
     render()
 
     return () => {
+      document.removeEventListener('scroll', markMoved, { capture: true })
+      window.removeEventListener('resize', markMoved)
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
       }

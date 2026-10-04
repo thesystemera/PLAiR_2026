@@ -39,6 +39,25 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
+const clipCache = new WeakMap()
+
+function clippingAncestors(element) {
+  if (!element || element === document.body || element === document.documentElement) return []
+  let clips = clipCache.get(element)
+  if (!clips) {
+    const style = getComputedStyle(element)
+    const clipsSelf = style.overflowX !== 'visible' || style.overflowY !== 'visible' || /paint|strict|content/.test(style.contain)
+    const above = clippingAncestors(element.parentElement)
+    clips = clipsSelf ? [element, ...above] : above
+    clipCache.set(element, clips)
+  }
+  return clips
+}
+
+function overlaps(a, left, top, right, bottom) {
+  return a.right > left && a.left < right && a.bottom > top && a.top < bottom
+}
+
 class DepthArtRenderer {
   constructor() {
     this.views = new Set()
@@ -54,8 +73,8 @@ class DepthArtRenderer {
     this.contextLost = false
     this.frame = null
     this.lastDrawAt = 0
-    this.observer = null
     this.layoutDirty = true
+    this.scrolled = false
     this.lastLayoutAt = 0
     this.lastInput = null
     this.showing = false
@@ -63,8 +82,21 @@ class DepthArtRenderer {
     this.markLayoutDirty = () => {
       this.layoutDirty = true
     }
+    this.markScrolled = (event) => {
+      const target = event.target
+      if (!target || target === document || target === document.documentElement || target === document.body) {
+        this.layoutDirty = true
+        return
+      }
+      for (const view of this.views) {
+        if (target.contains(view.host)) {
+          view.dirty = true
+          this.scrolled = true
+        }
+      }
+    }
     if (typeof document !== 'undefined') {
-      document.addEventListener('scroll', this.markLayoutDirty, { capture: true, passive: true })
+      document.addEventListener('scroll', this.markScrolled, { capture: true, passive: true })
       window.addEventListener('resize', this.markLayoutDirty, { passive: true })
     }
   }
@@ -76,43 +108,41 @@ class DepthArtRenderer {
 
   attach({ host, canvas, colorUrl, depthUrl, normalUrl, onDrawn }) {
     if (!this.ensureContext()) return () => {}
-    const view = { host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn, visible: false, entry: null, last: null, drawn: false }
+    const view = {
+      host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn,
+      clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
+    }
     view.entry = this.acquire(view)
     this.views.add(view)
-    this.layoutDirty = true
-    this.observe(view)
+    this.scrolled = true
     this.schedule()
     return () => this.detach(view)
   }
 
   detach(view) {
     if (!this.views.delete(view)) return
-    this.observer?.unobserve(view.host)
     if (view.entry) view.entry.refs--
     view.entry = null
     this.dropCache(view)
     this.evictIdle()
   }
 
-  observe(view) {
-    if (typeof IntersectionObserver === 'undefined') {
-      view.visible = true
-      return
+  measure(view, clipRects) {
+    const rect = view.host.getBoundingClientRect()
+    view.rect = rect
+    let visible = rect.width >= 2 && rect.height >= 2 && overlaps(rect, 0, 0, viewport.width, viewport.height)
+    for (const clip of view.clips) {
+      if (!visible) break
+      let clipRect = clipRects.get(clip)
+      if (!clipRect) {
+        clipRect = clip.getBoundingClientRect()
+        clipRects.set(clip, clipRect)
+      }
+      visible = overlaps(rect, clipRect.left, clipRect.top, clipRect.right, clipRect.bottom)
     }
-    if (!this.observer) {
-      this.observer = new IntersectionObserver((entries) => {
-        for (const entry of entries) {
-          for (const view of this.views) {
-            if (view.host !== entry.target) continue
-            view.visible = entry.isIntersecting
-            if (!view.visible) this.dropCache(view)
-          }
-        }
-        this.layoutDirty = true
-        this.schedule()
-      })
-    }
-    this.observer.observe(view.host)
+    view.visible = visible
+    view.shown = visible && (!view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
+    if (!visible) this.dropCache(view)
   }
 
   ensureContext() {
@@ -269,15 +299,18 @@ class DepthArtRenderer {
     const probe = readLightProbe(timestamp)
     const base = this.baseParallax()
     const relayout = this.layoutDirty || timestamp - this.lastLayoutAt > LAYOUT_REFRESH_MS
+    const scrolled = this.scrolled
     const input = this.lastInput
     const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
     const lit = !input || input.light !== probe.key
-    if (!relayout && !moved && !uploaded && !lit) return
+    if (!relayout && !scrolled && !moved && !uploaded && !lit) return
     this.lastInput = { x: base.parallaxX, y: base.parallaxY, light: probe.key }
+    this.scrolled = false
     if (relayout) {
       this.layoutDirty = false
       this.lastLayoutAt = timestamp
     }
+    const clipRects = new Map()
     const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
@@ -286,14 +319,13 @@ class DepthArtRenderer {
 
     for (const view of this.views) {
       const entry = view.entry
-      if (!view.visible || !entry || entry.state !== 'ready') continue
-      if (relayout || !view.rect) {
-        view.rect = view.host.getBoundingClientRect()
-        view.shown = !view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      if (!entry || entry.state !== 'ready') continue
+      if (relayout || view.dirty || !view.rect) {
+        view.dirty = false
+        this.measure(view, clipRects)
       }
       if (!view.shown) continue
       const rect = view.rect
-      if (rect.width < 2 || rect.height < 2) continue
       showing = true
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
