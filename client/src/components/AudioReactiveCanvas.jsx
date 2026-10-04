@@ -628,15 +628,19 @@ function lowerBound(sorted, value) {
   return lo
 }
 
-function pushEnergySample(history, sorted, value) {
+function pushEnergySample(history, stamps, sorted, value, now) {
   if (sorted.length !== history.length) {
     sorted.length = 0
     for (let i = 0; i < history.length; i++) sorted.push(history[i])
     sorted.sort(numericAscending)
   }
   history.push(value)
+  stamps.push(now)
   sorted.splice(lowerBound(sorted, value), 0, value)
-  if (history.length > 100) sorted.splice(lowerBound(sorted, history.shift()), 1)
+  while (stamps.length > 1 && now - stamps[0] > ENERGY_WINDOW_MS) {
+    stamps.shift()
+    sorted.splice(lowerBound(sorted, history.shift()), 1)
+  }
   return Math.max(0.65, sorted[Math.floor(sorted.length * 0.80)] || 0.65)
 }
 
@@ -674,6 +678,8 @@ const CROSSFADE_RELEASE = 1.2
 const approach = (current, target, rate, delta) => current + (target - current) * (1 - Math.exp(-rate * delta))
 
 const PROBE_INTERVAL_MS = 66
+const REFERENCE_FPS = 60
+const ENERGY_WINDOW_MS = 1667
 const LIGHT_CURVE_STEP_S = 0.5
 const LIGHT_CURVE_WINDOW_S = 4
 const LIGHT_IN_RANK = 0.55
@@ -946,9 +952,10 @@ function MultiPassPlane({
     beatPulse: 0.0,
   })
 
-  const lastAudioUpdateRef = useRef(0)
+  const beatStateRef = useRef({ threshold: 0.65, intensity: 0, onBeat: false })
   const energyHistoryRef = useRef([])
   const energyScratchRef = useRef([])
+  const energyStampsRef = useRef([])
   const renderSignatureRef = useRef({
     current: new Float64Array(SIGNATURE_SIZE),
     previous: new Float64Array(SIGNATURE_SIZE),
@@ -1353,146 +1360,150 @@ function MultiPassPlane({
     const scrollPosition = interfaceRef.current?.scrollPosition || 0
     const scrollVelocity = interfaceRef.current?.scrollVelocity || 0
 
-    if (now - lastAudioUpdateRef.current > 16) {
-        lastAudioUpdateRef.current = now
+    const perFrame = rate => 1 - Math.pow(1 - rate, delta * REFERENCE_FPS)
 
-        if (progressMs !== lastSeenProgressRef.current) {
-            localProgressUpdateTimeRef.current = now
-            lastSeenProgressRef.current = progressMs
-            if (!isPlaying) {
-                interpolatedProgressRef.current = progressMs
-            }
-        }
-
-        if (isPlaying) {
-            const timeSinceUpdate = now - localProgressUpdateTimeRef.current
-            interpolatedProgressRef.current = progressMs + timeSinceUpdate
-        } else {
+    if (progressMs !== lastSeenProgressRef.current) {
+        localProgressUpdateTimeRef.current = now
+        lastSeenProgressRef.current = progressMs
+        if (!isPlaying) {
             interpolatedProgressRef.current = progressMs
         }
-
-        const currentAudioFeatures = audioFeatures
-        const tempo = currentAudioFeatures?.tempo || 120
-        const beatDurationMs = (60 / tempo) * 1000
-        const tempoSyncedDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 1.5))
-        const fastDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 0.8))
-
-        if (isPlaying && currentAudioFeatures?.loudness_segments) {
-             const currentTime = interpolatedProgressRef.current / 1000
-             const segments = currentAudioFeatures.loudness_segments
-             const beats = currentAudioFeatures.beats || []
-
-             let segIdx = lastSegmentIndexRef.current
-             while (segIdx < segments.length - 1 && segments[segIdx + 1].start <= currentTime) segIdx++
-             lastSegmentIndexRef.current = segIdx
-             const currentSegment = segments[segIdx]
-
-             if (currentSegment) {
-                const minL = currentAudioFeatures.min_loudness || -60
-                const peakL = currentAudioFeatures.peak_loudness || -1
-                const rawEnergy = Math.max(0, Math.min(1, (currentSegment.loudness - minL) / (peakL - minL)))
-
-                effects.currentEnergy = rawEnergy
-
-                const energyThreshold = pushEnergySample(energyHistoryRef.current, energyScratchRef.current, rawEnergy)
-                const intensity = Math.max(0, (rawEnergy - energyThreshold) / (1.0 - energyThreshold))
-
-                let onBeat = false
-                let beatHit = -1
-                for (let i = lastBeatIndexRef.current; i < beats.length; i++) {
-                    const beatTime = beats[i]
-                    if (beatTime > currentTime + 0.08) break
-                    if (Math.abs(beatTime - currentTime) < 0.08) {
-                        onBeat = true
-                        beatHit = beatTime
-                        lastBeatIndexRef.current = Math.max(0, i - 1)
-
-                        const cues = visualCueMapRef.current.get(beatTime)
-                        if (cues) {
-                            if (cues.has('CAMERA_CUT')) {
-                                const magnitude = 0.3 + (rawEnergy * 0.4);
-                                if (Math.random() < 0.2) {
-                                    effects.targetFrameOffset.set(0, 0); effects.targetFrameScale = 1.0;
-                                } else {
-                                    effects.targetFrameScale = 1.0 + (Math.random() * magnitude);
-                                    effects.targetFrameOffset.set((Math.random()-0.5)*magnitude*0.5, (Math.random()-0.5)*magnitude*0.5);
-                                }
-                                effects.frameOffset.copy(effects.targetFrameOffset);
-                                effects.frameScale = effects.targetFrameScale;
-
-                                const clipState = videoClipRef.current
-                                if (clipState.textures.length > 0) {
-                                    clipState.currentIndex = (clipState.currentIndex + 1) % clipState.textures.length
-                                    syncVideoClipPlayback(clipState)
-                                }
-                            }
-                            if (cues.has('SMALL_ROTATION')) effects.rotation += (Math.random() - 0.5) * 10.0 * rawEnergy
-                        }
-                        break
-                    }
-                }
-
-                if (onBeat && rawEnergy > energyThreshold && intensity > 0.4) {
-                    effects.glitchX = (Math.random() - 0.5) * intensity * 150.0
-                    effects.glitchY = (Math.random() - 0.5) * intensity * 150.0
-                    if (intensity > 0.5 && visualQuality === 'high') {
-                        effects.hue += intensity * 30.0
-                        effects.chromatic = intensity * 80.0
-                        effects.blur += intensity * 25.0
-                    }
-                } else {
-                    effects.glitchX *= (1.0 - fastDecay)
-                    effects.glitchY *= (1.0 - fastDecay)
-                }
-
-                effects.hue *= (1.0 - tempoSyncedDecay)
-                effects.chromatic *= (1.0 - fastDecay)
-                effects.rotation *= (1.0 - fastDecay)
-                effects.brightness += ((0.25 + (rawEnergy * 0.5)) - effects.brightness) * 0.1
-                effects.saturation += ((0.8 + (rawEnergy * 0.4)) - effects.saturation) * 0.1
-                effects.contrast += ((0.9 + (rawEnergy * 0.2)) - effects.contrast) * 0.1
-
-                const halfSpeedBps = (tempo / 120.0);
-                tempoTimeRef.current += delta;
-                const breathing = (Math.sin(tempoTimeRef.current * halfSpeedBps * Math.PI * 2.0) + 1.0) / 2.0;
-
-                effects.beatPulse = breathing * (0.2 + rawEnergy * 0.8);
-                effects.flicker += ((1.0 - (breathing * rawEnergy * 0.2)) - effects.flicker) * 0.2
-                effects.scale += ((1.0 + (breathing * rawEnergy * 0.1)) - effects.scale) * 0.05
-
-                const kick = onBeat && beatHit !== lastKickBeatRef.current && rawEnergy > energyThreshold
-                if (kick) lastKickBeatRef.current = beatHit
-                const lightUp = lightLevelRef.current >= LIGHT_KICK_FLOOR
-                publishBeat(reduceMotion || !kick || !lightUp ? 0 : Math.min(1, 0.5 + intensity * 0.5), reduceMotion ? 0 : effects.beatPulse)
-             }
-        } else {
-            effects.chromatic *= (1.0 - fastDecay)
-            effects.glitchX *= (1.0 - fastDecay)
-            effects.glitchY *= (1.0 - fastDecay)
-            effects.rotation += (0 - effects.rotation) * 0.1
-            effects.brightness += (0.6 - effects.brightness) * 0.05
-            effects.saturation += (1 - effects.saturation) * 0.05
-            effects.contrast += (1 - effects.contrast) * 0.05
-            effects.scale += (1.0 - effects.scale) * 0.05
-            effects.flicker += (1.0 - effects.flicker) * 0.1
-            effects.hue += (0 - effects.hue) * 0.1
-            effects.targetFrameOffset.set(0, 0);
-            effects.targetFrameScale = 1.0;
-            effects.frameOffset.copy(effects.targetFrameOffset);
-            effects.frameScale = effects.targetFrameScale;
-            effects.beatPulse = 0.0;
-            publishBeat(0, 0)
-        }
-
-        const curve = lightCurveRef.current
-        const lightTarget = !isPlaying ? 0 : curve
-          ? curve[Math.min(curve.length - 1, Math.floor(interpolatedProgressRef.current / 1000 / LIGHT_CURVE_STEP_S))]
-          : LIGHT_WITHOUT_ANALYSIS
-        const lightRate = lightTarget > lightLevelRef.current ? LIGHT_ATTACK_RATE : LIGHT_RELEASE_RATE
-        lightLevelRef.current = approach(lightLevelRef.current, lightTarget, lightRate, delta)
-        if (lightLevelRef.current < 0.002 && lightTarget === 0) lightLevelRef.current = 0
-        publishLightLevel(lightLevelRef.current, lightTarget)
     }
+
+    if (isPlaying) {
+        const timeSinceUpdate = now - localProgressUpdateTimeRef.current
+        interpolatedProgressRef.current = progressMs + timeSinceUpdate
+    } else {
+        interpolatedProgressRef.current = progressMs
+    }
+
+    const currentAudioFeatures = audioFeatures
+    const tempo = currentAudioFeatures?.tempo || 120
+    const beatDurationMs = (60 / tempo) * 1000
+    const tempoSyncedDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 1.5))
+    const fastDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 0.8))
+
+    if (isPlaying && currentAudioFeatures?.loudness_segments) {
+         const currentTime = interpolatedProgressRef.current / 1000
+         const segments = currentAudioFeatures.loudness_segments
+         const beats = currentAudioFeatures.beats || []
+
+         let segIdx = lastSegmentIndexRef.current
+         while (segIdx < segments.length - 1 && segments[segIdx + 1].start <= currentTime) segIdx++
+         lastSegmentIndexRef.current = segIdx
+         const currentSegment = segments[segIdx]
+
+         if (currentSegment) {
+            const minL = currentAudioFeatures.min_loudness || -60
+            const peakL = currentAudioFeatures.peak_loudness || -1
+            const rawEnergy = Math.max(0, Math.min(1, (currentSegment.loudness - minL) / (peakL - minL)))
+
+            effects.currentEnergy = rawEnergy
+
+            const beatState = beatStateRef.current
+            beatState.threshold = pushEnergySample(energyHistoryRef.current, energyStampsRef.current, energyScratchRef.current, rawEnergy, now)
+            beatState.intensity = Math.max(0, (rawEnergy - beatState.threshold) / (1.0 - beatState.threshold))
+
+            let onBeat = false
+            let beatHit = -1
+            for (let i = lastBeatIndexRef.current; i < beats.length; i++) {
+                const beatTime = beats[i]
+                if (beatTime > currentTime + 0.08) break
+                if (Math.abs(beatTime - currentTime) < 0.08) {
+                    onBeat = true
+                    beatHit = beatTime
+                    lastBeatIndexRef.current = Math.max(0, i - 1)
+
+                    const cues = visualCueMapRef.current.get(beatTime)
+                    if (cues) {
+                        if (cues.has('CAMERA_CUT')) {
+                            const magnitude = 0.3 + (rawEnergy * 0.4);
+                            if (Math.random() < 0.2) {
+                                effects.targetFrameOffset.set(0, 0); effects.targetFrameScale = 1.0;
+                            } else {
+                                effects.targetFrameScale = 1.0 + (Math.random() * magnitude);
+                                effects.targetFrameOffset.set((Math.random()-0.5)*magnitude*0.5, (Math.random()-0.5)*magnitude*0.5);
+                            }
+                            effects.frameOffset.copy(effects.targetFrameOffset);
+                            effects.frameScale = effects.targetFrameScale;
+
+                            const clipState = videoClipRef.current
+                            if (clipState.textures.length > 0) {
+                                clipState.currentIndex = (clipState.currentIndex + 1) % clipState.textures.length
+                                syncVideoClipPlayback(clipState)
+                            }
+                        }
+                        if (cues.has('SMALL_ROTATION')) effects.rotation += (Math.random() - 0.5) * 10.0 * rawEnergy
+                    }
+                    break
+                }
+            }
+            beatState.onBeat = onBeat && rawEnergy > beatState.threshold && beatState.intensity > 0.4
+
+            if (beatState.onBeat) {
+                effects.glitchX = (Math.random() - 0.5) * beatState.intensity * 150.0
+                effects.glitchY = (Math.random() - 0.5) * beatState.intensity * 150.0
+                if (beatState.intensity > 0.5 && visualQuality === 'high') {
+                    effects.hue += beatState.intensity * 30.0
+                    effects.chromatic = beatState.intensity * 80.0
+                    effects.blur += beatState.intensity * 25.0
+                }
+            }
+
+            const kick = onBeat && beatHit !== lastKickBeatRef.current && rawEnergy > beatState.threshold
+            if (kick) lastKickBeatRef.current = beatHit
+
+            if (!beatState.onBeat) {
+                effects.glitchX *= (1.0 - fastDecay)
+                effects.glitchY *= (1.0 - fastDecay)
+            }
+
+            effects.hue *= (1.0 - tempoSyncedDecay)
+            effects.chromatic *= (1.0 - fastDecay)
+            effects.rotation *= (1.0 - fastDecay)
+            effects.brightness += ((0.25 + (rawEnergy * 0.5)) - effects.brightness) * perFrame(0.1)
+            effects.saturation += ((0.8 + (rawEnergy * 0.4)) - effects.saturation) * perFrame(0.1)
+            effects.contrast += ((0.9 + (rawEnergy * 0.2)) - effects.contrast) * perFrame(0.1)
+
+            const halfSpeedBps = (tempo / 120.0);
+            tempoTimeRef.current += delta;
+            const breathing = (Math.sin(tempoTimeRef.current * halfSpeedBps * Math.PI * 2.0) + 1.0) / 2.0;
+
+            effects.beatPulse = breathing * (0.2 + rawEnergy * 0.8);
+            effects.flicker += ((1.0 - (breathing * rawEnergy * 0.2)) - effects.flicker) * perFrame(0.2)
+            effects.scale += ((1.0 + (breathing * rawEnergy * 0.1)) - effects.scale) * perFrame(0.05)
+
+            const lightUp = lightLevelRef.current >= LIGHT_KICK_FLOOR
+            publishBeat(reduceMotion || !kick || !lightUp ? 0 : Math.min(1, 0.5 + beatState.intensity * 0.5), reduceMotion ? 0 : effects.beatPulse)
+         }
+    } else {
+        effects.chromatic *= (1.0 - fastDecay)
+        effects.glitchX *= (1.0 - fastDecay)
+        effects.glitchY *= (1.0 - fastDecay)
+        effects.rotation += (0 - effects.rotation) * perFrame(0.1)
+        effects.brightness += (0.6 - effects.brightness) * perFrame(0.05)
+        effects.saturation += (1 - effects.saturation) * perFrame(0.05)
+        effects.contrast += (1 - effects.contrast) * perFrame(0.05)
+        effects.scale += (1.0 - effects.scale) * perFrame(0.05)
+        effects.flicker += (1.0 - effects.flicker) * perFrame(0.1)
+        effects.hue += (0 - effects.hue) * perFrame(0.1)
+        effects.targetFrameOffset.set(0, 0);
+        effects.targetFrameScale = 1.0;
+        effects.frameOffset.copy(effects.targetFrameOffset);
+        effects.frameScale = effects.targetFrameScale;
+        effects.beatPulse = 0.0;
+        beatStateRef.current.onBeat = false
+        publishBeat(0, 0)
+    }
+
+    const curve = lightCurveRef.current
+    const lightTarget = !isPlaying ? 0 : curve
+      ? curve[Math.min(curve.length - 1, Math.floor(interpolatedProgressRef.current / 1000 / LIGHT_CURVE_STEP_S))]
+      : LIGHT_WITHOUT_ANALYSIS
+    const lightRate = lightTarget > lightLevelRef.current ? LIGHT_ATTACK_RATE : LIGHT_RELEASE_RATE
+    lightLevelRef.current = approach(lightLevelRef.current, lightTarget, lightRate, delta)
+    if (lightLevelRef.current < 0.002 && lightTarget === 0) lightLevelRef.current = 0
+    publishLightLevel(lightLevelRef.current, lightTarget)
 
     const dpr = gl.getPixelRatio()
     const w = size.width * dpr
