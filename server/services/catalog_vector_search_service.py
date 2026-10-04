@@ -1,4 +1,5 @@
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from models_global import run_on_gpu_executor
@@ -143,7 +144,14 @@ class CatalogVectorSearchService:
         return await run_on_gpu_executor(self.names.closest, field, text, how_many)
 
     async def warm(self) -> None:
-        await run_on_gpu_executor(self.aspects.warm)
+        def run():
+            self.aspects.warm()
+            for meta in list(self.vector_db._metadata_cache.values()):
+                self.vector_db.category_vectors(meta)
+
+        started = time.perf_counter()
+        await run_on_gpu_executor(run)
+        log_service.vector_music(f"✓ Catalog vectors ready ({time.perf_counter() - started:.1f}s)")
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()

@@ -1,6 +1,8 @@
 import re
 from functools import lru_cache
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 from services import log_service
 from services.base_vector_database_service import BaseVectorDatabaseService
 from services.catalog_credit import search_artist_text
@@ -12,12 +14,29 @@ SENTENCE_BREAK = re.compile(r"[.\n]+")
 VOCAL_TEXT_MAX_CHARS = 400
 
 TAG_LISTS = {"secondary_genres": "secondary_genres", "mood": "mood_keywords", "similar_artists": "similar_artists"}
+SECTION_BREAK = re.compile(r"\n\s*\n")
+SECTION_LABEL = re.compile(r"^\s*\[[^\]]*\]\s*$")
 
 
 def _tag_list(value) -> List[str]:
     if isinstance(value, str):
         value = value.split(",")
     return list(dict.fromkeys(tag.strip() for tag in value or [] if isinstance(tag, str) and tag.strip()))
+
+
+def _lyric_sections(lyrics: str) -> List[str]:
+    sections = []
+    for block in SECTION_BREAK.split(lyrics or ""):
+        lines = [line.strip() for line in block.splitlines() if line.strip() and not SECTION_LABEL.match(line)]
+        if lines:
+            sections.append("\n".join(lines))
+    return list(dict.fromkeys(sections))
+
+
+def _unit_mean(vectors: List[np.ndarray]) -> np.ndarray:
+    mean = np.mean(vectors, axis=0)
+    norm = np.linalg.norm(mean)
+    return mean / norm if norm else mean
 
 
 @lru_cache(maxsize=8192)
@@ -57,12 +76,31 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
         tags = {category: [text.strip()] if text and text.strip() else [] for category, text in texts.items()}
         for category, field in TAG_LISTS.items():
             tags[category] = _tag_list(derived.get(field))
+        theme = (derived.get("lyrical_interpretation") or "").strip()
+        tags["theme"] = [theme] if theme else []
+        tags["lyrics"] = _lyric_sections((track.get("generation_params") or {}).get("prompt") or "")
         tags["primary_artist"] = _tag_list(log_service.track_artists(track))
         who = VOCALS_TEXT.get(vocals_of(track))
         tags["vocal"] = list(dict.fromkeys(([who] if who else []) + _tag_list(derived.get("vocal_style_keywords"))))
         return tags
 
+    def category_vectors(self, track: Dict[str, Any]) -> Dict[str, np.ndarray]:
+        if self._vector_source is not self._metadata_cache:
+            self._vector_source, self._vectors = self._metadata_cache, {}
+        key = track.get("id")
+        vectors = self._vectors.get(key) if key else None
+        if vectors is None:
+            vectors = {category: _unit_mean(self.ensure_embeddings(category, tags))
+                       for category, tags in self.category_tags(track).items() if tags}
+            if key:
+                self._vectors[key] = vectors
+        return vectors
+
+    def weighted(self, item: Dict[str, Any], weights: Optional[Dict[str, float]] = None) -> np.ndarray:
+        return self._create_weighted_embedding(self.category_vectors(item), weights)
+
     log_channel = "vector_music"
+    builds_index = False
     service_label = "Music"
     display_name = "Catalog"
     index_dir_setting_name = "CATALOG_EMBEDDINGS_DIR"
@@ -76,6 +114,8 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
 
     def __init__(self, catalog_service=None):
         super().__init__(catalog_service)
+        self._vector_source = None
+        self._vectors: Dict[str, Dict[str, np.ndarray]] = {}
 
     @property
     def catalog_service(self):
@@ -85,43 +125,24 @@ class CatalogVectorDatabaseService(BaseVectorDatabaseService):
     def catalog_service(self, value):
         self.source_service = value
 
-    @property
-    def annoy_index_tracks_1(self):
-        return self.annoy_index_1
-
-    @property
-    def annoy_index_tracks_2(self):
-        return self.annoy_index_2
-
-    @property
-    def _track_rowid_cache(self) -> Dict[int, str]:
-        return self._rowid_cache
-
-    @property
-    def _track_metadata_cache(self) -> Dict[int, Dict]:
-        return self._metadata_cache
-
     def _trigger_rebuild(self):
-        self.rebuild_indexes()
+        self.refresh()
 
     def add_single_track(self, track_data: dict) -> bool:
-        return self._add_single_item(track_data)
+        for category, tags in self.category_tags(track_data).items():
+            if tags:
+                self.ensure_embeddings(category, tags)
+        self.refresh()
+        return True
 
-    def rebuild_indexes(self, catalog_service=None):
-        self._log_rebuild_header()
-
-        catalog_svc = catalog_service or self.catalog_service
-        if not catalog_svc:
-            log_service.warning("catalog_service is None - cannot rebuild indexes")
+    def refresh(self, catalog_service=None):
+        if catalog_service is not None:
+            self.catalog_service = catalog_service
+        if not self.catalog_service:
+            log_service.warning("catalog_service is None - cannot refresh the catalog vectors")
             return
-        if not catalog_svc.tracks:
-            log_service.warning("catalog_service.tracks is empty - cannot rebuild indexes. Will retry when catalog is loaded.")
-            return
-
-        total_tracks = len(catalog_svc.tracks)
-        self._log(f"📊 Total tracks to index: {total_tracks}")
-
-        self._rebuild_from_source(catalog_svc, total_tracks)
+        self.load_metadata()
+        self._log(f"✓ Catalog vectors refreshed: {len(self._metadata_cache)} tracks")
 
     def _extract_category_texts(self, track: Dict[str, Any]) -> Dict[str, str]:
         params = track.get("generation_params", {}) or {}

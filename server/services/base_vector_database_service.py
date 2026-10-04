@@ -38,6 +38,7 @@ class BaseVectorDatabaseService:
     source_db_label: str = ""
     item_noun: str = "items"
     single_item_noun: str = "item"
+    builds_index: bool = True
 
     def __init__(self, source_service=None):
         self._log(f"Initializing {type(self).__name__} (using global models)")
@@ -129,8 +130,9 @@ class BaseVectorDatabaseService:
         else:
             self._log("  No cached embeddings found (will generate on first use)")
 
-        self._log("\nLoading Annoy indexes from disk...")
-        self._load_annoy_indexes()
+        if self.builds_index:
+            self._log("\nLoading Annoy indexes from disk...")
+            self._load_annoy_indexes()
         if not self._metadata_cache and self.source_service is not None:
             try:
                 self.load_metadata()

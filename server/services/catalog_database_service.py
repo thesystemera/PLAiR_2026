@@ -445,13 +445,8 @@ class CatalogDatabaseService(SingletonService):
             new_track_count = len(set(self.tracks) - old_ids)
 
             if new_track_count > 0 and self.vector_db_service:
-                await asyncio.to_thread(
-                    self.vector_db_service.rebuild_indexes,
-                    self
-                )
-                log_service.success(
-                    f"✅ Catalog vector indexes rebuilt immediately (+{new_track_count} new tracks)"
-                )
+                await asyncio.to_thread(self.vector_db_service.refresh, self)
+                log_service.success(f"✅ Catalog vectors refreshed (+{new_track_count} new tracks)")
 
                 if self.broadcast_callback:
                     await self.broadcast_callback("track", "batch_reload", {

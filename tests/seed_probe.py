@@ -2,8 +2,8 @@
 
 Drives the real PlaybackState (seed_radio, then next() song by song) on the real catalog search, without a backend
 and without any LLM call. For every mode it reports, over the first N songs after the seed:
-  step   how close each song is to the one before it on the mode's own aspect (cosine of that category's whole
-         text, an independent check: the station itself matches tag by tag)
+  step   how close each song is to the one before it on the mode's own aspect (cosine of the aspect's average tag
+         vector, an independent check: the station itself matches tag by tag)
   seed   the same against the seed song, for songs 1-5 / 6-10 / 11-N (the seed stays in every match, so this
          should fall only a little)
   genre  share of songs with the same main genre as the song before
@@ -52,7 +52,7 @@ async def setup():
 
 
 def category_vectors(db, track):
-    return db.get_category_embeddings(db._extract_category_texts(track))
+    return db.category_vectors(track)
 
 
 def aspect(db, track, mode):
