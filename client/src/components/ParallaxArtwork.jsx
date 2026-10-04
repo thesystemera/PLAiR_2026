@@ -7,6 +7,8 @@ import { logger } from '../lib/logger'
 import { CSS_TRANSITION } from '../lib/motion'
 import { POM, createDepthArtProgram, parallaxSteps, setLightUniforms } from '../lib/depthArtShader'
 import { readLightProbe } from '../lib/lightProbe'
+import { normalFullCache } from '../lib/mediaCache'
+import { useDepthMap } from '../hooks/useDepthMap'
 
 const PARALLAX_EPSILON = 1e-4
 const REDRAW_SHIFT_PX = 0.1
@@ -27,12 +29,14 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   isActive = true
 }) {
   const enrichedArtworkUrl = useEnrichedArtwork(trackId)
+  const normalUrl = useDepthMap(normalFullCache, trackId)
 
   const canvasRef = useRef(null)
   const glRef = useRef(null)
   const programRef = useRef(null)
   const colorTextureRef = useRef(null)
   const depthTextureRef = useRef(null)
+  const normalTextureRef = useRef(null)
   const animationFrameRef = useRef(null)
   const uniformsRef = useRef(null)
   const lastDrawRef = useRef(null)
@@ -40,6 +44,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
   const [glReady, setGlReady] = useState(false)
   const [texturesKey, setTexturesKey] = useState(null)
+  const [normalKey, setNormalKey] = useState(null)
   const [fallbackMode, setFallbackMode] = useState(false)
   const [contextLost, setContextLost] = useState(false)
   const [onScreen, setOnScreen] = useState(true)
@@ -50,6 +55,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const loadKey = `${trackId}|${enrichedArtworkUrl}|${artworkUrl}`
   const texturesReady = texturesKey === loadKey
   const isVisible = !isMobile || onScreen
+  const hasNormals = !!normalUrl && normalKey === normalUrl
 
   useEffect(() => {
     window.registerRAFSource?.('ParallaxArtwork')
@@ -61,6 +67,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     setContextLost(true)
     setGlReady(false)
     setTexturesKey(null)
+    setNormalKey(null)
 
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current)
@@ -150,11 +157,13 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         if (programRef.current) gl.deleteProgram(programRef.current)
         if (colorTextureRef.current) gl.deleteTexture(colorTextureRef.current)
         if (depthTextureRef.current) gl.deleteTexture(depthTextureRef.current)
+        if (normalTextureRef.current) gl.deleteTexture(normalTextureRef.current)
         gl.getExtension('WEBGL_lose_context')?.loseContext()
       }
       programRef.current = null
       colorTextureRef.current = null
       depthTextureRef.current = null
+      normalTextureRef.current = null
       glRef.current = null
     }
   }, [handleContextLost, handleContextRestored])
@@ -295,6 +304,37 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   }, [glReady, trackId, enrichedArtworkUrl, artworkUrl, loadKey, fallbackMode, contextLost, onLoad, onError])
 
   useEffect(() => {
+    if (!glReady || !normalUrl || contextLost) return
+    const gl = glRef.current
+    if (!gl || gl.isContextLost()) return
+
+    let cancelled = false
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = normalUrl
+    image.decode().then(() => {
+      if (cancelled || gl.isContextLost()) return
+      const texture = gl.createTexture()
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image)
+      if (normalTextureRef.current) gl.deleteTexture(normalTextureRef.current)
+      normalTextureRef.current = texture
+      setNormalKey(normalUrl)
+    }).catch(() => {
+      logger.debug('[ParallaxArtwork] Normal map failed to load')
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [glReady, normalUrl, contextLost])
+
+  useEffect(() => {
     if (!glReady || !texturesReady || fallbackMode || contextLost || !isVisible || !isActive) return
 
     const gl = glRef.current
@@ -361,7 +401,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         if (!unchanged && !throttled) {
           const steps = parallaxSteps(Math.hypot(parallaxX, parallaxY) * pixelsPerUnit, parallaxStepPx)
 
-          setLightUniforms(gl, uniforms, probe, rect)
+          setLightUniforms(gl, uniforms, probe, rect, hasNormals)
 
           gl.viewport(0, 0, canvas.width, canvas.height)
 
@@ -378,6 +418,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           }
           gl.activeTexture(gl.TEXTURE1)
           gl.bindTexture(gl.TEXTURE_2D, depthTextureRef.current)
+          gl.activeTexture(gl.TEXTURE2)
+          gl.bindTexture(gl.TEXTURE_2D, hasNormals ? normalTextureRef.current : null)
 
           gl.uniform2f(uniforms.gyro, parallaxX, parallaxY)
           gl.uniform1f(uniforms.intensity, intensity)
@@ -428,7 +470,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         cancelAnimationFrame(animationFrameRef.current)
       }
     }
-  }, [glReady, texturesReady, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
+  }, [glReady, texturesReady, hasNormals, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
 
   useEffect(() => {
     const canvas = canvasRef.current

@@ -47,10 +47,10 @@ class DepthArtRenderer {
     for (const view of this.views) view.last = null
   }
 
-  attach({ host, canvas, colorUrl, depthUrl, onDrawn }) {
+  attach({ host, canvas, colorUrl, depthUrl, normalUrl, onDrawn }) {
     if (!this.ensureContext()) return () => {}
-    const view = { host, canvas, ctx: null, colorUrl, depthUrl, onDrawn, visible: false, entry: null, last: null, drawn: false }
-    view.entry = this.acquire(`${colorUrl}|${depthUrl}`, colorUrl, depthUrl)
+    const view = { host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn, visible: false, entry: null, last: null, drawn: false }
+    view.entry = this.acquire(view)
     this.views.add(view)
     this.observe(view)
     this.schedule()
@@ -107,7 +107,7 @@ class DepthArtRenderer {
         try {
           this.setupContext(canvas.getContext(gl instanceof WebGLRenderingContext ? 'webgl' : 'webgl2', CONTEXT_OPTIONS))
           this.contextLost = false
-          for (const view of this.views) view.entry = this.acquire(`${view.colorUrl}|${view.depthUrl}`, view.colorUrl, view.depthUrl)
+          for (const view of this.views) view.entry = this.acquire(view)
           this.schedule()
         } catch (error) {
           logger.error('[DepthArt] WebGL restore failed:', error)
@@ -133,15 +133,16 @@ class DepthArtRenderer {
     gl.clearColor(0, 0, 0, 1)
   }
 
-  acquire(key, colorUrl, depthUrl) {
+  acquire({ colorUrl, depthUrl, normalUrl }) {
+    const key = `${colorUrl}|${depthUrl}|${normalUrl}`
     let entry = this.textures.get(key)
     if (!entry) {
-      entry = { key, refs: 0, state: 'loading', color: null, depth: null, usedAt: 0 }
+      entry = { key, refs: 0, state: 'loading', color: null, depth: null, normal: null, usedAt: 0 }
       this.textures.set(key, entry)
-      Promise.all([loadImage(colorUrl), loadImage(depthUrl)])
-        .then(([color, depth]) => {
+      Promise.all([loadImage(colorUrl), loadImage(depthUrl), loadImage(normalUrl)])
+        .then(([color, depth, normal]) => {
           if (this.textures.get(key) !== entry) return
-          this.uploads.push({ entry, color, depth })
+          this.uploads.push({ entry, color, depth, normal })
           this.schedule()
         })
         .catch((error) => {
@@ -167,6 +168,7 @@ class DepthArtRenderer {
     if (this.gl && !this.contextLost) {
       if (entry.color) this.gl.deleteTexture(entry.color)
       if (entry.depth) this.gl.deleteTexture(entry.depth)
+      if (entry.normal) this.gl.deleteTexture(entry.normal)
     }
   }
 
@@ -185,11 +187,12 @@ class DepthArtRenderer {
   processUploads() {
     const gl = this.gl
     for (let i = 0; i < UPLOADS_PER_FRAME && this.uploads.length; i++) {
-      const { entry, color, depth } = this.uploads.shift()
+      const { entry, color, depth, normal } = this.uploads.shift()
       if (this.textures.get(entry.key) !== entry) continue
       gl.activeTexture(gl.TEXTURE0)
       entry.color = this.createTexture(color, gl.RGBA)
       entry.depth = this.createTexture(depth, gl.LUMINANCE)
+      entry.normal = this.createTexture(normal, gl.RGB)
       entry.state = 'ready'
     }
   }
@@ -299,9 +302,11 @@ class DepthArtRenderer {
       gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
       gl.uniform2f(uniforms.gyro, item.px, item.py)
       gl.uniform1f(uniforms.steps, item.steps)
-      setLightUniforms(gl, uniforms, probe, item.rect)
+      setLightUniforms(gl, uniforms, probe, item.rect, true)
       gl.drawArrays(gl.TRIANGLES, 0, 6)
     }
 

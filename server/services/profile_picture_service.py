@@ -13,9 +13,11 @@ from config import settings
 from services import log_service
 from services.base_service import SingletonService
 from services.suno_artwork_enrichment_service import artwork_enrichment_service
+from services.normal_map_service import ensure_pair_normal
 
 Image.MAX_IMAGE_PIXELS = 40_000_000
 DEPTH_FILENAME = "profile_depth.jpg"
+NORMAL_FILENAME = "profile_normal.jpg"
 
 class ProfilePictureService(SingletonService):
     def __init__(self):
@@ -51,6 +53,14 @@ class ProfilePictureService(SingletonService):
         if target.exists() and target.stat().st_mtime >= picture_path.stat().st_mtime:
             return target
         return await asyncio.shield(self._depth_job(user_id, picture_path))
+
+    async def get_normal_path(self, user_id: int, db: AsyncSession) -> Optional[Path]:
+        depth_path = await self.get_depth_path(user_id, db)
+        if not depth_path:
+            return None
+        picture_path = settings.get_user_profile_picture_path(user_id, "profile.jpg")
+        target = settings.get_user_profile_picture_path(user_id, NORMAL_FILENAME)
+        return await ensure_pair_normal(f"profile:{user_id}", picture_path, depth_path, target)
 
     def _render_profile_jpeg(self, file_contents: bytes) -> bytes:
         image = Image.open(io.BytesIO(file_contents))
@@ -151,6 +161,7 @@ class ProfilePictureService(SingletonService):
             file_path.unlink()
             log_service.api(f"Profile picture deleted for user {user_id_val}")
         self.depth_path(user_id_val).unlink(missing_ok=True)
+        settings.get_user_profile_picture_path(user_id_val, NORMAL_FILENAME).unlink(missing_ok=True)
 
         user.profile_picture = None  # type: ignore
         await db.commit()

@@ -27,7 +27,7 @@ import { MOTION } from '../lib/motion'
 import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
 import { useDepthMap } from '../hooks/useDepthMap'
-import { depthThumbCache } from '../lib/mediaCache'
+import { depthThumbCache, normalThumbCache } from '../lib/mediaCache'
 import { DepthArt } from './DepthArt'
 
 const CATALOG_ERROR_GRACE_MS = 4000
@@ -101,6 +101,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
   const cardInteraction = usePointerInteraction()
   const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
   const depthUrl = useDepthMap(depthThumbCache, track.id, track.has_artwork !== false)
+  const normalUrl = useDepthMap(normalThumbCache, track.id, track.has_artwork !== false)
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
   useEffect(() => {
@@ -157,6 +158,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
         <DepthArt
           colorUrl={artworkUrl}
           depthUrl={depthUrl}
+          normalUrl={normalUrl}
           alt={params.title || 'Track artwork'}
           onLoad={onArtLoad}
           onError={hideBrokenImage}

@@ -11,6 +11,7 @@ from typing import Optional
 
 from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import THUMBNAIL_SIZES, ensure_thumbnail
+from services.normal_map_service import ensure_track_normal
 from services import log_service
 from database import User
 from config import settings
@@ -258,6 +259,25 @@ async def get_artwork_depth_thumbnail(track_id: str, size: int):
             "Cache-Control": "public, max-age=31536000"
         }
     )
+
+@router.get("/api/artwork/{track_id}/normal")
+async def get_artwork_normal_map(track_id: str):
+    if not SAFE_ID.fullmatch(track_id):
+        raise HTTPException(status_code=404, detail="Normal map not found")
+    normal_path = await ensure_track_normal(track_id)
+    if not normal_path:
+        raise HTTPException(status_code=404, detail="Normal map not found")
+    return FileResponse(normal_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
+
+@router.get("/api/artwork/{track_id}/normal/thumb/{size}")
+async def get_artwork_normal_thumbnail(track_id: str, size: int):
+    if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
+        raise HTTPException(status_code=404, detail="Normal map not found")
+    normal_path = await ensure_track_normal(track_id)
+    if not normal_path:
+        raise HTTPException(status_code=404, detail="Normal map not found")
+    thumb_path = await ensure_thumbnail(track_id, normal_path, size, variant="normal")
+    return FileResponse(thumb_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
 
 @router.api_route("/api/artwork/{track_id}/enriched", methods=["GET", "HEAD"])
 async def get_enriched_artwork(track_id: str):

@@ -17,8 +17,8 @@ _inflight: dict[tuple[str, str, int], asyncio.Future] = {}
 
 
 def thumbnail_path(track_id: str, size: int, variant: str = "artwork") -> Path:
-    if variant == "depth":
-        return THUMBNAIL_DIR / "depth" / str(size) / f"{track_id}.jpeg"
+    if variant in ("depth", "normal"):
+        return THUMBNAIL_DIR / variant / str(size) / f"{track_id}.jpeg"
     return THUMBNAIL_DIR / str(size) / f"{track_id}.jpeg"
 
 
@@ -39,6 +39,12 @@ def _render_thumbnail(source: Path, target: Path, size: int, variant: str) -> No
                 width, height = image.size
                 image = image.crop((width // 2, 0, width, height)).convert("L")
                 quality = DEPTH_THUMBNAIL_QUALITY
+            elif variant == "normal":
+                image = image.convert("RGB")
+                image.thumbnail((size, size), Image.Resampling.BILINEAR)
+                image.save(temp, "JPEG", quality=DEPTH_THUMBNAIL_QUALITY, subsampling=0)
+                os.replace(temp, target)
+                return
             else:
                 image.draft("RGB", (size, size))
                 image = image.convert("RGB")

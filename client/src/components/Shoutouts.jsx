@@ -22,7 +22,7 @@ import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
 import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
 import { useDepthMap } from '../hooks/useDepthMap'
-import { profileDepthCache } from '../lib/mediaCache'
+import { profileDepthCache, profileNormalCache } from '../lib/mediaCache'
 import { DepthArt } from './DepthArt'
 
 const hideBrokenImage = (e) => { e.target.style.display = 'none' }
@@ -83,6 +83,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
     !!shoutout.profile_picture
   )
   const profileDepthUrl = useDepthMap(profileDepthCache, shoutout.user_id, !!shoutout.profile_picture)
+  const profileNormalUrl = useDepthMap(profileNormalCache, shoutout.user_id, !!shoutout.profile_picture)
 
   const getUserInitial = () => {
     return shoutout.username?.charAt(0).toUpperCase() || user?.username?.charAt(0).toUpperCase() || 'U'
@@ -137,6 +138,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
           <DepthArt
             colorUrl={profilePictureUrl}
             depthUrl={profileDepthUrl}
+            normalUrl={profileNormalUrl}
             alt={shoutout.username || 'User'}
             onError={hideBrokenImage}
           />

@@ -24,12 +24,12 @@ export function DepthArtBridge() {
   return null
 }
 
-export const DepthArt = memo(function DepthArt({ colorUrl, depthUrl, alt, onLoad, onError }) {
+export const DepthArt = memo(function DepthArt({ colorUrl, depthUrl, normalUrl, alt, onLoad, onError }) {
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const [drawnKey, setDrawnKey] = useState(null)
-  const usable = isLoadedImage(colorUrl) && isLoadedImage(depthUrl)
-  const key = usable ? `${colorUrl}|${depthUrl}` : null
+  const usable = isLoadedImage(colorUrl) && isLoadedImage(depthUrl) && isLoadedImage(normalUrl)
+  const key = usable ? `${colorUrl}|${depthUrl}|${normalUrl}` : null
 
   useEffect(() => {
     if (!key) return
@@ -38,9 +38,10 @@ export const DepthArt = memo(function DepthArt({ colorUrl, depthUrl, alt, onLoad
       canvas: canvasRef.current,
       colorUrl,
       depthUrl,
+      normalUrl,
       onDrawn: () => setDrawnKey(key),
     })
-  }, [key, colorUrl, depthUrl])
+  }, [key, colorUrl, depthUrl, normalUrl])
 
   const drawn = key !== null && drawnKey === key
 

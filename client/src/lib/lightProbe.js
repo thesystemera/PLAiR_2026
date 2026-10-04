@@ -5,6 +5,7 @@ const KICK_DECAY_SECONDS = 0.18
 const base = new Float32Array(PROBE_COUNT * 3)
 const colors = new Float32Array(PROBE_COUNT * 3)
 const state = { version: 0, lastBlendAt: 0, kickLevel: 0, kickAt: 0, pulse: 0, hasProbe: false, glow: null }
+const debug = { off: false, kick: null }
 
 export function publishLightProbe(rgbaBottomUp) {
   for (let row = 0; row < 3; row++) {
@@ -60,6 +61,17 @@ export function readLightProbe(now) {
     }
     if (moved > 1 / 1024) state.version++
   }
-  const kick = currentKick(now)
-  return { colors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, version: state.version, active: state.hasProbe }
+  const kick = debug.kick ?? currentKick(now)
+  return { colors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, version: state.version, active: state.hasProbe && !debug.off }
+}
+
+if (typeof window !== 'undefined') {
+  window.__plairLight = {
+    read: () => {
+      const probe = readLightProbe(performance.now())
+      return { active: probe.active, kick: probe.kick, pulse: probe.pulse, version: probe.version, colors: Array.from(probe.colors, v => +v.toFixed(3)) }
+    },
+    kick: (level = 1) => publishBeat(level, state.pulse),
+    debug: (options) => { Object.assign(debug, options); state.version++ },
+  }
 }
