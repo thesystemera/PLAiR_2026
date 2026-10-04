@@ -1050,7 +1050,7 @@ async def get_history_last_track(last_track: Optional[Dict] = None, **_) -> str:
     cost="low"
 )
 async def get_queue_playlist(session_id: Optional[str] = None, playback_service=None, **_) -> str:
-    from services_radio.dj_executor_playback import PLAYLIST_DISPLAY, SEED_MODE_DISPLAY
+    from services_radio.dj_command_executor_playback import PLAYLIST_DISPLAY, SEED_MODE_DISPLAY
     state = playback_service.get_state(session_id, simplified=False) if playback_service and session_id else None
     queue = (state or {}).get("queue") or []
     if not state or not state.get("current_track") or not queue:

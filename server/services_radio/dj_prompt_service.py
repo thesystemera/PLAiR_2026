@@ -858,7 +858,7 @@ class DJPromptService:
     @gpt_error_handler
     async def gpt_dj_interactive_tools(self, transcription, session_dict, tool_runtime, on_preamble=None,
                                        on_route=None) -> dict:
-        from services_radio.dj_tool_registry import (
+        from services_radio.dj_tools_registry import (
             DJ_FUNCTION_DECLARATIONS,
             READ_TOOLS,
             SEGMENT_TOOLS,

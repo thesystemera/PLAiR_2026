@@ -7,9 +7,9 @@ from config.settings import settings
 from services import listener_filters, listener_plays
 from services.catalog_vocals import FILTERABLE_VOCALS
 from services_radio import talk_clock
-from services_radio.dj_executor_playback import PLAYLIST_DISPLAY, SEED_MODE_DISPLAY
-from services_radio.dj_executor_search import SEARCH_CATEGORY_PREFIXES
-from services_radio.dj_executor_segments import NEWS_CATEGORIES
+from services_radio.dj_command_executor_playback import PLAYLIST_DISPLAY, SEED_MODE_DISPLAY
+from services_radio.dj_command_executor_search import SEARCH_CATEGORY_PREFIXES
+from services_radio.dj_command_executor_segments import NEWS_CATEGORIES
 
 
 SEARCH_CATEGORIES = list(SEARCH_CATEGORY_PREFIXES.keys())

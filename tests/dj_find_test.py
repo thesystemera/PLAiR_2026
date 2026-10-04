@@ -30,7 +30,7 @@ from services_radio import context_nodes  # noqa: E402,F401
 from services_radio.context_node_registry import node_registry  # noqa: E402
 from services_radio.dj_command_executor import CommandExecutorService  # noqa: E402
 from services_radio.dj_prompt_helper_service import assemble_prompt  # noqa: E402
-from services_radio.dj_tool_registry import READ_TOOLS, SEGMENT_TOOLS, declarations_for  # noqa: E402
+from services_radio.dj_tools_registry import READ_TOOLS, SEGMENT_TOOLS, declarations_for  # noqa: E402
 from services_radio.dj_tools import DJToolRuntime, DJTurnContext  # noqa: E402
 
 SYSTEM_NODES = ['core_dj_identity', 'format_channels', 'format_tone',

@@ -7,15 +7,15 @@ from services import log_service
 from services.task_utils import spawn
 from services_radio.community_judge import judge, post_context
 from services_radio import talk_clock
-from services_radio.dj_executor_search import SEARCH_CATEGORY_PREFIXES
-from services_radio.dj_tool_registry import (
+from services_radio.dj_command_executor_search import SEARCH_CATEGORY_PREFIXES
+from services_radio.dj_tools_registry import (
     accepted_arguments, AIRED_NOTE, AIRED_SAID_NOTE, EMPTY_NOTE, EXTRA_TOOL_NAMES, FAILED_ACTION_NOTE,
     FAILED_STATUSES, INVALID_CALL_NOTE, LOVED_SCOPES, MAX_SEGMENTS_PER_TURN, next_options, PERSONAL_PLAYLISTS,
     PLAY_TOOLS, READ_NOTE, READ_TOOLS, SAVE_TOOLS, SEGMENT_NOTE, SEGMENT_TOOLS, SHORTFALL_OUTCOMES, TOOL_COSTS,
     TOOLS_PREFIX,
 )
-from services_radio.dj_tool_display import activity_label, activity_summary, command_string
-from services_radio.dj_tool_args import normalize_tool_args
+from services_radio.dj_tools_display import activity_label, activity_summary, command_string
+from services_radio.dj_tools_args import normalize_tool_args
 
 
 @dataclass

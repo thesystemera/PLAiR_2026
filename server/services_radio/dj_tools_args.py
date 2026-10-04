@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional
 from config.settings import settings
 from services_radio import talk_clock
 from services_radio.talk_clock import DEFAULT_DEPTH
-from services_radio.dj_executor_segments import NEWS_CATEGORIES
-from services_radio.dj_tool_registry import (
+from services_radio.dj_command_executor_segments import NEWS_CATEGORIES
+from services_radio.dj_tools_registry import (
     AIRED_KINDS, BLEND_CATEGORIES, EXTRA_TOOL_NAMES, FIND_DEFAULT, FIND_MAX, LOVED_SCOPES, MAX_TEXT_ARG_CHARS,
     MUSIC_SOURCES, PLAYBACK_ACTIONS, PLAYLISTS, PULSE_KINDS, PULSE_SORT, PULSE_WHEN, RADIO_TOGGLES, RATINGS,
     RATING_TARGETS, SEARCH_CATEGORIES, SEARCH_SCOPES, SEED_CATEGORIES, SEGMENT_TOOLS, STARTS_WITH_MAX_CHARS,

@@ -1,7 +1,7 @@
 """How DJ tool calls show up: the brace-style command strings, the activity chips and their short result summaries."""
 from typing import Any, Dict, Optional
 from services_radio.talk_clock import DEFAULT_DEPTH
-from services_radio.dj_tool_registry import BRACE_TARGETS, FAILED_STATUSES, SEGMENT_TOOLS
+from services_radio.dj_tools_registry import BRACE_TARGETS, FAILED_STATUSES, SEGMENT_TOOLS
 
 
 def _brace(*tokens: str, value: Optional[str] = None) -> str:

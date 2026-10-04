@@ -7,7 +7,7 @@ from google.genai import types
 
 from services import llm_router
 from services.ai_service import AIService
-from services_radio.dj_tool_registry import DJ_FUNCTION_DECLARATIONS, READ_TOOLS
+from services_radio.dj_tools_registry import DJ_FUNCTION_DECLARATIONS, READ_TOOLS
 
 LINE = ("[BROADCAST] [LEO] &0.2& ~facepalms~ &0.1& Ah, FUCK! (24 chars)\n[JESS] @19@ &0.3& ~snorts~ My bad, dude. "
         "(39 chars)\n[LEO] @18@ &0.2& Nine Inch Nails! Not known snails!")

@@ -73,7 +73,7 @@ class NodeSelection(BaseModel):
 
 
 def tool_names() -> set:
-    from services_radio.dj_tool_registry import TOOL_NAMES
+    from services_radio.dj_tools_registry import TOOL_NAMES
     return TOOL_NAMES
 
 
@@ -117,7 +117,7 @@ def stated_pulse(pulse: Dict, user_input: str) -> Dict:
 
 
 def tool_menu() -> str:
-    from services_radio.dj_tool_registry import tool_catalog
+    from services_radio.dj_tools_registry import tool_catalog
     return tool_catalog()
 
 def _selection_pulse(selection) -> Dict:

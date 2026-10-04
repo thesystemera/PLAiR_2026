@@ -3,10 +3,10 @@ import asyncio
 from services_radio.conversation_service import save_conversation_to_database
 from services.task_utils import spawn
 from services import log_service
-from services_radio.dj_executor_community import ExecutorCommunity
-from services_radio.dj_executor_playback import ExecutorPlayback
-from services_radio.dj_executor_search import ExecutorSearch
-from services_radio.dj_executor_segments import INTERPRETATION_GATE_TIMEOUT_S, ExecutorSegments
+from services_radio.dj_command_executor_community import ExecutorCommunity
+from services_radio.dj_command_executor_playback import ExecutorPlayback
+from services_radio.dj_command_executor_search import ExecutorSearch
+from services_radio.dj_command_executor_segments import INTERPRETATION_GATE_TIMEOUT_S, ExecutorSegments
 
 
 class CommandExecutorService(ExecutorSearch, ExecutorPlayback, ExecutorCommunity, ExecutorSegments):
