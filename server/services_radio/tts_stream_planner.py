@@ -1,8 +1,10 @@
 import re
 from typing import List, Dict
+from config.settings import settings
 from services import log_service
 
 CHANNEL_TAG = re.compile(r'(\[BROADCAST]|\[TXT])')
+STATION_NAME = re.compile(r'\bpla(?:y ?a)?ir(\.fm|\s+fm)?\b', re.IGNORECASE)
 TIME_SHIFT = re.compile(r'@([WwCc]?)(\d+(?:\.\d+)?)@')
 
 
@@ -19,11 +21,16 @@ def spoken_text(text: str) -> str:
     return " ".join(spoken)
 
 
+def say_station_name(match: re.Match) -> str:
+    """The station name as the voice engine should read it: 'PLAiR.fm' -> 'Playar F M'."""
+    return settings.STATION_NAME_SPOKEN + (" F M" if match.group(1) else "")
+
+
 class TTSStreamPlanner:
     def split_text_into_sentences(self, text: str) -> List[Dict]:
         log_service.detail(f"Sentence Splitter: Original text: {text}", "tts_stream_planner")
 
-        text = spoken_text(text)
+        text = STATION_NAME.sub(say_station_name, spoken_text(text))
 
         first_speaker_match = re.search(r'\[(LEO|JESS)]', text)
         if not first_speaker_match:

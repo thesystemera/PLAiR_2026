@@ -15,6 +15,7 @@ from services import usage_tracking
 from services import web_fetch
 from services.http_client import fetch
 from services.task_utils import spawn
+from services_radio.talking_clock import clock_time
 
 MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/artist/"
 
@@ -22,6 +23,7 @@ MUSICBRAINZ_URL = "https://musicbrainz.org/ws/2/artist/"
 async def musicbrainz_get(url: str, params: dict):
     return await web_fetch.get(url, web_fetch.MUSICBRAINZ, params=params)
 WEATHER_URL = "https://api.openweathermap.org/data/2.5/"
+COMPASS = ("north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest")
 WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
 BIOGRAPHY_NEGATIVE_CACHE_SECONDS = 600
 BIOGRAPHY_CACHE_MAX = 500
@@ -316,6 +318,13 @@ class WebService:
         return datetime.datetime.fromtimestamp(timestamp, tz)
 
     @staticmethod
+    def _wind(wind: dict) -> str:
+        speed = f"{round(wind['speed'], 1):g} m/s"
+        if wind.get("deg") is None:
+            return speed
+        return f"{speed} from the {COMPASS[round(wind['deg'] / 45) % 8]}"
+
+    @staticmethod
     def format_current_weather(current_data):
         try:
             main = current_data["main"]
@@ -328,11 +337,11 @@ class WebService:
                 f"Temperature: {int(main['temp'])}°C, Feels Like: {int(main['feels_like'])}°C, "
                 f"Humidity: {main['humidity']}%, Pressure: {main['pressure']} hPa, "
                 f"Visibility: {current_data.get('visibility', 'N/A')} meters, "
-                f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind.get('deg', 'N/A')}°, "
+                f"Wind: {WebService._wind(wind)}, "
                 f"Cloudiness: {current_data['clouds']['all']}%, "
                 f"Weather: {weather['description']}, "
-                f"Sunrise: {WebService._local_time(sys['sunrise'], tz).strftime('%H:%M')}, "
-                f"Sunset: {WebService._local_time(sys['sunset'], tz).strftime('%H:%M')}"
+                f"Sunrise: {clock_time(WebService._local_time(sys['sunrise'], tz))}, "
+                f"Sunset: {clock_time(WebService._local_time(sys['sunset'], tz))}"
             )
         except KeyError as e:
             log_service.error(f"Weather: unexpected current-weather payload, missing {e}")
@@ -351,10 +360,10 @@ class WebService:
                 main = entry["main"]
                 wind = entry["wind"]
                 lines.append(
-                    f"{entry_time.strftime('%H:%M')} - "
+                    f"{clock_time(entry_time)} - "
                     f"Temp: {int(main['temp'])}°C, Feels Like: {int(main['feels_like'])}°C, "
                     f"Humidity: {main['humidity']}%, "
-                    f"Wind Speed: {wind['speed']} m/s, Wind Direction: {wind.get('deg', 'N/A')}°, "
+                    f"Wind: {WebService._wind(wind)}, "
                     f"Weather: {entry['weather'][0]['description']}"
                 )
         if not lines:

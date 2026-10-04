@@ -16,6 +16,7 @@ from services_radio import regional_knowledge as regional_kb
 from services_radio.dj_content_bank import artist_key, clip, fact_sentences
 from services_radio.external_news_service import brief, detailed, resolve_country
 from services_radio.radio_schedule import ClockRule
+from services_radio.talking_clock import clock_time
 
 BUILD_TIMEOUT_S = 20.0
 BIOGRAPHY_WAIT_S = 12.0
@@ -157,7 +158,7 @@ def _event_line(item, tz_name: Optional[str]) -> str:
             local = item.starts_at.astimezone(pytz.timezone(tz_name)) if tz_name else item.starts_at
         except pytz.UnknownTimeZoneError:
             local = item.starts_at
-        when = local.strftime("%A %d %B, %I:%M %p").replace(" 0", " ")
+        when = f"{local.strftime('%A %d %B').replace(' 0', ' ')}, {clock_time(local)}"
     tags = " / ".join(item.tags[1:] or item.tags)
     parts = [item.title]
     if venue:
@@ -245,7 +246,7 @@ class NewsSegment(RadioSegment):
                 break
         if len(facts) < 2:
             return None
-        notes = [f"Bulletin time: {ctx.now_local.strftime('%I:%M %p').lstrip('0')} local"]
+        notes = [f"Bulletin time: {clock_time(ctx.now_local)} local"]
         if country:
             notes.append(f"Listener's country: {country}")
         on_air = [news_service.airing_marker(ctx.session_id, picked)] if stored and ctx.session_id else []
@@ -310,7 +311,7 @@ class CitySegment(RadioSegment):
         if not facts:
             return None
         notes = [f"City: {ctx.place_name or 'unknown'}",
-                 f"Local time: {ctx.now_local.strftime('%I:%M %p').lstrip('0')}"]
+                 f"Local time: {clock_time(ctx.now_local)}"]
         return SegmentContent(facts=facts, keys=keys, notes=notes, shareable=ctx.is_guest and not ctx.precise,
                               moods=self.moods,
                               title=f"{ctx.place_name} update" if ctx.place_name else "City update", on_air=on_air)
@@ -504,7 +505,7 @@ class ForYouSegment(RadioSegment):
             avoid.append("listener shoutouts")
         brief = (
             f"FOR YOU: research a two-minute narrative feature made for this one listener. It's "
-            f"{ctx.now_local.strftime('%A %I:%M %p').replace(' 0', ' ')} where they are. Find out who they are, what "
+            f"{ctx.now_local.strftime('%A')} {clock_time(ctx.now_local)} where they are. Find out who they are, what "
             "they've been talking about and what's on air, then dig through everything the station knows and build "
             "the story you think they'd genuinely love right now. Vary the angle; don't default to gigs."
         )

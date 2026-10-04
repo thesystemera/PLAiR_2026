@@ -40,6 +40,15 @@ def number_words(n: int) -> str:
     return TENS[tens] if ones == 0 else f"{TENS[tens]}-{ONES[ones]}"
 
 
+def clock_time(moment: datetime) -> str:
+    """A clock time the way the station says it: 12-hour with am/pm ('7:23 pm', '7 pm', 'midnight', 'midday')."""
+    if moment.minute == 0 and moment.hour in (0, 12):
+        return "midnight" if moment.hour == 0 else "midday"
+    hour = moment.hour % 12 or 12
+    suffix = "am" if moment.hour < 12 else "pm"
+    return f"{hour} {suffix}" if moment.minute == 0 else f"{hour}:{moment.minute:02d} {suffix}"
+
+
 def intro_texts() -> Tuple[str, ...]:
     return tuple(t.format(station=settings.STATION_NAME_SPOKEN) for t in INTRO_TEMPLATES)
 

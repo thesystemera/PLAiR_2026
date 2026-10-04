@@ -64,7 +64,13 @@ async def get_format_tone(**_) -> str:
         "- A natural, messy two-host conversation: quick back-and-forth, the co-host reacting over the other's lines, "
         "no long monologues. However long or short the reply, both hosts are in it.\n"
         "- Use casual language with frequent swearing for emphasis or humor.\n"
-        "- The odd natural stutter or restart is fine, but keep it rare."
+        "- The odd natural stutter or restart is fine, but keep it rare.\n"
+        "- A voice engine reads every spoken line word for word and can't interpret figures or symbols, so write "
+        "everything the way it's said out loud: times as words on the 12-hour clock ('seven twenty-three pm', 'half "
+        "past nine', never '19:23' or '9:29'), numbers and decimals as words ('fourteen degrees', 'two point six "
+        "metres a second', 'twenty twenty-six'), symbols and short forms spelled out ('percent', 'Road' not 'Rd', "
+        "'kilometres' not 'km'), and names as people say them ('four A D', 'Galaxie five hundred'). Performance tags "
+        "keep their numbers."
     )
 
 

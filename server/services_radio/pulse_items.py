@@ -10,6 +10,7 @@ from database.models import User
 from services_radio import geo
 from services_radio import regional_knowledge as regional_kb
 from services_radio.listener_location import ListenerLocation
+from services_radio.talking_clock import clock_time
 
 
 KIND_EVENT = "event"
@@ -141,7 +142,7 @@ def _local_when(moment: datetime, tz_name: Optional[str]) -> str:
         local = moment.astimezone(pytz.timezone(tz_name)) if tz_name else moment
     except pytz.UnknownTimeZoneError:
         local = moment
-    return local.strftime("%a %d %b %H:%M").replace(" 0", " ")
+    return f"{local.strftime('%a %d %b').replace(' 0', ' ')} {clock_time(local)}"
 
 
 @dataclass

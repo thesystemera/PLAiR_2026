@@ -1,11 +1,13 @@
 import asyncio
 import re
 import time
+from datetime import datetime
 
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
 from services.http_client import fetch
+from services_radio.talking_clock import clock_time
 
 TICKETMASTER_URL = "https://app.ticketmaster.com/discovery/v2/events.json"
 CACHE_TTL_SECONDS = 3600
@@ -19,6 +21,13 @@ GENERIC_EVENT_WORDS = {"event", "events", "concert", "concerts", "gig", "gigs", 
                        "live music", "anything", "something", "stuff", "things", "local", "nearby"}
 _LATLONG = re.compile(r"^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$")
 
+
+
+def _clock(value: str) -> str:
+    try:
+        return clock_time(datetime.strptime(value[:5], "%H:%M"))
+    except ValueError:
+        return ""
 
 
 def _float(value):
@@ -181,7 +190,7 @@ class EventsService:
         lines = []
         for e in events:
             details = " | ".join(part for part in (
-                f"{e['date']} {e['time']}".strip(), f"{e['venue']}, {e['city']}".strip(", "),
+                f"{e['date']} {_clock(e['time'])}".strip(), f"{e['venue']}, {e['city']}".strip(", "),
                 e["genre"], e["price_range"], e["status"],
             ) if part and part != "Undefined")
             lines.append(f"- {e['name']} ({details})" + (f": {e['info']}" if e["info"] else ""))

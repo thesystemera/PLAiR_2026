@@ -12,6 +12,7 @@ from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver
 from services_radio import talk_clock
 from services_radio.listener_location import ListenerLocation
+from services_radio.talking_clock import clock_time
 
 AUDIO_FEATURES_CACHE_TTL_S = 3600
 AUDIO_FEATURES_CACHE_MAX = 512
@@ -59,10 +60,10 @@ def format_user_time_str(user: Optional[User], tz_name: Optional[str] = None) ->
         if tz_name is not None:
             server_time = datetime.now(timezone.utc)
             local_time = server_time.astimezone(pytz.timezone(cast(str, tz_name)))
-            return f"Local Time: {local_time.strftime('%I:%M %p')}"
+            return f"Local Time: {clock_time(local_time)}"
         else:
             utc_time = datetime.now(timezone.utc)
-            return f"Time: {utc_time.strftime('%I:%M %p')} UTC"
+            return f"Time: {clock_time(utc_time)} UTC"
     except Exception as e:
         log_service.error(f"[Context] Error formatting user local time: {e}")
         return "Time: Unknown"

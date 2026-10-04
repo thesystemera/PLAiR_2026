@@ -13,6 +13,7 @@ from database.models import PlayEvent, PreferenceType, TrackPreference
 from services import log_service
 from services_radio.dj_content_bank import TalkingPoint, clip, fact_sentences
 from services_radio.regional_knowledge import Taste
+from services_radio.talking_clock import clock_time
 
 J2000 = 2451545.0
 J2000_EPOCH = datetime(2000, 1, 1, 12, tzinfo=timezone.utc)
@@ -143,7 +144,7 @@ def sky_points(latitude, longitude, tz_name: Optional[str], now: Optional[dateti
     lead = timedelta(minutes=settings.DJ_SKY_CUE_LEAD_MIN)
     for kind, at in sun_events(lat, lon, now):
         local_at = at.astimezone(zone)
-        clock = local_at.strftime("%I:%M %p").lstrip("0")
+        clock = clock_time(local_at)
         minutes = int(round((at - now).total_seconds() / 60))
         key = f"sky:{kind}:{local_at.strftime('%Y%m%d')}"
         if timedelta(0) < at - now <= lead:

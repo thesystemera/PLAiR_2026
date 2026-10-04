@@ -701,7 +701,7 @@ class Settings:
     )
     STINGS_DIR: Path = Path(os.getenv("STINGS_DIR") or str(CATALOG_DIR / "stings"))
     STATION_AUDIO_DIR: Path = Path(os.getenv("STATION_AUDIO_DIR") or str(TTS_ENGINE_DATA_DIR / "station_audio"))
-    STATION_NAME_SPOKEN: str = os.getenv("STATION_NAME_SPOKEN", "Play Air")
+    STATION_NAME_SPOKEN: str = os.getenv("STATION_NAME_SPOKEN", "Playar")
     STATION_VOICE_VERSION: str = os.getenv("STATION_VOICE_VERSION", "1")
     STATION_VOICE_SEED: int = int(os.getenv("STATION_VOICE_SEED", "7100"))
     STATION_VOICE_TARGET_LUFS: float = float(os.getenv("STATION_VOICE_TARGET_LUFS", "-20"))

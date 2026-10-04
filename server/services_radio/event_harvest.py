@@ -26,6 +26,7 @@ from services.llm_router import LLM_BACKGROUND
 from services_radio import geo, news_links
 from services_radio.local_knowledge import region_zone
 from services_radio.news_store import fold
+from services_radio.talking_clock import clock_time
 from services_radio.regional_knowledge import KIND_EVENT, Collector, KnowledgeItem, Region, _haversine_km, \
     hot_topics
 
@@ -525,7 +526,7 @@ def event_id(title: str, starts_at: datetime, zone) -> str:
 
 def describe(event: FoundEvent, zone, now: datetime) -> str:
     local = event.starts_at.astimezone(zone)
-    when = local.strftime("%a %d %b") + (local.strftime(" %H:%M") if event.timed else "")
+    when = local.strftime("%a %d %b").replace(" 0", " ") + (f" {clock_time(local)}" if event.timed else "")
     if event.repeats:
         when = f"{event.repeats}, next {when}"
     elif event.starts_at < now and event.ends_at:
