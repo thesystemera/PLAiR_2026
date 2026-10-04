@@ -2,12 +2,15 @@ import asyncio
 import os
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import cv2
 import numpy as np
 
+from PIL import Image
+
 from config import settings
+from services.suno_artwork_enrichment_service import artwork_enrichment_service
 
 NORMAL_MAP_SIZE = 1024
 NORMAL_MAP_QUALITY = 92
@@ -43,8 +46,8 @@ def _photo_detail(bgr, depth):
     return np.clip(result, 0.0, 1.0)
 
 
-def normal_map(bgr, depth_u8):
-    depth = depth_u8.astype(np.float32) / 255.0
+def normal_map(bgr, depth):
+    depth = depth.astype(np.float32) / 255.0 if depth.dtype == np.uint8 else depth.astype(np.float32)
     reach = DEPTH_SMOOTH_PX_AT_512 * depth.shape[1] / 512.0
     smooth = cv2.bilateralFilter(depth, 0, DEPTH_SMOOTH_TOLERANCE, reach)
     span = max(float(smooth.max() - smooth.min()), 1e-6)
@@ -98,15 +101,6 @@ def bake_from_side_by_side(source: Path, target: Path) -> None:
     _write_jpeg(target, normal_map(color, depth))
 
 
-def bake_from_pair(color_path: Path, depth_path: Path, target: Path) -> None:
-    color = cv2.imread(str(color_path), cv2.IMREAD_COLOR)
-    depth = cv2.imread(str(depth_path), cv2.IMREAD_GRAYSCALE)
-    if color is None or depth is None:
-        raise OSError(f"could not read {color_path.name} / {depth_path.name}")
-    depth = cv2.resize(depth, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_AREA)
-    _write_jpeg(target, normal_map(_fit(color, NORMAL_MAP_SIZE, cv2.INTER_AREA), _fit(depth, NORMAL_MAP_SIZE, cv2.INTER_AREA)))
-
-
 def is_fresh(target: Path, *sources: Path) -> bool:
     try:
         built = target.stat().st_mtime
@@ -115,7 +109,7 @@ def is_fresh(target: Path, *sources: Path) -> bool:
         return False
 
 
-NORMALS_DIR: Path = settings.CATALOG_DIR / "artwork_normals"
+NORMALS_DIR: Path = settings.CATALOG_DIR / "artwork_normals_v2"
 _bake_slots = asyncio.Semaphore(2)
 _inflight: dict[str, asyncio.Future] = {}
 
@@ -124,7 +118,12 @@ def track_normal_path(track_id: str) -> Path:
     return NORMALS_DIR / f"{track_id}.jpeg"
 
 
-async def _ensure(key: str, target: Path, sources: tuple[Path, ...], bake) -> Optional[Path]:
+def set_bake_parallelism(count: int) -> None:
+    global _bake_slots
+    _bake_slots = asyncio.Semaphore(count)
+
+
+async def _ensure(key: str, target: Path, sources: tuple[Path, ...], bake: Callable[[], Awaitable[None]]) -> Optional[Path]:
     if not all(source.exists() for source in sources):
         return None
     if is_fresh(target, *sources):
@@ -134,19 +133,34 @@ async def _ensure(key: str, target: Path, sources: tuple[Path, ...], bake) -> Op
         async def run():
             async with _bake_slots:
                 if not is_fresh(target, *sources):
-                    await asyncio.to_thread(bake)
+                    await bake()
         pending = asyncio.ensure_future(run())
         _inflight[key] = pending
         pending.add_done_callback(lambda _f: _inflight.pop(key, None))
     await asyncio.shield(pending)
-    return target
+    return target if target.exists() else None
+
+
+async def _bake_with_model(color_path: Path, target: Path) -> None:
+    color = cv2.imread(str(color_path), cv2.IMREAD_COLOR)
+    if color is None:
+        raise OSError(f"could not read {color_path.name}")
+    color = _fit(color, NORMAL_MAP_SIZE, cv2.INTER_AREA)
+    depth = await artwork_enrichment_service.depth_float(Image.fromarray(cv2.cvtColor(color, cv2.COLOR_BGR2RGB)))
+    normals = await asyncio.to_thread(normal_map, color, depth)
+    await asyncio.to_thread(_write_jpeg, target, normals)
 
 
 async def ensure_track_normal(track_id: str) -> Optional[Path]:
-    source = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
     target = track_normal_path(track_id)
-    return await _ensure(f"track:{track_id}", target, (source,), lambda: bake_from_side_by_side(source, target))
+    artwork = settings.ARTWORK_DIR / f"{track_id}.jpeg"
+    if artwork_enrichment_service.available:
+        return await _ensure(f"track:{track_id}", target, (artwork,), lambda: _bake_with_model(artwork, target))
+    enriched = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
+    return await _ensure(f"track:{track_id}", target, (enriched,), lambda: asyncio.to_thread(bake_from_side_by_side, enriched, target))
 
 
-async def ensure_pair_normal(key: str, color_path: Path, depth_path: Path, target: Path) -> Optional[Path]:
-    return await _ensure(key, target, (color_path, depth_path), lambda: bake_from_pair(color_path, depth_path, target))
+async def ensure_image_normal(key: str, color_path: Path, target: Path) -> Optional[Path]:
+    if not artwork_enrichment_service.available:
+        return None
+    return await _ensure(key, target, (color_path,), lambda: _bake_with_model(color_path, target))

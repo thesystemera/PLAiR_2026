@@ -70,18 +70,19 @@ class ArtworkEnrichmentService(SingletonService):
             self._model_loaded = False
 
     def _generate_depth_map(self, image: Image.Image) -> np.ndarray:
+        return (self._infer_depth(image) * 255).astype(np.uint8)
+
+    def _infer_depth(self, image: Image.Image) -> np.ndarray:
         if self._model is None:
             raise RuntimeError("Depth model not loaded - call initialize() first")
-
-        img_array = np.array(image.convert('RGB'))
-
         with torch.no_grad():
-            depth = self._model.infer_image(img_array)
+            depth = self._model.infer_image(np.array(image.convert('RGB')))
+        return ((depth - depth.min()) / (depth.max() - depth.min() + 1e-8)).astype(np.float32)
 
-        depth_normalized = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
-        depth_uint8 = (depth_normalized * 255).astype(np.uint8)
-
-        return depth_uint8
+    async def depth_float(self, image: Image.Image) -> np.ndarray:
+        loop = asyncio.get_event_loop()
+        async with gpu_lease("Depth-Anything"):
+            return await loop.run_in_executor(None, self._infer_depth, image)
 
     @staticmethod
     def _create_side_by_side_jpeg(

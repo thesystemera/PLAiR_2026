@@ -23,7 +23,7 @@ function pickThumbSize() {
 }
 
 const ARTWORK_THUMB_SIZE = pickThumbSize()
-const NORMAL_MAP_VERSION = 2
+const NORMAL_MAP_VERSION = 3
 
 const CACHE_CONFIGS = {
   artwork: {
