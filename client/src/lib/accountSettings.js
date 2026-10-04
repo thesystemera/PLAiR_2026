@@ -1,7 +1,7 @@
 import { safeStorage } from './safeStorage'
 
 const GUEST_SETTINGS_KEY = 'guestSoundSettings'
-const GUEST_SETTING_KEYS = ['ttsMuted', 'notificationsMuted']
+const GUEST_SETTING_KEYS = ['ttsMuted', 'notificationsMuted', 'litArtwork']
 
 export function loadGuestSettings() {
   try {
@@ -23,6 +23,7 @@ export const ACCOUNT_SETTING_DEFAULTS = Object.freeze({
   fpsEnabled: false,
   videoClipsEnabled: false,
   visualQuality: 'high',
+  litArtwork: true,
 })
 
 const ACCOUNT_SETTING_FIELDS = {
@@ -32,6 +33,7 @@ const ACCOUNT_SETTING_FIELDS = {
   fps_enabled: 'fpsEnabled',
   video_clips_enabled: 'videoClipsEnabled',
   visual_quality: 'visualQuality',
+  lit_artwork: 'litArtwork',
 }
 
 export function settingsFromAccount(source) {

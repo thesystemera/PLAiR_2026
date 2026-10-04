@@ -15,6 +15,7 @@ import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { useDeletePost } from '../hooks/useDeletePost'
 import { profileDepthCache, profileNormalCache, profilePictureCache } from '../lib/mediaCache'
+import { saveGuestSettings } from '../lib/accountSettings'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
@@ -563,9 +564,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     openEditTrack,
     uploadModalOpen,
     openUsageModal,
-    tiltEnabled,
     tiltNeedsPermission,
-    enableTiltEffects,
+    requestMotionAccess,
     shoutoutUpdates,
     reviewUpdates,
     uploadUpdates,
@@ -582,9 +582,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     openEditTrack: state.openEditTrack,
     uploadModalOpen: state.uploadModalOpen,
     openUsageModal: state.openUsageModal,
-    tiltEnabled: state.tiltEnabled,
     tiltNeedsPermission: state.tiltNeedsPermission,
-    enableTiltEffects: state.enableTiltEffects,
+    requestMotionAccess: state.requestMotionAccess,
     shoutoutUpdates: state.contentUpdates.shoutouts,
     reviewUpdates: state.contentUpdates.reviews,
     uploadUpdates: state.contentUpdates.uploads,
@@ -914,6 +913,24 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       publishSettings({ fpsEnabled: user?.fps_enabled ?? false })
       error('Failed to update FPS')
       logger.error('Failed to update FPS setting:', _err)
+    }
+  }
+
+  const handleToggleLitArtwork = async () => {
+    const newVal = settingsState.litArtwork === false
+    publishSettings({ litArtwork: newVal })
+    if (newVal && tiltNeedsPermission) void requestMotionAccess()
+    if (!user) {
+      saveGuestSettings({ litArtwork: newVal })
+      return
+    }
+    try {
+      await api.updateUserProfile({ lit_artwork: newVal })
+      if (refreshUser) await refreshUser()
+    } catch (_err) {
+      publishSettings({ litArtwork: user?.lit_artwork ?? true })
+      error('Failed to update 3D Lit Artwork')
+      logger.error('Failed to update lit artwork setting:', _err)
     }
   }
 
@@ -1355,20 +1372,18 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             </div>
           </SettingRow>
 
-          {tiltNeedsPermission && (
-            <SettingRow
-              icon={Smartphone}
-              label="3D Lit Artwork"
-              color="text-sky-400"
-              headerContent={
-                <button onClick={() => void enableTiltEffects(!tiltEnabled)} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${tiltEnabled ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{tiltEnabled ? 'ON' : 'OFF'}</button>
-              }
-            >
-              <div className="text-xs text-gray-400">
-                Artwork moves in 3D as you tilt your phone, lit by the visuals behind it. Your phone will ask for motion access.
-              </div>
-            </SettingRow>
-          )}
+          <SettingRow
+            icon={Smartphone}
+            label="3D Lit Artwork"
+            color="text-sky-400"
+            headerContent={
+              <button onClick={() => void handleToggleLitArtwork()} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.litArtwork !== false ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.litArtwork !== false ? 'ON' : 'OFF'}</button>
+            }
+          >
+            <div className="text-xs text-gray-400">
+              Artwork moves in 3D as you tilt or move, lit by the visuals behind it.{tiltNeedsPermission ? ' Your phone will ask for motion access.' : ''}
+            </div>
+          </SettingRow>
 
           <SettingRow
             icon={Video}

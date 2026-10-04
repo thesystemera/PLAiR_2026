@@ -34,6 +34,7 @@ class User(Base):
     dark_mode = Column(Boolean, default=True)
     fps_enabled = Column(Boolean, default=False)
     video_clips_enabled = Column(Boolean, default=False)  # Enable video clips in visuals and shared videos
+    lit_artwork = Column(Boolean, default=True, server_default="true", nullable=False)
     visual_quality = Column(String, default="high")  # high, medium, low - controls AudioReactiveCanvas shader complexity
 
     subscribed = Column(Boolean, default=False, nullable=False)

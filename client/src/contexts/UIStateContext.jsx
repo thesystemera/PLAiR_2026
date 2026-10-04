@@ -72,7 +72,6 @@ import { UI_FULLSCREEN, FALLBACK_GRADIENT_HEX, getOnAirSegment } from '../lib/th
 import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 
-const TILT_STORAGE_KEY = 'tiltEffects'
 const RADIO_INPUT_KEY = 'radioInputMode'
 const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
 const MAX_PASSING_NOTICES = 3
@@ -365,21 +364,12 @@ export function UIStateProvider({ children }) {
 
   const physicsKickRef = useRef(null)
 
-  const [tiltEnabled, setTiltEnabled] = useState(() => !TILT_NEEDS_PERMISSION || safeStorage.get(TILT_STORAGE_KEY) === 'true')
   const tiltControlsRef = useRef(null)
 
-  const enableTiltEffects = useCallback(async (enabled) => {
-    safeStorage.set(TILT_STORAGE_KEY, String(enabled))
-    if (!enabled) {
-      tiltControlsRef.current?.detach()
-      setTiltEnabled(false)
-      return false
-    }
-    const granted = await (tiltControlsRef.current?.request() ?? Promise.resolve(false))
-    setTiltEnabled(granted)
-    if (!granted) safeStorage.set(TILT_STORAGE_KEY, 'false')
-    return granted
-  }, [])
+  const requestMotionAccess = useCallback(
+    () => tiltControlsRef.current?.request() ?? Promise.resolve(!TILT_NEEDS_PERMISSION),
+    []
+  )
 
   useEffect(() => {
     let disposed = false
@@ -416,9 +406,10 @@ export function UIStateProvider({ children }) {
     }
 
     if (TILT_NEEDS_PERMISSION) {
-      const request = () => DeviceOrientationEvent.requestPermission()
+      let granted = false
+      const request = () => granted ? Promise.resolve(true) : DeviceOrientationEvent.requestPermission()
         .then((permission) => {
-          const granted = permission === 'granted'
+          granted = permission === 'granted'
           if (granted && !disposed) {
             window.addEventListener('deviceorientation', handleOrientation, { passive: true })
           }
@@ -428,13 +419,10 @@ export function UIStateProvider({ children }) {
           logger.warn('Motion permission not granted', error)
           return false
         })
-      tiltControlsRef.current = {
-        request,
-        detach: () => window.removeEventListener('deviceorientation', handleOrientation),
-      }
-      if (safeStorage.get(TILT_STORAGE_KEY) === 'true') {
-        cancelGesture = AudioInteractionManager.onUserGesture(() => { void request() })
-      }
+      tiltControlsRef.current = { request }
+      cancelGesture = AudioInteractionManager.onUserGesture(() => {
+        if (uiState.settingsState.litArtwork !== false) void request()
+      })
     } else {
       window.addEventListener('deviceorientation', handleOrientation, { passive: true })
     }
@@ -628,6 +616,7 @@ export function UIStateProvider({ children }) {
     fpsEnabled: false,
     videoClipsEnabled: false,
     visualQuality: 'high',
+    litArtwork: true,
   })
 
   const publishSettings = useCallback((updates) => {
@@ -1210,9 +1199,8 @@ export function UIStateProvider({ children }) {
   }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, getThumbArtworkUrl, preloadArtwork, preloadEnrichedArtwork, preloadThumbArtwork])
 
   const value = useMemo(() => ({
-    tiltEnabled,
     tiltNeedsPermission: TILT_NEEDS_PERMISSION,
-    enableTiltEffects,
+    requestMotionAccess,
     reportEngineStatus,
     visualState,
     radioProgressData,
@@ -1321,7 +1309,7 @@ export function UIStateProvider({ children }) {
 
     setVideoPreviewPlaying,
   }), [
-    tiltEnabled, enableTiltEffects,
+    requestMotionAccess,
     reportEngineStatus, visualState, radioProgressData, visualColorData, engineState,
     setMixerRef, audioState, publishAudioState, queueState, publishQueueState,
     authState, publishAuthState, radioState, publishRadioState, downloadState, publishDownloadState,

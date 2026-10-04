@@ -99,6 +99,7 @@ async def get_me(
         "fps_enabled": getattr(user, "fps_enabled", False),
         "video_clips_enabled": getattr(user, "video_clips_enabled", False),
         "visual_quality": getattr(user, "visual_quality", "high"),
+        "lit_artwork": getattr(user, "lit_artwork", True),
         "persona": user.persona,
         "profile": user.profile,
         "shoutout_interests": user.shoutout_interests,

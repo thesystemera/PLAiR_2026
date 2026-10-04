@@ -102,6 +102,7 @@ class UserProfileService:
             "fps_enabled": user.fps_enabled,
             "video_clips_enabled": user.video_clips_enabled,
             "visual_quality": user.visual_quality,
+            "lit_artwork": user.lit_artwork,
             "audio_quality": user.audio_quality,
             "engagements_since_last_update": user.engagements_since_last_update,
             "last_login": last_login_str,
@@ -142,6 +143,9 @@ class UserProfileService:
         if updates.get("visual_quality") is not None:
             user.visual_quality = updates["visual_quality"]  # type: ignore
             settings_to_broadcast["visualQuality"] = user.visual_quality
+        if updates.get("lit_artwork") is not None:
+            user.lit_artwork = updates["lit_artwork"]  # type: ignore
+            settings_to_broadcast["litArtwork"] = user.lit_artwork
         if updates.get("persona") is not None:
             user.persona = updates["persona"]  # type: ignore
         if updates.get("profile") is not None:

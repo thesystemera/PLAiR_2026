@@ -72,7 +72,7 @@ const LIGHT = {
   // --- Light sources found in the background video (lib/lightProbe.js) ---
   HEIGHT:           0.45,   // How far in front of the screen the lights hang. Lower = grazing light, deeper relief.
   FALLOFF:          1.5,    // How fast a light fades with screen distance from the image.
-  STRENGTH:         0.25,    // Overall light level per unit of a source's contrast with the scene.
+  STRENGTH:         0.6,    // Overall light level per unit of a source's contrast with the scene.
 
   // --- Relief: surfaces facing a light brighten, facing away darken ---
   RELIEF:           0.5,

@@ -49,7 +49,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   const [contextLost, setContextLost] = useState(false)
   const [onScreen, setOnScreen] = useState(true)
 
-  const { gyroscopeRef, mouseRef } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef }))
+  const { gyroscopeRef, mouseRef, litArtwork } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef, litArtwork: state.settingsState.litArtwork !== false }))
   const { isMobile } = useViewport()
   const { parallaxDpr, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
   const loadKey = `${trackId}|${enrichedArtworkUrl}|${artworkUrl}`
@@ -335,7 +335,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   }, [glReady, normalUrl, contextLost])
 
   useEffect(() => {
-    if (!glReady || !texturesReady || fallbackMode || contextLost || !isVisible || !isActive) return
+    if (!glReady || !texturesReady || fallbackMode || contextLost || !isVisible || !isActive || !litArtwork) return
 
     const gl = glRef.current
     const canvas = canvasRef.current
@@ -470,7 +470,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         cancelAnimationFrame(animationFrameRef.current)
       }
     }
-  }, [glReady, texturesReady, hasNormals, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
+  }, [glReady, texturesReady, hasNormals, litArtwork, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -501,7 +501,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     return () => resizeObserver.disconnect()
   }, [parallaxDpr])
 
-  const useStandardArtwork = fallbackMode || contextLost || !isVisible || !isActive || !texturesReady
+  const useStandardArtwork = fallbackMode || contextLost || !isVisible || !isActive || !texturesReady || !litArtwork
 
   if (fallbackMode || contextLost) {
     return (

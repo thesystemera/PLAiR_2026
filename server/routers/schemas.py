@@ -76,6 +76,7 @@ class UserProfileUpdate(BaseModel):
     fps_enabled: Optional[bool] = None
     video_clips_enabled: Optional[bool] = None
     visual_quality: Optional[str] = None
+    lit_artwork: Optional[bool] = None
 
 class DirectReplyUploadRequest(BaseModel):
     audio: str = Field(..., max_length=settings.MAX_BASE64_AUDIO_CHARS)

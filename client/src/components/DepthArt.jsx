@@ -28,7 +28,8 @@ export const DepthArt = memo(function DepthArt({ colorUrl, depthUrl, normalUrl, 
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const [drawnKey, setDrawnKey] = useState(null)
-  const usable = isLoadedImage(colorUrl) && isLoadedImage(depthUrl) && isLoadedImage(normalUrl)
+  const litArtwork = useUISelector(state => state.settingsState.litArtwork) !== false
+  const usable = litArtwork && isLoadedImage(colorUrl) && isLoadedImage(depthUrl) && isLoadedImage(normalUrl)
   const key = usable ? `${colorUrl}|${depthUrl}|${normalUrl}` : null
 
   useEffect(() => {
