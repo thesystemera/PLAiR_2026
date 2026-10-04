@@ -55,7 +55,7 @@ async def setup(ai: bool):
     services.user_content_service = UserContentDatabaseService()
     await services.user_content_service.initialize()
     ucv = UserContentVectorDatabaseService(services.user_content_service)
-    await asyncio.to_thread(ucv.load_initial_data)
+    await asyncio.to_thread(ucv.load)
     cache = UserContentVectorSearchPromptCacheService()
     await cache.initialize(services.ai_service, ucv)
     services.user_content_vector_search_service = UserContentVectorSearchService(ucv, services.user_content_service,
@@ -63,17 +63,17 @@ async def setup(ai: bool):
     services.request_store = ListenerRequestStore()
     await asyncio.to_thread(services.request_store.initialize)
     services.request_vector_db_service = ListenerRequestVectorDatabaseService(services.request_store)
-    await asyncio.to_thread(services.request_vector_db_service.load_initial_data)
+    await asyncio.to_thread(services.request_vector_db_service.load)
     services.request_search = SemanticSearch(services.request_vector_db_service, ListenerRequestPromptCache())
     await services.request_search.prompt_cache.initialize(services.ai_service, services.request_vector_db_service)
     source = local_knowledge.LocalNuggetSource()
     await asyncio.to_thread(source.initialize)
     vdb = local_knowledge.LocalKnowledgeVectorDatabaseService(source)
-    await asyncio.to_thread(vdb.load_initial_data)
+    await asyncio.to_thread(vdb.load)
     search = SemanticSearch(vdb, local_knowledge.LocalKnowledgePromptCache())
     await search.prompt_cache.initialize(services.ai_service, vdb)
     news_db = local_knowledge.NewsVectorDatabaseService(source)
-    await asyncio.to_thread(news_db.load_initial_data)
+    await asyncio.to_thread(news_db.load)
     news_search = SemanticSearch(news_db, local_knowledge.NewsPromptCache())
     await news_search.prompt_cache.initialize(services.ai_service, news_db)
     local_knowledge.install(vdb, search, news_db, news_search)
@@ -81,7 +81,7 @@ async def setup(ai: bool):
     from services.catalog_vector_search_service import CatalogVectorSearchService
     from services.catalog_vector_search_prompt_cache_service import CatalogVectorSearchPromptCacheService
     catalog_db = CatalogVectorDatabaseService(services.catalog_service)
-    await asyncio.to_thread(catalog_db.load_initial_data)
+    await asyncio.to_thread(catalog_db.load)
     catalog_cache = CatalogVectorSearchPromptCacheService()
     await catalog_cache.initialize(services.ai_service, catalog_db)
     services.vector_search_service = CatalogVectorSearchService(catalog_db, services.catalog_service, catalog_cache)
@@ -107,7 +107,7 @@ async def main() -> None:
     session_id = f"guest_{uuid.uuid4()}"
     listener_location.guest_locations.update(session_id, -36.8570, 174.7600, 30, "Pacific/Auckland")
     listener = await pulse.listener(None, session_id)
-    print(f"region={listener.region.key} nuggets={len(local_knowledge.local_vector_db._metadata_cache)}")
+    print(f"region={listener.region.key} nuggets={len(local_knowledge.local_vector_db.metas())}")
     probes = [(q, None, None) for q in args.queries] if args.queries else PROBES
     for text, kinds, when in probes:
         items = await pulse.query(pulse_kb.PulseQuery(listener=listener, text=text, kinds=set(kinds) if kinds else None,

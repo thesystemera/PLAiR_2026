@@ -342,8 +342,9 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                        "matching as it rolls on. One aspect (category) makes a pure station: 'primary_genre' from a "
                        "track plays that genre, 'vocal' that kind of singing. Several aspects with weights (blend) "
                        "make a mixed station when the listener asks for more than one thing, e.g. this track's style "
-                       "with a rainy, slow mood: blend [{category: style, weight: 0.7}, {category: mood, weight: "
-                       "0.5, words: 'rainy, slow'}]. An aspect with words is matched to those words instead of the "
+                       "with a rainy, slow mood: a style aspect plus a mood aspect with the words 'rainy, slow'. Set "
+                       "each weight from how much the listener stressed that part: what they lead with or insist on "
+                       "counts more. An aspect with words is matched to those words instead of the "
                        "track. The track is the one playing now by default, or the previous or next one. Use it for "
                        "'more like this', to steer from a sound the listener just heard, or to build a station from "
                        "what they describe.",

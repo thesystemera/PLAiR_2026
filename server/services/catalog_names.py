@@ -36,10 +36,11 @@ class NameSpace:
     indexes: Dict[str, Optional[NameIndex]]
 
 
-def build_name_space(metas: List[Dict[str, Any]]) -> NameSpace:
-    every = sorted({name for meta in metas for field in NAME_FIELDS for name in track_names(meta, field)})
-    spelling = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True,
-                               strip_accents="unicode").fit(every or [" "])
+def build_name_space(metas: List[Dict[str, Any]], spelling: Optional[TfidfVectorizer] = None) -> NameSpace:
+    if spelling is None:
+        every = sorted({name for meta in metas for field in NAME_FIELDS for name in track_names(meta, field)})
+        spelling = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True,
+                                   strip_accents="unicode").fit(every or [" "])
     indexes: Dict[str, Optional[NameIndex]] = {}
     for field in NAME_FIELDS:
         rows, starts, names = [], [], []
@@ -57,42 +58,49 @@ def build_name_space(metas: List[Dict[str, Any]]) -> NameSpace:
 class NameLookup:
     """Names compared by spelling, not meaning: character n-gram vectors, so typos, spacing, accents and a leading
     'the' still find the name, and two different names never match just because their words mean something alike.
-    Reads the live catalog index slot."""
+    Reads the catalog store's live slot and the tracks added since."""
 
     def __init__(self, vector_db):
         self.vector_db = vector_db
 
-    def similarity(self, field: str, names: List[str], slot=None) -> Optional[Tuple[NameIndex, np.ndarray]]:
-        slot = slot or self.vector_db.current()
-        index = slot.names.indexes.get(field) if slot is not None else None
+    @staticmethod
+    def similarity(field: str, names: List[str], slot) -> Optional[Tuple[NameIndex, np.ndarray]]:
+        index = slot.names.indexes.get(field) if slot is not None and slot.names is not None else None
         names = [name.strip() for name in names if name and name.strip()]
         if index is None or not names:
             return None
         return index, (slot.names.spelling.transform(names) @ index.vectors.T).toarray()
 
     def closest(self, field: str, text: str, how_many: int) -> List[Tuple[str, float]]:
-        found = self.similarity(field, [text])
-        if found is None:
-            return []
-        index, similarity = found
+        slots, _hidden = self.vector_db.views()
         best: Dict[str, float] = {}
-        for name, score in zip(index.names, similarity[0]):
-            best[name] = max(best.get(name, 0.0), float(score))
+        for slot in slots:
+            found = self.similarity(field, [text], slot)
+            if found is None:
+                continue
+            index, similarity = found
+            for name, score in zip(index.names, similarity[0]):
+                best[name] = max(best.get(name, 0.0), float(score))
         return sorted(best.items(), key=lambda item: item[1], reverse=True)[:how_many]
 
     def find(self, field: str, text: str, n_results: int,
              allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        slot = self.vector_db.current()
-        found = self.similarity(field, [text], slot)
-        if found is None:
-            return []
-        index, similarity = found
-        per_track = np.maximum.reduceat(similarity[0], index.starts)
+        slots, hidden = self.vector_db.views()
+        scored: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        for slot in slots:
+            found = self.similarity(field, [text], slot)
+            if found is None:
+                continue
+            index, similarity = found
+            per_track = np.maximum.reduceat(similarity[0], index.starts)
+            for i, score in enumerate(per_track):
+                entry = slot.entries[index.rows[i]]
+                if entry.key not in hidden:
+                    scored[entry.key] = (float(score), entry.meta)
         out = []
-        for i in np.argsort(-per_track, kind="stable"):
-            meta = slot.metas[index.rows[i]]
+        for score, meta in sorted(scored.values(), key=lambda item: item[0], reverse=True):
             if allowed(meta):
-                out.append({**meta, "similarity_score": float(per_track[i])})
+                out.append({**meta, "similarity_score": score})
                 if len(out) >= n_results:
                     break
         return out

@@ -37,7 +37,7 @@ async def setup():
     services.catalog_service = CatalogDatabaseService()
     await services.catalog_service.initialize()
     catalog_db = CatalogVectorDatabaseService(services.catalog_service)
-    await asyncio.to_thread(catalog_db.load_initial_data)
+    await asyncio.to_thread(catalog_db.load)
     return CatalogVectorSearchService(catalog_db, services.catalog_service, None)
 
 

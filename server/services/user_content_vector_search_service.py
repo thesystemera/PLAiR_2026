@@ -54,7 +54,7 @@ class UserContentVectorSearchService:
             results = []
             for match in found:
                 full_data = match.meta
-                content_id = self.vector_db._rowid_cache.get(match.rowid) or full_data.get('id')
+                content_id = match.key or full_data.get('id')
                 user_data = full_data.get('user_data', {})
                 distance_km = self._distance_to(full_data, user_location)
                 result = {

@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-
-import numpy as np
 import psycopg2
 from pydantic import Field, create_model
 
@@ -10,7 +8,7 @@ from config import settings
 from models_global import run_on_gpu_executor
 from services import log_service
 from services.base_prompt_cache_service import BasePromptCacheService
-from services.base_vector_database_service import BaseVectorDatabaseService
+from services.category_store import CategoryStore, Match
 
 
 @dataclass(frozen=True)
@@ -30,7 +28,7 @@ def field_text(key: str, limit: int = 400) -> Callable[[Dict[str, Any]], str]:
     return extract
 
 
-class SemanticVectorDatabaseService(BaseVectorDatabaseService):
+class SemanticVectorDatabaseService(CategoryStore):
     category_specs: Tuple[Category, ...] = ()
 
     def __init_subclass__(cls, **kwargs):
@@ -42,9 +40,6 @@ class SemanticVectorDatabaseService(BaseVectorDatabaseService):
 
     def _extract_category_texts(self, item: Dict[str, Any]) -> Dict[str, str]:
         return {spec.name: spec.extract(item) or "" for spec in self.category_specs}
-
-    def _trigger_rebuild(self):
-        self.rebuild()
 
 
 def normalize_weights(weights: Dict[str, float], categories: Iterable[str]) -> Dict[str, float]:
@@ -100,16 +95,8 @@ def make_prompt_cache(vector_cls, table_name: str, domain: str, examples: str, l
     return PromptCache
 
 
-@dataclass
-class Match:
-    score: float
-    similarity: float
-    rowid: int
-    meta: Dict[str, Any]
-
-
 class SemanticSearch:
-    def __init__(self, vector_db: BaseVectorDatabaseService, prompt_cache=None):
+    def __init__(self, vector_db: CategoryStore, prompt_cache=None):
         self.vector_db = vector_db
         self.prompt_cache = prompt_cache
 
@@ -126,45 +113,14 @@ class SemanticSearch:
                     return weights, analysis.cleaned_query or query
         return dict(self.vector_db.default_weights), query
 
-    def _rank(self, vector: np.ndarray, weights: Dict[str, float], n: int,
-              keep: Optional[Callable[[Dict[str, Any]], bool]], boost: Optional[Callable[[Dict[str, Any]], float]],
-              exclude: Optional[Dict[str, Any]] = None) -> List[Match]:
-        db = self.vector_db
-        matches = []
-        for rowid, meta in list(db._metadata_cache.items()):
-            if meta is exclude or (keep is not None and not keep(meta)):
-                continue
-            similarity = float(np.dot(vector, db.weighted(meta, weights)))
-            matches.append(Match(similarity + (boost(meta) if boost else 0.0), similarity, rowid, meta))
-        matches.sort(key=lambda match: match.score, reverse=True)
-        return matches[:n]
-
     async def search(self, query: str, n: int = 8, keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
                      boost: Optional[Callable[[Dict[str, Any]], float]] = None, use_ai: bool = False,
                      weights: Optional[Dict[str, float]] = None) -> List[Match]:
         db = self.vector_db
-        if not db._metadata_cache:
-            return []
         if weights is None:
             weights, query = await self.weights_for(query, use_ai)
         if not query:
-            return [Match(boost(meta) if boost else 0.0, 0.0, rowid, meta)
-                    for rowid, meta in list(db._metadata_cache.items()) if keep is None or keep(meta)][:n]
+            return [Match(boost(entry.meta) if boost else 0.0, 0.0, entry.row_id, entry.meta, entry.key)
+                    for entry in db.entries() if keep is None or keep(entry.meta)][:n]
         query_vector = await run_on_gpu_executor(db._generate_embedding, query)
-        return await run_on_gpu_executor(self._rank, query_vector, weights, n, keep, boost)
-
-    async def similar_to(self, item: Dict[str, Any], weights: Dict[str, float], n: int = 6,
-                         keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Match]:
-        db = self.vector_db
-        if not db._metadata_cache:
-            return []
-
-        def run():
-            return self._rank(db.weighted(item, weights), weights, n, keep, None, exclude=item)
-
-        return await run_on_gpu_executor(run)
-
-
-async def rebuild_if_dirty(db: Optional[SemanticVectorDatabaseService]) -> None:
-    if db is not None and db.dirty:
-        await run_on_gpu_executor(db.rebuild)
+        return await run_on_gpu_executor(db.rank, query_vector, weights, n, keep, boost)

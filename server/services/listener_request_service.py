@@ -66,27 +66,19 @@ class ListenerRequestVectorDatabaseService(SemanticVectorDatabaseService):
         Category("request_daypart", 0.05, lambda item: f"{item.get('weekday') or ''} {item.get('daypart') or ''}".strip(),
                  "When they asked: day and time of day"),
     )
-    log_channel = "system"
-    service_label = "Listener requests"
     display_name = "Listener Requests"
-    index_dir_setting_name = "EMBEDDINGS_DIR"
-    index_file_prefix = "listener_requests"
     source_table = "listener_requests"
     source_id_column = "request_id"
-    source_label = "listener requests"
-    source_db_label = "user_content"
+    key_field = "request_id"
     item_noun = "requests"
-    single_item_noun = "request"
 
     def add_request(self, meta: Dict[str, Any], rowid: int) -> None:
-        self._add_single_item(meta)
-        self._rowid_cache[rowid] = meta["request_id"]
-        self._metadata_cache[rowid] = meta
-        self.dirty = True
+        self.add_meta(meta["request_id"], meta, rowid)
 
     def rows(self, region_key: str, since: datetime) -> List[tuple]:
         found = []
-        for rowid, meta in list(self._metadata_cache.items()):
+        for entry in self.entries():
+            rowid, meta = entry.row_id, entry.meta
             if meta.get("region_key") != region_key:
                 continue
             try:

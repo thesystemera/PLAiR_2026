@@ -53,7 +53,6 @@ REPAIRABLE_METADATA_FIELDS = ("duration", "derived_tags", "derived_tags.primary_
 BACKFILL_METADATA_FIELDS = ("derived_tags.video_search_terms",)
 MAX_REPORT_ISSUES = 500
 FFPROBE_TIMEOUT_S = 30
-VECTOR_REBUILD_COOLDOWN_S = 600
 EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 SHOUTOUT_STEM = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -81,7 +80,7 @@ TRACK_CHECKS: Tuple[AssetCheck, ...] = (
     AssetCheck("audio_features", "track", "Audio features JSON", ("master_wav",), False, True),
     AssetCheck("lyric_timestamps", "track", "Lyric timestamps JSON", ("metadata", "master_wav"), True, True),
     AssetCheck("db_flags", "track", "DB has_mp3/has_wav/has_artwork flags", ("db_row",), False, False),
-    AssetCheck("vector_index", "track", "Catalog vector index entry", ("db_row",), True, True),
+    AssetCheck("vector_index", "track", "Catalog vector store entry", ("db_row",), True, False),
 )
 
 SHOUTOUT_CHECKS: Tuple[AssetCheck, ...] = (
@@ -218,7 +217,6 @@ class AssetIntegrityService:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._followup_delay: Optional[float] = None
         self._indexed_ids: Optional[set] = None
-        self._vector_rebuilt_at = 0.0
         self._current_scan: Optional[Dict[str, Any]] = None
 
     def bind(self, **services_to_bind):
@@ -559,7 +557,7 @@ class AssetIntegrityService:
         if subject.db is None or self._indexed_ids is None:
             return Finding(OK, "index state unknown")
         if subject.id not in self._indexed_ids:
-            return Finding(MISSING, "not in the live catalog index slot (search and stations can't find it)")
+            return Finding(MISSING, "not in the catalog vector store (search and stations can't find it)")
         return Finding(OK)
 
     def _detect_shoutout(self, subject: Subject):
@@ -719,8 +717,8 @@ class AssetIntegrityService:
 
     def _current_indexed_ids(self) -> Optional[set]:
         vector_db = self._svc("vector_db")
-        live = vector_db.current() if vector_db is not None else None
-        return live.ids if live is not None else None
+        keys = vector_db.keys() if vector_db is not None else set()
+        return keys or None
 
     def _is_gpu(self, check: AssetCheck, subject: Subject) -> bool:
         if check.key == "lyric_timestamps" and subject.info.get("lyrics_placeholder"):
@@ -1169,14 +1167,9 @@ class AssetIntegrityService:
         subject.db.update({"has_mp3": flags[0], "has_wav": flags[1], "has_artwork": flags[2]})
 
     async def _repair_vector_index(self, subject: Subject, finding: Finding):
-        if time.monotonic() - self._vector_rebuilt_at < VECTOR_REBUILD_COOLDOWN_S:
-            self._indexed_ids = await asyncio.to_thread(self._current_indexed_ids)
-            return
         vector_db = self._svc("vector_db")
-        catalog = self._svc("catalog")
         async with models_global.gpu_lease("Asset doctor vector index"):
-            await asyncio.to_thread(vector_db.rebuild_indexes, catalog)
-        self._vector_rebuilt_at = time.monotonic()
+            await asyncio.to_thread(vector_db.add_rows, [subject.id])
         self._indexed_ids = await asyncio.to_thread(self._current_indexed_ids)
 
     async def _register_shoutout(self, subject: Subject):

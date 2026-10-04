@@ -110,17 +110,10 @@ class LocalKnowledgeVectorDatabaseService(SemanticVectorDatabaseService):
                  "What sort of thing it is: event, place, news"),
         Category("nugget_when", 0.10, when_phrase, "When it happens: day, time of day, weekend or weeknight"),
     )
-    log_channel = "system"
-    service_label = "Local knowledge"
     display_name = "Local Knowledge"
-    index_dir_setting_name = "EMBEDDINGS_DIR"
-    index_file_prefix = "local_knowledge"
     source_table = "local_nuggets"
     source_id_column = "nugget_id"
-    source_label = "local nuggets"
-    source_db_label = "ai_radio"
     item_noun = "nuggets"
-    single_item_noun = "nugget"
 
 
 class NewsVectorDatabaseService(SemanticVectorDatabaseService):
@@ -134,17 +127,10 @@ class NewsVectorDatabaseService(SemanticVectorDatabaseService):
                  "What sort of story it is and its tone (sport, crime; good news, funny, sad)"),
         Category("news_outlet", 0.06, field_text("source"), "The publisher"),
     )
-    log_channel = "system"
-    service_label = "News"
     display_name = "News"
-    index_dir_setting_name = "EMBEDDINGS_DIR"
-    index_file_prefix = "news"
     source_table = "news_nuggets"
     source_id_column = "nugget_id"
-    source_label = "news stories"
-    source_db_label = "ai_radio"
     item_noun = "stories"
-    single_item_noun = "story"
 
 
 def place_type_text(item: Dict[str, Any]) -> str:
@@ -187,17 +173,10 @@ class PlaceVectorDatabaseService(SemanticVectorDatabaseService):
         Category("place_hours", 0.075, place_hours_text, "Opening hours: early, late night, weekends"),
         Category("place_quality", 0.075, place_quality_text, "Rating and price: cheap, upmarket, well reviewed"),
     )
-    log_channel = "system"
-    service_label = "Places"
     display_name = "Places"
-    index_dir_setting_name = "EMBEDDINGS_DIR"
-    index_file_prefix = "places"
     source_table = "place_nuggets"
     source_id_column = "nugget_id"
-    source_label = "places"
-    source_db_label = "ai_radio"
     item_noun = "places"
-    single_item_noun = "place"
 
 
 class LocalNuggetSource:

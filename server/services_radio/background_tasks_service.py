@@ -151,8 +151,6 @@ class BackgroundTasksService:
 
     async def listener_request_maintainer(self):
         from service_registry import services
-        from services.semantic_source import rebuild_if_dirty
-        from services_radio import local_knowledge
         from services_radio.pulse import demand, place_shoutouts
         last_prune = 0.0
         while True:
@@ -161,10 +159,6 @@ class BackgroundTasksService:
                 if services.news_service is not None:
                     await services.news_service.upkeep()
                 await place_shoutouts()
-                await rebuild_if_dirty(local_knowledge.local_vector_db)
-                await rebuild_if_dirty(local_knowledge.news_vector_db)
-                await rebuild_if_dirty(local_knowledge.place_vector_db)
-                await rebuild_if_dirty(services.request_vector_db_service)
                 if time.monotonic() - last_prune > 86400:
                     await demand.prune()
                     last_prune = time.monotonic()
@@ -173,92 +167,19 @@ class BackgroundTasksService:
             except Exception as e:
                 log_service.error(f"Listener request maintainer error: {e}")
 
-    async def vector_database_rebuilder(self):
+    async def vector_store_maintainer(self):
+        from services.vector_store import STORES
         while True:
             try:
-                await asyncio.sleep(300)  # 5 minutes
-
-                if len(self.tts_vector_db_service.new_embeddings_log) > 0:
-                    log_service.info(f"Vector DB: Rebuilding vector database with {len(self.tts_vector_db_service.new_embeddings_log)} new embeddings")
-                    await asyncio.to_thread(self.tts_vector_db_service.rebuild_indexes)
+                await asyncio.sleep(settings.VECTOR_REBUILD_INTERVAL_S)
+                for store in list(STORES):
+                    if store.dirty:
+                        await asyncio.to_thread(store.rebuild)
             except asyncio.CancelledError:
-                log_service.info("Vector DB Rebuilder: Task cancelled")
+                log_service.info("Vector store maintainer: Task cancelled")
                 break
             except Exception as e:
-                log_service.error(f"Vector database rebuilder error: {e}")
-                await asyncio.sleep(60)
-
-    async def catalog_index_updater(self):
-        await asyncio.sleep(300)
-
-        last_catalog_size = len(self.catalog_service.tracks) if self.catalog_service else 0
-
-        while True:
-            try:
-                if not self.catalog_vector_db_service or not self.catalog_service:
-                    await asyncio.sleep(300)
-                    continue
-
-                current_size = len(self.catalog_service.tracks)
-
-                if current_size != last_catalog_size or self.catalog_vector_db_service.dirty:
-                    log_service.vector_music(
-                        f"🔄 Catalog size changed ({last_catalog_size} → {current_size}), "
-                        f"rebuilding indexes in background..."
-                        if current_size != last_catalog_size else "🔄 Catalog tracks edited, rebuilding indexes in background..."
-                    )
-                    await asyncio.to_thread(
-                        self.catalog_vector_db_service.rebuild_indexes,
-                        self.catalog_service
-                    )
-                    last_catalog_size = current_size
-                    log_service.success("✓ Catalog vector indexes rebuilt and swapped")
-
-                await asyncio.sleep(300)
-
-            except asyncio.CancelledError:
-                log_service.info("Catalog Index Updater: Task cancelled")
-                break
-            except Exception as e:
-                log_service.error(f"Catalog index updater error: {e}")
-                await asyncio.sleep(60)
-
-    async def user_content_index_updater(self):
-        await asyncio.sleep(300)
-
-        last_user_content_size = 0
-
-        while True:
-            try:
-                if not self.user_content_vector_db_service or not self.user_content_service:
-                    await asyncio.sleep(300)
-                    continue
-
-                current_size = len(self.user_content_service.shoutouts)
-
-                if current_size != last_user_content_size:
-                    log_service.user_content(
-                        f"🔄 User content size changed ({last_user_content_size} → {current_size}), "
-                        f"rebuilding indexes in background..."
-                    )
-                    all_shoutouts = await self.user_content_service.load_all_shoutouts_for_indexing()
-                    if all_shoutouts:
-                        await asyncio.to_thread(
-                            self.user_content_vector_db_service.rebuild_indexes,
-                            all_shoutouts
-                        )
-                        last_user_content_size = current_size
-                        log_service.success("✓ User content vector indexes rebuilt and swapped (backup sweep)")
-                    else:
-                        log_service.warning("⚠️  No shoutouts found to index")
-
-                await asyncio.sleep(300)
-
-            except asyncio.CancelledError:
-                log_service.info("User Content Index Updater: Task cancelled")
-                break
-            except Exception as e:
-                log_service.error(f"User content index updater error: {e}")
+                log_service.error(f"Vector store maintainer error: {e}")
                 await asyncio.sleep(60)
 
     async def video_clip_pre_downloader(self):

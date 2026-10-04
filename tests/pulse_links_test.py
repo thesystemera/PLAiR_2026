@@ -22,19 +22,14 @@ def nugget(kind, ext, title, text="", entities=(), lat=None, lon=None):
             "starts_at": (NOW + timedelta(days=2)).isoformat() if kind == "event" else None}
 
 
-class FakeIndex:
-    def get_n_items(self):
-        return 0
-
-
 class FakeVectorDb:
-    current_index = 1
+    version = 1
 
     def __init__(self, metas):
-        self._metadata_cache = {i + 1: meta for i, meta in enumerate(metas)}
+        self._metas = list(metas)
 
-    def current_annoy_index(self):
-        return FakeIndex()
+    def metas(self):
+        return list(self._metas)
 
 
 class FakeSearch:

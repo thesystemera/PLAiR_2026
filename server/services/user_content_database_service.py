@@ -267,6 +267,9 @@ class UserContentDatabaseService(SingletonService):
             self.shoutout_ids.sort(key=lambda sid: self.shoutouts[sid].get("timestamp", ""), reverse=True)
 
     def forget_shoutout(self, shoutout_id: str):
+        from service_registry import services
+        if services.user_content_vector_db_service is not None:
+            services.user_content_vector_db_service.remove(shoutout_id)
         previous = self.shoutouts.pop(shoutout_id, None)
         if previous and previous.get("parent_id"):
             self.children.get(previous["parent_id"], set()).discard(shoutout_id)
@@ -411,27 +414,16 @@ class UserContentDatabaseService(SingletonService):
 
         if vector_db_service:
             try:
-                await asyncio.to_thread(vector_db_service.add_single_shoutout, metadata)
-                all_items = await self.load_all_shoutouts_for_indexing()
-                await asyncio.to_thread(vector_db_service.rebuild_indexes, all_items)
+                await asyncio.to_thread(vector_db_service.add_meta, item_id, metadata)
             except Exception as e:
-                log_service.warning(f"{kind} {item_id} saved but indexing failed (background rebuild will retry): {e}")
+                vector_db_service.dirty = True
+                log_service.warning(f"{kind} {item_id} saved but not searchable yet (background rebuild will add it): {e}")
 
         if broadcast_callback:
             await broadcast_callback(kind, item_id, public_shoutout(metadata))
 
         log_service.user_content(f"✅ {kind.capitalize()} {item_id} saved ({'voice' if has_audio else 'typed'})")
         return metadata
-
-    async def load_all_shoutouts_for_indexing(self) -> List[Dict]:
-        all_data = []
-        for sid, data in self.shoutouts.items():
-            item = data.copy()
-            item['id'] = sid
-            item['content_type'] = kind_of(data)
-            item['date'] = item.get('timestamp', '')
-            all_data.append(item)
-        return all_data
 
     def _get_all_shoutout_ids_from_db(self) -> List[str]:
         conn = self._get_connection()

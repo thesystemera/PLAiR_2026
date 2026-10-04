@@ -1150,13 +1150,13 @@ class Pulse:
 
     def _region_index(self, region_key: str) -> dict:
         db = local_knowledge.local_vector_db
-        stamp = (len(db._metadata_cache), db.current_index) if db is not None else (0, 0)
+        stamp = db.version if db is not None else 0
         cached = self._link_cache.get(region_key)
         if cached and cached[0] == stamp and time.monotonic() - cached[1] < 300:
             return cached[2]
         by_id: Dict[str, Dict[str, Any]] = {}
         names: Dict[str, list] = {}
-        for meta in list(db._metadata_cache.values()) if db is not None else []:
+        for meta in db.metas() if db is not None else []:
             if meta.get("region_key") != region_key:
                 continue
             by_id[meta["id"]] = meta
@@ -1222,7 +1222,7 @@ class Pulse:
     def _news_pool(listener: PulseListener) -> list[Dict[str, Any]]:
         db = local_knowledge.news_vector_db
         country = (listener.location.country_code or settings.NEWS_DEFAULT_COUNTRY).upper()
-        return [meta for meta in list(db._metadata_cache.values()) if (meta.get("country") or "").upper() == country] \
+        return [meta for meta in db.metas() if (meta.get("country") or "").upper() == country] \
             if db is not None else []
 
     @staticmethod

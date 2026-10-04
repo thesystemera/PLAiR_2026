@@ -12,6 +12,7 @@ from database import AsyncSessionLocal
 from database.models import PlaceCache, PlaceSearch
 from services import log_service
 from services import usage_tracking
+from models_global import run_on_gpu_executor
 
 _WORD = re.compile(r"[a-z0-9]+")
 SEARCH_ORIGIN_DECIMALS = 3
@@ -200,17 +201,12 @@ async def remember(query: str, lat: float, lon: float, radius_m: float, results:
     except Exception as e:
         log_service.warning(f"[PLACES] memory save failed: {type(e).__name__}: {e}")
         return
-    await embed_now()
-
-
-async def embed_now() -> None:
-    from services.semantic_source import rebuild_if_dirty
     from services_radio import local_knowledge
-    local_knowledge.mark_places_dirty()
-    try:
-        await rebuild_if_dirty(local_knowledge.place_vector_db)
-    except Exception as e:
-        log_service.warning(f"[PLACES] embedding new places failed: {type(e).__name__}: {e}")
+    if local_knowledge.place_vector_db is not None:
+        try:
+            await run_on_gpu_executor(local_knowledge.place_vector_db.add_rows, [f"place:{pid}" for pid in ids])
+        except Exception as e:
+            log_service.warning(f"[PLACES] adding new places to the search failed: {type(e).__name__}: {e}")
 
 
 async def searched_near(query: str, lat: float, lon: float) -> bool:

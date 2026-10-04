@@ -68,7 +68,8 @@ def build_tag_indexes(vector_db, metas: List[Dict[str, Any]]) -> Dict[str, Optio
 class AspectRanker:
     """Stations built from aspects of songs (or from words): each aspect scores every song on its own - genre,
     mood, style and the rest by meaning, tag by tag; artists by spelling - and a blend is those scores weighted.
-    Every anchor (the seed, each recent song) counts equally. Reads the live catalog index slot."""
+    Every anchor (the seed, each recent song) counts equally. Reads the catalog store's live slot and the tracks
+    added since."""
 
     def __init__(self, vector_db, names: NameLookup):
         self.vector_db = vector_db
@@ -151,9 +152,27 @@ class AspectRanker:
 
     def rank(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
              n_results: int, allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
-        slot = self.vector_db.current()
-        if slot is None:
-            return []
+        slots, hidden = self.vector_db.views()
+        scored: Dict[str, Tuple[float, float, Dict[str, Any]]] = {}
+        for slot in slots:
+            final, artist = self._slot_scores(slot, aspects, seed, recent)
+            if final is None:
+                continue
+            for i, entry in enumerate(slot.entries):
+                if entry.key in hidden or np.isnan(final[i]):
+                    scored.pop(entry.key, None)
+                    continue
+                scored[entry.key] = (float(final[i]), float(artist[i]), entry.meta)
+        out = []
+        for final, _artist, meta in sorted(scored.values(), key=lambda row: (row[0], row[1]), reverse=True):
+            if allowed(meta):
+                out.append({**meta, "similarity_score": final})
+                if len(out) >= n_results:
+                    break
+        return out
+
+    def _slot_scores(self, slot, aspects: List[Aspect], seed: Optional[Dict[str, Any]],
+                     recent: List[Dict[str, Any]]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         metas = slot.metas
         weighted, weights, artist = [], [], np.zeros(len(metas), dtype=np.float32)
         for aspect in aspects:
@@ -165,19 +184,12 @@ class AspectRanker:
             if same is not None:
                 artist += np.nan_to_num(same) * aspect.weight
         if not weighted:
-            return []
+            return None, None
         total_weight = np.sum(weights, axis=0)
         with np.errstate(invalid="ignore", divide="ignore"):
             final = np.nansum(np.vstack(weighted), axis=0) / total_weight
         final[total_weight == 0] = np.nan
-        out = []
-        for i in np.lexsort((-artist, -np.nan_to_num(final, nan=-np.inf))):
-            if np.isnan(final[i]) or not allowed(metas[i]):
-                continue
-            out.append({**metas[i], "similarity_score": float(final[i])})
-            if len(out) >= n_results:
-                break
-        return out
+        return final, artist
 
 
 def aspects_for(mode: str, ranker: AspectRanker) -> List[Aspect]:

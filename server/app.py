@@ -226,7 +226,7 @@ async def lifespan(_app: FastAPI):
 
     log_service.system("Initializing catalog vector database service...")
     catalog_vector_db_service = CatalogVectorDatabaseService(catalog_service)
-    await asyncio.to_thread(catalog_vector_db_service.load_initial_data)
+    await asyncio.to_thread(catalog_vector_db_service.load)
     log_service.success("✓ Catalog vector database service initialized")
     human_music_upload_service.attach_services(vector_db_service=catalog_vector_db_service)
     spawn(human_music_upload_service.backfill_fingerprints(), name="upload_fingerprint_backfill")
@@ -276,7 +276,7 @@ async def lifespan(_app: FastAPI):
     user_content_vector_db_service = None
     try:
         services.user_content_vector_db_service = user_content_vector_db_service = UserContentVectorDatabaseService(user_content_service)
-        await asyncio.to_thread(user_content_vector_db_service.load_initial_data)
+        await asyncio.to_thread(user_content_vector_db_service.load)
         log_service.success("✓ User content vector database service initialized")
 
         log_service.system("Initializing user content prompt cache service...")
@@ -301,7 +301,7 @@ async def lifespan(_app: FastAPI):
         services.request_store = request_store = ListenerRequestStore()
         await asyncio.to_thread(request_store.initialize)
         services.request_vector_db_service = ListenerRequestVectorDatabaseService(request_store)
-        await asyncio.to_thread(services.request_vector_db_service.load_initial_data)
+        await asyncio.to_thread(services.request_vector_db_service.load)
         services.request_search = SemanticSearch(services.request_vector_db_service, ListenerRequestPromptCache())
         await services.request_search.prompt_cache.initialize(ai_service, services.request_vector_db_service)
         log_service.success("✓ Listener request vectors initialized")
@@ -313,15 +313,15 @@ async def lifespan(_app: FastAPI):
         nugget_source = local_knowledge.LocalNuggetSource()
         await asyncio.to_thread(nugget_source.initialize)
         local_vector_db = local_knowledge.LocalKnowledgeVectorDatabaseService(nugget_source)
-        await asyncio.to_thread(local_vector_db.load_initial_data)
+        await asyncio.to_thread(local_vector_db.load)
         local_search = SemanticSearch(local_vector_db, local_knowledge.LocalKnowledgePromptCache())
         await local_search.prompt_cache.initialize(ai_service, local_vector_db)
         news_vector_db = local_knowledge.NewsVectorDatabaseService(nugget_source)
-        await asyncio.to_thread(news_vector_db.load_initial_data)
+        await asyncio.to_thread(news_vector_db.load)
         news_search = SemanticSearch(news_vector_db, local_knowledge.NewsPromptCache())
         await news_search.prompt_cache.initialize(ai_service, news_vector_db)
         place_vector_db = local_knowledge.PlaceVectorDatabaseService(nugget_source)
-        await asyncio.to_thread(place_vector_db.load_initial_data)
+        await asyncio.to_thread(place_vector_db.load)
         place_search = SemanticSearch(place_vector_db, local_knowledge.PlacePromptCache())
         await place_search.prompt_cache.initialize(ai_service, place_vector_db)
         local_knowledge.install(local_vector_db, local_search, news_vector_db, news_search, place_vector_db,
@@ -553,9 +553,7 @@ async def lifespan(_app: FastAPI):
         youtube_clip_service=get_youtube_clip_service()
     )
     weather_task_handle = asyncio.create_task(background_tasks_service.weather_updater())
-    vector_db_task_handle = asyncio.create_task(background_tasks_service.vector_database_rebuilder())
-    catalog_index_task_handle = asyncio.create_task(background_tasks_service.catalog_index_updater())
-    user_content_index_task_handle = asyncio.create_task(background_tasks_service.user_content_index_updater())
+    vector_store_task_handle = asyncio.create_task(background_tasks_service.vector_store_maintainer())
     video_clip_task_handle = asyncio.create_task(background_tasks_service.video_clip_pre_downloader())
     regional_task_handle = asyncio.create_task(background_tasks_service.regional_knowledge_refresher())
     request_task_handle = asyncio.create_task(background_tasks_service.listener_request_maintainer())
@@ -612,9 +610,7 @@ async def lifespan(_app: FastAPI):
     yield
 
     weather_task_handle.cancel()
-    vector_db_task_handle.cancel()
-    catalog_index_task_handle.cancel()
-    user_content_index_task_handle.cancel()
+    vector_store_task_handle.cancel()
     video_clip_task_handle.cancel()
     regional_task_handle.cancel()
     request_task_handle.cancel()

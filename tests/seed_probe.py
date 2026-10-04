@@ -46,13 +46,13 @@ async def setup():
     services.catalog_service = CatalogDatabaseService()
     await services.catalog_service.initialize()
     catalog_db = CatalogVectorDatabaseService(services.catalog_service)
-    await asyncio.to_thread(catalog_db.load_initial_data)
+    await asyncio.to_thread(catalog_db.load)
     search = CatalogVectorSearchService(catalog_db, services.catalog_service, None)
     return catalog_db, search, PlaybackPopulationService(services.catalog_service, search)
 
 
 def category_vectors(db, track):
-    return db.category_vectors(track)
+    return db.vectors_for(track)
 
 
 def aspect(db, track, mode):

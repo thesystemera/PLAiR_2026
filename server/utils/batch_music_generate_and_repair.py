@@ -81,7 +81,7 @@ async def initialize_generation_stack(
     await models_global.initialize_semantic_encoder()
 
     catalog_db = CatalogVectorDatabaseService()
-    catalog_db.load_initial_data()
+    catalog_db.load()
 
     vec_search = CatalogVectorSearchService(catalog_db, catalog_service)
     playback = PlaybackService(catalog_service, vec_search)

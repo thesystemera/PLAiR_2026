@@ -85,8 +85,6 @@ class Settings:
 
     # All vector databases and embeddings stored here
     EMBEDDINGS_DIR: Path = Path(os.getenv("EMBEDDINGS_DIR") or BASE_DIR / "data" / "embeddings")
-    CATALOG_EMBEDDINGS_DIR: Path = EMBEDDINGS_DIR
-    USER_CONTENT_EMBEDDINGS_DIR: Path = EMBEDDINGS_DIR
 
     # NOTE: Main databases (catalog, user_content, users) migrated to PostgreSQL 2026-02-01
     # See: ai_radio_catalog, ai_radio_user_content, ai_radio databases
@@ -301,6 +299,7 @@ class Settings:
     PULSE_COMMUNITY_RADIUS_KM: float = float(os.getenv("PULSE_COMMUNITY_RADIUS_KM", "60"))
     PULSE_REQUEST_DEDUPE_S: float = float(os.getenv("PULSE_REQUEST_DEDUPE_S", "180"))
     PULSE_REQUEST_REBUILD_S: int = int(os.getenv("PULSE_REQUEST_REBUILD_S", "300"))
+    VECTOR_REBUILD_INTERVAL_S: int = int(os.getenv("VECTOR_REBUILD_INTERVAL_S", "300"))
     PULSE_DEMAND_KEEP_DAYS: int = int(os.getenv("PULSE_DEMAND_KEEP_DAYS", "90"))
     PULSE_PREFETCH_MIN_ASKERS: int = int(os.getenv("PULSE_PREFETCH_MIN_ASKERS", "2"))
     PULSE_PREFETCH_TOPICS: int = int(os.getenv("PULSE_PREFETCH_TOPICS", "3"))
