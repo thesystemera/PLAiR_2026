@@ -23,6 +23,7 @@ function pickThumbSize() {
 }
 
 const ARTWORK_THUMB_SIZE = pickThumbSize()
+const NORMAL_MAP_VERSION = 2
 
 const CACHE_CONFIGS = {
   artwork: {
@@ -75,7 +76,7 @@ const CACHE_CONFIGS = {
     maxMemoryItems: 300,
     expiryMs: 14 * 24 * 60 * 60 * 1000,
     metadataKey: 'normal-thumb-metadata',
-    getUrl: (id) => `/api/artwork/${id}/normal/thumb/${ARTWORK_THUMB_SIZE}`,
+    getUrl: (id) => `/api/artwork/${id}/normal/thumb/${ARTWORK_THUMB_SIZE}?v=${NORMAL_MAP_VERSION}`,
     logPrefix: '[NormalThumbCache]'
   },
   normal_full: {
@@ -84,7 +85,7 @@ const CACHE_CONFIGS = {
     maxMemoryItems: 20,
     expiryMs: 14 * 24 * 60 * 60 * 1000,
     metadataKey: 'normal-full-metadata',
-    getUrl: (id) => `/api/artwork/${id}/normal`,
+    getUrl: (id) => `/api/artwork/${id}/normal?v=${NORMAL_MAP_VERSION}`,
     logPrefix: '[NormalCache]'
   },
   profile_normal: {
@@ -92,7 +93,7 @@ const CACHE_CONFIGS = {
     maxItems: 500,
     expiryMs: 7 * 24 * 60 * 60 * 1000,
     metadataKey: 'profile-normal-metadata',
-    getUrl: (id) => `/api/user/${id}/profile-picture/normal`,
+    getUrl: (id) => `/api/user/${id}/profile-picture/normal?v=${NORMAL_MAP_VERSION}`,
     logPrefix: '[ProfileNormalCache]'
   },
   profile_depth: {

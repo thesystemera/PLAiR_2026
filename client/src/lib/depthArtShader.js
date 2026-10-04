@@ -1,5 +1,7 @@
+import { MAX_LIGHTS } from './lightProbe'
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// DEPTH ARTWORK SHADER - parallax occlusion mapping + skylight probe lighting
+// DEPTH ARTWORK SHADER - parallax occlusion mapping + lights from the background
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 // One shader for every depth-mapped image (Now Playing, catalog tiles, shoutout
@@ -7,10 +9,10 @@
 //   1. POM ray march     → proper foreground-over-background occlusion
 //   2. Trail detection   → identifies disoccluded streaks behind shifted foreground
 //   3. Background fill   → replaces detected trails with nearby background color
-//   4. Skylight          → the background canvas, sampled at 9 screen points
-//                          (lib/lightProbe.js), lights the baked normal map
+//   4. Lighting          → up to 4 light sources found in the background video
+//                          (lib/lightProbe.js) light the baked normal map
 //                          (server/services/normal_map_service.py, deepMirror method):
-//                          relief shading plus a rim light that flashes on kicks
+//                          relief shading, specular glints and a rim that flash on kicks
 //                          and breathes with the beat
 //
 // HOW TRAIL DETECTION WORKS:
@@ -67,18 +69,20 @@ export const POM = {
 
 const LIGHT = {
 
-  // --- Skylight probes ---
-  FALLOFF:          2.5,    // How fast a probe's light fades with screen distance from the image.
-  SPREAD:           1.6,    // How sideways the probes' light arrives. Higher = grazing light, deeper relief.
-  EXPOSURE:         0.9,    // Probe light is scaled so the scene's average reads this bright (the scene is dark by design).
-  EXPOSURE_FLOOR:   0.04,   // Below this average the scene counts as black and the light fades with it.
-  EXPOSURE_MAX:     6.0,    // Most a dark scene's light is boosted.
+  // --- Light sources found in the background video (lib/lightProbe.js) ---
+  HEIGHT:           0.45,   // How far in front of the screen the lights hang. Lower = grazing light, deeper relief.
+  FALLOFF:          1.5,    // How fast a light fades with screen distance from the image.
+  STRENGTH:         0.25,    // Overall light level per unit of a source's contrast with the scene.
 
-  // --- Relief: surfaces facing a bright probe brighten, facing away darken ---
-  RELIEF:           0.35,
+  // --- Relief: surfaces facing a light brighten, facing away darken ---
+  RELIEF:           0.5,
 
-  // --- Rim: edges facing a bright probe pick up its colour ---
-  RIM:              0.5,
+  // --- Specular glint where a surface reflects a light toward the viewer ---
+  SPECULAR:         0.35,
+  SHININESS:        24.0,
+
+  // --- Rim: edges facing a light pick up its colour ---
+  RIM:              0.35,
   RIM_SOFT:         0.25,   // How far a normal leans (length of normal.xy) before the rim starts.
   RIM_HARD:         0.85,   // Lean where the rim is full.
 
@@ -111,13 +115,13 @@ const depthArtFragmentShader = `
   uniform float u_zoom;
   uniform float u_steps;
 
-  uniform vec3 u_probe[9];
+  uniform vec4 u_lights[${MAX_LIGHTS}];
+  uniform vec3 u_light_colors[${MAX_LIGHTS}];
   uniform vec4 u_rect;
   uniform float u_aspect;
   uniform float u_light;
   uniform float u_kick;
   uniform float u_pulse;
-  uniform float u_exposure;
 
   varying vec2 v_texCoord;
 
@@ -227,30 +231,26 @@ const depthArtFragmentShader = `
     vec2 facing = slopeLen > 0.0001 ? n.xy / slopeLen : vec2(0.0);
 
     vec3 relief = vec3(0.0);
+    vec3 glint = vec3(0.0);
     vec3 rim = vec3(0.0);
-    float weightSum = 0.0;
-    for (int i = 0; i < 9; i++) {
-      float fi = float(i);
-      float row = floor(fi / 3.0);
-      vec2 probePos = vec2(fi - row * 3.0 + 0.5, row + 0.5) / 3.0;
-      vec2 toProbe = (probePos - screenUV) * vec2(u_aspect, 1.0);
-      float dist = length(toProbe);
-      vec2 dir = dist > 0.0001 ? toProbe / dist : vec2(0.0);
-      float w = 1.0 / (1.0 + dist * dist * ${G(LIGHT.FALLOFF)});
-      vec3 L = normalize(vec3(dir * ${G(LIGHT.SPREAD)}, 1.0));
-      vec3 light = u_probe[i] * u_exposure;
-      relief += light * w * (dot(n, L) - L.z);
-      float behind = 1.0 - smoothstep(0.0, 0.35, dist);
-      rim += light * w * mix(max(dot(facing, dir), 0.0), 1.0, behind);
-      weightSum += w;
+    for (int i = 0; i < ${MAX_LIGHTS}; i++) {
+      vec4 source = u_lights[i];
+      if (source.w <= 0.001) continue;
+      vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
+      float dist = length(toLight);
+      vec2 dir = dist > 0.0001 ? toLight / dist : vec2(0.0);
+      vec3 L = normalize(vec3(toLight, ${G(LIGHT.HEIGHT)}));
+      vec3 light = u_light_colors[i] * source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist * dist * ${G(LIGHT.FALLOFF)});
+      relief += light * (dot(n, L) - L.z);
+      vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
+      glint += light * max(pow(max(dot(n, H), 0.0), ${G(LIGHT.SHININESS)}) - pow(H.z, ${G(LIGHT.SHININESS)}), 0.0);
+      rim += light * max(dot(facing, dir), 0.0);
     }
-    relief /= weightSum;
-    rim /= weightSum;
 
     float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
     float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
     vec3 lit = color * (1.0 + relief * ${G(LIGHT.RELIEF)} * energy);
-    lit += rim * edge * ${G(LIGHT.RIM)} * energy * (1.0 - lit);
+    lit += (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy * (1.0 - lit);
     return clamp(lit, 0.0, 1.0);
   }
 
@@ -283,7 +283,7 @@ const QUAD_TEX_COORDS = new Float32Array([
   0, 0,  1, 1,  1, 0
 ])
 
-const DEPTH_ART_UNIFORMS = ['u_color', 'u_depth', 'u_normal', 'u_gyro', 'u_intensity', 'u_zoom', 'u_steps', 'u_probe', 'u_rect', 'u_aspect', 'u_light', 'u_kick', 'u_pulse', 'u_exposure']
+const DEPTH_ART_UNIFORMS = ['u_color', 'u_depth', 'u_normal', 'u_gyro', 'u_intensity', 'u_zoom', 'u_steps', 'u_lights', 'u_light_colors', 'u_rect', 'u_aspect', 'u_light', 'u_kick', 'u_pulse']
 
 const MIN_LINEAR_STEPS = 6
 
@@ -329,7 +329,7 @@ export function createDepthArtProgram(gl) {
 
   const uniforms = {}
   for (const name of DEPTH_ART_UNIFORMS) {
-    uniforms[name.slice(2)] = gl.getUniformLocation(program, name === 'u_probe' ? 'u_probe[0]' : name)
+    uniforms[name.slice(2)] = gl.getUniformLocation(program, name === 'u_lights' || name === 'u_light_colors' ? `${name}[0]` : name)
   }
   gl.uniform1i(uniforms.color, 0)
   gl.uniform1i(uniforms.depth, 1)
@@ -349,18 +349,10 @@ export function setLightUniforms(gl, uniforms, probe, rect, hasNormals) {
   if (!on) return
   const width = Math.max(1, window.innerWidth)
   const height = Math.max(1, window.innerHeight)
-  gl.uniform3fv(uniforms.probe, probe.colors)
+  gl.uniform4fv(uniforms.lights, probe.lights)
+  gl.uniform3fv(uniforms.light_colors, probe.lightColors)
   gl.uniform4f(uniforms.rect, rect.left / width, rect.top / height, rect.width / width, rect.height / height)
   gl.uniform1f(uniforms.aspect, width / height)
   gl.uniform1f(uniforms.kick, probe.kick)
   gl.uniform1f(uniforms.pulse, probe.pulse)
-  gl.uniform1f(uniforms.exposure, probeExposure(probe.colors))
-}
-
-function probeExposure(colors) {
-  let luma = 0
-  for (let i = 0; i < colors.length; i += 3) luma += colors[i] * 0.2126 + colors[i + 1] * 0.7152 + colors[i + 2] * 0.0722
-  luma /= colors.length / 3
-  if (luma < LIGHT.EXPOSURE_FLOOR) return LIGHT.EXPOSURE * luma / (LIGHT.EXPOSURE_FLOOR * LIGHT.EXPOSURE_FLOOR)
-  return Math.min(LIGHT.EXPOSURE_MAX, LIGHT.EXPOSURE / luma)
 }

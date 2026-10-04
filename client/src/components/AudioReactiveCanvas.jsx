@@ -28,7 +28,7 @@ import {logger} from '../lib/logger'
 import {REFERENCE_SCENE_DPR, useQuality} from '../contexts/QualityContext'
 import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
-import {publishBeat, publishLightProbe, setLightGlow} from '../lib/lightProbe'
+import {PROBE_GRID, publishBeat, publishLightProbe, setLightGlow} from '../lib/lightProbe'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -601,13 +601,13 @@ const probeFragmentShader = `
   void main() {
     vec2 cell = floor(gl_FragCoord.xy);
     vec3 sum = vec3(0.0);
-    for (int y = 0; y < 4; y++) {
-      for (int x = 0; x < 4; x++) {
-        vec2 uv = (cell + (vec2(float(x), float(y)) + 0.5) / 4.0) / 3.0;
+    for (int y = 0; y < 3; y++) {
+      for (int x = 0; x < 3; x++) {
+        vec2 uv = (cell + (vec2(float(x), float(y)) + 0.5) / 3.0) / ${PROBE_GRID}.0;
         sum += texture2D(u_source, uv).rgb;
       }
     }
-    gl_FragColor = vec4(sum / 16.0, 1.0);
+    gl_FragColor = vec4(sum / 9.0, 1.0);
   }
 `
 
@@ -1054,7 +1054,7 @@ function MultiPassPlane({
   useEffect(() => { captureScene.add(captureMesh); return () => captureScene.remove(captureMesh) }, [captureScene, captureMesh])
 
   const probeScene = useMemo(() => new Scene(), [])
-  const probeTarget = useMemo(() => new WebGLRenderTarget(3, 3, {
+  const probeTarget = useMemo(() => new WebGLRenderTarget(PROBE_GRID, PROBE_GRID, {
     minFilter: LinearFilter,
     magFilter: LinearFilter,
     format: RGBAFormat,
@@ -1071,19 +1071,17 @@ function MultiPassPlane({
   useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
   useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
   useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
-  const probeReadRef = useRef({ pending: false, buffer: new Uint8Array(36) })
+  const probeReadRef = useRef({ pending: false, buffer: new Uint8Array(PROBE_GRID * PROBE_GRID * 4) })
   const lastKickBeatRef = useRef(-1)
 
   const glowAt = useMemo(() => {
     const out = [0, 0, 0]
     const u = fgMaterial.uniforms
-    return (col, row) => {
+    return (x, y) => {
       if (u.u_glow_active.value < 0.5) {
         out[0] = 0; out[1] = 0; out[2] = 0
         return out
       }
-      const x = (col + 0.5) / 3
-      const y = 1 - (row + 0.5) / 3
       const dx = (x - u.u_glow_center.value.x) * u.u_glow_scale.value.x
       const dy = (y - u.u_glow_center.value.y) * u.u_glow_scale.value.y
       const voice = Math.pow(2, -(dx * dx + dy * dy))
@@ -1787,7 +1785,7 @@ function MultiPassPlane({
           probeRead.pending = true
           gl.setRenderTarget(probeTarget)
           gl.render(probeScene, captureCamera)
-          gl.readRenderTargetPixelsAsync(probeTarget, 0, 0, 3, 3, probeRead.buffer)
+          gl.readRenderTargetPixelsAsync(probeTarget, 0, 0, PROBE_GRID, PROBE_GRID, probeRead.buffer)
             .then(() => publishLightProbe(probeRead.buffer))
             .catch(() => {})
             .finally(() => { probeRead.pending = false })

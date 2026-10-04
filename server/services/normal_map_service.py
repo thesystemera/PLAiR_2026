@@ -12,7 +12,8 @@ from config import settings
 NORMAL_MAP_SIZE = 1024
 NORMAL_MAP_QUALITY = 92
 GRADIENT_STRENGTH = 0.5
-DEPTH_SMOOTH_PX_AT_512 = 1.0
+DEPTH_SMOOTH_PX_AT_512 = 2.5
+DEPTH_SMOOTH_TOLERANCE = 0.04
 DETAIL_STRENGTH = 0.85 * 4.0
 
 _SOBEL_X = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], np.float32)
@@ -44,8 +45,8 @@ def _photo_detail(bgr, depth):
 
 def normal_map(bgr, depth_u8):
     depth = depth_u8.astype(np.float32) / 255.0
-    sigma = DEPTH_SMOOTH_PX_AT_512 * depth.shape[1] / 512.0
-    smooth = cv2.GaussianBlur(depth, (0, 0), sigma)
+    reach = DEPTH_SMOOTH_PX_AT_512 * depth.shape[1] / 512.0
+    smooth = cv2.bilateralFilter(depth, 0, DEPTH_SMOOTH_TOLERANCE, reach)
     span = max(float(smooth.max() - smooth.min()), 1e-6)
     depth255 = (smooth - float(smooth.min())) / span * 255.0
 
