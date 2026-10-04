@@ -139,6 +139,19 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
+- **Finish splitting the big files (started 4 Oct):** rule: a split file keeps the original name as its prefix
+  (`dj_tools.py` + `dj_tools_registry.py`, `api.js` + `apiMusic.js`), the unsuffixed file is the core, and every
+  new file gets a line in the CLAUDE.md File Map. Done: the DJ tools, command executor and prompt service,
+  context nodes, City Pulse, playback state, asset doctor, Suno queue, upload service (backend); `api.js`,
+  `offlineAPI.js`, `UploadMusicModal.jsx` (front end). Still to do:
+  - `User.jsx` (1617 lines): settings sections into `User*` parts. Free to start.
+  - `UIStateContext.jsx` (1505) and `PlaybackContext.jsx` (1537): every component depends on them, so split by
+    moving whole hooks/handlers out unchanged, then test on a phone and a PC (playback, device switching,
+    offline hand-back) before deploying.
+  - `AudioReactiveCanvas.jsx` (2345) and `App.jsx` (1113): wait until the shader optimisation session is done
+    with them.
+  - `suno_generation_queue_service._run_batch` (a 570-line method): needs a real Suno generation to test.
+
 - **Resemble Enhance on music vocal stems (owner, 3 Oct, parked):** it gave the DJ voices only a small lift
   over CVSR, too slow to run live, but it may help vocals in the music remaster chain (offline). Runner and setup:
   `scripts/voice_restoration/`, findings in `docs/TTS_ENGINE_RESEARCH.md`.
