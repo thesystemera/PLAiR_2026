@@ -1358,14 +1358,14 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           {tiltNeedsPermission && (
             <SettingRow
               icon={Smartphone}
-              label="Tilt Effects"
+              label="3D Lit Artwork"
               color="text-sky-400"
               headerContent={
                 <button onClick={() => void enableTiltEffects(!tiltEnabled)} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${tiltEnabled ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{tiltEnabled ? 'ON' : 'OFF'}</button>
               }
             >
               <div className="text-xs text-gray-400">
-                Artwork moves as you tilt your phone. Your phone will ask for motion access.
+                Artwork moves in 3D as you tilt your phone, lit by the visuals behind it. Your phone will ask for motion access.
               </div>
             </SettingRow>
           )}
