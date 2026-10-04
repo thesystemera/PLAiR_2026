@@ -14,7 +14,6 @@ const PARALLAX_EPSILON = 1e-4
 const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
-const LIGHT_ONLY_FRAME_MS = 33
 
 const isPowerOfTwo = value => value > 0 && (value & (value - 1)) === 0
 
@@ -393,7 +392,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           last.left === rect.left &&
           last.top === rect.top
         const sameLight = last && last.probe === probe.version && last.kick === probe.kick && last.pulse === probe.pulse
-        const unchanged = still && (sameLight || now - last.time < LIGHT_ONLY_FRAME_MS)
+        const unchanged = still && sameLight
 
         const paused = last && timestamp !== undefined && isSceneRenderingPaused(timestamp)
         const throttled = paused || (last && minFrameMs > 0 && timestamp !== undefined && timestamp - last.time < minFrameMs)

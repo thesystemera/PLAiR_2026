@@ -10,7 +10,6 @@ const MAX_IDLE_TEXTURES = 48
 const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.1
 const FRAME_CAP_SLACK_MS = 4
-const LIGHT_ONLY_FRAME_MS = 33
 const LAYOUT_REFRESH_MS = 250
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
@@ -241,7 +240,7 @@ class DepthArtRenderer {
     const input = this.lastInput
     const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
     const lit = !input || input.probe !== probe.version || input.kick !== probe.kick || input.pulse !== probe.pulse
-    if (!relayout && !moved && !uploaded && (!lit || timestamp - this.lastDrawAt < LIGHT_ONLY_FRAME_MS)) return
+    if (!relayout && !moved && !uploaded && !lit) return
     this.lastInput = { x: base.parallaxX, y: base.parallaxY, probe: probe.version, kick: probe.kick, pulse: probe.pulse }
     if (relayout) {
       this.layoutDirty = false
