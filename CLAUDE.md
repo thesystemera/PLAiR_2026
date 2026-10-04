@@ -570,6 +570,19 @@ Every vector engine (TTS clip tables, catalog, shoutouts, local knowledge, news,
 - **Never on a request:** no rebuild, no bulk embedding and no embedding-table writes while someone waits. A query's own text is encoded (`vector_store.query_vector`, memory cache only).
 - A new engine subclasses `VectorStore` (or `CategoryStore`) and implements `load_rows`, `embed` and, when it needs its own structures, `build_slot` / `restore`; it never writes its own swap, staleness or rebuild loop.
 
+### 20. Human Music Uploads
+
+**IMPORTANT:** Human uploads use the SAME catalog system as AI tracks. See `docs/HUMAN_MUSIC_UPLOAD.md` for full details.
+
+
+**AI track credits are compulsory and one name:** an AI track's artist is the artist it was inspired by, and it is shown as the artist. `generation_params.artist_name`, `track_info.artist` and `derived_tags.inspired_artist` always hold the same name (`services/catalog_credit.settle_ai_credit`: the requested artist, then the inspired-by artist, then the artist in the original request, then the first similar artist). Enrichment settles it on every new track, the Asset Doctor repairs any drift, `server/utils/backfill_artist_credit.py` fixes the catalog in bulk (run 3 Oct: 1,340 tracks). Every view reads `generation_params.artist_name`. Audit the catalog with `server/utils/catalog_audit.py`.
+
+**Key Principle:** Human tracks are stored in the same `tracks` table with `is_ai_generated=0`. They use identical metadata schemas, playback systems, and discovery pipelines as AI tracks.
+
+**Credits (least resistance):** uploading is one tap; everything is automatic and editable afterwards. A user's bands are artist profiles they define once (User panel → Artists & Bands); an upload is credited to the chosen profile, else their last-used, else their first, else one made from their username. The credit is `generation_params.artist_name` (= `track_info.artist`, plus `artist_profile_id`/`artist_slug`), the field every view reads; `derived_tags.inspired_artist` is only a "sounds like" comparison and never the credit. Titles: uploader's > embedded tag (mutagen, `embedded_tags`) > a real title in the filename > the sung hook (Gemini is told all of these). Renaming a profile re-credits its tracks (`retag_artist`); edits go through `update_track_metadata` (validated, re-indexed; a lyrics edit drops the lyric timing so the asset doctor re-aligns it). "Enhance audio" (Apollo) is the user's remembered opt-in (`users.upload_enhance`). Uploads, artwork and profile pictures are refused before the body is read without a valid token (`SIGNED_IN_UPLOAD_PATHS`). Fix old uploads with `server/utils/backfill_upload_credits.py`; test with `tests/upload_credit_test.py --file <audio> [--cancel-file <other audio>]` (runs the full pipeline, 2-8 min).
+
+**Rights, sharing, jobs, duplicates:** the first upload asks once for a rights confirmation (`users.upload_rights_confirmed_at`). Tracks go live as `visibility` public; unlisted/private tracks are in `CatalogDatabaseService.hidden_ids` and are left out of `get_all_tracks`, vector search, queue fill (`_get_user_preferences` unions them into bans), top hits, charts, on-air stats and new-session seeding; they still play by id. `explicit` is set by Gemini (editable). Music source: each listener's Both / Human / AI setting (radio pref `music_source`, default both) is applied with bans and hidden tracks by `services/listener_filters.excluded_ids` in queue fill, catalog, search, DJ searches and Pulse; no separate human stations, filters or badges. The upload request returns `{"status": "processing", "upload_id"}` as soon as the file is received; processing runs as a background job (`UPLOAD_JOBS` in `routers/user_music.py`, `GET/DELETE /api/user/music/uploads/{id}`), and its final `upload_progress` event is sent only after the job's result is stored. Every human upload carries a Chromaprint `fingerprint` (ffmpeg's chromaprint muxer, first 120 s, `services/audio_fingerprint.py`); after decoding, a match (similarity ≥ 0.8; the same song measured 0.94-1.0, different songs ≤ 0.55) returns the uploader's existing track or refuses another listener's song. Missing fingerprints are backfilled at startup.
+
 ## Settings (one system, `docs/SETTINGS.md`)
 
 Every Settings-panel option is saved per **device kind** (`windows-pc`, `android-phone`, `iphone`, ...; `deviceKind()` in `lib/session.js`, sent as `X-Device-Kind`), never per account and never per device ID (IDs churn: 538 for one account on 4 Oct 2026). The registry is `client/src/lib/settingsSchema.json` (read by client and server); values live in `settingsState` + the local `plair_settings` entry and in `users.device_settings[kind]` (`GET`/`PUT /api/settings`, `SettingsSyncBridge`). Change a setting only through `publishSettings()`; the server reads one only through `services/device_settings_service.py`. Log out resets nothing. Add a setting by adding it to the schema. `user_devices` rows unused for 60 days are pruned at startup.
@@ -582,272 +595,469 @@ Every Settings-panel option is saved per **device kind** (`windows-pc`, `android
 
 **Optimistic Updates:** UI updates immediately → API call → Backend broadcasts → Frontend verifies → Revert if mismatch
 
-## Key File Locations
+## File Map
 
-### Frontend Contexts (State Management)
+Every `.py`, `.jsx` and `.js` source file with one line on what it does, by folder. A file split into parts keeps the original name as its prefix (`dj_tools.py`, `dj_tools_registry.py`, ...), so the parts sit together; the file without a suffix is the core and says what each part holds. Add a line here for every new file and update the line when a file's job changes.
 
-**Core Engine Contexts (Report to UIState):**
-- `client/src/contexts/UIStateContext.jsx` - **CRITICAL** SSOT for all UI state (visual state, playback state, device state)
-- `client/src/contexts/PlaybackContext.jsx` - Music playback engine (audio loading, crossfading, device enforcement)
-- `client/src/contexts/VoiceRecordingContext.jsx` - Microphone recording engine (voice commands, shoutouts)
-- `client/src/contexts/PlaybackShoutoutContext.jsx` - Shoutout playback engine (user-generated audio playback)
+#### client
 
-**Infrastructure Contexts:**
-- `client/src/contexts/WebSocketContext.jsx` - WebSocket client (message subscription, connection management)
-- `client/src/contexts/ViewportContext.jsx` - Responsive breakpoints (window size, device detection, scaling)
-- `client/src/contexts/NetworkContext.jsx` - Network status (online/offline, connection quality, bitrate detection; without `navigator.connection` (Safari/iOS/Firefox) the speed test times a 516 KB `Range: bytes=0-` download of `/images/plair_icon.png`, which the service worker never caches)
-- `client/src/contexts/StorageContext.jsx` - Storage management (cache size, quota, cleanup)
+- `client/public/sw.js` - Service worker: precaches the build's asset manifest, caches static/dynamic files, never intercepts /api, serves ranges.
+- `client/vite.config.js` - Vite config: React plugin, offline asset-manifest plugin, dev server on 3000 proxying /api, /ws, /track.
 
-**Data Contexts:**
-- `client/src/contexts/AuthContext.jsx` - Authentication state (user, token, login/logout)
-- `client/src/contexts/PreferencesContext.jsx` - User preferences (track/shoutout likes, bans, super_likes)
-- `client/src/contexts/GenerationQueueContext.jsx` - Suno music generation queue (job status, progress tracking)
-- `client/src/contexts/DynamicThemeContext.jsx` - Theme/category metadata (colors, icons, interaction effects)
+#### client/src
 
-### Frontend Components
+- `client/src/App.jsx` - Root app: lays out panels, player, canvas, bridges and lazy-loaded modals at root level.
+- `client/src/main.jsx` - Entry point: installs error reporter and press feedback, stale-chunk reload guard, mounts providers and App.
 
-**Core UI Components:**
-- `client/src/components/Player.jsx` - Main playback controls (play/pause/skip, volume, progress bar with segment colors)
-- `client/src/components/NowPlaying.jsx` - Now playing display (artwork, track info, A/B crossfade, parallax effects)
-- `client/src/components/Queue.jsx` - Playback queue display (draggable items, interaction effects)
-- `client/src/components/Catalog.jsx` - Track catalog grid (virtual scrolling, artwork preloading)
-- `client/src/components/Radio.jsx` - Radio panel container (seed modes, playlists)
-- `client/src/components/User.jsx` - User profile panel (settings, preferences)
-- `client/src/components/Conversation.jsx` - DJ conversation interface (text/voice input, message history)
+#### client/src/components
 
-**Media Components:**
-- `client/src/components/MediaActions.jsx` - Like/ban/superlike buttons (engagement tracking, interaction effects)
-- `client/src/components/MediaSearch.jsx` - Search interface (track/artist search)
-- `client/src/components/Shoutouts.jsx` - User shoutouts panel (playback, analytics)
-- `client/src/components/ParallaxArtwork.jsx` - Parallax artwork component (depth-based scrolling)
-- `client/src/components/AudioReactiveCanvas.jsx` - **SSOT** Shader-based audio visualizer (exports shared shaders + effect functions for offlineVideoRenderer)
-- `client/src/components/MediaStatsOverlay.jsx` - Media statistics overlay (playback stats)
-- `client/src/components/MediaShared.jsx` - Shared media components
+- `client/src/components/AccountSettings.jsx` - User panel account section: passkeys, optional password, device-link code approval, sign out, delete account.
+- `client/src/components/AppBridges.jsx` - Render-nothing bridges: track data loading, media session, offline/connection/upload notices, device link, settings sync.
+- `client/src/components/AppErrorBoundary.jsx` - Root error boundary that reports render crashes and shows a "Reload PLAiR" screen.
+- `client/src/components/AudioReactiveCanvas.jsx` - Three.js audio-reactive shader background with lyrics; exports shared effect functions for the video renderer.
+- `client/src/components/AudioUnlockPrompt.jsx` - "Tap to start audio" prompt shown when the browser blocks playback until a tap.
+- `client/src/components/BitratePicker.jsx` - Audio quality selector hook, button and panel (auto, 128k, 192k, 256k, data saver).
+- `client/src/components/Catalog.jsx` - Track catalog panel: genre cards, virtualised track grid, sorting, play now and seed actions.
+- `client/src/components/Conversation.jsx` - DJ conversation view: chat bubbles, internal dialogue, ordered tool activity cards, filters, autoscroll.
+- `client/src/components/CostTicker.jsx` - Small fixed overlay showing today's AI usage cost, refreshed every minute.
+- `client/src/components/DepthArt.jsx` - Depth-lit artwork canvas over the plain image, plus track/profile wrappers and renderer config bridge.
+- `client/src/components/DevicePicker.jsx` - Multi-device picker hook, button, panel and "Playing on another device" notice with Play here.
+- `client/src/components/DJActivity.jsx` - DJ tool activity cards (plan, calls, results) and the bridge that pops tool chips as notices.
+- `client/src/components/DJTextComposer.jsx` - Text input box for typing messages to the DJs in text mode.
+- `client/src/components/FPSCounter.jsx` - Developer overlay showing the current frames per second.
+- `client/src/components/GenerationQueuePanel.jsx` - Panel listing Suno generation jobs with progress, cancel and remove.
+- `client/src/components/GestureGuide.jsx` - One-time onboarding overlay for guests showing swipe gestures for play, pause, previous, next.
+- `client/src/components/InteractiveEngagementButton.jsx` - Animated canvas-blob engagement button with haptics and visual feedback.
+- `client/src/components/KeyboardControls.jsx` - Global keyboard shortcuts for playback, seeking and push-to-talk recording.
+- `client/src/components/ListenerTimeline.jsx` - Listener timeline of what aired in the last 24 hours, with kind filters.
+- `client/src/components/MediaActions.jsx` - Like, super like, ban (and delete) buttons for tracks and shoutouts.
+- `client/src/components/MediaSearch.jsx` - Search box for catalog and shoutouts with AI search toggle and results.
+- `client/src/components/MediaSearchMatchBadge.jsx` - Badge showing why a search result matched (category and score).
+- `client/src/components/MediaShared.jsx` - Shared media UI: grid columns, spinners, empty/offline states, badges, card animation, search hook.
+- `client/src/components/MediaStatsOverlay.jsx` - Catalog header overlay with stats and sort modes that hides while scrolling.
+- `client/src/components/Motion.jsx` - Motion building blocks: Expandable, ExpandChevron, ExpandSection and FadeSwap.
+- `client/src/components/Notice.jsx` - NoticeChip pop-up pill and InlineNote status line with tone colours and icons.
+- `client/src/components/NoticeStack.jsx` - Renders the UIState notice channel as a stack of NoticeChips at the top.
+- `client/src/components/NowPlaying.jsx` - Now playing panel: A/B artwork, synced lyrics, audio features, artist info, reviews, share.
+- `client/src/components/OnAirBadge.jsx` - ON AIR notice and frame shown during Radio Mode talk breaks.
+- `client/src/components/Panel.jsx` - Generic panel wrapper, header, curved backdrop, panel ids/config and text radio icon.
+- `client/src/components/ParallaxArtwork.jsx` - WebGL parallax artwork using colour plus depth maps, driven by tilt or mouse.
+- `client/src/components/Player.jsx` - Main player bar: artwork, transport controls, waveform progress, talk break progress, device status.
+- `client/src/components/Queue.jsx` - Playback queue list with now-playing highlight, preference badges and seed/list mode buttons.
+- `client/src/components/Radio.jsx` - Radio panel container holding the radio talk button, conversation and timeline.
+- `client/src/components/RadioModeSettings.jsx` - Settings for Radio Mode talk breaks and their segment types.
+- `client/src/components/Scroller.jsx` - Custom scroll container with edge fades, scroll label and haptic feedback.
+- `client/src/components/SettingRow.jsx` - Small settings layout pieces: SettingRow and ToggleChip.
+- `client/src/components/Shoutouts.jsx` - Shoutouts panel: category cards and shoutout cards with playback and delete.
+- `client/src/components/User.jsx` - User panel: profile, settings, devices, preferences lists, uploads, artist profiles, own posts.
+- `client/src/components/VirtualScroller.jsx` - Virtualised scrolling list that renders only visible items of large lists.
+- `client/src/components/VisualErrorBoundary.jsx` - Error boundary for visual parts that logs and renders a fallback.
 
-**Modals (client/src/components/modals/):**
-- `Modal.jsx` - **Base modal component** (blurred artwork background, category gradients, animated borders)
-- `SeedRadioModal.jsx` - Seed radio: stations from an aspect of the current track (genre, mood, style, vocal, artist...)
-- `GenerationModal.jsx` - Music generation modal (Suno generation UI)
-- `ShoutoutModal.jsx` - Shoutout playback modal (transcription, analytics)
-- `ListModal.jsx` - Your music (favorites, discovery) and Charts (top hits); the queue header has one icon button per camp (Your music, Seed radio, Charts), lit in the active mode's colour
-- `UploadMusicModal.jsx` - Human music upload modal (drag/drop, Gemini analysis, metadata preview)
-- `ShareModal.jsx` - Content sharing modal (video export with music video background)
+#### client/src/components/Auth
 
-**Device/Settings Components:**
-- `client/src/components/DevicePicker.jsx` - Device selection/management (multi-device playback, device naming)
-- `client/src/components/BitratePicker.jsx` - Audio quality selector (auto, 128k, 192k, 256k)
-- `client/src/components/GenerationQueuePanel.jsx` - Generation queue panel (job progress, track list)
+- `client/src/components/Auth/DeviceLinkQR.jsx` - Shows a sign-in QR code and code for linking this device from a signed-in phone.
+- `client/src/components/Auth/Login.jsx` - Sign-in form: passkey first, optional password, QR device link.
+- `client/src/components/Auth/Register.jsx` - Sign-up form creating an account with a passkey or optional password.
 
-**UI Utilities:**
-- `client/src/components/Panel.jsx` - Generic panel wrapper (consistent styling, animations)
-- `client/src/components/Scroller.jsx` - Custom scroller (haptic feedback, smooth scrolling)
-- `client/src/components/Notice.jsx` / `NoticeStack.jsx` - the one notice channel (`NoticeChip`; see section 14)
-- `client/src/components/VirtualScroller.jsx` - Virtual scrolling (large lists, lazy loading)
-- `client/src/components/KeyboardControls.jsx` - Keyboard shortcuts (space = play/pause, arrows = seek)
-- `client/src/components/InteractiveEngagementButton.jsx` - Interactive buttons (haptics, visual feedback)
-- `client/src/components/MediaSearchMatchBadge.jsx` - Search result badges (match highlighting)
-- `client/src/components/GestureGuide.jsx` - Gesture tutorial (onboarding)
-- `client/src/components/FPSCounter.jsx` - Performance monitor (dev tool)
+#### client/src/components/modals
 
-**Auth Components:**
-- `client/src/components/Auth/Login.jsx` - Login form
-- `client/src/components/Auth/Register.jsx` - Registration form
+- `client/src/components/modals/CompatibilityWarningModal.jsx` - Warning modal about limited support on iOS or Safari devices.
+- `client/src/components/modals/ConfirmationModal.jsx` - Confirm, alert and prompt dialog rendered for DialogContext.
+- `client/src/components/modals/DemoModeModal.jsx` - Shows the demo mode info markdown rendered as styled JSX.
+- `client/src/components/modals/GenerationModal.jsx` - Choose remix or similar-artist Suno generation jobs for a track.
+- `client/src/components/modals/ListModal.jsx` - Pick a playlist station: your music (favorites, discovery) or charts (top hits).
+- `client/src/components/modals/Modal.jsx` - Base modal with artwork blur, category gradient, glow border, plus shared modal parts.
+- `client/src/components/modals/ReviewModal.jsx` - Write or record a review of a track, with editor verdict feedback.
+- `client/src/components/modals/SeedRadioModal.jsx` - Pick a seed mode (genre, mood, artist...) to start radio from a track.
+- `client/src/components/modals/ShareModal.jsx` - Share a track by link or exported music video, with download and copy.
+- `client/src/components/modals/ShoutoutModal.jsx` - Shoutout playback modal with transcript, analytics, replies and reply recording.
+- `client/src/components/modals/UploadMusicModal.jsx` - Human music upload and edit: drag/drop, rights, credits, analysis progress, metadata preview.
+- `client/src/components/modals/UsageStatsModal.jsx` - Admin view of AI usage and costs by scope and period.
 
-**Main Files:**
-- `client/src/App.jsx` - Root app component
-- `client/src/main.jsx` - React entry point
+#### client/src/contexts
 
-### Frontend Hooks
+- `client/src/contexts/AuthContext.jsx` - Authentication state: user, token, login/logout, refresh, session info handling.
+- `client/src/contexts/DialogContext.jsx` - Promise-based confirm, alert and prompt dialogs via showConfirm/showAlert/showPrompt.
+- `client/src/contexts/DynamicThemeContext.jsx` - Track-driven theme colours, category metadata, panel icons, interaction effects, theme artwork.
+- `client/src/contexts/GenerationQueueContext.jsx` - Suno generation job queue state, status updates and actions.
+- `client/src/contexts/NetworkContext.jsx` - Network status: server health probes, connection mode, speed test, bitrate selection. Without `navigator.connection` (Safari/iOS/Firefox) the speed test times a 516 KB `Range: bytes=0-` download of `/images/plair_icon.png`, which the service worker never caches.
+- `client/src/contexts/PlaybackContext.jsx` - Music playback engine: server state sync, device enforcement, offline local mode, playback actions.
+- `client/src/contexts/PlaybackShoutoutContext.jsx` - Shoutout audio playback engine with progress, reporting to UIState.
+- `client/src/contexts/PreferencesContext.jsx` - Track and shoutout likes, super likes and bans with optimistic updates.
+- `client/src/contexts/QualityContext.jsx` - Adaptive quality tiers (DPR, blur, parallax, fps cap) and reduced-motion policy.
+- `client/src/contexts/StorageContext.jsx` - Offline storage usage, quota and data usage info with refresh trigger.
+- `client/src/contexts/UIStateContext.jsx` - SSOT for UI state: engine status, visual state, modals, notices, settings, artwork preloading.
+- `client/src/contexts/ViewportContext.jsx` - Responsive breakpoints, scale, device detection and root font size.
+- `client/src/contexts/VoiceRecordingContext.jsx` - Microphone recording engine provider for voice turns and shoutouts.
+- `client/src/contexts/WebSocketContext.jsx` - WebSocket client: auth handshake, ping/pong health, reconnect, outbox, subscribe and emit hooks.
 
-**Audio Hooks:**
-- `client/src/hooks/useAudio.js` - Audio engine hook (play, pause, seek, volume, crossfade)
-- `client/src/hooks/useDJAudioStream.js` - DJ TTS audio stream (real-time voice playback, device-aware). Mounted once at the App root as `<DJVoiceEngine />` (never inside a panel, so collapsing/remounting panels cannot cut the DJ); owns its own audio element, pauses while the mic records
-- `client/src/hooks/useFFTProcessor.js` - **DRY** Unified FFT processing (DJ/Voice/Shoutout frequency analysis, two modes: frequency_bands & logarithmic)
-- `client/src/hooks/useUISound.js` - UI sound effects (click sounds, haptic feedback)
-- `client/src/hooks/useVoiceRecorder.js` - Voice recording (microphone access, audio processing)
+#### client/src/hooks
 
-**UI Hooks:**
-- `client/src/hooks/usePointerInteraction.js` - Pointer interaction handling (touch, mouse, hover)
-- `client/src/hooks/useDeviceSelector.js` - Device selection logic (active device detection)
-- `client/src/hooks/useVirtualWindow.js` - Virtual windowing (scroll optimization for large lists)
-- `client/src/hooks/useProfilePicture.js` - Profile picture handling (upload, cache)
-- `client/src/hooks/useGeolocation.js` - Geolocation services (user location, weather)
+- `client/src/hooks/useArtPop.js` - Plays a pop animation on artwork when its id changes.
+- `client/src/hooks/useAudio.js` - Creates the AudioEngine and mixer and publishes audio state to UIState.
+- `client/src/hooks/useDeletePost.js` - Confirm-and-delete flow for the listener's own shoutouts, replies and reviews.
+- `client/src/hooks/useDepthMap.js` - Loads a depth or normal map URL from a media cache, with retry backoff when missing.
+- `client/src/hooks/useDeviceLinkApproval.js` - Approves a device-link code so another device signs in as this user.
+- `client/src/hooks/useDeviceSelector.js` - Lists microphones and speakers and stores the selected ones.
+- `client/src/hooks/useDJAudioStream.js` - DJVoiceEngine: plays DJ voice streams, speaker colours and FFT, device-aware. Mounted once at the App root as `<DJVoiceEngine />`, never inside a panel, so collapsing panels cannot cut the DJ.
+- `client/src/hooks/useEntranceWindow.js` - Returns true for a short window after a key changes, to run entrance animations.
+- `client/src/hooks/useFFTProcessor.js` - Shared FFT analysis loop for DJ, voice and shoutout audio, reported to UIState.
+- `client/src/hooks/useGeolocation.js` - Listener location: permission, position updates, sending location to the server.
+- `client/src/hooks/usePointerInteraction.js` - Tells taps from drags by tracking pointer movement against a threshold.
+- `client/src/hooks/useProfilePicture.js` - Loads a user's profile picture URL through the media cache.
+- `client/src/hooks/useUISound.js` - Plays interface sounds (record press, broadcast, errors) respecting notification mute.
+- `client/src/hooks/useVirtualWindow.js` - Paged data window for virtual lists: fetches pages on demand with retries and limits.
+- `client/src/hooks/useVoiceRecorder.js` - Microphone capture with MediaRecorder, audio session switching and level analysis.
 
-### Frontend Libraries
+#### client/src/lib
 
-**Core Libraries:**
-- `client/src/lib/audioEngine.js` - **CRITICAL** Audio playback engine (dual-buffer A/B crossfading, device enforcement, `_rampGain()` for all gain automation)
-- `client/src/lib/safeStorage.js` - **CRITICAL** Safe localStorage wrapper (try-catch with in-memory fallback for iOS private browsing). ALL localStorage access MUST go through `safeStorage.get/set/remove`
-- `client/src/lib/session.js` - Device ID management (safeStorage, UUID generation)
-- `client/src/lib/api.js` - **CRITICAL** API client (ALL backend calls route through `_routeRequest()` for offline/online switching)
-- `client/src/lib/logger.js` - Logging utilities (console formatting, log levels)
-- `client/src/lib/utils.js` - Utility functions (date formatting, string manipulation)
+- `client/src/lib/api.js` - API client: every backend call, offline routing via _routeRequest, connectivity events. Every backend call goes through it, never a direct `fetch()`.
+- `client/src/lib/artworkPrefetcher.js` - Prioritised, concurrent artwork thumbnail prefetching and decoding queue.
+- `client/src/lib/audioEngine.js` - Dual-slot audio engine: A/B crossfades, gain ramps, streaming, device enforcement, iOS unlock. All gain automation goes through `_rampGain()`.
+- `client/src/lib/audioInteractionManager.js` - Unlocks audio on user gestures: resumes contexts, runs hooks, primes media elements.
+- `client/src/lib/audioMixer.js` - Ducks and restores the music level under the DJ via the engine's gain ramps.
+- `client/src/lib/backgroundDownloader.js` - Background download queue for offline tracks with daily limits and slow-connection backoff.
+- `client/src/lib/cacheManager.js` - Offline library manager: download tracks with artwork and data, quota, cleanup, track list.
+- `client/src/lib/cacheValidator.js` - Validates track data and blobs before they are stored offline.
+- `client/src/lib/depthArtRenderer.js` - Shared WebGL renderer drawing depth-lit artwork into many canvases with parallax.
+- `client/src/lib/depthArtShader.js` - Parallax occlusion mapping shader and light uniforms for depth artwork.
+- `client/src/lib/djBroadcastChain.js` - Web Audio processing chain for DJ voice playback (compression, gain ramps).
+- `client/src/lib/djStreamPlayer.js` - DJ voice stream player: MediaSource per stream, sequential queue, cancel, stall watchdog.
+- `client/src/lib/errorReporter.js` - Collects log breadcrumbs and sends client errors and events to the server.
+- `client/src/lib/haptics.js` - Triggers device vibration patterns for haptic feedback.
+- `client/src/lib/lightProbe.js` - Samples the background shader into a light grid and lights for depth artwork.
+- `client/src/lib/logger.js` - Logger with levels and a sink hook used by the error reporter.
+- `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for artwork, depth and profile images.
+- `client/src/lib/mediaSupport.js` - Detects MSE and WebM/Opus support and picks streaming and download formats.
+- `client/src/lib/microMotion.js` - Web Animations micro-interactions: press pop, nope, burst, art pop, arrival glow.
+- `client/src/lib/motion.js` - Motion tokens: durations, easings, springs, variants, presets and CSS transitions.
+- `client/src/lib/musicBed.js` - Plays and fades music beds under Radio Mode talk breaks.
+- `client/src/lib/offlineAPI.js` - Offline backend answering API calls from downloads, including the local radio queue.
+- `client/src/lib/offlineStorage.js` - IndexedDB store for downloaded tracks and metadata normalisation.
+- `client/src/lib/offlineVideoRenderer.js` - Renders share videos frame by frame with the shared shaders and encodes MP4.
+- `client/src/lib/passkeys.js` - WebAuthn passkey helpers: login, sign-up, add and silent upgrade.
+- `client/src/lib/playbackSync.js` - Pure helpers ordering server playback snapshots against pending commands and acks.
+- `client/src/lib/renderPause.js` - Briefly pauses scene rendering while modals open or close.
+- `client/src/lib/retryUtils.js` - Retry with exponential backoff for API calls.
+- `client/src/lib/safeStorage.js` - Safe localStorage wrapper with in-memory fallback. ALL localStorage access goes through `safeStorage.get/set/remove` (iOS private browsing throws on raw localStorage).
+- `client/src/lib/session.js` - Device id generation, device name/kind detection and session ids.
+- `client/src/lib/settings.js` - Local settings schema: validate, load, save and notify, migrating legacy keys.
+- `client/src/lib/soundModes.js` - The four DJ sound modes over TTS and notification mute settings.
+- `client/src/lib/splash.js` - Hides the startup splash once scene and playback are ready, 4 s at most.
+- `client/src/lib/talkBreak.js` - TalkBreakController: runs Radio Mode talk breaks: hold the music, play bed and stream, progress, resume.
+- `client/src/lib/textRenderer.js` - Canvas text renderer turning lyric words into textures for the shader.
+- `client/src/lib/themeManager.js` - Extracts artwork colours and holds panel, transition, fade and category colour constants.
+- `client/src/lib/uploadJobs.js` - Helpers for polling background upload jobs until they finish.
+- `client/src/lib/usageFormat.js` - Formats usage costs, counts and durations for the usage views.
+- `client/src/lib/utils.js` - Small helpers: duration and date formatting, blob to base64, WebGL2 check.
 
-**Caching/Offline:**
-- `client/src/lib/mediaCache.js` - Media caching (artwork, audio, multi-layer: memory + IndexedDB + Cache API)
-- `client/src/lib/cacheManager.js` - Cache management (quota, cleanup, eviction)
-- `client/src/lib/backgroundDownloader.js` - Background downloads (queue, retry, progress)
-- `client/src/lib/offlineAPI.js` - Offline API fallback (cached responses)
-- `client/src/lib/offlineStorage.js` - Offline storage (local data persistence)
-- `client/src/lib/cacheValidator.js` - Cache validation (staleness checks)
+#### server
 
-**Audio Processing:**
-- `client/src/lib/audioMixer.js` - Audio mixing (volume control, crossfading)
-- `client/src/lib/djStreamPlayer.js` - DJ stream player (one MediaSource per stream, strictly sequential queue, cancel with fade, stall/reconnect watchdog, mic hold); pure logic with injectable env, node-testable
-- `client/src/lib/djBroadcastChain.js` - DJ broadcast chain (audio pipeline; only processes while the DJ is audible, all gain changes via `_rampGain`)
-- `client/src/lib/audioInteractionManager.js` - Audio interaction manager (click-to-play, autoplay policy)
+- `server/app.py` - FastAPI app: lifespan that starts and stops every service, middleware and router includes.
+- `server/models_global.py` - Shared torch device, cached sentence encoders, GPU executor, GPU lease lock and CUDA out-of-memory helpers.
+- `server/run_migration.py` - Adds columns missing from PostgreSQL tables after models.py changes (users, device settings).
+- `server/security_middleware.py` - Request guard (traversal, guest ids, body limits), media-aware gzip, secret redaction and quiet access logs.
+- `server/service_registry.py` - The `services` registry the lifespan fills and routers read at request time.
+- `server/start.py` - Backend entry point: loads .env, disables Windows Quick Edit, sets event loop, runs uvicorn.
+- `server/usage_middleware.py` - Attributes paid AI calls in each request to a user, guest or system scope.
 
-**Video/Rendering:**
-- `client/src/lib/offlineVideoRenderer.js` - Offline video export (frame-by-frame WebGL rendering, MP4 encoding via WebCodecs, uses shared shaders from AudioReactiveCanvas)
+#### server/config
 
-**UI Libraries:**
-- `client/src/lib/soundModes.js` - the four DJ sound modes (DJ + PING, DJ only, PING only, OFF over `settingsState.ttsMuted` / `notificationsMuted`), shared by the player button and User → Sounds; `useUISound` skips notification sounds while `notificationsMuted` (mic press/release feedback still plays)
-- `client/src/lib/haptics.js` - Haptic feedback (vibration patterns)
-- `client/src/lib/textRenderer.js` - Text rendering (canvas-based text)
-- `client/src/lib/themeManager.js` - Theme management (color schemes)
-- `client/src/lib/retryUtils.js` - Retry utilities (exponential backoff)
+- `server/config/__init__.py` - Re-exports `settings` and `Settings` from config.settings.
+- `server/config/settings.py` - All configuration from .env: databases, paths, LLM chains, TTS, City Pulse, stings and limits.
 
-### Backend Core Services
+#### server/database
 
-**Playback & State Management:**
-- `server/services/playback_state.py` - **CRITICAL** Playback state machine (queue, radio_mode, active_device_id)
-- `server/services/playback_service.py` - Session-level playback management (multi-user coordination)
-- `server/services/device_management_service.py` - Device management (registration, activation, listing)
-- `server/services/websocket_service.py` - WebSocket connection management (session broadcasting, cleanup)
-- `server/app.py` - FastAPI app: lifespan (service startup/shutdown), middleware, router includes
-- `server/routers/` - API routes by domain (auth, playback, catalog, share, media, shoutouts, dj, devices, ws, ...); `deps.py` shared dependencies, `schemas.py` request models
-- `server/service_registry.py` - `services` registry populated by the lifespan and read by routers
-- `server/security_middleware.py` - request guard (path traversal, guest id format)
+- `server/database/__init__.py` - Re-exports the async engine, session factory, get_db, init_db and core models.
+- `server/database/connection.py` - Async SQLAlchemy engine and session for ai_radio, `get_db` dependency and table creation.
+- `server/database/models.py` - SQLAlchemy models: users, passkeys, devices, preferences, conversations, play events, usage, regional and place caches.
+- `server/database/pg_pool.py` - Bounded psycopg2 connection pools per database that block when full instead of overflowing.
 
-**Authentication & User:**
-- `server/services/auth_service.py` - Authentication (JWT tokens, password hashing)
-- `server/services/user_profile_service.py` - User profile management (username, settings, location)
-- `server/services/preferences_service.py` - User preferences (audio quality, theme, TTS settings)
-- `server/services/user_data_cache_service.py` - In-memory cache for users and their likes/bans (auth reads users from it; any write to a `User` row must call `invalidate_user`, as `UserProfileService.update_profile` does, or `/api/auth/me` serves stale settings)
-- `server/services/profile_picture_service.py` - Profile picture uploads and serving
+#### server/routers
 
-**Media Serving:**
-- `server/services/media_streaming_service.py` - Media file streaming (range requests, bitrate selection)
-- `server/services/rate_limit_service.py` - Rate limiting (per-user request throttling)
+- `server/routers/__init__.py` - Empty package marker.
+- `server/routers/account.py` - Passkey sign-up and sign-in, passkey management, password setting, QR device linking and account deletion.
+- `server/routers/analytics.py` - Top hits, per-track and per-shoutout analytics, and logging shoutout plays.
+- `server/routers/artists.py` - Artist/band profiles CRUD and the upload setup info for a signed-in user.
+- `server/routers/auth.py` - Password register and login, token refresh, current user, username change and user data management.
+- `server/routers/catalog.py` - Catalog track listing, stats, genres, single track JSON and the public track page.
+- `server/routers/client_log.py` - Receives scrubbed, rate-limited client error reports and writes them to client.jsonl.
+- `server/routers/conversation.py` - Listener timeline (last 24 h aired) and DJ conversation history read and save.
+- `server/routers/deps.py` - Shared dependencies: session info, current user, client IP, rate limits, limited upload reads, admin check.
+- `server/routers/devices.py` - List, activate, rename and remove a user's playback devices.
+- `server/routers/dj.py` - Speech transcription and typed DJ talk endpoints.
+- `server/routers/generation.py` - Start, list, check and cancel Suno music generation jobs.
+- `server/routers/media.py` - Streams tracks (MP3/Opus/WebM), artwork, thumbnails, depth/normal maps, audio features, video clips, lyric timing.
+- `server/routers/playback.py` - REST playback controls: play, pause, stop, seek, queue add/remove and seed radio.
+- `server/routers/preferences.py` - Set, clear and list a listener's track likes, super likes and bans.
+- `server/routers/radio.py` - Read and update Radio Mode settings and serve music beds.
+- `server/routers/schemas.py` - Pydantic request models shared by the routers.
+- `server/routers/search.py` - Semantic track search endpoint for the app's search box.
+- `server/routers/settings.py` - Get and save a signed-in user's settings per device kind.
+- `server/routers/share.py` - Upload shared music videos and serve their MP4 and public share page.
+- `server/routers/shoutouts.py` - Shoutouts, replies and reviews: fetch, search, audio, typed or recorded saves, preferences, delete.
+- `server/routers/system.py` - Health check and admin Asset Doctor report and scan trigger.
+- `server/routers/usage.py` - Admin AI usage and cost summaries per user, plus the caller's own usage.
+- `server/routers/user.py` - User profile read and update, and profile picture upload, serving and delete.
+- `server/routers/user_music.py` - Human music uploads as background jobs, uploader track edits and deletes, track artwork.
+- `server/routers/ws.py` - Playback WebSocket: handshake auth, playback commands, guest location, announcer worker.
 
-**Analytics:**
-- `server/services/analytics_service.py` - Analytics tracking (play events, engagement)
-- `server/services/analytics_file_service.py` - File-based analytics storage (JSONL, exports)
+#### server/utils
 
-**AI Services:**
-- `server/services/ai_service.py` - Gemini LLM wrapper (`google-genai`: `call_gemini`, `call_gemini_with_tools`, structured output)
+- `server/utils/backfill_artist_credit.py` - Gives every AI track one artist name across all credit fields; dry run unless --apply.
+- `server/utils/backfill_upload_credits.py` - Fixes artist credits and titles on one uploader's human tracks; dry run unless --apply.
+- `server/utils/backfill_video_search_terms.py` - Fills missing video_search_terms on tracks in batched DeepSeek calls.
+- `server/utils/backfill_vocals.py` - Sets derived_tags.vocals (who sings) on tracks via batched LLM calls on text.
+- `server/utils/bake_normal_maps.py` - Bakes missing artwork normal maps for every catalog cover on the GPU.
+- `server/utils/batch_music_generate_and_repair.py` - Interactive menu: catalog check and repair, Suno generation, variants, artwork enrichment and upscaling.
+- `server/utils/build_breath_library.py` - Builds the offline breath library from clustered DJ lines, cutting breaths between rendered sentences.
+- `server/utils/catalog_audit.py` - Audits catalog metadata for missing titles, artists, credits and malformed fields.
+- `server/utils/find_dead_functions.py` - Finds Python functions that are never called, aware of routes and node registrations.
+- `server/utils/generate_radio_drops.py` - Makes radio drop candidates: DeepSeek prompts, Stable Audio renders, pick page, install and relevel.
+- `server/utils/process_backlog.py` - Renders Suno tracks without masters (or stale chain versions) on a chosen GPU, own process.
+- `server/utils/relevel_catalog.py` - Turns masters louder than the station level down by gain and re-encodes Opus/WebM.
+- `server/utils/reprocess_catalog_audio.py` - Resumable re-process of catalog audio through the mastering chain, with A/B, verify, swap and restore.
+- `server/utils/upscale_voice_cache.py` - Upscales cached voice takes (sentences, paralanguage, breaths) to 48 kHz in place, keeping tags.
 
-### Backend Data Services
+#### tests
 
-**Catalog Management:**
-- `server/services/catalog_database_service.py` - Track catalog (CRUD operations, metadata queries)
-- `server/services/vector_store.py` - **The one pattern for every vector engine** (live slot + pending items, single-item add/remove, background rebuild into the spare slot, swap, boot check; shared encoder and query vector cache), section 19
-- `server/services/category_store.py` - `CategoryStore`: category-weighted items on that pattern (catalog, shoutouts, City Pulse sources)
-- `server/services/catalog_vector_database_service.py` - Catalog vector DB (hooks on the base class)
-- `server/services/catalog_vector_search_service.py` - The catalog's front: free-text search, plus stations (`catalog_aspects.py`) and name lookup (`catalog_names.py`)
-- `server/services/playback_population_service.py` - Fills a station's queue (lists via `playback_lists.py`, stations via aspects)
-- `server/services/semantic_cache.py` - `SemanticCache`: earlier answers reused by exact words, then the closest earlier ask by meaning (boot load, re-embed on encoder change, hits counted and new entries saved in the background); used by the query-intent caches and the Producer route cache
-- `server/services/base_prompt_cache_service.py` - Shared base for the query-intent prompt caches (on `SemanticCache`)
-- `server/services/catalog_vector_search_prompt_cache_service.py` - Prompt caching for vector search (hooks on the base class)
+- `tests/account_test.py` - Passkey sign-up/in, device link, password, typed post, account deletion on a running backend; no LLM per docstring.
+- `tests/catalog_ways_probe.py` - Probes catalog name lookup by spelling and blended-aspect stations; no backend, no LLM.
+- `tests/community_test.py` - Shoutouts, replies, reviews end to end (typed, spoken, sting, no coordinates); calls LLMs via the editor/analysis.
+- `tests/crossfade_probe.py` - Prints crossfade plans for random catalog pairs; no server, no LLM.
+- `tests/device_settings_test.py` - Checks per-device-kind settings stay independent and survive a fresh login; no LLM.
+- `tests/dj_find_test.py` - Runs whole DJ music-request turns with faked playback, checks the artist played; Gemini, 2-4 calls/turn.
+- `tests/dj_followup_replay.py` - Replays recorded DJ follow-up rounds with different studio messages, classifies how replies open; calls Gemini.
+- `tests/dj_pulse_test.py` - Live DJ turns over WebSocket as an Auckland guest (or signed in), checks radio.log; calls Gemini.
+- `tests/dj_tool_loop_test.py` - Checks the DJ tool loop drops echoed lines and calls with a stubbed Gemini; no real LLM.
+- `tests/event_harvest_probe.py` - Crawls for events in one city without saving; DeepSeek reads a few pages without structured data.
+- `tests/for_you_probe.py` - Builds one Radio Mode For You feature for a located guest or user; calls the DeepSeek agent.
+- `tests/perf_depth_art.mjs` - Frame-time benchmark of depth/light artwork on a simulated low-end phone in headless Chrome; no LLM.
+- `tests/pulse_links_test.py` - Checks City Pulse links between gigs, places, news and shoutouts on fake sources; no LLM.
+- `tests/queue_rules_test.py` - Checks queue rules (picks, play next, seeding, playlist switch) on a fake catalog; no LLM.
+- `tests/seed_probe.py` - Probes whether each seed radio mode holds its thread song after song; no backend, no LLM.
+- `tests/semantic_probe.py` - Semantic City Pulse search probe with no DJ LLM; Gemini only with --ai on cache miss.
+- `tests/smoke_test.py` - End-to-end smoke test: health, catalog, streaming, search, TTS, guest DJ turn; Gemini unless --skip-dj.
+- `tests/track_search_probe.py` - Reports where the intended artist ranks for clue-style track searches; small Gemini calls unless --no-ai.
+- `tests/tts_engine_bakeoff.py` - Bake-off of TTS engines over HTTP, scored with Whisper and loudness plus concurrency; no LLM.
+- `tests/tts_voice_bakeoff.py` - Renders test lines in candidate TTS voices and scores them with Whisper; no LLM.
+- `tests/upload_credit_test.py` - Music upload end to end: artist credit, edits, profiles, cancel; full pipeline incl. Gemini analysis.
+- `tests/upload_llm_ab.py` - A/B of Gemini upload analysis models on real human uploads, with cost and latency; calls Gemini.
+- `tests/vector_store_test.py` - Checks the shared VectorStore build, add, remove and slot-swap rebuild on a fake store; no LLM.
 
-**User Content Management:**
-- `server/services/user_content_database_service.py` - User content database (shoutouts, recordings)
-- `server/services/user_content_vector_database_service.py` - User content vector DB (semantic search for user audio)
-- `server/services/user_content_vector_search_service.py` - User content vector search
-- `server/services/user_content_vector_search_prompt_cache_service.py` - User content prompt cache
-- `server/services/user_content_speech_enhancement_service.py` - Shoutout/reply/review audio (MossFormer2_SE_48K, VAD pause trim, LLM filter, review stings) - see section 17
+#### scripts
 
-**Database Core:**
-- `server/database/connection.py` - Database connection (async SQLAlchemy)
-- `server/database/models.py` - SQLAlchemy models (User, Track, Conversation, etc.)
+- `scripts/check-quality.ps1` - Offline quality gate: Python syntax, Ruff, Vulture, ESLint, UI-state check, Knip and build.
+- `scripts/voice_restoration/README.md` - Notes on parked offline voice restoration models (Resemble Enhance, Sidon) versus the live CVSR.
+- `scripts/voice_restoration/resemble_enhance_dir.py` - Runs Resemble Enhance over a folder of voice takes offline (parked experiment).
+- `scripts/voice_restoration/sidon_dir.py` - Runs the Sidon speech restoration model over a folder of voice takes offline (parked experiment).
 
-### Backend Audio Processing Services
+#### external_components
 
-**Audio Analysis & Transcoding:**
-- `server/services/audio_features_service.py` - Audio feature extraction (tempo, key, energy, loudness)
-- `server/services/audio_transcoding_service.py` - Format conversion (MP3 encoding at multiple bitrates)
-- `server/services/audio_master_service.py` - Corrective EQ (`correct_audio`) and the final leveler (`master_audio(..., correct=False)`), see section 18
-- `server/services/audio_sonic_master_service.py` - SonicMaster (generative mastering, partial wet mix)
+- `external_components/plair_start.bat` - PLAiR Start: stops old backend, builds frontend, reloads nginx, launches backend window, runs smoke test.
+- `external_components/plair_stop.ps1` - Stops only PLAiR's backend and TTS engine by command line and ports, windows included.
 
-**Audio Source Separation & Enhancement:**
-- `server/services/audio_demucs_service.py` - Audio source separation (Demucs - vocals, drums, bass, other)
-- `server/services/audio_roformer_service.py` - Mel-Band RoFormer vocal/music split (`SEPARATION_MODEL=roformer`)
-- `server/services/audio_vocal_enhance_service.py` - Lew's vocal Apollo on the separated vocal (subclass of the Apollo service)
-- `server/services/audio_apollo_service.py` - Apollo bandwidth fill on the full mix
-- `server/services/audio_clearvoice_service.py` - only re-exports `ClearVoice` (shoutout SE model, DJ voice upscaler)
+#### server/services
 
-**Lyrical Processing:**
-- `server/services/audio_lyrical_timestamp_service.py` - Lyrical timestamping (word-level alignment)
-- `server/services/whisper_dual_service.py` - Speech-to-text (Whisper - transcription, language detection)
+- `server/services/__init__.py` - Package marker for the services module; holds no code.
+- `server/services/account_deletion_service.py` - Deletes an account: closes billing and live session, removes uploads, posts, share videos, rows and user files.
+- `server/services/ai_service.py` - Gemini wrapper: plain, structured and tool calls, plus the DJ's Gemini and DeepSeek tool-turn loops.
+- `server/services/analytics_file_service.py` - Writes per-track analytics JSON and appends daily event logs under the analytics directory.
+- `server/services/analytics_service.py` - Buffers play events into play_events, scores popularity, serves top hits and track/shoutout stats.
+- `server/services/api_utils.py` - One helper that reduces a track record to the short summary fields API responses use.
+- `server/services/artist_profile_service.py` - Listeners' artist/band profiles: create, edit, delete, list, slugs, and picking the profile an upload is credited to.
+- `server/services/artwork_generation_service.py` - Generates and upscales track artwork with a lazily loaded Stable Diffusion XL pipeline, unloaded when idle.
+- `server/services/artwork_thumbnail_service.py` - Renders and caches sized artwork thumbnails on demand for the thumb endpoint.
+- `server/services/asset_integrity_service.py` - The asset doctor: schedules scans of tracks and shoutouts, keeps state and reports, runs repairs.
+- `server/services/asset_integrity_service_checks.py` - Asset doctor's check definitions, finding and subject types, and file/duration probes they use.
+- `server/services/asset_integrity_service_detect.py` - Asset doctor detection: probes each track's and shoutout's files, metadata, DB flags and vector index entry.
+- `server/services/asset_integrity_service_repair.py` - Asset doctor repairs: per-check fixes, repair gating (GPU, busy, back-off) and quarantine.
+- `server/services/audio_apollo_service.py` - Apollo bandwidth restoration on a full mix, chunked on GPU; base for the vocal Apollo.
+- `server/services/audio_clearvoice_service.py` - Re-exports ClearVoice, patched to use the current CUDA device instead of picking a free GPU.
+- `server/services/audio_demucs_service.py` - Demucs stem separation (vocals, drums, bass, other) for the processing pipeline.
+- `server/services/audio_features_service.py` - Analyses a track: tempo, beats, key, loudness, sections, energy-style features, crossfade points, announcer safe zones.
+- `server/services/audio_fingerprint.py` - Chromaprint fingerprints of uploads via ffmpeg, encoding and similarity scoring for duplicate detection.
+- `server/services/audio_flashsr_service.py` - Optional FlashSR bandwidth stage: super-resolves audio above its detected cutoff and merges bands back.
+- `server/services/audio_headroom.py` - Shared DSP helpers: true-peak measurement and limiting, dithered PCM16 writing, spectrally balanced stem remixing.
+- `server/services/audio_lyrical_timestamp_service.py` - Aligns lyrics to the vocal with Whisper word timings and writes per-line/word lyric timestamps.
+- `server/services/audio_master_service.py` - Corrective EQ (rumble cut, resonance notches, tone vs commercial average) and final loudness leveler.
+- `server/services/audio_quality_score_service.py` - Audiobox Aesthetics scorer: rates audio quality on four axes and compares renders, loaded on demand.
+- `server/services/audio_roformer_service.py` - Mel-Band RoFormer vocal/music separation on GPU, windowed, unloaded when idle.
+- `server/services/audio_sonic_master_service.py` - SonicMaster generative mastering applied as a partial wet mix with RMS matching.
+- `server/services/audio_stage_registry.py` - Picks and builds the configured bandwidth, separation and quality-scorer stages; stem directory paths.
+- `server/services/audio_transcoding_service.py` - ffmpeg transcoding: Opus/WebM bitrate variants, MP3 conversion, WAV extraction and media probing.
+- `server/services/audio_vocal_enhance_service.py` - Lew's vocal Apollo: the Apollo service with the vocal checkpoint, run on separated vocals.
+- `server/services/auth_service.py` - Password hashing and checks, JWT creation and decoding, user registration and login lookups.
+- `server/services/base_prompt_cache_service.py` - Base for search query-intent caches: LLM works out category weights and filters, reused by SemanticCache.
+- `server/services/base_service.py` - SingletonService base class that gives each service one shared instance.
+- `server/services/catalog_aspects.py` - Builds stations from song aspects: scores every song per aspect (meaning, tags, artist spelling) and blends.
+- `server/services/catalog_credit.py` - Settles an AI track's single artist credit across all artist fields and lists credited artists.
+- `server/services/catalog_database_service.py` - Track catalog: scans metadata into memory and Postgres, flags, hidden tracks, and watches for new masters.
+- `server/services/catalog_names.py` - Artist and title lookup by spelling using character n-gram vectors, tolerant of typos and accents.
+- `server/services/catalog_vector_database_service.py` - Catalog's category store: per-aspect texts, tags and weights per track, and building search slots.
+- `server/services/catalog_vector_search_prompt_cache_service.py` - Catalog search intent prompts: category weights and filters (vocals etc.) the LLM derives from a query.
+- `server/services/catalog_vector_search_service.py` - Catalog search entry point: free-text weighted search, name lookup and aspect stations, with exclusions.
+- `server/services/catalog_vocals.py` - Reads who sings a track (instrumental, male, female, duet, unknown) from tags or generation settings.
+- `server/services/category_store.py` - Generic store of items described by named categories, embedded per category and ranked by weighted similarity.
+- `server/services/community_engagement.py` - Shoutout engagement: popularity scores, bans and burying, airable ranking, top replies and what aired per listener.
+- `server/services/device_link_service.py` - In-memory QR/code device linking: a new device shows a code, a signed-in device approves it.
+- `server/services/device_management_service.py` - Registers, renames, removes, deduplicates and prunes a user's playback devices in the database.
+- `server/services/device_settings_service.py` - Per-device-kind app settings validated against the shared client settings schema, with defaults.
+- `server/services/embedded_artwork_service.py` - Extracts cover art embedded in uploaded MP3, FLAC, M4A, OGG or WAV files and saves it.
+- `server/services/gemini_cache.py` - Manages explicit Gemini context caches for fixed system prompts: create, find, renew and invalidate.
+- `server/services/http_client.py` - Shared httpx client with retries and a per-host circuit breaker for outbound requests.
+- `server/services/human_metadata_extraction_service.py` - Gemini audio analysis of human uploads into catalog metadata (genre, mood, lyrics, mix decisions, artwork prompt).
+- `server/services/human_music_upload_service.py` - Human upload pipeline: validation, duplicate fingerprint check, stage planning, processing and rollback on failure.
+- `server/services/human_music_upload_service_common.py` - Upload shared bits: limits, value cleaning, embedded tag reading, upload exceptions and progress events.
+- `server/services/human_music_upload_service_lanes.py` - Upload processing lanes: Gemini metadata, loudness, audio lane (split, enhance, master) and artwork lane.
+- `server/services/human_music_upload_service_tracks.py` - A listener's uploaded tracks: list, delete, edit metadata and re-credit to an artist profile.
+- `server/services/listener_filters.py` - Track ids a listener must not get (bans, hidden, music source) and favorites/super-like search scopes.
+- `server/services/listener_plays.py` - Per-listener play, listen and skip counts, the love score from ratings, and weighted favorite picks.
+- `server/services/listener_request_service.py` - Stores listeners' City Pulse asks with their answers and indexes them for semantic search.
+- `server/services/listener_timeline.py` - What aired for a listener (tracks, posts, hosts' talk) over a time window; records voiced talk.
+- `server/services/llm_result_cache.py` - Keyed, TTL-limited cache of LLM results, optionally persisted to a JSON file per namespace.
+- `server/services/llm_router.py` - LLM role chains: Gemini and DeepSeek calls with fallback, circuit breaker, thinking budgets, structured JSON parsing.
+- `server/services/llm_telemetry.py` - LLM price table, token usage and cost estimates, cache savings, errors and fallbacks, periodic aggregate logs.
+- `server/services/log_service.py` - Central logging: categories, file rotation, verbose details, throttled warnings, listener and track labels.
+- `server/services/media_streaming_service.py` - Streams media files with HTTP range parsing and picks the bitrate variant to serve.
+- `server/services/normal_map_service.py` - Bakes normal maps from artwork plus depth for track and profile images used by lit depth art.
+- `server/services/opengraph_service.py` - Renders track share pages with Open Graph and Twitter meta tags injected into the app's HTML.
+- `server/services/passkey_service.py` - WebAuthn passkeys: sign-up, add, sign-in options and verification, listing and removal, username checks.
+- `server/services/playback_lists.py` - Fills list stations: favorites weighted by listening, discovery (half favorites, half new nearby songs) and top hits.
+- `server/services/playback_population_service.py` - Fills a station's queue from lists or aspect-built stations matched to the seed and recent songs.
+- `server/services/playback_service.py` - Holds per-session playback states: transport commands, broadcasts, idle eviction and periodic snapshot saving.
+- `server/services/playback_snapshots.py` - Saves, loads, restores and prunes each session's station snapshot in the playback_snapshots table.
+- `server/services/playback_state.py` - Per-session playback state machine: current track, play/pause/seek/next, acknowledgements, play events, transitions.
+- `server/services/playback_state_devices.py` - Playback state device handling: connects, disconnects, active device, transfers, claims and claim-on-open.
+- `server/services/playback_state_queue.py` - Playback state queue: history, upcoming picks, station auto-fill, queue size limits, adding and removing tracks.
+- `server/services/playback_state_stations.py` - Playback state station switching: seeding a list or aspect station from a song or words.
+- `server/services/preferences_service.py` - Track and shoutout likes, super likes and bans, plus reading and applying Radio Mode settings.
+- `server/services/profile_picture_service.py` - Uploads, serves and deletes profile pictures, with depth and normal map renders.
+- `server/services/rate_limit_service.py` - Token-bucket rate limits and per-user Suno generation quotas with reserve and refund.
+- `server/services/semantic_cache.py` - Reuses earlier answers by exact text, then closest meaning above a threshold; backs search-intent and Producer caches.
+- `server/services/semantic_source.py` - Shared semantic source pattern: category specs, base vector database class, and per-query re-weighted search.
+- `server/services/source_quality_analysis_service.py` - Grades an upload's source quality (format, bit depth, spectrum, dynamics) and decides whether enhancement applies.
+- `server/services/suno_artwork_enrichment_service.py` - Makes depth maps for artwork and writes side-by-side colour plus depth images for parallax.
+- `server/services/suno_enriched_metadata_service.py` - LLM enrichment of track metadata: derived tags and canonical style, saved into the metadata.
+- `server/services/suno_generation_queue_service.py` - Suno generation jobs: submit batches, track credits, assign ids, refunds, cancellation and job status.
+- `server/services/suno_generation_queue_service_inflight.py` - Records Suno generations in flight on disk and resumes or refunds them after a restart.
+- `server/services/suno_generation_queue_service_jobs.py` - Suno job model: statuses, limits, progress calculation, status output and friendly error messages.
+- `server/services/suno_metadata_service.py` - Creates, saves and loads Suno track metadata JSON, file paths and generation status.
+- `server/services/suno_prompt_service.py` - LLM turns a listener's music request into Suno generation parameters.
+- `server/services/suno_service.py` - Suno API client: submit tasks, poll status, check credits, download audio and images.
+- `server/services/suno_service_orchestrator.py` - Multi-lane processing pipeline from Suno MP3 plus metadata to a mastered catalog entry.
+- `server/services/task_utils.py` - Spawns tracked asyncio background tasks and logs their failures.
+- `server/services/track_artwork_service.py` - Uploads, deletes, checks and generates a track's artwork image.
+- `server/services/track_asset_stages.py` - Per-track asset paths and steps: MP3, Opus variants, features, lyric timing, artwork, master version stamp.
+- `server/services/usage_report_service.py` - Builds the admin usage report: costs per period, feature and user, projections, electricity, revenue.
+- `server/services/usage_tracking.py` - Attributes paid LLM, API, Suno and GPU usage to user, guest or system and records rollups.
+- `server/services/user_content_database_service.py` - Shoutouts, replies and reviews store: files, Postgres rows, creation, enrichment, deletion and public views without coordinates.
+- `server/services/user_content_speech_enhancement_service.py` - Turns listener recordings into clean radio audio: enhancement, LLM transcript filter, pause trim, leveling, review stings.
+- `server/services/user_content_vector_database_service.py` - Shoutout category store: categories, default weights and texts embedded for semantic search.
+- `server/services/user_content_vector_search_prompt_cache_service.py` - Shoutout search intent prompts: category weights the LLM derives from a query.
+- `server/services/user_content_vector_search_service.py` - Semantic search over shoutouts with query intent weights, distance filtering and audio URLs.
+- `server/services/user_data_cache_service.py` - In-memory cache of users and their likes and bans, with invalidation tied to DB commits. Auth reads users from it: any write to a `User` row must call `invalidate_user` (as `UserProfileService.update_profile` does), or `/api/auth/me` serves stale settings.
+- `server/services/user_profile_service.py` - Updates username and profile, reads profiles, deletes DJ conversations and resets the listener persona.
+- `server/services/vector_store.py` - Generic vector store pattern: live plus pending slots, instant add/remove, background rebuilds, shared encoder.
+- `server/services/web_fetch.py` - Polite web fetching: per-host pacing, rest periods, rate-limit handling, robots.txt checks and rotating identities.
+- `server/services/websocket_service.py` - WebSocket connections per session and device: registration, broadcasting, online devices and stale cleanup.
+- `server/services/whisper_dual_service.py` - Two Whisper models for transcription: a fast one and a higher-quality one.
+- `server/services/youtube_clip_service.py` - Finds and downloads YouTube background video clips per keyword or track via yt-dlp, with cache limits.
 
-### Backend Music Generation Services (Suno)
+#### server/services_radio
 
-**Core Suno Services:**
-- `server/services/suno_service.py` - Suno API client (song generation, clip fetching)
-- `server/services/suno_metadata_service.py` - Suno metadata extraction (tags, style analysis)
-- `server/services/suno_prompt_service.py` - Suno prompt generation (AI-assisted prompt crafting)
-- `server/services/suno_service_orchestrator.py` - Suno service coordination (workflow management)
-- `server/services/suno_generation_queue_service.py` - Generation queue management (job tracking, status updates)
+- `server/services_radio/announcer_service.py` - Between-track announcer: watches sessions, analyses transitions, publishes crossfade plans, maps song spaces for talk and stings.
+- `server/services_radio/area_air_quality.py` - Area signal for Google Air Quality: parses the API response into an air-quality category per area.
+- `server/services_radio/area_geocode.py` - Reverse-geocode area signal: turns coordinates into a cached suburb/area name via Google Geocoding.
+- `server/services_radio/area_pollen.py` - Area signal for Google Pollen: parses daily pollen forecasts for the listener's area.
+- `server/services_radio/area_signals.py` - Shared framework for area signals: grid cells, area_cache store, Google request helpers and talking points.
+- `server/services_radio/background_tasks_service.py` - Background loops: weather updates, regional knowledge refresh, listener request and vector store maintenance, clip pre-downloads.
+- `server/services_radio/community_judge.py` - Editor AI verdict deciding whether a listener's shoutout, reply or review is worth saving, with feedback.
+- `server/services_radio/community_on_air.py` - Picks which shoutouts air (minus bans, buried and recently aired) with their top replies.
+- `server/services_radio/context_node_registry.py` - Decorator registry of async context nodes the Producer selects; fetches chosen nodes in parallel.
+- `server/services_radio/context_nodes.py` - Imports every context node family so all nodes register with the node registry.
+- `server/services_radio/context_nodes_format.py` - Context nodes for host identity, format, tone, channels, performance tags, dialogue examples and guidelines.
+- `server/services_radio/context_nodes_listener.py` - Context nodes for the listener: profile, local time, persona, favourites, bans, conversation and weather.
+- `server/services_radio/context_nodes_segments.py` - Context nodes for segment instructions and data (news, weather, places, events, lyrics), studio clock, segment length.
+- `server/services_radio/context_nodes_station.py` - Context nodes for station schedule, recent airings, talking points, Radio Mode segments, tool guidance and City Pulse.
+- `server/services_radio/context_nodes_track.py` - Context nodes for the track on air, its audio features, the queue and history.
+- `server/services_radio/context_router_service.py` - The Producer: picks context nodes, tool plan and pulse facets per listener message, with Postgres caching.
+- `server/services_radio/context_service.py` - Gathers raw context data: listener location/time, track info, favourites, weather, news, events, biographies, shoutouts.
+- `server/services_radio/conversation_service.py` - Handles listener text/voice turns: impulses, the DJ tool turn, speaking replies and saving conversation history.
+- `server/services_radio/crossfade_plan.py` - Plans each song-to-song crossfade from loudness shape and vocal timing of both tracks.
+- `server/services_radio/dj_bank_sources.py` - Talking-point sources: weather change cues, sun/moon sky facts, listener and station listening stats, taste.
+- `server/services_radio/dj_command_executor.py` - CommandExecutorService combining search, playback, community and segment executors behind the DJ tools.
+- `server/services_radio/dj_command_executor_community.py` - DJ actions for rating tracks and shoutouts and saving listener shoutouts, replies and reviews.
+- `server/services_radio/dj_command_executor_playback.py` - DJ actions for transport, seed radio, playlists, moving playback between devices and Radio Mode settings.
+- `server/services_radio/dj_command_executor_search.py` - DJ actions for finding and queueing music via the app's search and the listener's loved tracks.
+- `server/services_radio/dj_command_executor_segments.py` - DJ actions scheduling produced segments: news, weather, events, places, biographies, lyrics and shoutouts.
+- `server/services_radio/dj_content_bank.py` - Talking-point bank: per-session airings, timezones, weather cues, trivia and window-sized talking point menus.
+- `server/services_radio/dj_prompt_helper_service.py` - Prompt helpers: assembling prompts, wrapping untrusted data, cleaning LLM output and validating DJ scripts.
+- `server/services_radio/dj_prompt_service.py` - Runs the interactive DJ tool turn and Radio Mode segment prompts, including the review step.
+- `server/services_radio/dj_prompt_service_configs.py` - Which context nodes each prompt type uses, segment kinds with stand-in lines, and the GPT error wrapper.
+- `server/services_radio/dj_prompt_service_debug.py` - Writes each prompt and response to the prompt debug folder for inspection.
+- `server/services_radio/dj_prompt_service_segments.py` - Prompts and broadcasts for produced segments, the interpretation cache, and allowed performance tag lists.
+- `server/services_radio/dj_prompt_system_service.py` - Voice-script LLM calls: impulse/interlude scripts, paralanguage phonetics and emojis, breaths, engine tag snapping.
+- `server/services_radio/dj_tools.py` - DJ tool runtime: per-turn context, call authorization and dispatching each tool to its handler.
+- `server/services_radio/dj_tools_args.py` - Normalises DJ tool call arguments and enforces the plain limits on what may run.
+- `server/services_radio/dj_tools_display.py` - How DJ tool calls display: brace-style command strings, activity chips and short result summaries.
+- `server/services_radio/dj_tools_registry.py` - The one DJ tool registry building the DJ's declarations, the Producer's catalog and request_tools.
+- `server/services_radio/event_harvest.py` - Harvests grassroots events from web pages via JSON-LD, iCal, WordPress feeds and a meaning-scored link crawler.
+- `server/services_radio/external_events_service.py` - Ticketmaster events client with caching and formatting of events for the hosts.
+- `server/services_radio/external_location_service.py` - Google Places search and place details for location segments and the place cache.
+- `server/services_radio/external_news_service.py` - News service: Google News pulls, country/city resolution, story depth plans and news reports.
+- `server/services_radio/external_web_service.py` - Artist biographies (MusicBrainz/web) and weather forecasts with caching and formatting.
+- `server/services_radio/filler_scripts.py` - Impulse and interlude mini-scripts: picks the closest stored script by conversation, learns better ones, plays them.
+- `server/services_radio/geo.py` - The Where spatial standard: distances, nearness, overlap, relations and Google-geocoded phrase resolution.
+- `server/services_radio/listener_location.py` - Resolves a listener's location from profile, guest position, device or timezone; holds guest positions in memory.
+- `server/services_radio/local_knowledge.py` - Vector sources for local events, news and places (local_nuggets, news, place_nuggets) and their dirty flags.
+- `server/services_radio/music_beds.py` - Music bed library loaded from a manifest: loop lengths, gains and picking beds for talk breaks.
+- `server/services_radio/news_analysis.py` - LLM story cards for news: tags, people, place, category, tone and on-air worth.
+- `server/services_radio/news_links.py` - News URL helpers: strip tracking params, article identity and decoding Google News links to real URLs.
+- `server/services_radio/news_reader.py` - Fetches news articles and extracts a short sentence summary from the body text.
+- `server/services_radio/news_store.py` - Postgres store for news pulls and items: reuse by meaning and matching stories, rankings, aired ledger.
+- `server/services_radio/paralanguage_emoji.py` - Renders ~paralanguage~ tags as emojis in chat text and generates emojis for new titles.
+- `server/services_radio/persona_service.py` - Generates and updates a listener's persona and profile from their recent conversations via LLM.
+- `server/services_radio/place_memory.py` - Place cache memory: looks up remembered places and whether a similar search ran nearby before.
+- `server/services_radio/pulse.py` - City Pulse router: queries sources per kind, ranks, links related items, records requests, gives details.
+- `server/services_radio/pulse_agent.py` - For You research agent: explores pulse and listener tools to return a cited story-beat narrative.
+- `server/services_radio/pulse_demand.py` - City Pulse demand: ledger of listener requests clustered into trends, and the region charts.
+- `server/services_radio/pulse_items.py` - City Pulse building blocks: PulseItem, PulseListener, PulseQuery and the KnowledgeNode source base class.
+- `server/services_radio/pulse_sources.py` - City Pulse sources: one KnowledgeNode each for events, places, news, music, weather, area, artists, community, reviews, charts, trends.
+- `server/services_radio/radio_mode_service.py` - Radio Mode: plans and airs scheduled talk breaks per session, with beds and segment content.
+- `server/services_radio/radio_schedule.py` - Radio Mode preferences and scheduling: clock slots, feature intervals and choosing which break is due.
+- `server/services_radio/radio_segments.py` - Radio Mode segment registry: news, city, local, community, trivia and For You segments and their prompts.
+- `server/services_radio/regional_knowledge.py` - Regional knowledge pool: regions, collectors (Ticketmaster, Google News, Places), the store and taste-targeted queries.
+- `server/services_radio/station_blips.py` - Radio drops library: picks in/out blips and mixes them around host and station voice streams.
+- `server/services_radio/station_ids.py` - Station ID lines (generic and city) and picking the best cached take for one.
+- `server/services_radio/station_voice.py` - Station computer voice: exact-key clip cache, take validation and the background renderer.
+- `server/services_radio/sting_library.py` - Musical sting library loaded from the stings manifest, with audio reading.
+- `server/services_radio/sting_schedule.py` - Pure sting choice: time check if due, else a voiced kind that fits, else a musical sting.
+- `server/services_radio/sting_service.py` - Sting service: per-session sting state, offering song spaces, pre-rendering and streaming stings.
+- `server/services_radio/sting_types.py` - Registry of sting types (station ID, sweeper, musical, logo ID, time check) and how each renders.
+- `server/services_radio/stripe_service.py` - Stripe billing: checkout, customers, subscription sync and webhook handling for PLAiR subscriptions.
+- `server/services_radio/talk_clock.py` - Speaking pace and talk length: measured words per second, word counts for seconds, studio clock notes.
+- `server/services_radio/talking_clock.py` - Talking clock: builds spoken time readings from exact cached parts and checks rendered numbers.
+- `server/services_radio/tts_broadcast_service.py` - TimelineMixer and audio broadcast: mixes timeline chunks and their intensities for streaming.
+- `server/services_radio/tts_database_migration_service.py` - Re-indexes voice clip files from disk into the embeddings DB at startup using their tags.
+- `server/services_radio/tts_engine_bootstrap.py` - Launches, health-checks and stops the local Chatterbox TTS engine with the backend.
+- `server/services_radio/tts_generation_service.py` - Voice take generation: cache lookup else engine render, priority scheduling, saving FLAC clips and embeddings.
+- `server/services_radio/tts_live_stream.py` - LiveStreamEncoder: persistent ffmpeg WebM/Opus encoder per voice stream, with resampling and drops.
+- `server/services_radio/tts_processing_service.py` - Voice audio processing: decoding, SFX leveling, station treatment, mic-distance movement curves and Perlin motion.
+- `server/services_radio/tts_queue_manager.py` - TTS queue: renders turn segments, blends hosts' tracks incrementally, streams, cancels and meters pace.
+- `server/services_radio/tts_stream_planner.py` - Splits DJ scripts into sentences and builds the stream plan; only [BROADCAST] text is spoken.
+- `server/services_radio/tts_vector_db_service.py` - Vector clip cache for lines, paralanguage, SFX and breaths: Annoy slots, lookups, anti-repeat cooldown.
+- `server/services_radio/tts_voice_threads.py` - Shared thread pool for running blocking voice work off the event loop.
+- `server/services_radio/voice_upscale.py` - ClearVoice speech super-resolution upscaling host takes from 24 kHz to 48 kHz.
 
-**Metadata Enrichment:**
-- `server/services/suno_enriched_metadata_service.py` - Enriched metadata (AI-generated descriptions, categorization)
-- `server/services/suno_artwork_enrichment_service.py` - Artwork enrichment (depth maps, color analysis for parallax)
+#### tts_chatterbox (DJ voice engine, own venv)
 
-### Backend Human Music Upload Services
-
-**IMPORTANT:** Human uploads use the SAME catalog system as AI tracks. See `docs/HUMAN_MUSIC_UPLOAD.md` for full details.
-
-- `server/services/human_metadata_extraction_service.py` - Gemini (`GEMINI_UPLOAD_ANALYSIS_MODEL`, 3.5 Flash) audio analysis (genre, mood, lyrics, mix decisions, artwork prompt)
-- `server/services/human_music_upload_service.py` - Upload pipeline (validation, transcoding, mastering, catalog integration, edits)
-- `server/services/artist_profile_service.py` + `routers/artists.py` - artist/band profiles (`artist_profiles` table)
-
-**AI track credits are compulsory and one name:** an AI track's artist is the artist it was inspired by, and it is shown as the artist. `generation_params.artist_name`, `track_info.artist` and `derived_tags.inspired_artist` always hold the same name (`services/catalog_credit.settle_ai_credit`: the requested artist, then the inspired-by artist, then the artist in the original request, then the first similar artist). Enrichment settles it on every new track, the Asset Doctor repairs any drift, `server/utils/backfill_artist_credit.py` fixes the catalog in bulk (run 3 Oct: 1,340 tracks). Every view reads `generation_params.artist_name`. Audit the catalog with `server/utils/catalog_audit.py`.
-
-**Key Principle:** Human tracks are stored in the same `tracks` table with `is_ai_generated=0`. They use identical metadata schemas, playback systems, and discovery pipelines as AI tracks.
-
-**Credits (least resistance):** uploading is one tap; everything is automatic and editable afterwards. A user's bands are artist profiles they define once (User panel → Artists & Bands); an upload is credited to the chosen profile, else their last-used, else their first, else one made from their username. The credit is `generation_params.artist_name` (= `track_info.artist`, plus `artist_profile_id`/`artist_slug`), the field every view reads; `derived_tags.inspired_artist` is only a "sounds like" comparison and never the credit. Titles: uploader's > embedded tag (mutagen, `embedded_tags`) > a real title in the filename > the sung hook (Gemini is told all of these). Renaming a profile re-credits its tracks (`retag_artist`); edits go through `update_track_metadata` (validated, re-indexed; a lyrics edit drops the lyric timing so the asset doctor re-aligns it). "Enhance audio" (Apollo) is the user's remembered opt-in (`users.upload_enhance`). Uploads, artwork and profile pictures are refused before the body is read without a valid token (`SIGNED_IN_UPLOAD_PATHS`). Fix old uploads with `server/utils/backfill_upload_credits.py`; test with `tests/upload_credit_test.py --file <audio> [--cancel-file <other audio>]` (runs the full pipeline, 2-8 min).
-
-**Rights, sharing, jobs, duplicates:** the first upload asks once for a rights confirmation (`users.upload_rights_confirmed_at`). Tracks go live as `visibility` public; unlisted/private tracks are in `CatalogDatabaseService.hidden_ids` and are left out of `get_all_tracks`, vector search, queue fill (`_get_user_preferences` unions them into bans), top hits, charts, on-air stats and new-session seeding; they still play by id. `explicit` is set by Gemini (editable). Music source: each listener's Both / Human / AI setting (radio pref `music_source`, default both) is applied with bans and hidden tracks by `services/listener_filters.excluded_ids` in queue fill, catalog, search, DJ searches and Pulse; no separate human stations, filters or badges. The upload request returns `{"status": "processing", "upload_id"}` as soon as the file is received; processing runs as a background job (`UPLOAD_JOBS` in `routers/user_music.py`, `GET/DELETE /api/user/music/uploads/{id}`), and its final `upload_progress` event is sent only after the job's result is stored. Every human upload carries a Chromaprint `fingerprint` (ffmpeg's chromaprint muxer, first 120 s, `services/audio_fingerprint.py`); after decoding, a match (similarity ≥ 0.8; the same song measured 0.94-1.0, different songs ≤ 0.55) returns the uploader's existing track or refuses another listener's song. Missing fingerprints are backfilled at startup.
-
-### Backend DJ System (services_radio)
-
-**DJ Conversation & Prompting:**
-- `server/services_radio/dj_prompt_service.py` - DJ personality prompts (character, tone, knowledge base)
-- `server/services_radio/dj_prompt_system_service.py` - DJ system prompts (instructions, formatting)
-- `server/services_radio/dj_prompt_helper_service.py` - DJ prompt helpers (context injection, template rendering)
-- `server/services_radio/dj_command_executor.py` - Executes DJ tool actions; its parts `dj_command_executor_search.py`, `dj_command_executor_playback.py`, `dj_command_executor_community.py`, `dj_command_executor_segments.py`
-- `server/services_radio/dj_tools_registry.py` / `dj_tools_args.py` / `dj_tools_display.py` / `dj_tools.py` - the DJ tools: registry, argument checks, activity display, turn runtime
-- `server/services_radio/conversation_service.py` - User-DJ conversations (message history, context management)
-- `server/services_radio/announcer_service.py` - Station announcements (scheduled broadcasts, event notifications)
-- `server/services_radio/persona_service.py` - DJ persona management (personality traits, voice selection)
-
-**Context Management:**
-- `server/services_radio/context_service.py` - Context for AI responses (track info, user preferences, session state)
-- `server/services_radio/context_node_registry.py` - Context node registry (dynamic context system)
-- `server/services_radio/context_router_service.py` - Context routing (selecting relevant context nodes)
-- `server/services_radio/context_nodes.py` - Context node definitions (track, user, weather, news, etc.)
-
-**TTS Pipeline:**
-- `tts_chatterbox/server.py` - **Local Chatterbox-Turbo TTS engine** (separate process, Flask on 127.0.0.1:8090, own venv; streams PCM s16le 24 kHz from `POST /tts`; `tts_server/` is the retired Orpheus engine)
-- `server/services_radio/tts_engine_bootstrap.py` - Launches/health-checks/stops the TTS engine with the backend lifespan
-- `server/services_radio/tts_generation_service.py` - Semantic clip cache lookup, else `generate_pcm()` from the engine; saves new clips as FLAC (`write_clip`) + embeddings
-- `server/services_radio/tts_processing_service.py` - Audio processing (normalization, compression, effects)
-- `server/services_radio/tts_stream_planner.py` - TTS streaming (chunk planning, timing coordination)
-- `server/services_radio/tts_queue_manager.py` - TTS queue management (priority, cancellation)
-- `server/services_radio/tts_broadcast_service.py` - Audio broadcasting (WebSocket streaming, chunking)
-- `server/services_radio/tts_vector_db_service.py` - TTS clip cache: one `ClipStore` per clip table (Annoy A/B files) on the shared pattern, plus the take picking (cooldown, near-best takes)
-- `server/services_radio/tts_database_migration_service.py` - Re-indexes clip files from disk into the embeddings DB at startup
-- `server/services_radio/sting_service.py` - Stings & talking clock (station voice cache + renderer in `station_voice.py`, `talking_clock.py`, `station_ids.py`, `sting_library.py`, `sting_types.py` registry, `sting_schedule.py` rules)
-
-**External Data Services:**
-- `server/services_radio/external_web_service.py` - Web scraping (artist info, lyrics, news)
-- `server/services_radio/external_news_service.py` - News API (headlines, articles)
-- `server/services_radio/external_location_service.py` - Location services (geocoding, timezone)
-- `server/services_radio/external_events_service.py` - Events API (concerts, festivals)
-
-**Background Tasks:**
-- `server/services_radio/background_tasks_service.py` - Background tasks (scheduled jobs, cleanup, maintenance)
-- `server/services_radio/stripe_service.py` - Payment processing (subscriptions, billing)
+- `tts_chatterbox/server.py` - The local Chatterbox-Turbo TTS engine: separate process, Flask on 127.0.0.1:8090, streams PCM s16le 24 kHz from `POST /tts`, `POST /abort/<job_id>`.
+- `tts_chatterbox/engine.py` - Engine core: voices, slots, batched decoding, the stop token and the length cap per take.
+- `tts_chatterbox/batch_t3.py` - Batched CUDA-graph token decoder for up to `TTS_ENGINE_SLOTS` sentences at once.
+- `tts_chatterbox/batch_vocoder.py` - Batched S3Gen vocoder pass for the decoded sentences.
+- `tts_chatterbox/s3_patches.py` - Patches to Chatterbox's S3Gen for fp32 on the Pascal P6000.
+- `tts_server/` - The retired Orpheus-3B engine; kept in the repo, not loaded.
 
 ## Database
 
