@@ -8,11 +8,11 @@ import { CSS_TRANSITION } from '../lib/motion'
 import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
 import { layoutMotionAge, noteLightConsumer, readLightProbe } from '../lib/lightProbe'
 import { normalFullCache } from '../lib/mediaCache'
+import { createGpuTimer } from '../lib/frameStats'
 import { useDepthMap } from '../hooks/useDepthMap'
 
 const PARALLAX_EPSILON = 1e-4
 const REDRAW_SHIFT_PX = 0.1
-const FRAME_CAP_SLACK_MS = 4
 const MIPMAP_BELOW_RATIO = 0.75
 const CACHE_AFTER_STILL_DRAWS = 2
 const RESIZE_SETTLE_MS = 300
@@ -59,7 +59,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
   const { gyroscopeRef, mouseRef, litArtwork } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef, litArtwork: state.settingsState.litArtwork !== false }))
   const { isMobile } = useViewport()
-  const { parallaxDpr, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
+  const { parallaxDpr, parallaxStepPx, reduceMotion, isTopTier } = useQuality()
   const loadKey = `${trackId}|${enrichedArtworkUrl}|${artworkUrl}`
   const texturesReady = texturesKey === loadKey
   const isVisible = !isMobile || onScreen
@@ -354,7 +354,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     let errorCheckPending = true
     let stillDraws = 0
     const placement = { rect: null, at: 0, dirty: true }
-    const minFrameMs = parallaxFpsCap > 0 ? 1000 / parallaxFpsCap - FRAME_CAP_SLACK_MS : 0
+    const gpuTimer = createGpuTimer(gl, 'art gpu')
 
     const bindArtwork = (uniforms) => {
       gl.activeTexture(gl.TEXTURE0)
@@ -390,6 +390,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           logger.warn('[ParallaxArtwork] Context lost during render')
           return
         }
+
+        gpuTimer.poll()
 
         if (!colorTextureRef.current || !depthTextureRef.current) {
           window.__rafDebug?.sources && (window.__rafDebug.sources['ParallaxArtwork'] = (window.__rafDebug.sources['ParallaxArtwork'] || 0) + 1)
@@ -428,9 +430,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
         const unchanged = tiltStill && last.left === rect.left && last.top === rect.top && last.light === probe.key
 
         const paused = last && timestamp !== undefined && isSceneRenderingPaused(timestamp)
-        const throttled = paused || (last && minFrameMs > 0 && timestamp !== undefined && timestamp - last.time < minFrameMs)
 
-        if (!unchanged && !throttled) {
+        if (!unchanged && !paused) {
           stillDraws = tiltStill ? stillDraws + 1 : 0
           const lit = probe.active && hasNormals
           let cache = cacheRef.current
@@ -442,6 +443,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
 
           const profile = window.__plairProfile
           const drawStart = profile ? performance.now() : 0
+          gpuTimer.begin()
           if (build) {
             if (!cache || cache.width !== canvas.width || cache.height !== canvas.height) {
               deleteParallaxCache(gl, cache)
@@ -480,6 +482,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           gl.activeTexture(gl.TEXTURE2)
           gl.bindTexture(gl.TEXTURE_2D, hasNormals ? normalTextureRef.current : null)
           gl.drawArrays(gl.TRIANGLES, 0, 6)
+          gpuTimer.end()
           if (profile) {
             gl.finish()
             const kind = cached ? 'relit' : build ? 'cached' : 'full'
@@ -509,7 +512,6 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
             light: probe.key,
             left: rect.left,
             top: rect.top,
-            time: now,
           }
         }
 
@@ -536,8 +538,9 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
       }
+      gpuTimer.dispose()
     }
-  }, [glReady, texturesReady, hasNormals, litArtwork, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxFpsCap, parallaxStepPx, reduceMotion, isTopTier])
+  }, [glReady, texturesReady, hasNormals, litArtwork, intensity, zoom, fallbackMode, contextLost, gyroscopeRef, mouseRef, isVisible, isActive, parallaxStepPx, reduceMotion, isTopTier])
 
   useEffect(() => {
     const canvas = canvasRef.current

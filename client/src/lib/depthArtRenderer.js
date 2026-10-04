@@ -2,6 +2,7 @@ import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createPa
 import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
+import { createGpuTimer } from './frameStats'
 
 const INTENSITY = 0.1
 const SCROLL_TILT = 0.9
@@ -9,7 +10,6 @@ const MAX_PARALLAX = 1.6
 const MAX_IDLE_TEXTURES = 48
 const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.1
-const FRAME_CAP_SLACK_MS = 4
 const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
 const CANVAS_RESIZES_PER_FRAME = 3
@@ -64,7 +64,7 @@ class DepthArtRenderer {
     this.views = new Set()
     this.textures = new Map()
     this.uploads = []
-    this.settings = { dpr: Infinity, fpsCap: 0, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
+    this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
     this.canvas = null
     this.snapshot = false
     this.gl = null
@@ -73,7 +73,6 @@ class DepthArtRenderer {
     this.unavailable = false
     this.contextLost = false
     this.frame = null
-    this.lastDrawAt = 0
     this.layoutDirty = true
     this.scrolled = false
     this.lastLayoutAt = 0
@@ -198,6 +197,7 @@ class DepthArtRenderer {
     }
     this.gl = gl
     this.programs = programs
+    this.gpuTimer = createGpuTimer(gl, 'art gpu')
     const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS)
     this.maxSize = Math.min(4096, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), dims[0], dims[1])
   }
@@ -291,11 +291,11 @@ class DepthArtRenderer {
     if (!this.views.size) return
     this.schedule()
     if (!this.gl || this.contextLost) return
+    this.gpuTimer.poll()
     const uploaded = this.uploads.length > 0
     if (uploaded) this.processUploads()
 
-    const { fpsCap, stepPx, reduceMotion } = this.settings
-    if (fpsCap > 0 && timestamp - this.lastDrawAt < 1000 / fpsCap - FRAME_CAP_SLACK_MS) return
+    const { stepPx, reduceMotion } = this.settings
     if (isSceneRenderingPaused(timestamp)) return
 
     if (this.showing) noteLightConsumer(timestamp)
@@ -360,8 +360,9 @@ class DepthArtRenderer {
 
     this.showing = showing
     if (!batch.length) return
-    this.lastDrawAt = timestamp
+    this.gpuTimer.begin()
     this.drawBatch(batch, probe)
+    this.gpuTimer.end()
   }
 
   drawBatch(batch, probe) {

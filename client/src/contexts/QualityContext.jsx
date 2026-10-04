@@ -4,13 +4,14 @@ import { safeStorage } from '../lib/safeStorage'
 import { logger } from '../lib/logger'
 import { pauseSceneRendering } from '../lib/renderPause'
 import { setMotionPolicy } from '../lib/microMotion'
+import { screenRefreshMs, watchScreenRefresh } from '../lib/screenRefresh'
 
 const QUALITY_TIERS = [
-  { name: 'minimal', sceneDpr: 0.7, fpsCap: 30, glassTaps: 1, parallaxDpr: 1, parallaxFpsCap: 30, parallaxStepPx: 2 },
-  { name: 'low', sceneDpr: 0.85, fpsCap: 30, glassTaps: 1, parallaxDpr: 1.5, parallaxFpsCap: 30, parallaxStepPx: 1.5 },
-  { name: 'balanced', sceneDpr: 1.0, fpsCap: 0, glassTaps: 3, parallaxDpr: 2, parallaxFpsCap: 0, parallaxStepPx: 1 },
-  { name: 'sharp', sceneDpr: 1.25, fpsCap: 0, glassTaps: 3, parallaxDpr: 2.5, parallaxFpsCap: 0, parallaxStepPx: 1 },
-  { name: 'high', sceneDpr: 1.5, fpsCap: 0, glassTaps: 3, parallaxDpr: Infinity, parallaxFpsCap: 0, parallaxStepPx: 0 },
+  { name: 'minimal', sceneDpr: 0.7, glassTaps: 1, parallaxDpr: 1, parallaxStepPx: 2 },
+  { name: 'low', sceneDpr: 0.85, glassTaps: 1, parallaxDpr: 1.5, parallaxStepPx: 1.5 },
+  { name: 'balanced', sceneDpr: 1.0, glassTaps: 3, parallaxDpr: 2, parallaxStepPx: 1 },
+  { name: 'sharp', sceneDpr: 1.25, glassTaps: 3, parallaxDpr: 2.5, parallaxStepPx: 1 },
+  { name: 'high', sceneDpr: 1.5, glassTaps: 3, parallaxDpr: Infinity, parallaxStepPx: 0 },
 ]
 
 const TOP_TIER = QUALITY_TIERS.length - 1
@@ -19,13 +20,12 @@ export const REFERENCE_SCENE_DPR = QUALITY_TIERS[TOP_TIER].sceneDpr
 const FORCED_TIER_KEY = 'plair_quality_tier'
 const LEARNED_TIER_KEY = 'plair_quality_auto_v1'
 const WINDOW_FRAMES = 90
-const SLOW_FRAME_SECONDS = 1 / 40
-const FAST_FRAME_SECONDS = 1 / 54
+const SLOW_FRAME_RATIO = 1.5
+const FAST_FRAME_RATIO = 1.11
 const SLOW_WINDOWS_TO_DROP = 2
 const FAST_WINDOWS_TO_RAISE = 4
 const FAILURES_TO_LOCK = 2
 const ACTIVE_RATIO = 0.8
-const OVERLAY_FPS_CAP = 30
 
 const SOFTWARE_GPU = /swiftshader|llvmpipe|softpipe|basic render|software/i
 const WEAK_GPU = /mali-(4\d\d|t[678]\d\d|g31|g51|g52|g57|g68)|adreno \(tm\) (3\d\d|4\d\d|50\d|51\d|53\d|60\d|61[0-3])|powervr|sgx|ge8\d\d\d|vivante|videocore|intel.*hd graphics ([2-5]\d{2,3}|$)/i
@@ -98,7 +98,6 @@ export function QualityProvider({ children }) {
   const saveData = useSaveData()
   const [forcedTier] = useState(readForcedTier)
   const [autoTier, setAutoTier] = useState(() => readLearnedTier() ?? heuristicTier())
-  const [overlayCount, setOverlayCount] = useState(0)
 
   const visualQuality = settingsState.visualQuality || 'high'
   const userCeiling = visualQuality === 'low' ? 1 : visualQuality === 'medium' ? 2 : TOP_TIER
@@ -126,6 +125,8 @@ export function QualityProvider({ children }) {
   useEffect(() => {
     setMotionPolicy({ tier, reduceMotion })
   }, [tier, reduceMotion])
+
+  useEffect(() => watchScreenRefresh(), [])
 
   const changeTier = useCallback((next, reason) => {
     setAutoTier(prev => {
@@ -155,6 +156,7 @@ export function QualityProvider({ children }) {
     if (governor.count < WINDOW_FRAMES) return
 
     const average = governor.total / governor.count
+    const refresh = screenRefreshMs() / 1000
     const busy = governor.active / governor.count >= ACTIVE_RATIO
     governor.total = 0
     governor.count = 0
@@ -166,7 +168,7 @@ export function QualityProvider({ children }) {
     }
 
     const current = governor.tier
-    if (average > SLOW_FRAME_SECONDS) {
+    if (average > refresh * SLOW_FRAME_RATIO) {
       governor.fastWindows = 0
       governor.slowWindows++
       if (governor.slowWindows >= SLOW_WINDOWS_TO_DROP && current > 0) {
@@ -178,7 +180,7 @@ export function QualityProvider({ children }) {
     }
 
     governor.slowWindows = 0
-    if (average < FAST_FRAME_SECONDS && current < governor.ceiling && governor.failures[current + 1] < FAILURES_TO_LOCK) {
+    if (average < refresh * FAST_FRAME_RATIO && current < governor.ceiling && governor.failures[current + 1] < FAILURES_TO_LOCK) {
       governor.fastWindows++
       if (governor.fastWindows >= FAST_WINDOWS_TO_RAISE) {
         governor.fastWindows = 0
@@ -189,28 +191,18 @@ export function QualityProvider({ children }) {
     }
   }, [changeTier, forcedTier])
 
-  const registerOverlay = useCallback(() => {
-    setOverlayCount(count => count + 1)
-    return () => setOverlayCount(count => Math.max(0, count - 1))
-  }, [])
-
   const value = useMemo(() => {
     const settings = QUALITY_TIERS[tier]
-    const capUnderOverlay = (cap) => overlayCount > 0 ? Math.min(cap || OVERLAY_FPS_CAP, OVERLAY_FPS_CAP) : cap
     return {
       tier,
       ...settings,
-      fpsCap: capUnderOverlay(settings.fpsCap),
-      parallaxFpsCap: capUnderOverlay(settings.parallaxFpsCap),
       isTopTier: tier === TOP_TIER,
-      hasOverlay: overlayCount > 0,
       reduceMotion,
       reportFrame,
       reportRenderer,
-      registerOverlay,
       pauseRendering: pauseSceneRendering,
     }
-  }, [tier, overlayCount, reduceMotion, reportFrame, reportRenderer, registerOverlay])
+  }, [tier, reduceMotion, reportFrame, reportRenderer])
 
   useEffect(() => {
     window.__plairQuality = () => ({ tier, name: QUALITY_TIERS[tier].name, forced: forcedTier !== null, ceiling, reduceMotion, saveData })

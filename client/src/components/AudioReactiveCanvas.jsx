@@ -30,6 +30,7 @@ import {isSceneRenderingPaused} from '../lib/renderPause'
 import {splashReady} from '../lib/splash'
 import {PROBE_GRID, lightProbeWanted, publishBeat, publishLightLevel, setLightGlow} from '../lib/lightProbe'
 import {LightProbeReader} from '../lib/lightProbeReader'
+import { addFrameWork, createGpuTimer, frameStatsActive } from '../lib/frameStats'
 
 const backgroundVertexShader = `
   varying vec2 vUv;
@@ -727,7 +728,6 @@ const SIGNATURE_EPSILON = 1e-4
 const SIGNATURE_SIZE = 160
 const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
-const FRAME_CAP_SLACK_SECONDS = 0.004
 
 function writeSignatureValue(out, index, value) {
   if (typeof value === 'number') {
@@ -919,7 +919,7 @@ function MultiPassPlane({
   const isFullscreen = interfaceState?.isFullscreenVisuals ?? false
 
   const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
-  const { fpsCap, glassTaps, reduceMotion, reportFrame, reportRenderer, tier } = useQuality()
+  const { glassTaps, reduceMotion, reportFrame, reportRenderer, tier } = useQuality()
   const renderer = useThree(state => state.gl)
   const mainScene = useThree(state => state.scene)
   const mainCamera = useThree(state => state.camera)
@@ -968,7 +968,6 @@ function MultiPassPlane({
     captureLength: 0,
     captured: new Float64Array(SIGNATURE_SIZE),
   })
-  const lastDrawAtRef = useRef(0)
   const visualCueMapRef = useRef(new Map())
   const lastBeatIndexRef = useRef(0)
   const lastSegmentIndexRef = useRef(0)
@@ -1340,6 +1339,7 @@ function MultiPassPlane({
   }, [])
 
   const frameTimingRef = useRef({ total: 0, count: 0, lastLog: 0 })
+  const sceneTimerRef = useRef(null)
 
   useFrame(({ size, gl, scene, camera }, frameDelta) => {
     window.__rafDebug?.sources && (window.__rafDebug.sources['ARC-MultiPass'] = (window.__rafDebug.sources['ARC-MultiPass'] || 0) + 1)
@@ -1350,6 +1350,10 @@ function MultiPassPlane({
     if (isUnmountedRef.current || !engineRef || !interfaceRef || !programsReadyRef.current) return
 
     probeReaderRef.current?.collect()
+    const context = gl.getContext()
+    if (sceneTimerRef.current?.gl !== context) sceneTimerRef.current = { gl: context, timer: createGpuTimer(context, 'scene gpu') }
+    const sceneTimer = sceneTimerRef.current.timer
+    sceneTimer.poll()
 
     const now = Date.now()
     const effects = effectsRef.current
@@ -1830,12 +1834,10 @@ function MultiPassPlane({
 
     const paused = !signature.force && isSceneRenderingPaused(frameStart)
     reportFrame(delta, wantsRender && !paused)
-    const frameSeconds = frameStart / 1000
-    const throttled = paused || (fpsCap > 0 && !signature.force && frameSeconds - lastDrawAtRef.current < 1 / fpsCap - FRAME_CAP_SLACK_SECONDS)
-    const needsRender = wantsRender && !throttled
+    const needsRender = wantsRender && !paused
 
     if (needsRender) {
-      lastDrawAtRef.current = frameSeconds
+      sceneTimer.begin()
       signature.force = false
       signature.fgVisible = hasVisiblePanels
       signature.textVersion = textVersion
@@ -1874,11 +1876,13 @@ function MultiPassPlane({
       if (backdropMeshRef.current) backdropMeshRef.current.visible = !hasVisiblePanels
 
       gl.render(scene, camera)
+      sceneTimer.end()
       splashReady('scene')
     }
 
     const frameEnd = performance.now()
     const frameTime = frameEnd - frameStart
+    if (frameStatsActive()) addFrameWork('scene js', frameTime)
     frameTimingRef.current.total += frameTime
     frameTimingRef.current.count++
     if (needsRender) frameTimingRef.current.rendered = (frameTimingRef.current.rendered || 0) + 1
@@ -1901,7 +1905,6 @@ function MultiPassPlane({
           mouseValues: `${mouse.parallaxX?.toFixed(3)},${mouse.parallaxY?.toFixed(3)}`,
           visualQuality,
           dpr: gl.getPixelRatio().toFixed(2),
-          fpsCap,
           glassTaps,
         }
         logger.debug('[SHADER PERF]', debugInfo)

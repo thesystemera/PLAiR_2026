@@ -326,7 +326,7 @@ export function Modal({
   const { engineState, radioState } = useUISelector(state => ({ engineState: state.engineState, radioState: state.radioState }))
   const { isShortViewport } = useViewport()
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
-  const { registerOverlay, pauseRendering } = useQuality()
+  const { pauseRendering } = useQuality()
   const [isClosing, setIsClosing] = useState(false)
 
   const backdropInteraction = usePointerInteraction()
@@ -365,8 +365,7 @@ export function Modal({
   useEffect(() => {
     if (!isOpen) return
     pauseRendering(MODAL_OPEN_PAUSE_MS)
-    return registerOverlay()
-  }, [isOpen, registerOverlay, pauseRendering])
+  }, [isOpen, pauseRendering])
 
   useEffect(() => {
     if (!isVisible) return
