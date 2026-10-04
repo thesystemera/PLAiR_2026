@@ -148,7 +148,8 @@ export function readLightProbe(now) {
   }
   const kick = debug.kick ?? currentKick(now)
   const level = debug.level ?? state.level
-  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, level, version: state.version, active: state.hasProbe && !debug.off && level > 0.001 }
+  const active = state.hasProbe && !debug.off && level > 0.001
+  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, level, version: state.version, active, key: active ? `${state.version}|${kick}|${state.pulse}` : 'off' }
 }
 
 if (typeof window !== 'undefined') {

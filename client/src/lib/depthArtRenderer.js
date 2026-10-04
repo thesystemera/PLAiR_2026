@@ -239,9 +239,9 @@ class DepthArtRenderer {
     const relayout = this.layoutDirty || timestamp - this.lastLayoutAt > LAYOUT_REFRESH_MS
     const input = this.lastInput
     const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
-    const lit = !input || input.probe !== probe.version || input.kick !== probe.kick || input.pulse !== probe.pulse
+    const lit = !input || input.light !== probe.key
     if (!relayout && !moved && !uploaded && !lit) return
-    this.lastInput = { x: base.parallaxX, y: base.parallaxY, probe: probe.version, kick: probe.kick, pulse: probe.pulse }
+    this.lastInput = { x: base.parallaxX, y: base.parallaxY, light: probe.key }
     if (relayout) {
       this.layoutDirty = false
       this.lastLayoutAt = timestamp
@@ -254,7 +254,11 @@ class DepthArtRenderer {
     for (const view of this.views) {
       const entry = view.entry
       if (!view.visible || !entry || entry.state !== 'ready') continue
-      if (relayout || !view.rect) view.rect = view.host.getBoundingClientRect()
+      if (relayout || !view.rect) {
+        view.rect = view.host.getBoundingClientRect()
+        view.shown = !view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      }
+      if (!view.shown) continue
       const rect = view.rect
       if (rect.width < 2 || rect.height < 2) continue
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
@@ -267,7 +271,7 @@ class DepthArtRenderer {
       const last = view.last
       if (last && last.entry === entry && last.width === width && last.height === height &&
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon &&
-        last.probe === probe.version && last.kick === probe.kick && last.pulse === probe.pulse &&
+        last.light === probe.key &&
         last.left === rect.left && last.top === rect.top) continue
       batch.push({ view, entry, rect, width, height, px, py, steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) })
     }
@@ -318,6 +322,8 @@ class DepthArtRenderer {
     gl.uniform1f(uniforms.intensity, INTENSITY)
     gl.uniform1f(uniforms.zoom, 1)
 
+    const profile = window.__plairProfile
+    const drawStart = profile ? performance.now() : 0
     for (const item of group) {
       const glY = canvas.height - item.y - item.height
       gl.viewport(item.x, glY, item.width, item.height)
@@ -335,6 +341,7 @@ class DepthArtRenderer {
       gl.drawArrays(gl.TRIANGLES, 0, 6)
     }
 
+    const copyStart = profile ? (gl.finish(), performance.now()) : 0
     for (const item of group) {
       const view = item.view
       if (view.canvas.width !== item.width || view.canvas.height !== item.height) {
@@ -346,12 +353,20 @@ class DepthArtRenderer {
       view.ctx.drawImage(canvas, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
       view.last = {
         entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
-        probe: probe.version, kick: probe.kick, pulse: probe.pulse, left: item.rect.left, top: item.rect.top,
+        light: probe.key, left: item.rect.left, top: item.rect.top,
       }
       if (!view.drawn) {
         view.drawn = true
         view.onDrawn?.(true)
       }
+    }
+    if (profile) {
+      const pixels = group.reduce((total, item) => total + item.width * item.height, 0)
+      profile.tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0 }
+      profile.tiles.frames++
+      profile.tiles.drawMs += copyStart - drawStart
+      profile.tiles.copyMs += performance.now() - copyStart
+      profile.tiles.pixels += pixels
     }
   }
 }

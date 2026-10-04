@@ -72,6 +72,7 @@ async function load(litArtwork) {
     const saved = JSON.parse(localStorage.getItem('plair_settings') || '{}')
     localStorage.setItem('plair_settings', JSON.stringify({ ...saved, litArtwork: ${litArtwork}, visualQuality: 'high' }))
     localStorage.setItem('plair_quality_tier', '4')
+    localStorage.setItem('plair_demo_mode_modal_seen', 'true')
   })()`)
   await send('Page.reload')
   await sleep(9000)
@@ -85,15 +86,16 @@ async function openTab(label) {
   await sleep(2500)
 }
 
-async function measure() {
+async function measure(tilt = true, level = 1) {
   return evaluate(`new Promise(resolve => {
-    window.__plairLight?.debug({ level: 1 })
+    window.__plairLight?.debug({ level: ${level} })
+    window.__plairProfile = {}
     const times = []
     const start = performance.now()
     let last = start
     const step = (now) => {
       const t = (now - start) / 1000
-      window.dispatchEvent(Object.assign(new Event('deviceorientation'), { alpha: 0, beta: 20 * Math.sin(t * 1.3), gamma: 20 * Math.cos(t * 0.9) }))
+      if (${tilt}) window.dispatchEvent(Object.assign(new Event('deviceorientation'), { alpha: 0, beta: 20 * Math.sin(t * 1.3), gamma: 20 * Math.cos(t * 0.9) }))
       times.push(now - last)
       last = now
       if (now - start < ${SECONDS * 1000}) requestAnimationFrame(step)
@@ -102,7 +104,17 @@ async function measure() {
         const sorted = times.slice(5).sort((a, b) => a - b)
         const pick = q => +sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))].toFixed(1)
         const drawnTiles = [...document.querySelectorAll('canvas[aria-hidden="true"]')].filter(c => c.style.opacity === '1').length
-        resolve({ fps: +(sorted.length / ((now - start) / 1000)).toFixed(1), p50ms: pick(0.5), p95ms: pick(0.95), drawnTiles })
+        const profile = window.__plairProfile
+        window.__plairProfile = null
+        const frames = sorted.length || 1
+        const tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0 }
+        const np = profile.nowPlaying || { frames: 0, drawMs: 0, pixels: 0 }
+        resolve({
+          fps: +(frames / ((now - start) / 1000)).toFixed(1), p50ms: pick(0.5), p95ms: pick(0.95), drawnTiles,
+          tileDrawMs: +(tiles.drawMs / frames).toFixed(1), tileCopyMs: +(tiles.copyMs / frames).toFixed(1),
+          tileMpx: +(tiles.pixels / frames / 1e6).toFixed(2),
+          npDrawMs: +(np.drawMs / frames).toFixed(1), npMpx: +(np.pixels / frames / 1e6).toFixed(2),
+        })
       }
     }
     requestAnimationFrame(step)
@@ -114,7 +126,8 @@ for (const lit of [true, false]) {
   await load(lit)
   for (const tab of ['Catalog', 'Playing']) {
     await openTab(tab)
-    results.push({ litArtwork: lit, tab, ...(await measure()) })
+    const modes = lit && args.isolate ? [['tilt+light', true, 1], ['tilt only', true, 0], ['light only', false, 1], ['still', false, 0]] : [['tilt+light', true, 1]]
+    for (const [mode, tilt, level] of modes) results.push({ litArtwork: lit, tab, mode, ...(await measure(tilt, level)) })
     if (args.shots) {
       mkdirSync(args.shots, { recursive: true })
       const shot = await send('Page.captureScreenshot', { format: 'png' })

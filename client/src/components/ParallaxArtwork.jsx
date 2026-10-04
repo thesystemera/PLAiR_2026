@@ -391,7 +391,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           Math.abs(last.y - parallaxY) < epsilon &&
           last.left === rect.left &&
           last.top === rect.top
-        const sameLight = last && last.probe === probe.version && last.kick === probe.kick && last.pulse === probe.pulse
+        const sameLight = last && last.light === probe.key
         const unchanged = still && sameLight
 
         const paused = last && timestamp !== undefined && isSceneRenderingPaused(timestamp)
@@ -425,9 +425,18 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
           gl.uniform1f(uniforms.zoom, zoom)
           gl.uniform1f(uniforms.steps, steps)
 
+          const profile = window.__plairProfile
+          const drawStart = profile ? performance.now() : 0
           gl.clearColor(0, 0, 0, 1)
           gl.clear(gl.COLOR_BUFFER_BIT)
           gl.drawArrays(gl.TRIANGLES, 0, 6)
+          if (profile) {
+            gl.finish()
+            profile.nowPlaying = profile.nowPlaying || { frames: 0, drawMs: 0, pixels: 0 }
+            profile.nowPlaying.frames++
+            profile.nowPlaying.drawMs += performance.now() - drawStart
+            profile.nowPlaying.pixels += canvas.width * canvas.height
+          }
 
           if (errorCheckPending) {
             errorCheckPending = false
@@ -445,9 +454,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
             height: canvas.height,
             x: parallaxX,
             y: parallaxY,
-            probe: probe.version,
-            kick: probe.kick,
-            pulse: probe.pulse,
+            light: probe.key,
             left: rect.left,
             top: rect.top,
             time: now,
