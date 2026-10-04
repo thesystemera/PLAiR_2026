@@ -7,6 +7,12 @@ handover. Reference docs that carry their own detail are linked from each item.
 Grouped by effort, easiest first. "Checked" means it was confirmed against the code or the machine on 1 Oct;
 anything else is carried over as written.
 
+## 0. Urgent: frame rate since the lit artwork (4 Oct)
+
+- **Frame rate dropped to about half or a quarter since Now Playing and the covers are lit from the background**;
+  possible loss of the frosted-glass panels; up/down tilt on Now Playing not working on the owner's phone.
+  Everything known, the benchmark and the next steps: `docs/HANDOVER_2026-10-04_LIT_ARTWORK.md`.
+
 ## 1. Quick wins
 
 - **Press PLAiR Start, then run the smoke test**, so the 30 Sep / 1 Oct work is live. The studio-message wording
@@ -216,7 +222,8 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   Intrect's ArtifactNet (patent-pending), or reviving `D:\Projects_parked\SUNO_UPSCALE`; both need a clean
   real-music dataset.
 - **E: is full** (about 9 GB free of 954 GB). `E:\deepPBR.io` is 859 GB and grows with every reconstruction job
-  (`storageolatileeconstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's test renders
+  (`storageolatile
+econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's test renders
   live on D: (`D:\_audio_quality_scratch`).
 
 - **DJ autonomy: the station knows what you're up to** (owner, 2 Oct; `docs/DJ_AUTONOMY.md`). A DJ mode where
