@@ -3,7 +3,7 @@
 # Usage: bash ablate.sh <out_dir> <tabs> <variant>...   (variants listed in the case below)
 OUT="$1"; TABS="$2"; shift 2
 mkdir -p "$OUT"
-COMMON=(--uncapped 1 --quality high --trace 1 --urls https://plair.live --luid "${LUID:-0,86686}" --gpu P6000 --seconds 5 --tabs "$TABS")
+COMMON=(${PACED:+--cpu 4} ${PACED:---uncapped 1} --quality high --trace 1 --urls https://plair.live --luid "${LUID:-0,86686}" --gpu P6000 --seconds 5 --tabs "$TABS")
 for v in "$@"; do
   extra=(--modes light)
   case "$v" in

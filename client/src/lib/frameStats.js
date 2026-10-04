@@ -24,9 +24,9 @@ export function addFrameWork(name, ms) {
   }
 }
 
-export function takeFrameWork() {
+export function takeFrameWork(frames) {
   const result = { gpuTimers: gpuTimersSeen }
-  for (const [name, entry] of work) result[name] = { avg: entry.ms / entry.count, count: entry.count }
+  for (const [name, entry] of work) result[name] = { avg: entry.ms / Math.max(1, frames), count: entry.count }
   work.clear()
   return result
 }

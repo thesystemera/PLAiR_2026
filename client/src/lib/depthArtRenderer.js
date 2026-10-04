@@ -2,7 +2,7 @@ import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createPa
 import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
-import { createGpuTimer } from './frameStats'
+import { addFrameWork, createGpuTimer, frameStatsActive } from './frameStats'
 
 const INTENSITY = 0.1
 const SCROLL_TILT = 0.9
@@ -287,6 +287,12 @@ class DepthArtRenderer {
   }
 
   tick(timestamp) {
+    const started = performance.now()
+    this.drawFrame(timestamp)
+    if (frameStatsActive()) addFrameWork('art js', performance.now() - started)
+  }
+
+  drawFrame(timestamp) {
     this.frame = null
     if (!this.views.size) return
     this.schedule()

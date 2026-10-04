@@ -106,11 +106,33 @@ function summarizeProfile(profile, title, frames) {
     }
   })
   const fmt = (m, n) => [...m.entries()].filter(([k]) => !/^\((idle|program|root)\)/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, us]) => `  ${(us / 1000 / frames).toFixed(3)} ms/frame  ${k}`).join('\n')
+  const byFile = new Map()
+  for (const [k, us] of selfUs) {
+    if (/^\((idle|program|root)\)/.test(k)) continue
+    const file = (k.split(' ').pop() || '').replace(/:\d+$/, '').replace(/-[\w-]{8}\.js$/, '.js') || '(native)'
+    byFile.set(file, (byFile.get(file) || 0) + us)
+  }
+  console.log(['--- JS self time by bundle ---', ...[...byFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([f, us]) => `  ${(us / 1000 / frames).toFixed(3)} ms/frame  ${f}`)].join('\n'))
   const n = Number(args.top || 18)
   console.log(`--- profile: ${title} --- self:\n${fmt(selfUs, n)}\n total:\n${fmt(totalUs, n + 7)}`)
 }
 
+function summarizeInvalidations(events, frames) {
+  const counts = new Map()
+  for (const e of events) {
+    if (!/InvalidationTracking/.test(e.name)) continue
+    const d = e.args?.data || {}
+    const node = d.nodeName || d.node?.nodeName || '?'
+    const reason = d.reason || d.invalidationSet?.[0]?.classes?.join('.') || d.changedClass || d.changedAttribute || d.changedId || d.extraData || ''
+    const key = `${e.name.replace('InvalidationTracking', '')} | ${String(node).slice(0, 70)} | ${String(reason).slice(0, 60)}`
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, Number(args.invalidations) > 1 ? Number(args.invalidations) : 30)
+  console.log(['--- invalidations per frame ---', ...top.map(([k, n]) => `  ${(n / frames).toFixed(2)}  ${k}`)].join('\n'))
+}
+
 function summarizeTrace(events, title, frames) {
+  if (args.invalidations) summarizeInvalidations(events, frames)
   const names = new Map()
   for (const e of events) if (e.ph === 'M' && e.name === 'thread_name') names.set(`${e.pid}:${e.tid}`, e.args.name)
   const threads = new Map()
@@ -255,7 +277,7 @@ async function run(url, lit) {
           }
           if (args.trace) {
             traceEvents = []
-            await send('Tracing.start', { categories: 'toplevel,gpu,cc,viz,blink,v8.execute,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-gpu.service', transferMode: 'ReportEvents' })
+            await send('Tracing.start', { categories: 'toplevel,gpu,cc,viz,blink,v8.execute,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-gpu.service' + (args.invalidations ? ',disabled-by-default-devtools.timeline.invalidationTracking' : ''), transferMode: 'ReportEvents' })
           }
           const value = await evaluate(`new Promise(resolve => {
             window.__plairLight?.debug({ level: ${level} })
@@ -308,6 +330,7 @@ async function run(url, lit) {
             await send('Tracing.end')
             await done
             summarizeTrace(traceEvents, `${tab} ${mode}`, value.fps * SECONDS)
+            if (args.savetrace) writeFileSync(`${args.savetrace}-${tab}-${mode}.json`, JSON.stringify(traceEvents))
           }
           results.push({ url, lit, tab, mode, ...value })
           console.log(JSON.stringify(results[results.length - 1]))

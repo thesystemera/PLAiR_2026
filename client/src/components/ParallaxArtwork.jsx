@@ -8,7 +8,7 @@ import { CSS_TRANSITION } from '../lib/motion'
 import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms } from '../lib/depthArtShader'
 import { layoutMotionAge, noteLightConsumer, readLightProbe } from '../lib/lightProbe'
 import { normalFullCache } from '../lib/mediaCache'
-import { createGpuTimer } from '../lib/frameStats'
+import { addFrameWork, createGpuTimer, frameStatsActive } from '../lib/frameStats'
 import { useDepthMap } from '../hooks/useDepthMap'
 
 const PARALLAX_EPSILON = 1e-4
@@ -381,6 +381,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
     }
 
     const render = (timestamp) => {
+      const started = performance.now()
       try {
         if (!gl || !canvas || !programs) {
           return
@@ -520,6 +521,8 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
       } catch (error) {
         logger.error('[ParallaxArtwork] Render loop error:', error)
         setFallbackMode(true)
+      } finally {
+        if (frameStatsActive()) addFrameWork('art js', performance.now() - started)
       }
     }
 

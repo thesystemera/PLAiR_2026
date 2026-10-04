@@ -116,7 +116,7 @@ export function QualityProvider({ children }) {
     setMotionPolicy({ tier: levelIndex, reduceMotion })
   }, [levelIndex, reduceMotion])
 
-  useEffect(() => watchScreenRefresh(), [])
+  useEffect(() => (auto ? watchScreenRefresh() : undefined), [auto])
 
   const changeLevel = useCallback((next, reason) => {
     setAutoLevel(prev => {

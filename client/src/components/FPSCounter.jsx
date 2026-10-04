@@ -11,6 +11,12 @@ const formatWork = (work, name) => {
   return name.endsWith('gpu') && !work.gpuTimers ? '?' : '-'
 }
 
+const otherWork = (work) => {
+  if (!work.main) return '-'
+  const ours = (work['scene js']?.avg || 0) + (work['art js']?.avg || 0)
+  return Math.max(0, work.main.avg - ours).toFixed(1)
+}
+
 export function FPSCounter() {
   const [stats, setStats] = useState({ fps: 60, screenHz: 0, dropped: 0, worst: 0, work: {} })
 
@@ -52,7 +58,7 @@ export function FPSCounter() {
           screenHz: Math.round(1000 / refresh),
           dropped,
           worst: Math.round(worst),
-          work: takeFrameWork()
+          work: takeFrameWork(frames)
         })
         count = 0
         frames = 0
@@ -92,7 +98,7 @@ export function FPSCounter() {
     >
       <div>{stats.fps} FPS · screen {stats.screenHz} Hz · {stats.dropped} dropped · worst {stats.worst} ms</div>
       <div style={{ color: '#e5e7eb' }}>
-        ms per frame: main {formatWork(work, 'main')} · scene js {formatWork(work, 'scene js')} · scene gpu {formatWork(work, 'scene gpu')} · art gpu {formatWork(work, 'art gpu')}
+        ms per frame: main {formatWork(work, 'main')} = scene js {formatWork(work, 'scene js')} + art js {formatWork(work, 'art js')} + other {otherWork(work)} · gpu: scene {formatWork(work, 'scene gpu')} art {formatWork(work, 'art gpu')}
       </div>
     </div>
   )

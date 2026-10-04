@@ -1094,7 +1094,7 @@ function MultiPassPlane({
   const glassMeshRef = useRef(null)
   const backdropMeshRef = useRef(null)
 
-  const captureMesh = useMemo(() => new Mesh(defaultGeometry, bgMaterial), [bgMaterial])
+  const captureMesh = useMemo(() => Object.assign(new Mesh(defaultGeometry, bgMaterial), { frustumCulled: false }), [bgMaterial])
   useEffect(() => { captureScene.add(captureMesh); return () => captureScene.remove(captureMesh) }, [captureScene, captureMesh])
 
   const probeScene = useMemo(() => new Scene(), [])
@@ -1111,7 +1111,7 @@ function MultiPassPlane({
     fragmentShader: probeFragmentShader,
     uniforms: { u_source: { value: captureRenderTarget.texture } }
   }), [captureRenderTarget])
-  const probeMesh = useMemo(() => new Mesh(defaultGeometry, probeMaterial), [probeMaterial])
+  const probeMesh = useMemo(() => Object.assign(new Mesh(defaultGeometry, probeMaterial), { frustumCulled: false }), [probeMaterial])
   useEffect(() => { probeScene.add(probeMesh); return () => probeScene.remove(probeMesh) }, [probeScene, probeMesh])
   useEffect(() => () => { probeMaterial.dispose() }, [probeMaterial])
   useEffect(() => () => { probeTarget.dispose() }, [probeTarget])
@@ -1151,6 +1151,12 @@ function MultiPassPlane({
     }
   }, [fgMaterial])
   useEffect(() => setLightGlow(glowAt), [glowAt])
+
+  useEffect(() => {
+    renderer.sortObjects = false
+    for (const node of [mainScene, captureScene, probeScene, mainCamera, captureCamera]) node.matrixWorldAutoUpdate = false
+    for (const mesh of [glassMeshRef.current, backdropMeshRef.current]) if (mesh) mesh.frustumCulled = false
+  }, [renderer, mainScene, captureScene, probeScene, mainCamera, captureCamera])
 
   useEffect(() => {
     let cancelled = false
