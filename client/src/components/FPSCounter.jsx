@@ -1,25 +1,34 @@
 import { useState, useEffect } from 'react'
 
+const DROPPED_FACTOR = 1.5
+
 export function FPSCounter() {
-  const [fps, setFps] = useState(60)
+  const [stats, setStats] = useState({ fps: 60, dropped: 0, worst: 0 })
 
   useEffect(() => {
-    if (window.__rafDebug) {
-      const intervalId = setInterval(() => {
-        setFps(window.__rafDebug.count || 60)
-      }, 1000)
-      return () => clearInterval(intervalId)
-    }
-
     let frames = 0
-    let last = performance.now()
+    let dropped = 0
+    let worst = 0
+    let interval = Infinity
+    let last = null
+    let windowStart = performance.now()
     let rafId
     const tick = (now) => {
+      if (last !== null) {
+        const delta = now - last
+        interval = Math.min(interval, delta)
+        if (delta > interval * DROPPED_FACTOR) dropped += Math.round(delta / interval) - 1
+        worst = Math.max(worst, delta)
+      }
+      last = now
       frames++
-      if (now - last >= 1000) {
-        setFps(Math.round((frames * 1000) / (now - last)))
+      if (now - windowStart >= 1000) {
+        setStats({ fps: Math.round((frames * 1000) / (now - windowStart)), dropped, worst: Math.round(worst) })
         frames = 0
-        last = now
+        dropped = 0
+        worst = 0
+        interval = Infinity
+        windowStart = now
       }
       rafId = requestAnimationFrame(tick)
     }
@@ -27,7 +36,7 @@ export function FPSCounter() {
     return () => cancelAnimationFrame(rafId)
   }, [])
 
-  const color = fps >= 55 ? '#22c55e' : fps >= 30 ? '#eab308' : '#ef4444'
+  const color = stats.dropped === 0 ? '#22c55e' : stats.dropped <= 3 ? '#eab308' : '#ef4444'
 
   return (
     <div
@@ -46,7 +55,7 @@ export function FPSCounter() {
         pointerEvents: 'none',
       }}
     >
-      {fps} FPS
+      {stats.fps} FPS · {stats.dropped} dropped · worst {stats.worst} ms
     </div>
   )
 }
