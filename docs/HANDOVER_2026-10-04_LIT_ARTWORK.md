@@ -1,5 +1,48 @@
 # Handover: lit 3D artwork and the frame-rate drop (4 Oct 2026)
 
+## Update 5 Oct 2026, night: where it stands (start here)
+
+The owner's phone (Redmi Note 13 4G, Adreno 610, Android 15, 120 Hz set, no battery saver) still shows no
+noticeable gain. The owner is getting a faster phone. Owner's rules from this session: optimise for every GPU (not
+for one phone), profile on High, never cap or gate frame rate, no telemetry sent to the server, don't make the owner
+the test instrument.
+
+Live now:
+- No frame-rate caps anywhere. The weak-GPU tiers capped the scene and artwork at 30 fps; that cap was the reason the
+  phone sat at exactly 60 (the counter showed "screen 120 Hz"). Fixing it took the phone from 59 to ~76 fps.
+- Visual Quality is one setting, High / Mid / Low / Auto (`QualityContext`); only Auto adapts, against the screen's
+  measured refresh (`lib/screenRefresh.js`, which runs only for Auto or the FPS counter).
+- FPS counter line 2: `main = scene js + art js + other`, plus GPU timers where the browser exposes them (the
+  phone's Chrome does not).
+- Light probe computed on the CPU (`lib/backgroundProbe.js`) instead of a GPU readback. Under GPU load the readback
+  blocked the main thread 457-511 ms of every second (single stalls 95-218 ms); now 0. The CPU copy of the colour
+  maths must follow any change to the background shader's grading/transform.
+- Background effects run every frame (no 60 Hz gate); three.js skips matrix/cull/sort work for its static quads.
+
+Measured per frame on High, 4x CPU throttle, phone viewport (`bash tests/gpu_bench/ablate.sh`, `PACED=1`):
+main thread ~8 ms on Radio, ~8.5 ms on Playing. Of that: Chrome's own lifecycle (style, prepaint, layer update,
+commit, observers, animation servicing) ~5 ms; background scene ~1.9 ms (three.js + react-three-fiber ~1.3 ms of it);
+lit artwork + light ~1-2 ms (one player thumbnail on Radio already costs ~0.9 ms: atlas snapshot, 2D drawImage per
+tile); CSS transitions ~0.7 ms (mostly the player progress bar); React 0.05 ms. Switching lit art off also cut
+Chrome's GPU-process time by about a third.
+
+Tried and rejected: progress bar as a Web Animation (Chrome then restyles it every frame: worse); per-device
+frame telemetry to the server (owner said no).
+
+Leads, biggest first (none started):
+1. Draw all lit artwork inside the scene's WebGL context (no tile canvases, no per-frame snapshot/copies, fewer
+   composited layers). Biggest structural win; must keep DOM order, clipping, rounded corners and fades.
+2. Replace three.js/r3f for the background with plain WebGL (same shaders): ~1.3 ms at 4x CPU.
+3. Chrome lifecycle per frame: fewer composited layers and observers (ResizeObserver/IntersectionObserver run every
+   frame), fewer separate rAF loops.
+4. GPU fill of the main pass on weak GPUs: profile it on the P6000 with `--viewport 3840x2160x1.5 --uncapped 1`
+   (GPU-bound, stable timers) and `--uniforms` ablations (glass blur, refraction, chromatic, lyrics).
+
+Bench options added (`tests/gpu_bench/gpubench.mjs`): `--viewport WxHxDPR` (desktop, GPU-bound when large),
+`--quality high|medium|low|auto`, `--fullscreen 1`, `--fps 1`, `--css '<rules>'`, `--uniforms 'name=value,...'`,
+`--block '<url pattern>'`, `--invalidations N`, `--savetrace <prefix>`, `--ttop N`; profiles print JS time per bundle.
+An unminified build (`npx vite build --minify false --outDir <dir>`, served by `serve.mjs`) gives readable profiles.
+
 ## Update 5 Oct 2026: what was measured and changed (all live)
 
 Measured with `tests/gpu_bench/` (headless Chrome pinned to the P6000, phone emulation, GPU timer queries, traces,
