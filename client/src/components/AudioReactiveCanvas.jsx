@@ -1301,11 +1301,19 @@ function MultiPassPlane({
   const frameTimingRef = useRef({ total: 0, count: 0, lastLog: 0 })
   const sceneTimerRef = useRef(null)
 
+  useEffect(() => {
+    window.__plairScene = { bg: bgMaterial, fg: fgMaterial, skip: false, force: false }
+    return () => { delete window.__plairScene }
+  }, [bgMaterial, fgMaterial])
+
   useFrame(({ size, gl, scene, camera }, frameDelta) => {
     window.__rafDebug?.sources && (window.__rafDebug.sources['ARC-MultiPass'] = (window.__rafDebug.sources['ARC-MultiPass'] || 0) + 1)
     const frameStart = performance.now()
 
     if (isOfflineRendering) return
+    const bench = window.__plairScene
+    if (bench?.skip) return
+    if (bench?.force) renderSignatureRef.current.force = true
 
     if (isUnmountedRef.current || !engineRef || !interfaceRef || !programsReadyRef.current) return
 
@@ -1820,6 +1828,13 @@ function MultiPassPlane({
       publishLightProbe(sampleBackgroundProbe(probe))
     }
 
+    if (bench?.uniforms) {
+      for (const name in bench.uniforms) {
+        const target = bgUniforms[name] || fgUniforms[name]
+        if (target) target.value = bench.uniforms[name]
+      }
+    }
+
     const paused = !signature.force && isSceneRenderingPaused(frameStart)
     reportFrame(delta, wantsRender && !paused)
     const needsRender = wantsRender && !paused
@@ -1841,9 +1856,13 @@ function MultiPassPlane({
       if (hasVisiblePanels && captureDirty) {
         bgUniforms.u_canvas_resolution.value.set(rtWidth, rtHeight)
         bgUniforms.u_is_capture.value = 1.0
+        const timing = bench?.timing
+        if (timing) { context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }
         gl.setRenderTarget(captureRenderTarget)
         gl.render(captureScene, captureCamera)
+        if (timing) context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel)
         gl.setRenderTarget(null)
+        if (timing) { timing.capture = (timing.capture || 0) + performance.now() - timing.t; timing.captures = (timing.captures || 0) + 1 }
         bgUniforms.u_is_capture.value = 0.0
         bgUniforms.u_canvas_resolution.value.set(logicalWidth, logicalHeight)
         signature.captureStale = false
@@ -1856,7 +1875,11 @@ function MultiPassPlane({
       if (glassMeshRef.current) glassMeshRef.current.visible = hasVisiblePanels
       if (backdropMeshRef.current) backdropMeshRef.current.visible = !hasVisiblePanels
 
+      const timing = bench?.timing
+      if (timing) { context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }
       gl.render(scene, camera)
+      if (timing) for (let i = 1; i < (timing.repeat || 1); i++) gl.render(scene, camera)
+      if (timing) { context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel); timing.main = (timing.main || 0) + (performance.now() - timing.t) / (timing.repeat || 1); timing.frames = (timing.frames || 0) + 1 }
       sceneTimer.end()
       splashReady('scene')
     }

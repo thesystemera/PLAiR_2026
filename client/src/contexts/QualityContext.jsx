@@ -81,10 +81,13 @@ function useSaveData() {
 }
 
 export function QualityProvider({ children }) {
-  const { visualQuality, dataSaverMode } = useUISelector(state => ({
+  const { visualQuality: chosenQuality, dataSaverMode, publishSettings } = useUISelector(state => ({
     visualQuality: state.settingsState.visualQuality,
     dataSaverMode: state.settingsState.dataSaverMode,
+    publishSettings: state.publishSettings,
   }))
+  const [benchOverride, setBenchOverride] = useState(null)
+  const visualQuality = benchOverride?.level || chosenQuality
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
   const saveData = useSaveData()
   const [autoLevel, setAutoLevel] = useState(() => readLearnedLevel() ?? heuristicLevel())
@@ -186,17 +189,20 @@ export function QualityProvider({ children }) {
     levelIndex,
     auto,
     ...LEVEL_SETTINGS[level],
+    ...benchOverride,
     isHigh: level === 'high',
     reduceMotion,
     reportFrame,
     reportRenderer,
     pauseRendering: pauseSceneRendering,
-  }), [level, levelIndex, auto, reduceMotion, reportFrame, reportRenderer])
+  }), [level, levelIndex, auto, reduceMotion, reportFrame, reportRenderer, benchOverride])
 
   useEffect(() => {
-    window.__plairQuality = () => ({ level, auto, autoLevel: LEVELS[autoIndex], ceiling: LEVELS[autoCeiling], reduceMotion, saveData })
+    window.__plairQuality = () => ({ level, auto, autoLevel: LEVELS[autoIndex], ceiling: LEVELS[autoCeiling], reduceMotion, saveData, override: benchOverride })
+    window.__plairQuality.override = setBenchOverride
+    window.__plairQuality.publishSettings = publishSettings
     return () => { delete window.__plairQuality }
-  }, [level, auto, autoIndex, autoCeiling, reduceMotion, saveData])
+  }, [level, auto, autoIndex, autoCeiling, reduceMotion, saveData, benchOverride, publishSettings])
 
   return (
     <QualityContext.Provider value={value}>

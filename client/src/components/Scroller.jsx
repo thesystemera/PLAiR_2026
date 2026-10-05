@@ -16,7 +16,13 @@ const SCROLLER_MASK_STYLE = {
   maskComposite: 'intersect'
 }
 
-export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {} }, ref) {
+function scrollerMaskStyle(extraMask) {
+  if (!extraMask) return SCROLLER_MASK_STYLE
+  const mask = `${SCROLLER_MASK}, ${extraMask}`
+  return { WebkitMask: mask, WebkitMaskComposite: 'source-in', mask, maskComposite: 'intersect' }
+}
+
+export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, mask = null }, ref) {
   const scrollRef = useRef(null)
 
   useImperativeHandle(ref, () => scrollRef.current)
@@ -164,7 +170,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
   }, [handleScroll, handleTouchStart, handleTouchEnd, reportScrollState])
 
   return (
-    <div className="h-full relative overflow-hidden" style={SCROLLER_MASK_STYLE}>
+    <div className="h-full relative overflow-hidden" style={scrollerMaskStyle(mask)}>
       <div
         ref={scrollRef}
         className={`h-full overflow-y-auto ${className}`}

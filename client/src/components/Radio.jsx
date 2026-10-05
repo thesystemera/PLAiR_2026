@@ -19,7 +19,6 @@ import { PanelHeader, TextRadioIcon } from './Panel'
 import { Scroller } from './Scroller'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
-import { CSS_TRANSITION } from '../lib/motion'
 
 const RADIO_BUTTON_SIZE = 240
 const RADIO_SIDE_WIDTH = 'min(18rem, 40vw)'
@@ -210,16 +209,12 @@ export function Radio() {
         <Scroller
           ref={conversationScrollRef}
           className="h-full overflow-x-hidden"
+          mask={showButtonMask
+            ? `radial-gradient(circle at 50% calc(50% + ${maskOffset}px), transparent ${maskInnerRadius}px, black ${maskOuterRadius}px)`
+            : null}
           style={{
             scrollbarWidth: 'thin',
             scrollbarColor: buttonOpacity < 1 ? 'rgba(136, 136, 136, 0.5) transparent' : 'transparent transparent',
-            maskImage: showButtonMask
-              ? `radial-gradient(circle at 50% calc(50% + ${maskOffset}px), transparent ${maskInnerRadius}px, black ${maskOuterRadius}px)`
-              : 'none',
-            WebkitMaskImage: showButtonMask
-              ? `radial-gradient(circle at 50% calc(50% + ${maskOffset}px), transparent ${maskInnerRadius}px, black ${maskOuterRadius}px)`
-              : 'none',
-            transition: CSS_TRANSITION.mask
           }}
         >
           <div

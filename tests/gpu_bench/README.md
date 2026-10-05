@@ -22,3 +22,25 @@ Build a client to test without touching production: `npx vite build --outDir <sc
 Notes: headless Chrome is not frame-capped when `--uncapped 1` is given, and at 60 fps the P6000 drops to low clocks
 (per-draw times look 5x higher), so compare builds under the same settings, alternating, several times. Chrome is
 killed by its profile path (`killchrome.mjs`): `child.kill()` leaves the browser running.
+
+## The owner's phone over USB (5 Oct 2026)
+
+`adb forward tcp:9222 localabstract:chrome_devtools_remote` (adb from Google's platform-tools; set `ADB=<path to adb.exe>`),
+PLAiR open in Chrome on the phone and in front (a hidden tab stops its frame loop and the scripts time out).
+
+| Script | What it does |
+|---|---|
+| `phone.mjs busy <s> <label>` | GPU busy % from the Adreno driver (`/sys/class/kgsl/kgsl-3d0/gpubusy`, readable without root) plus rAF fps. Busy % saturates near 100 and the GPU clock moves with load, so compare variants back to back. |
+| `phone.mjs gpu <s> <label>` | GPU ms of the scene's capture and main pass, timed with 1-pixel `readPixels` around them (`finish()` returns early in Chrome). `REPEAT=n` draws the main pass n times per frame to keep the clock up. |
+| `phone.mjs trace <s> [n]` | Chrome trace from the browser target: busy ms/s per thread, top events. `PASSES=<label>` prints Viz render passes per frame instead (each CSS mask over a composited scroller is one extra panel-sized pass every frame). |
+| `phone.mjs css '<rules>'`, `eval`, `layers`, `reload`, `tap x,y` | Live CSS ablation, page eval, composited layer list, reload, trusted tap (unlocks audio after a reload). |
+| `canvastest.mjs '<json>'` | Bare full-screen WebGL canvas in a new tab (`dpr`, `alpha`, `desync`, `overlay`), GPU busy while it clears every frame. |
+| `drawcount.js` | `node phone.mjs eval "$(cat drawcount.js)"`: WebGL calls per canvas per second. |
+
+Page hooks for ablation: `__plairScene.skip / force / uniforms {name: value} / timing`, `__plairQuality.override({ level, sceneDpr, glassTaps, ... })`.
+
+Measured on the Redmi Note 13 4G (Adreno 610), High, Radio tab, music playing: Chrome on Android throttles main-thread
+frames to 60 Hz unless the screen is touched (`ThrottleMainFrameTo60Hz`); the background canvas changing every frame
+makes Chrome re-composite the whole 1080x2400 screen (canvas clearing only, no scene: 66% busy vs 12% with the canvas
+still); masks: 93 -> 85% busy, fps 55 -> 60; main scene pass ~11 ms GPU. `desynchronized: true` cut the compositing
+cost to ~2% but showed half-drawn tiles (specks), so it is not usable.
