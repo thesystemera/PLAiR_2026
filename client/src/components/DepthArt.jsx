@@ -2,11 +2,10 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useQuality } from '../contexts/QualityContext'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
-import { CSS_TRANSITION } from '../lib/motion'
 import { useDepthMap } from '../hooks/useDepthMap'
 import { ART_PACK_SIZE, PROFILE_PACK_SIZE, artPackCache, isMemoryKey, profilePackCache } from '../lib/mediaCache'
 
-const INSTANT_MS = 150
+const HIDDEN = { opacity: 0 }
 
 const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('http') || url.startsWith('/') || isMemoryKey(url))
 
@@ -35,7 +34,7 @@ const DepthArt = memo(function DepthArt({
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const callbacksRef = useRef({ onLoad, onError })
-  const [drawn, setDrawn] = useState({ key: null, instant: false })
+  const [drawnKey, setDrawnKey] = useState(null)
   const key = isLoadedImage(packUrl) ? packUrl : null
 
   useEffect(() => {
@@ -49,14 +48,13 @@ const DepthArt = memo(function DepthArt({
 
   useEffect(() => {
     if (!key) return
-    const attachedAt = performance.now()
     return depthArtRenderer.attach({
       host: hostRef.current,
       canvas: canvasRef.current,
       packUrl: key,
       packSize,
       onDrawn: () => {
-        setDrawn({ key, instant: performance.now() - attachedAt < INSTANT_MS })
+        setDrawnKey(key)
         callbacksRef.current.onLoad?.({ currentTarget: canvasRef.current, target: canvasRef.current })
       },
       onFailed: () => callbacksRef.current.onError?.({ currentTarget: canvasRef.current, target: canvasRef.current }),
@@ -67,7 +65,7 @@ const DepthArt = memo(function DepthArt({
     if (packMissing) callbacksRef.current.onError?.({ currentTarget: canvasRef.current, target: canvasRef.current })
   }, [packMissing])
 
-  const shown = key !== null && drawn.key === key
+  const shown = key !== null && drawnKey === key
 
   return (
     <div ref={hostRef} className={className}>
@@ -76,7 +74,7 @@ const DepthArt = memo(function DepthArt({
         role="img"
         aria-label={alt}
         className="absolute inset-0 w-full h-full pointer-events-none"
-        style={{ opacity: shown ? 1 : 0, transition: shown && drawn.instant ? 'none' : CSS_TRANSITION.fadeOpacity }}
+        style={shown ? undefined : HIDDEN}
         {...artProps}
       />
     </div>

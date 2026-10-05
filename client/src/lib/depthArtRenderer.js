@@ -354,7 +354,10 @@ class DepthArtRenderer {
       entry.refs--
       keep.add(entry)
     }
-    for (const entry of this.textures.values()) entry.warm = keep.has(entry)
+    for (const entry of this.textures.values()) {
+      entry.warm = keep.has(entry)
+      if (entry.warm) entry.warmed = true
+    }
     this.evictIdle()
     this.schedule()
   }
@@ -661,7 +664,7 @@ class DepthArtRenderer {
       }
       if (!view.drawn) {
         view.drawn = true
-        view.onDrawn?.(true)
+        view.onDrawn?.()
       }
     }
     if (source !== canvas) source.close()
@@ -709,6 +712,10 @@ if (typeof window !== 'undefined') {
         atlas: r.canvas ? `${r.canvas.width}x${r.canvas.height}` : null, viewSizes,
       }
     },
+    views: () => [...depthArtRenderer.views].filter(view => view.rect && view.rect.bottom > 0 && view.rect.top < viewport.height && view.rect.width > 60).map(view => ({
+      top: Math.round(view.rect.top), shown: view.shown, drawn: view.drawn, entry: view.entry?.state || 'none', warmHit: !!view.entry?.warmed,
+      size: view.entry?.size, canvas: `${view.canvas.width}x${view.canvas.height}`,
+    })),
     set: ({ maxIdle } = {}) => {
       if (maxIdle !== undefined) depthArtRenderer.maxIdle = maxIdle
       depthArtRenderer.evictIdle()
