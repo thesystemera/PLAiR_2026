@@ -558,4 +558,11 @@ const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BAC
   }
 `
 
-export { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, backdropFragmentShader }
+const sceneGlassFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + AMBIENT_GLOW_FUNCTION + `
+  void main() {
+    vec4 glass = clamp(computeGlass(), 0.0, 1.0);
+    gl_FragColor = vec4(applyAmbientGlow(glass.rgb, vUv, glass.a), 1.0);
+  }
+`
+
+export { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, backdropFragmentShader }

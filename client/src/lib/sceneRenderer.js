@@ -1,8 +1,10 @@
 import {
+  BufferGeometry,
   CanvasTexture,
   ClampToEdgeWrapping,
   ColorManagement,
   DataTexture,
+  Float32BufferAttribute,
   LinearFilter,
   LinearSRGBColorSpace,
   MathUtils,
@@ -23,7 +25,7 @@ import {
   WebGLRenderer,
   WebGLRenderTarget,
 } from 'three'
-import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, backdropFragmentShader } from './sceneShaders'
+import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, backdropFragmentShader } from './sceneShaders'
 import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -58,6 +60,9 @@ const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
 const ARTWORK_SIZE = 512
 const CLICK_DECAY_MS = 500
 const ARTWORK_SWAP_FRAMES = 2
+const PANEL_CORNER_RADIUS = 0.015
+const OPAQUE_PANEL_OPACITY = 0.9995
+const MAX_SPLIT_RECTS = 7
 export const LYRIC_WIDTH = 1024
 export const LYRIC_HEIGHT = 512
 
@@ -181,6 +186,77 @@ async function loadArtworkTexture(url, targetSize) {
   texture.generateMipmaps = true
   texture.needsUpdate = true
   return texture
+}
+
+function opaquePanelRects(regions, opacities, count, out) {
+  let n = 0
+  for (let i = 0; i < count; i++) {
+    const region = regions[i]
+    if (region.z < 0.01 || opacities[i] < OPAQUE_PANEL_OPACITY) continue
+    const halfWidth = region.z * 0.5 - PANEL_CORNER_RADIUS
+    const halfHeight = region.w * 0.5 - PANEL_CORNER_RADIUS
+    if (halfWidth <= 0 || halfHeight <= 0) continue
+    out[n * 4] = Math.max(0, region.x - halfWidth)
+    out[n * 4 + 1] = Math.max(0, region.y - halfHeight)
+    out[n * 4 + 2] = Math.min(1, region.x + halfWidth)
+    out[n * 4 + 3] = Math.min(1, region.y + halfHeight)
+    if (out[n * 4] < out[n * 4 + 2] && out[n * 4 + 1] < out[n * 4 + 3]) n++
+  }
+  return n
+}
+
+function pushQuad(positions, uvs, x0, y0, x1, y1) {
+  const corners = [x0, y0, x1, y0, x1, y1, x0, y0, x1, y1, x0, y1]
+  for (let i = 0; i < corners.length; i += 2) {
+    positions.push(corners[i] * 2 - 1, corners[i + 1] * 2 - 1, 0)
+    uvs.push(corners[i], corners[i + 1])
+  }
+}
+
+function splitScreen(rects, count) {
+  const xs = [0, 1]
+  const ys = [0, 1]
+  for (let i = 0; i < count; i++) {
+    xs.push(rects[i * 4], rects[i * 4 + 2])
+    ys.push(rects[i * 4 + 1], rects[i * 4 + 3])
+  }
+  const sortUnique = values => [...new Set(values)].sort((a, b) => a - b)
+  const columns = sortUnique(xs)
+  const rows = sortUnique(ys)
+  const inner = { positions: [], uvs: [] }
+  const outer = { positions: [], uvs: [] }
+  for (let j = 0; j < rows.length - 1; j++) {
+    const y0 = rows[j]
+    const y1 = rows[j + 1]
+    const cy = (y0 + y1) * 0.5
+    let runStart = 0
+    let runInside = null
+    for (let i = 0; i <= columns.length - 1; i++) {
+      let inside = null
+      if (i < columns.length - 1) {
+        const cx = (columns[i] + columns[i + 1]) * 0.5
+        inside = false
+        for (let k = 0; k < count; k++) {
+          if (cx > rects[k * 4] && cx < rects[k * 4 + 2] && cy > rects[k * 4 + 1] && cy < rects[k * 4 + 3]) { inside = true; break }
+        }
+      }
+      if (inside !== runInside) {
+        if (runInside !== null) {
+          const target = runInside ? inner : outer
+          pushQuad(target.positions, target.uvs, columns[runStart], y0, columns[i], y1)
+        }
+        runStart = i
+        runInside = inside
+      }
+    }
+  }
+  return { inner, outer }
+}
+
+function setQuads(geometry, quads) {
+  geometry.dispose()
+  geometry.setAttribute('position', new Float32BufferAttribute(quads.positions, 3))
+  geometry.setAttribute('uv', new Float32BufferAttribute(quads.uvs, 2))
 }
 
 function createDefaultState() {
@@ -395,12 +471,29 @@ export class SceneRenderer {
       },
     })
 
+    this.glassInteriorMaterial = new ShaderMaterial({
+      vertexShader: backgroundVertexShader,
+      fragmentShader: sceneGlassFragmentShader,
+      uniforms: this.fgMaterial.uniforms,
+    })
+    this.glassGeometry = new BufferGeometry()
+    this.glassInteriorGeometry = new BufferGeometry()
+    setQuads(this.glassGeometry, splitScreen(null, 0).outer)
+    setQuads(this.glassInteriorGeometry, splitScreen(null, 0).outer)
+    this.splitRects = new Float64Array(MAX_SPLIT_RECTS * 4)
+    this.splitScratch = new Float64Array(MAX_SPLIT_RECTS * 4)
+    this.splitCount = -1
+    this.splitHasInterior = false
+    this.splitHasOuter = true
+
     this.captureMesh = new Mesh(this.geometry, this.bgMaterial)
-    this.glassMesh = new Mesh(this.geometry, this.fgMaterial)
+    this.glassMesh = new Mesh(this.glassGeometry, this.fgMaterial)
+    this.glassInteriorMesh = new Mesh(this.glassInteriorGeometry, this.glassInteriorMaterial)
     this.backdropMesh = new Mesh(this.geometry, this.backdropMaterial)
-    for (const mesh of [this.captureMesh, this.glassMesh, this.backdropMesh]) mesh.frustumCulled = false
+    for (const mesh of [this.captureMesh, this.glassMesh, this.glassInteriorMesh, this.backdropMesh]) mesh.frustumCulled = false
     this.captureScene.add(this.captureMesh)
     this.mainScene.add(this.glassMesh)
+    this.mainScene.add(this.glassInteriorMesh)
     this.mainScene.add(this.backdropMesh)
     for (const node of [this.mainScene, this.captureScene, this.mainCamera, this.captureCamera]) {
       node.updateMatrixWorld(true)
@@ -586,9 +679,27 @@ export class SceneRenderer {
     this.bgMaterial.dispose()
     this.fgMaterial.dispose()
     this.backdropMaterial.dispose()
+    this.glassInteriorMaterial.dispose()
+    this.glassGeometry.dispose()
+    this.glassInteriorGeometry.dispose()
     this.geometry.dispose()
     this.sceneTimer.dispose()
     this.renderer.dispose()
+  }
+
+  updateGlassSplit(regions, opacities, count) {
+    const rects = this.splitScratch
+    const n = opaquePanelRects(regions, opacities, count, rects)
+    let changed = n !== this.splitCount
+    for (let i = 0; !changed && i < n * 4; i++) changed = rects[i] !== this.splitRects[i]
+    if (!changed) return
+    this.splitCount = n
+    this.splitRects.set(rects)
+    const { inner, outer } = splitScreen(rects, n)
+    if (inner.positions.length) setQuads(this.glassInteriorGeometry, inner)
+    if (outer.positions.length) setQuads(this.glassGeometry, outer)
+    this.splitHasInterior = inner.positions.length > 0
+    this.splitHasOuter = outer.positions.length > 0
   }
 
   frame(delta) {
@@ -1102,7 +1213,9 @@ export class SceneRenderer {
         signature.captureStale = true
       }
 
-      this.glassMesh.visible = hasVisiblePanels
+      if (hasVisiblePanels) this.updateGlassSplit(packedRegions, packedOpacities, packedCount)
+      this.glassMesh.visible = hasVisiblePanels && this.splitHasOuter
+      this.glassInteriorMesh.visible = hasVisiblePanels && this.splitHasInterior
       this.backdropMesh.visible = !hasVisiblePanels
 
       if (timing) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }
