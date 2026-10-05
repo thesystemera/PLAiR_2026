@@ -111,8 +111,21 @@ const OFFLINE_STORE_TYPES = new Set(['artwork', 'artwork_thumb', 'enriched_artwo
 const openCaches = new Map()
 const METADATA_SAVE_DELAY_MS = 1000
 
+const blobsByUrl = new Map()
+
+export function blobForUrl(url) {
+  return blobsByUrl.get(url) || null
+}
+
+function createBlobUrl(blob) {
+  const url = URL.createObjectURL(blob)
+  blobsByUrl.set(url, blob)
+  return url
+}
+
 function revokeBlobUrl(url) {
   if (typeof url === 'string' && url.startsWith('blob:')) {
+    blobsByUrl.delete(url)
     URL.revokeObjectURL(url)
   }
 }
@@ -261,7 +274,7 @@ class MediaCache {
       const cached = await cacheManager.getCachedTrack(id)
       const blob = this.type === 'enriched_artwork' ? cached?.enrichedArtworkBlob : cached?.artworkBlob
       if (!blob) return null
-      const blobUrl = URL.createObjectURL(blob)
+      const blobUrl = createBlobUrl(blob)
       this._setMemory(id, blobUrl)
       this.updateMetadata(id, blob.size)
       return blobUrl
@@ -320,7 +333,7 @@ class MediaCache {
       if (!response) return null
 
       const blob = await response.blob()
-      const blobUrl = URL.createObjectURL(blob)
+      const blobUrl = createBlobUrl(blob)
 
       this._setMemory(id, blobUrl)
       this.updateMetadata(id, blob.size)

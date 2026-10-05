@@ -3,6 +3,7 @@ import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
 import { addFrameWork, createGpuTimer, frameStatsActive } from './frameStats'
+import { blobForUrl } from './mediaCache'
 
 const INTENSITY = 0.1
 const SCROLL_TILT = 0.9
@@ -18,9 +19,13 @@ const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
 async function loadImage(url) {
   if (typeof createImageBitmap === 'function') {
-    const response = await fetch(url)
-    if (!response.ok) throw new Error(`image ${response.status}`)
-    return createImageBitmap(await response.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
+    let blob = blobForUrl(url)
+    if (!blob) {
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`image ${response.status}`)
+      blob = await response.blob()
+    }
+    return createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
   }
   const image = new Image()
   image.decoding = 'async'
