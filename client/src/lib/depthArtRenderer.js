@@ -8,7 +8,7 @@ import { blobForUrl } from './mediaCache'
 const INTENSITY = 0.1
 const SCROLL_TILT = 0.9
 const MAX_PARALLAX = 1.6
-const MAX_IDLE_TEXTURES = 48
+const MAX_IDLE_TEXTURES = 8
 const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.1
 const LAYOUT_REFRESH_MS = 250
@@ -74,6 +74,7 @@ class DepthArtRenderer {
   constructor() {
     this.views = new Set()
     this.textures = new Map()
+    this.maxIdle = MAX_IDLE_TEXTURES
     this.uploads = []
     this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
     this.canvas = null
@@ -291,9 +292,9 @@ class DepthArtRenderer {
   evictIdle() {
     let idle = 0
     for (const entry of this.textures.values()) if (entry.refs <= 0) idle++
-    if (idle <= MAX_IDLE_TEXTURES) return
+    if (idle <= this.maxIdle) return
     const byAge = [...this.textures.values()].filter(entry => entry.refs <= 0).sort((a, b) => a.usedAt - b.usedAt)
-    for (const entry of byAge.slice(0, idle - MAX_IDLE_TEXTURES)) this.release(entry)
+    for (const entry of byAge.slice(0, idle - this.maxIdle)) this.release(entry)
   }
 
   release(entry) {
@@ -337,6 +338,7 @@ class DepthArtRenderer {
       entry.depth = this.createTexture(depth, gl.LUMINANCE)
       entry.bound = createDepthBound(gl, this.programs, entry.depth, depth.width, depth.height)
       entry.normal = this.createTexture(normal, gl.RGB)
+      entry.sizes = [color.width, color.height, depth.width, depth.height, normal.width, normal.height]
       entry.state = 'ready'
       for (const image of [color, depth, normal]) image.close?.()
     }
@@ -581,3 +583,39 @@ class DepthArtRenderer {
 }
 
 export const depthArtRenderer = new DepthArtRenderer()
+
+if (typeof window !== 'undefined') {
+  window.__plairArt = {
+    stats: () => {
+      const r = depthArtRenderer
+      const mb = bytes => +(bytes / 1048576).toFixed(1)
+      let active = 0, idle = 0, textureBytes = 0, cacheBytes = 0, caches = 0
+      const textureSizes = {}
+      for (const entry of r.textures.values()) {
+        if (entry.refs > 0) active++
+        else idle++
+        if (!entry.sizes) continue
+        const [cw, ch, dw, dh, nw, nh] = entry.sizes
+        textureBytes += cw * ch * 4 + dw * dh * (1 + 4 / 3) + nw * nh * 4
+        textureSizes[cw] = (textureSizes[cw] || 0) + 1
+      }
+      const viewSizes = {}
+      for (const view of r.views) {
+        if (view.cache) {
+          caches++
+          cacheBytes += view.cache.width * view.cache.height * (4 + (r.programs?.floatHit ? 8 : 4))
+        }
+        const key = `${view.canvas.width}<-${view.entry?.sizes?.[0] || '?'}`
+        viewSizes[key] = (viewSizes[key] || 0) + 1
+      }
+      return {
+        views: r.views.size, active, idle, textureMB: mb(textureBytes), textureSizes, caches, cacheMB: mb(cacheBytes),
+        atlas: r.canvas ? `${r.canvas.width}x${r.canvas.height}` : null, viewSizes,
+      }
+    },
+    set: ({ maxIdle } = {}) => {
+      if (maxIdle !== undefined) depthArtRenderer.maxIdle = maxIdle
+      depthArtRenderer.evictIdle()
+    },
+  }
+}

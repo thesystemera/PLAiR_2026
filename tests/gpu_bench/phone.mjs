@@ -138,6 +138,51 @@ if (cmd === 'busy') {
   const total = [...self.values()].reduce((a, b) => a + b, 0)
   console.log('total sampled ms', (total / 1000).toFixed(0))
   for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, Number(arg2 || 30))) console.log((v / 1000).toFixed(0).padStart(6), 'ms', k)
+} else if (cmd === 'memdump') {
+  const version = await (await fetch('http://127.0.0.1:9222/json/version')).json()
+  const b = connect(version.webSocketDebuggerUrl)
+  await b.ready
+  const events = []
+  let done
+  b.on(m => {
+    if (m.method === 'Tracing.dataCollected') events.push(...m.params.value)
+    if (m.method === 'Tracing.tracingComplete') done?.()
+  })
+  await b.send('Tracing.start', { traceConfig: { includedCategories: ['disabled-by-default-memory-infra'], memoryDumpConfig: { triggers: [] } }, transferMode: 'ReportEvents' })
+  await sleep(300)
+  await b.send('Tracing.requestMemoryDump', { deterministic: true, levelOfDetail: 'detailed' })
+  const complete = new Promise(r => { done = r })
+  await b.send('Tracing.end')
+  await complete
+  const procs = new Map(events.filter(e => e.ph === 'M' && e.name === 'process_name').map(e => [e.pid, e.args.name]))
+  const depth = Number(arg2 || 2)
+  const rows = []
+  for (const e of events) {
+    const allocators = e.ph === 'v' && e.args?.dumps?.allocators
+    if (!allocators) continue
+    const proc = procs.get(e.pid) || e.pid
+    const sums = new Map()
+    for (const [name, a] of Object.entries(allocators)) {
+      const size = a.attrs?.size
+      if (!size || size.units !== 'bytes') continue
+      const parts = name.split('/')
+      if (parts.length !== Math.min(depth, parts.length) && Object.keys(allocators).some(n => n.startsWith(parts.slice(0, depth).join('/') + '/') && n.split('/').length === depth)) continue
+      const key = parts.slice(0, depth).map(s => s.replace(/0x[0-9a-f]+|\d{3,}/g, '#')).join('/')
+      if (parts.length > depth) continue
+      sums.set(key, (sums.get(key) || 0) + parseInt(size.value, 16))
+    }
+    for (const [k, v] of sums) rows.push([proc, k, v])
+  }
+  const filter = arg && arg !== 'all' ? new RegExp(arg) : null
+  for (const [proc, k, v] of rows.filter(r => !filter || filter.test(r[1])).sort((a, b) => b[2] - a[2]).slice(0, 40)) {
+    if (v < 1 << 20) continue
+    console.log(`${(v / 1048576).toFixed(1).padStart(8)} MB  ${String(proc).padEnd(14)} ${k}`)
+  }
+  if (process.env.SAVE) (await import('node:fs')).writeFileSync(process.env.SAVE, JSON.stringify(events))
+  b.close()
+} else if (cmd === 'gc') {
+  await p.send('HeapProfiler.collectGarbage')
+  console.log('gc done')
 } else if (cmd === 'eval') {
   console.log(await evaluate(arg))
 } else if (cmd === 'fps') {
