@@ -188,14 +188,14 @@ const BACKGROUND_FRAGMENT_MAIN = `  void main() {
     float blurAmount = getBlurAmount(uv);
     vec4 finalColor;
 
-    if (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) {
-      vec2 chromaticOffset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
-      vec4 colorR = applyEffects(uv + chromaticOffset, blurAmount, u_transition);
-      vec4 colorG = applyEffects(uv, blurAmount, u_transition);
-      vec4 colorB = applyEffects(uv - chromaticOffset, blurAmount, u_transition);
-      finalColor = vec4(colorR.r, colorG.g, colorB.b, colorG.a);
-    } else {
-      finalColor = applyEffects(uv, blurAmount, u_transition);
+    int chromaticTaps = (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) ? 3 : 1;
+    vec2 chromaticOffset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
+    for (int k = 0; k < chromaticTaps; k++) {
+      vec2 tapUv = k == 0 ? uv : (k == 1 ? uv + chromaticOffset : uv - chromaticOffset);
+      vec4 tap = applyEffects(tapUv, blurAmount, u_transition);
+      if (k == 0) finalColor = tap;
+      else if (k == 1) finalColor.r = tap.r;
+      else finalColor.b = tap.b;
     }
 
     if (u_video_clip_blend > 0.01) {
@@ -1312,6 +1312,7 @@ function MultiPassPlane({
 
     if (isOfflineRendering) return
     const bench = window.__plairScene
+    if (bench && !bench.three) bench.three = { gl, scene, camera }
     if (bench?.skip) return
     if (bench?.force) renderSignatureRef.current.force = true
 
@@ -1879,6 +1880,7 @@ function MultiPassPlane({
       if (timing) { context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }
       gl.render(scene, camera)
       if (timing) for (let i = 1; i < (timing.repeat || 1); i++) gl.render(scene, camera)
+      if (bench?.extra) for (let i = 0; i < bench.extra; i++) gl.render(scene, camera)
       if (timing) { context.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, timing.pixel); timing.main = (timing.main || 0) + (performance.now() - timing.t) / (timing.repeat || 1); timing.frames = (timing.frames || 0) + 1 }
       sceneTimer.end()
       splashReady('scene')

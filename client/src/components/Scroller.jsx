@@ -9,18 +9,11 @@ const { maskFadeTop, maskFadeBottom, maskFadeSide } = PANEL_SCROLL
 
 const SCROLLER_MASK = EDGE_FADE_MASK(maskFadeTop, maskFadeBottom, maskFadeSide)
 
-const SCROLLER_MASK_STYLE = {
-  WebkitMask: SCROLLER_MASK,
-  WebkitMaskComposite: 'source-in',
-  mask: SCROLLER_MASK,
-  maskComposite: 'intersect'
+function scrollerMaskStyle(mask) {
+  return { WebkitMaskImage: mask, WebkitMaskComposite: 'source-in', maskImage: mask, maskComposite: 'intersect' }
 }
 
-function scrollerMaskStyle(extraMask) {
-  if (!extraMask) return SCROLLER_MASK_STYLE
-  const mask = `${SCROLLER_MASK}, ${extraMask}`
-  return { WebkitMask: mask, WebkitMaskComposite: 'source-in', mask, maskComposite: 'intersect' }
-}
+const SCROLLER_MASK_STYLE = scrollerMaskStyle(SCROLLER_MASK)
 
 export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, mask = null }, ref) {
   const scrollRef = useRef(null)
@@ -170,7 +163,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
   }, [handleScroll, handleTouchStart, handleTouchEnd, reportScrollState])
 
   return (
-    <div className="h-full relative overflow-hidden" style={scrollerMaskStyle(mask)}>
+    <div className="h-full relative overflow-hidden" style={mask ? scrollerMaskStyle(`${SCROLLER_MASK}, ${mask}`) : SCROLLER_MASK_STYLE}>
       <div
         ref={scrollRef}
         className={`h-full overflow-y-auto ${className}`}

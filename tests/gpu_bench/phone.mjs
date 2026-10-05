@@ -93,6 +93,9 @@ if (cmd === 'busy') {
   const r = await evaluate(`new Promise(res => { const b = window.__plairScene; b.force = true; b.timing = { pixel: new Uint8Array(4), repeat: ${Number(process.env.REPEAT || 1)} }; setTimeout(() => { const t = b.timing; b.timing = null; res(JSON.stringify({ main: +(t.main / t.frames).toFixed(2), capture: t.captures ? +(t.capture / t.captures).toFixed(2) : 0, captures: t.captures || 0, frames: t.frames })) }, ${Number(arg) * 1000}) })`)
   const t = JSON.parse(r)
   console.log(`${(arg2 || '').padEnd(16)} main ${String(t.main).padStart(6)} ms   capture ${String(t.capture).padStart(5)} ms (${t.captures}/${t.frames} frames)`)
+} else if (cmd === 'ft') {
+  const f = JSON.parse(await evaluate(FPS_EXPR(Number(arg))))
+  console.log(`${(arg2 || '').padEnd(18)} frame ${(1000 / f.fps).toFixed(2)} ms  fps ${f.fps}  p50 ${f.p50}  p90 ${f.p90}`)
 } else if (cmd === 'eval') {
   console.log(await evaluate(arg))
 } else if (cmd === 'fps') {
