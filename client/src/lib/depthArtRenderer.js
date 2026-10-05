@@ -454,9 +454,9 @@ class DepthArtRenderer {
       }
       if (view.scrollInset === undefined) view.scrollInset = parseFloat(getComputedStyle(view.scroller).paddingTop) || 0
       const top = box.top + view.scrollInset
-      const room = (box.bottom - top - rect.height) / 2
-      if (room < 1) return 0
-      return clamp((rect.top + rect.height / 2 - (top + box.bottom) / 2) / room, -1, 1) * SCROLL_TILT
+      const half = (box.bottom - top) / 2
+      if (half < 1) return 0
+      return clamp((rect.top + rect.height / 2 - (top + box.bottom) / 2) / half, -1, 1) * SCROLL_TILT
     }
     const parallaxFor = (view, rect, width, height) => {
       const tilt = scrollTiltFor(view, rect)
