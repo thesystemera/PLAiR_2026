@@ -9,7 +9,7 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render Suno tracks that have no master yet through the full chain, "
                                                  "on a chosen GPU, in a process of its own")
-    parser.add_argument("--gpu", type=int, default=0, help="PCI-ordered GPU index (0 = Quadro P6000, PLAiR's card; 1 = the RTX 6000 is the owner's other projects)")
+    parser.add_argument("--gpu", type=int, default=0, help="PCI-ordered GPU index (0 = Quadro P6000, PLAiR's card; 1 = the RTX 6000, shared with the owner's other projects)")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N tracks")
     parser.add_argument("--in-flight", type=int, default=4, help="Tracks inside the lanes at once")
     parser.add_argument("--dry-run", action="store_true", help="List what would run")

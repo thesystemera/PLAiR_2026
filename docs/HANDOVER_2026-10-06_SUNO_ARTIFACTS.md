@@ -18,7 +18,7 @@ Goal: remove or mask these without removing music (the owner rejects anything th
 |---|---|---|
 | Too bright at 8-12 kHz, dull at 16 kHz | Reference EQ to the modern-master average (Pestana 2013, No.1 singles 2000-2010), only what falls outside ±3 dB, up to 10 dB | Fixed: every tested song inside or within 0.3 dB of the band |
 | Nothing above the 18 kHz MP3 wall | Apollo on the decoded MP3, keeping Suno's signal below its cutoff and filling above | Fixed (16-20 kHz +2-2.5 dB vs v3) |
-| Codec holes in the highs | Steady tape hiss at -70 dBFS before the limiter | Masked: deepest holes halved; owner likes it |
+| Codec holes in the highs | Steady tape hiss at -80 dBFS before the limiter (-70 until 6 Oct) | Masked: deepest holes halved at -70; owner likes it, lowered to -80 as a little loud |
 | Flange / swirl | SonicMaster 33% wet (regenerates the highs; at 100% it smooths codec flange but adds its own artifacts) | Partly: still audible |
 | Harsh flangy vocals | RoFormer split -> Lew's vocal Apollo -> remix | Partly: still audible |
 | Digital noise / grain | Nothing targets it directly (Apollo changes little at Suno's bitrate) | Open |
