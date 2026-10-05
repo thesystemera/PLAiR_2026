@@ -48,6 +48,14 @@ SonicMaster's blend is the one stage that can itself sound phasey: its wet outpu
 
 **Stereo (6 Oct, lead 8):** in 12 random songs the phase between the channels on shared content (6-12 degrees, wandering 8-15 degrees per 85 ms) equals what a perfectly centred source gives at the same coherence (5.5-9.5 and 8-14 degrees). The flange is not between the channels, so mid/side processing will not help. Suno is close to mono (coherence 0.88-0.95 in every band).
 
+**Why SonicMaster sounds muddy (6 Oct, Carbon Copy, 45 s with vocals, its pure output against its input):**
+- It works as an expander: the level range of each band grows from 15-19 dB to 24-29 dB, and the quietest fifth of 100 ms frames drops 7-9 dB from 250 Hz to 8 kHz. At 33% wet the quiet moments still drop 1-2 dB in every band.
+- It turns 2-4 kHz down 1.75 dB and 8-16 kHz up 6.6 dB.
+- Its mids are a different take: coherence with the input is 0.74 at 60-250 Hz, 0.42 at 250-2000 Hz and 0.00 above 2 kHz, so a blend layers two unrelated versions.
+- Its pure output still reads lock 0.046 (raw 0.154, 33% blend 0.089), so more wet than about 100% of the highs buys nothing.
+
+**In test with the owner (6 Oct): SonicMaster for the highs only** (`scripts/music_lab/sonic_highs.py <track id>`, clips in `upscale_ab/sonic_highs/send/`). Suno's own signal below 3 kHz and above 17 kHz; between them SonicMaster's pure output, with its level per third-octave band and 46 ms frame set to the original's and its long-term tone matched. Measured on Carbon Copy after the reference EQ and leveler, against the chain without SonicMaster: every band within 0.5 dB, mids unchanged in every frame, quiet moments -0.5 dB at 2-8 kHz and +0.2 dB at 8-16 kHz, lock 0.041, fixed tones gone (+0.7 dB), 16 kHz inside the industry band. The highs get wider in stereo (left/right coherence at 4-12 kHz 0.79, current chain 0.91, Suno 0.97). SonicMaster at 100% takes 27 s for 57 s of audio on the P6000 at 7.7 GB. Not in the production chain; the owner has not judged it yet.
+
 **Chain facts:**
 - Apollo (JusperLee, trained on 32-128 kbps MP3s) changes Suno's music only 21-26 dB under the signal: Suno's bitrate is above what it learned, and Suno's artifacts are not MP3 artifacts. Lew's Universal Apollo measured the same.
 - Suno's artifacts most likely come from its own generative audio decoder (a neural codec), with the MP3 on top. Anything trained only on MP3 damage will miss most of them.
