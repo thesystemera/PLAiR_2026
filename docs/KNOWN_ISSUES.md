@@ -9,6 +9,10 @@ anything else is carried over as written.
 
 ## 0. Urgent: frame rate since the lit artwork (4 Oct)
 
+- **5 Oct: start with `docs/NEXT_SESSION_PERFORMANCE.md`.** WebGL context loss (the page went black on the
+  owner's phone during A/B runs) is the first item; then 60 fps under hand-held motion (Now Playing ~36-46,
+  Catalog ~47 today), with the measured breakdown and the phone test scripts in `tests/gpu_bench/perf/`.
+
 - **Frame rate dropped to about half or a quarter since Now Playing and the covers are lit from the background**;
   possible loss of the frosted-glass panels; up/down tilt on Now Playing not working on the owner's phone.
   Everything known, the benchmark and the next steps: `docs/HANDOVER_2026-10-04_LIT_ARTWORK.md`.
