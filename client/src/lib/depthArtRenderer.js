@@ -86,6 +86,7 @@ class DepthArtRenderer {
     this.views = new Set()
     this.textures = new Map()
     this.maxIdle = MAX_IDLE_TEXTURES
+    this.drawDelays = []
     this.uploads = []
     this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, gyroRef: null, mouseRef: null }
     this.canvas = null
@@ -222,6 +223,7 @@ class DepthArtRenderer {
     }
     view.visible = visible
     view.shown = visible && view.styleVisible
+    if (view.shown && !view.shownAt) view.shownAt = performance.now()
     if (!visible) this.dropCache(view)
   }
 
@@ -399,6 +401,7 @@ class DepthArtRenderer {
 
   processUploads() {
     const gl = this.gl
+    if (this.uploads.length > 1) this.uploads.sort((a, b) => (b.entry.refs > 0) - (a.entry.refs > 0))
     for (let i = 0; i < UPLOADS_PER_FRAME && this.uploads.length; i++) {
       const { entry, color, map } = this.uploads.shift()
       if (this.textures.get(entry.key) !== entry) {
@@ -489,11 +492,19 @@ class DepthArtRenderer {
         continue
       }
       if (!entry || entry.state !== 'ready') continue
-      if (!view.shown) continue
       const rect = view.rect
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
-      if (view.canvas.width !== width || view.canvas.height !== height) {
+      const sized = view.canvas.width === width && view.canvas.height === height
+      if (!view.shown) {
+        if (!sized && rect.width >= 2 && resized < CANVAS_RESIZES_PER_FRAME) {
+          view.canvas.width = width
+          view.canvas.height = height
+          resized++
+        }
+        continue
+      }
+      if (!sized) {
         if (resized >= CANVAS_RESIZES_PER_FRAME) continue
         resized++
       }
@@ -664,6 +675,9 @@ class DepthArtRenderer {
       }
       if (!view.drawn) {
         view.drawn = true
+        view.drawnAfterMs = Math.round(performance.now() - view.shownAt)
+        this.drawDelays.push(view.drawnAfterMs)
+        if (this.drawDelays.length > 200) this.drawDelays.shift()
         view.onDrawn?.()
       }
     }
@@ -714,8 +728,9 @@ if (typeof window !== 'undefined') {
     },
     views: () => [...depthArtRenderer.views].filter(view => view.rect && view.rect.bottom > 0 && view.rect.top < viewport.height && view.rect.width > 60).map(view => ({
       top: Math.round(view.rect.top), shown: view.shown, drawn: view.drawn, entry: view.entry?.state || 'none', warmHit: !!view.entry?.warmed,
-      size: view.entry?.size, canvas: `${view.canvas.width}x${view.canvas.height}`,
+      size: view.entry?.size, canvas: `${view.canvas.width}x${view.canvas.height}`, drawnAfterMs: view.drawnAfterMs,
     })),
+    drawDelays: () => depthArtRenderer.drawDelays.splice(0),
     set: ({ maxIdle } = {}) => {
       if (maxIdle !== undefined) depthArtRenderer.maxIdle = maxIdle
       depthArtRenderer.evictIdle()
