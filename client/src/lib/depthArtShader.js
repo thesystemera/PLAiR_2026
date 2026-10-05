@@ -182,8 +182,25 @@ const MARCH_BOUND = `
   #endif
 `
 
+const SHADE_PRECISION = `
+  #ifndef SHADE
+  #ifdef MEDIUMP_SHADING
+  #define SHADE mediump
+  #else
+  #define SHADE highp
+  #endif
+  #endif
+`
+
+const SAMPLES = `
+  #define DEPTH_AT(uv) texture2D(u_depth, uv).g
+  #define COLOR_AT(uv) texture2D(u_color, uv)
+`
+
 const PARALLAX = `
+  ${SHADE_PRECISION}
   ${MARCH_BOUND}
+  ${SAMPLES}
 
   vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV) {
     float dispLen = length(displacement);
@@ -207,7 +224,7 @@ const PARALLAX = `
         testDepth -= layerStep;
         continue;
       }
-      sampledDepth = texture2D(u_depth, clamp(testUV, 0.0, 1.0)).g;
+      sampledDepth = DEPTH_AT(clamp(testUV, 0.0, 1.0));
 
       if (sampledDepth >= testDepth) {
         hit = true;
@@ -226,7 +243,7 @@ const PARALLAX = `
       for (int j = 0; j < REFINE_STEPS; j++) {
         float mid = (lo + hi) * 0.5;
         vec2 midUV = uv - (mid - 0.5) * displacement;
-        float midSample = texture2D(u_depth, clamp(midUV, 0.0, 1.0)).g;
+        float midSample = DEPTH_AT(clamp(midUV, 0.0, 1.0));
 
         if (midSample >= mid) {
           lo = mid;
@@ -242,24 +259,24 @@ const PARALLAX = `
     }
 
     hitUV = testUV;
-    vec4 pomColor = texture2D(u_color, clamp(testUV, 0.001, 0.999));
+    SHADE vec4 pomColor = COLOR_AT(clamp(testUV, 0.001, 0.999));
 
-    float dispGate = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
+    SHADE float dispGate = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
     if (dispGate <= 0.0) return pomColor;
 
-    float baseDepth = texture2D(u_depth, clamp(uv, 0.0, 1.0)).g;
-    float foregroundness = smoothstep(${G(POM.FG_DEPTH_SOFT)}, ${G(POM.FG_DEPTH_HARD)}, baseDepth);
+    SHADE float baseDepth = DEPTH_AT(clamp(uv, 0.0, 1.0));
+    SHADE float foregroundness = smoothstep(${G(POM.FG_DEPTH_SOFT)}, ${G(POM.FG_DEPTH_HARD)}, baseDepth);
     if (foregroundness <= 0.0) return pomColor;
 
     float texel = ${G(POM.EDGE_RADIUS)};
-    float dL = texture2D(u_depth, clamp(testUV - vec2(texel, 0.0), 0.0, 1.0)).g;
-    float dR = texture2D(u_depth, clamp(testUV + vec2(texel, 0.0), 0.0, 1.0)).g;
-    float dU = texture2D(u_depth, clamp(testUV - vec2(0.0, texel), 0.0, 1.0)).g;
-    float dD = texture2D(u_depth, clamp(testUV + vec2(0.0, texel), 0.0, 1.0)).g;
-    float gradient = abs(dR - dL) + abs(dD - dU);
+    SHADE float dL = DEPTH_AT(clamp(testUV - vec2(texel, 0.0), 0.0, 1.0));
+    SHADE float dR = DEPTH_AT(clamp(testUV + vec2(texel, 0.0), 0.0, 1.0));
+    SHADE float dU = DEPTH_AT(clamp(testUV - vec2(0.0, texel), 0.0, 1.0));
+    SHADE float dD = DEPTH_AT(clamp(testUV + vec2(0.0, texel), 0.0, 1.0));
+    SHADE float gradient = abs(dR - dL) + abs(dD - dU);
 
-    float edgeness = smoothstep(${G(POM.EDGE_SOFT)}, ${G(POM.EDGE_HARD)}, gradient);
-    float trailMask = edgeness * foregroundness * dispGate;
+    SHADE float edgeness = smoothstep(${G(POM.EDGE_SOFT)}, ${G(POM.EDGE_HARD)}, gradient);
+    SHADE float trailMask = edgeness * foregroundness * dispGate;
     if (trailMask <= 0.0) return pomColor;
 
     vec2 dispDir = dispLen > 0.001 ? displacement / dispLen : vec2(1.0, 0.0);
@@ -271,22 +288,22 @@ const PARALLAX = `
     vec2 s3 = uv - dispDir * spread;
     vec2 s4 = uv - dispDir * spread * 2.0;
 
-    float fd1 = texture2D(u_depth, clamp(s1, 0.0, 1.0)).g;
-    float fd2 = texture2D(u_depth, clamp(s2, 0.0, 1.0)).g;
-    float fd3 = texture2D(u_depth, clamp(s3, 0.0, 1.0)).g;
-    float fd4 = texture2D(u_depth, clamp(s4, 0.0, 1.0)).g;
+    SHADE float fd1 = DEPTH_AT(clamp(s1, 0.0, 1.0));
+    SHADE float fd2 = DEPTH_AT(clamp(s2, 0.0, 1.0));
+    SHADE float fd3 = DEPTH_AT(clamp(s3, 0.0, 1.0));
+    SHADE float fd4 = DEPTH_AT(clamp(s4, 0.0, 1.0));
 
-    float w1 = max(0.01, pow(1.0 - fd1, ${G(POM.FILL_DEPTH_POWER)}));
-    float w2 = max(0.01, pow(1.0 - fd2, ${G(POM.FILL_DEPTH_POWER)}));
-    float w3 = max(0.01, pow(1.0 - fd3, ${G(POM.FILL_DEPTH_POWER)}));
-    float w4 = max(0.01, pow(1.0 - fd4, ${G(POM.FILL_DEPTH_POWER)}));
+    SHADE float w1 = max(0.01, pow(1.0 - fd1, ${G(POM.FILL_DEPTH_POWER)}));
+    SHADE float w2 = max(0.01, pow(1.0 - fd2, ${G(POM.FILL_DEPTH_POWER)}));
+    SHADE float w3 = max(0.01, pow(1.0 - fd3, ${G(POM.FILL_DEPTH_POWER)}));
+    SHADE float w4 = max(0.01, pow(1.0 - fd4, ${G(POM.FILL_DEPTH_POWER)}));
 
-    vec4 fc1 = texture2D(u_color, clamp(s1 - (fd1 - 0.5) * displacement, 0.001, 0.999)) * w1;
-    vec4 fc2 = texture2D(u_color, clamp(s2 - (fd2 - 0.5) * displacement, 0.001, 0.999)) * w2;
-    vec4 fc3 = texture2D(u_color, clamp(s3 - (fd3 - 0.5) * displacement, 0.001, 0.999)) * w3;
-    vec4 fc4 = texture2D(u_color, clamp(s4 - (fd4 - 0.5) * displacement, 0.001, 0.999)) * w4;
+    SHADE vec4 fc1 = COLOR_AT(clamp(s1 - (fd1 - 0.5) * displacement, 0.001, 0.999)) * w1;
+    SHADE vec4 fc2 = COLOR_AT(clamp(s2 - (fd2 - 0.5) * displacement, 0.001, 0.999)) * w2;
+    SHADE vec4 fc3 = COLOR_AT(clamp(s3 - (fd3 - 0.5) * displacement, 0.001, 0.999)) * w3;
+    SHADE vec4 fc4 = COLOR_AT(clamp(s4 - (fd4 - 0.5) * displacement, 0.001, 0.999)) * w4;
 
-    vec4 fillColor = (fc1 + fc2 + fc3 + fc4) / (w1 + w2 + w3 + w4);
+    SHADE vec4 fillColor = (fc1 + fc2 + fc3 + fc4) / (w1 + w2 + w3 + w4);
 
     return mix(pomColor, fillColor, trailMask * ${G(POM.FILL_STRENGTH)});
   }
@@ -304,53 +321,55 @@ const PARALLAX = `
 `
 
 function powerFunction(exponent) {
-  if (!Number.isInteger(exponent) || exponent < 1) return `float shine(float x) { return pow(x, ${G(exponent)}); }`
+  if (!Number.isInteger(exponent) || exponent < 1) return `SHADE float shine(SHADE float x) { return pow(x, ${G(exponent)}); }`
   const lines = []
   let result = null
   let square = 'x'
   for (let bit = exponent, level = 0; bit > 0; bit >>= 1, level++) {
     if (level > 0) {
-      lines.push(`float x${level} = ${square} * ${square};`)
+      lines.push(`SHADE float x${level} = ${square} * ${square};`)
       square = `x${level}`
     }
     if (bit & 1) result = result ? `${result} * ${square}` : square
   }
-  return `float shine(float x) { ${lines.join(' ')} return ${result}; }`
+  return `SHADE float shine(SHADE float x) { ${lines.join(' ')} return ${result}; }`
 }
 
 const SKYLIGHT = `
+  #define NORMAL_AT(uv) texture2D(u_normal, uv)
+  ${SHADE_PRECISION}
   ${powerFunction(LIGHT.SHININESS)}
 
-  vec3 skylight(vec3 color, vec2 hitUV, vec2 screenUV) {
+  SHADE vec3 skylight(SHADE vec3 color, vec2 hitUV, vec2 screenUV) {
 #ifdef PACKED_NORMALS
-    vec2 packedNormal = texture2D(u_normal, clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;
-    vec3 n = normalize(vec3(sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))), packedNormal));
+    SHADE vec2 packedNormal = NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;
+    SHADE vec3 n = normalize(vec3(sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))), packedNormal));
 #else
-    vec3 n = normalize(texture2D(u_normal, clamp(hitUV, 0.0, 1.0)).rgb * 2.0 - 1.0);
+    SHADE vec3 n = normalize(NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rgb * 2.0 - 1.0);
 #endif
-    float slopeLen = length(n.xy);
-    vec2 facing = slopeLen > 0.0001 ? n.xy / slopeLen : vec2(0.0);
+    SHADE float slopeLen = length(n.xy);
+    SHADE vec2 facing = slopeLen > 0.0001 ? n.xy / slopeLen : vec2(0.0);
 
-    vec3 relief = vec3(0.0);
-    vec3 glint = vec3(0.0);
-    vec3 rim = vec3(0.0);
+    SHADE vec3 relief = vec3(0.0);
+    SHADE vec3 glint = vec3(0.0);
+    SHADE vec3 rim = vec3(0.0);
     for (int i = 0; i < ${MAX_LIGHTS}; i++) {
-      vec4 source = u_lights[i];
+      SHADE vec4 source = u_lights[i];
       if (source.w <= 0.001) continue;
-      vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
-      float dist2 = dot(toLight, toLight);
-      vec2 dir = dist2 > 1e-8 ? toLight * inversesqrt(dist2) : vec2(0.0);
-      vec3 L = vec3(toLight, ${G(LIGHT.HEIGHT)}) * inversesqrt(dist2 + ${G(LIGHT.HEIGHT * LIGHT.HEIGHT)});
-      vec3 light = u_light_colors[i] * (source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist2 * ${G(LIGHT.FALLOFF)}));
+      SHADE vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
+      SHADE float dist2 = dot(toLight, toLight);
+      SHADE vec2 dir = dist2 > 1e-8 ? toLight * inversesqrt(dist2) : vec2(0.0);
+      SHADE vec3 L = vec3(toLight, ${G(LIGHT.HEIGHT)}) * inversesqrt(dist2 + ${G(LIGHT.HEIGHT * LIGHT.HEIGHT)});
+      SHADE vec3 light = u_light_colors[i] * (source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist2 * ${G(LIGHT.FALLOFF)}));
       relief += light * (dot(n, L) - L.z);
-      vec3 H = vec3(L.xy, L.z + 1.0) * inversesqrt(2.0 + 2.0 * L.z);
+      SHADE vec3 H = vec3(L.xy, L.z + 1.0) * inversesqrt(2.0 + 2.0 * L.z);
       glint += light * max(shine(max(dot(n, H), 0.0)) - shine(H.z), 0.0);
       rim += light * max(dot(facing, dir), 0.0);
     }
 
-    float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
-    float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
-    vec3 lit = color * (1.0 + relief * ${G(LIGHT.RELIEF)} * energy);
+    SHADE float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
+    SHADE float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
+    SHADE vec3 lit = color * (1.0 + relief * ${G(LIGHT.RELIEF)} * energy);
     lit += (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy * (1.0 - lit);
     return clamp(lit, 0.0, 1.0);
   }
@@ -519,13 +538,15 @@ function linkProgram(gl, vertexSource, fragmentSource, uniformNames, samplers) {
   return { program, uniforms }
 }
 
-function withDefines(source, packedNormals) {
-  if (!packedNormals) return source
+function withDefines(source, defines) {
+  if (!defines.length) return source
   const versionEnd = source.startsWith('#version') ? source.indexOf(String.fromCharCode(10)) + 1 : 0
-  return [source.slice(0, versionEnd), '#define PACKED_NORMALS', source.slice(versionEnd)].join(String.fromCharCode(10))
+  return [source.slice(0, versionEnd), ...defines.map(name => `#define ${name}`), source.slice(versionEnd)].join(String.fromCharCode(10))
 }
 
-export function createDepthArtPrograms(gl, { packedNormals = false } = {}) {
+export function createDepthArtPrograms(gl, { packedNormals = false, mediumpShading = true } = {}) {
+  const shading = mediumpShading ? ['MEDIUMP_SHADING'] : []
+  const defines = [packedNormals && 'PACKED_NORMALS', ...shading].filter(Boolean)
   const posBuffer = gl.createBuffer()
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
   gl.bufferData(gl.ARRAY_BUFFER, QUAD_POSITIONS, gl.STATIC_DRAW)
@@ -545,9 +566,9 @@ export function createDepthArtPrograms(gl, { packedNormals = false } = {}) {
       const floatHit = !!gl.getExtension('EXT_color_buffer_float')
       const hit = floatHit ? HIT_FLOAT : HIT_PACKED
       const builder = linkProgram(gl, VERTEX_300, BOUND_BUILD_FRAGMENT, ['u_source', 'u_reduce', 'u_level'], { source: BUILD_UNIT })
-      const cache = linkProgram(gl, VERTEX_300, cacheFragment(hit), [...PARALLAX_UNIFORM_NAMES, 'u_depth_bound', 'u_bound_levels'], { color: 0, depth: 1, depth_bound: BOUND_UNIT })
-      const relight = linkProgram(gl, VERTEX_100, withDefines(relightFragment(hit), packedNormals), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
-      const full = linkProgram(gl, VERTEX_300, withDefines(FULL_FRAGMENT_300, packedNormals), [...fullUniforms, 'u_depth_bound', 'u_bound_levels'], { ...fullSamplers, depth_bound: BOUND_UNIT })
+      const cache = linkProgram(gl, VERTEX_300, withDefines(cacheFragment(hit), shading), [...PARALLAX_UNIFORM_NAMES, 'u_depth_bound', 'u_bound_levels'], { color: 0, depth: 1, depth_bound: BOUND_UNIT })
+      const relight = linkProgram(gl, VERTEX_100, withDefines(relightFragment(hit), defines), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
+      const full = linkProgram(gl, VERTEX_300, withDefines(FULL_FRAGMENT_300, defines), [...fullUniforms, 'u_depth_bound', 'u_bound_levels'], { ...fullSamplers, depth_bound: BOUND_UNIT })
       const noBound = gl.createTexture()
       gl.bindTexture(gl.TEXTURE_2D, noBound)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
@@ -559,7 +580,7 @@ export function createDepthArtPrograms(gl, { packedNormals = false } = {}) {
       logger.warn('[DepthArt] Parallax cache unavailable:', error)
     }
   }
-  const full = linkProgram(gl, VERTEX_100, withDefines(FULL_FRAGMENT, packedNormals), fullUniforms, fullSamplers)
+  const full = linkProgram(gl, VERTEX_100, withDefines(FULL_FRAGMENT, defines), fullUniforms, fullSamplers)
   const flat = linkProgram(gl, VERTEX_100, FLAT_FRAGMENT, ['u_color'], { color: 0 })
   return { full, cache: null, relight: null, flat, floatHit: false, bound: null }
 }

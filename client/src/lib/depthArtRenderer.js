@@ -29,16 +29,10 @@ async function loadPack(url) {
 }
 
 function createAtlas() {
-  if (typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.transferToImageBitmap === 'function') {
-    const canvas = new OffscreenCanvas(256, 256)
-    const options = { ...CONTEXT_OPTIONS, preserveDrawingBuffer: false }
-    const gl = canvas.getContext('webgl2', options) || canvas.getContext('webgl', options)
-    if (gl) return { canvas, gl, options, snapshot: true }
-  }
   const canvas = document.createElement('canvas')
   const options = { ...CONTEXT_OPTIONS, preserveDrawingBuffer: true }
   const gl = canvas.getContext('webgl2', options) || canvas.getContext('webgl', options)
-  return gl ? { canvas, gl, options, snapshot: false } : null
+  return gl ? { canvas, gl, options } : null
 }
 
 function clamp(value, min, max) {
@@ -73,13 +67,13 @@ class DepthArtRenderer {
     this.skipCopy = false
     this.forceSplit = false
     this.bench = { forceFull: false, extraFull: 0, extraCopy: 0 }
+    this.shaderOptions = {}
     this.stepScale = 1
     this.skipDraw = false
     this.drawDelays = []
     this.uploads = []
     this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, gyroRef: null, mouseRef: null }
     this.canvas = null
-    this.snapshot = false
     this.gl = null
     this.programs = null
     this.maxSize = 4096
@@ -247,7 +241,6 @@ class DepthArtRenderer {
       if (!atlas) throw new Error('WebGL unavailable')
       const { canvas, gl, options } = atlas
       this.canvas = canvas
-      this.snapshot = atlas.snapshot
       this.setupContext(gl)
       canvas.addEventListener('webglcontextlost', (event) => {
         event.preventDefault()
@@ -281,7 +274,7 @@ class DepthArtRenderer {
   }
 
   setupContext(gl) {
-    const programs = createDepthArtPrograms(gl, { packedNormals: true })
+    const programs = createDepthArtPrograms(gl, { packedNormals: true, ...this.shaderOptions })
     for (const entry of [programs.full, programs.cache]) {
       if (!entry) continue
       gl.useProgram(entry.program)
@@ -661,7 +654,6 @@ class DepthArtRenderer {
     }
 
     const copyStart = profile ? (gl.finish(), performance.now()) : 0
-    const source = this.snapshot ? canvas.transferToImageBitmap() : canvas
     for (const item of group) {
       if (this.skipCopy && item.view.drawn) continue
       const view = item.view
@@ -671,7 +663,7 @@ class DepthArtRenderer {
       }
       if (!view.ctx) view.ctx = view.canvas.getContext('2d', { alpha: false })
       if (!view.ctx) continue
-      for (let extra = 0; extra <= this.bench.extraCopy; extra++) view.ctx.drawImage(source, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
+      for (let extra = 0; extra <= this.bench.extraCopy; extra++) view.ctx.drawImage(canvas, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
       view.last = {
         flat: item.mode === 'flat', entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
         light: probe.key, left: item.rect.left, top: item.rect.top,
@@ -686,7 +678,6 @@ class DepthArtRenderer {
         view.onDrawn?.()
       }
     }
-    if (source !== canvas) source.close()
     if (profile) {
       const pixels = group.reduce((total, item) => total + item.width * item.height, 0)
       profile.tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0, full: 0, build: 0, relight: 0 }
@@ -755,8 +746,14 @@ if (typeof window !== 'undefined') {
       }
       return out
     },
-    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench } = {}) => {
+    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx } = {}) => {
+      if (stepPx !== undefined) depthArtRenderer.configure({ stepPx })
       if (bench !== undefined) Object.assign(depthArtRenderer.bench, bench)
+      if (shader !== undefined && depthArtRenderer.gl) {
+        depthArtRenderer.shaderOptions = shader
+        depthArtRenderer.setupContext(depthArtRenderer.gl)
+        for (const view of depthArtRenderer.views) { view.last = null; depthArtRenderer.dropCache(view) }
+      }
       if (forceSplit !== undefined) depthArtRenderer.forceSplit = forceSplit
       if (stepScale !== undefined) depthArtRenderer.stepScale = stepScale
       if (skipCopy !== undefined) depthArtRenderer.skipCopy = skipCopy

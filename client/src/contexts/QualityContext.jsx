@@ -10,7 +10,7 @@ const LEVELS = ['low', 'medium', 'high']
 const LEVEL_SETTINGS = {
   low: { sceneDpr: 0.85, glassTaps: 1, parallaxDpr: 1.5, parallaxStepPx: 1.5 },
   medium: { sceneDpr: 1.0, glassTaps: 3, parallaxDpr: 2, parallaxStepPx: 1 },
-  high: { sceneDpr: 1.5, glassTaps: 3, parallaxDpr: Infinity, parallaxStepPx: 0 },
+  high: { sceneDpr: 1.5, glassTaps: 3, parallaxDpr: Infinity, parallaxStepPx: 1 },
 }
 const TOP_LEVEL = LEVELS.length - 1
 export const REFERENCE_SCENE_DPR = LEVEL_SETTINGS.high.sceneDpr
