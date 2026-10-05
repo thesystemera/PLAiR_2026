@@ -8,6 +8,7 @@ import { DURATION } from '../lib/motion'
 import { PACK_SIZES, isMemoryKey, packCache, profilePackCache } from '../lib/mediaCache'
 
 const HIDDEN = { opacity: 0 }
+const SHOWN = { transition: 'opacity var(--dur-quick) var(--ease-decelerate)' }
 const PLACEHOLDER = { containerType: 'size' }
 const PLACEHOLDER_NOTE = { fontSize: '40cqmin', lineHeight: 1 }
 const FRONT = { zIndex: 1 }
@@ -97,7 +98,7 @@ const DepthArt = memo(function DepthArt({
         role="img"
         aria-label={alt}
         className="absolute inset-0 w-full h-full pointer-events-none"
-        style={shown ? undefined : HIDDEN}
+        style={shown ? SHOWN : HIDDEN}
         {...artProps}
       />
     </div>

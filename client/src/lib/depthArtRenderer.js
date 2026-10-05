@@ -15,6 +15,10 @@ const REDRAW_SHIFT_PX = 0.1
 const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
 const CANVAS_RESIZES_PER_FRAME = 3
+const AHEAD_FRAMES = 10
+const AHEAD_MIN_VIEWPORTS = 0.5
+const AHEAD_MAX_VIEWPORTS = 2
+const AHEAD_DRAWS_PER_FRAME = 4
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
@@ -88,6 +92,9 @@ class DepthArtRenderer {
     this.scrollOffsets = new WeakMap()
     this.scrollViews = new WeakMap()
     this.scrolledTargets = new Set()
+    this.scrollSpeed = 0
+    this.aheadMargin = 0
+    this.aheadPending = false
     this.viewsVersion = 0
     this.markScrolled = (event) => {
       const target = event.target
@@ -150,11 +157,13 @@ class DepthArtRenderer {
   }
 
   applyScrolls() {
+    let speed = 0
     for (const target of this.scrolledTargets) {
       const last = this.scrollOffsets.get(target)
       const top = target.scrollTop
       const left = target.scrollLeft
       this.scrollOffsets.set(target, { top, left })
+      if (last) speed = Math.max(speed, Math.abs(last.top - top), Math.abs(last.left - left))
       let cached = this.scrollViews.get(target)
       if (!cached || cached.version !== this.viewsVersion) {
         cached = { version: this.viewsVersion, views: [...this.views].filter(view => target.contains(view.host)) }
@@ -170,6 +179,7 @@ class DepthArtRenderer {
       }
     }
     this.scrolledTargets.clear()
+    this.scrollSpeed = speed
   }
 
   measure(view, clipRects) {
@@ -202,17 +212,22 @@ class DepthArtRenderer {
 
   place(view, rect, clipRects) {
     view.rect = rect
-    let visible = rect.width >= 2 && rect.height >= 2 && overlaps(rect, 0, 0, viewport.width, viewport.height)
+    const margin = this.aheadMargin
+    const sized = rect.width >= 2 && rect.height >= 2
+    let visible = sized && overlaps(rect, 0, 0, viewport.width, viewport.height)
+    let near = sized && overlaps(rect, -margin, -margin, viewport.width + margin, viewport.height + margin)
     for (const clip of view.clips) {
-      if (!visible) break
+      if (!near) break
       let clipRect = clipRects.get(clip)
       if (!clipRect) {
         clipRect = clip.getBoundingClientRect()
         clipRects.set(clip, clipRect)
       }
-      visible = overlaps(rect, clipRect.left, clipRect.top, clipRect.right, clipRect.bottom)
+      visible = visible && overlaps(rect, clipRect.left, clipRect.top, clipRect.right, clipRect.bottom)
+      near = overlaps(rect, clipRect.left - margin, clipRect.top - margin, clipRect.right + margin, clipRect.bottom + margin)
     }
     view.visible = visible
+    view.near = near && view.styleVisible
     view.shown = visible && view.styleVisible
     if (view.shown && !view.shownAt) view.shownAt = performance.now()
     if (!visible) this.dropCache(view)
@@ -415,7 +430,7 @@ class DepthArtRenderer {
     const input = this.lastInput
     const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
     const lit = !input || input.light !== probe.key
-    if (!relayout && !scrolled && !moved && !uploaded && !lit) return
+    if (!relayout && !scrolled && !moved && !uploaded && !lit && !this.aheadPending) return
     this.lastInput = { x: base.parallaxX, y: base.parallaxY, light: probe.key }
     this.scrolled = false
     if (relayout) {
@@ -423,13 +438,22 @@ class DepthArtRenderer {
       this.lastLayoutAt = timestamp
     }
     this.applyScrolls()
+    this.aheadMargin = clamp(this.scrollSpeed * AHEAD_FRAMES, viewport.height * AHEAD_MIN_VIEWPORTS, viewport.height * AHEAD_MAX_VIEWPORTS)
     const clipRects = new Map()
     const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const flat = !this.settings.lit
     const batch = []
+    const ahead = []
     let showing = false
     let resized = 0
+    const parallaxFor = (view, rect, width, height) => {
+      const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
+      const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
+      const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)
+      const pixelsPerUnit = view.intensity * Math.max(width, height) * (1 + view.intensity * POM.ZOOM_FACTOR)
+      return { px, py, pixelsPerUnit }
+    }
 
     for (const view of this.views) {
       if (relayout || view.dirty || !view.rect) {
@@ -452,12 +476,17 @@ class DepthArtRenderer {
       const rect = view.rect
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
-      const sized = view.canvas.width === width && view.canvas.height === height
+      let sized = view.canvas.width === width && view.canvas.height === height
       if (!view.shown) {
         if (!sized && rect.width >= 2 && resized < CANVAS_RESIZES_PER_FRAME) {
           view.canvas.width = width
           view.canvas.height = height
           resized++
+          sized = true
+        }
+        if (sized && view.near && !view.drawn) {
+          const distance = Math.max(0, -rect.bottom, rect.top - viewport.height) + Math.max(0, -rect.right, rect.left - viewport.width)
+          ahead.push({ view, entry, rect, width, height, distance })
         }
         continue
       }
@@ -472,10 +501,7 @@ class DepthArtRenderer {
         continue
       }
       showing = true
-      const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
-      const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
-      const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)
-      const pixelsPerUnit = view.intensity * Math.max(width, height) * (1 + view.intensity * POM.ZOOM_FACTOR)
+      const { px, py, pixelsPerUnit } = parallaxFor(view, rect, width, height)
       const epsilon = REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit)
       const tiltStill = last && last.entry === entry && last.width === width && last.height === height &&
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
@@ -490,6 +516,17 @@ class DepthArtRenderer {
         steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx),
         mode: cached ? 'relight' : build ? 'build' : 'full',
       })
+    }
+
+    ahead.sort((a, b) => a.distance - b.distance)
+    this.aheadPending = ahead.length > AHEAD_DRAWS_PER_FRAME
+    for (const { view, entry, rect, width, height } of ahead.slice(0, AHEAD_DRAWS_PER_FRAME)) {
+      if (flat) {
+        batch.push({ view, entry, rect, width, height, px: 0, py: 0, steps: 0, mode: 'flat' })
+        continue
+      }
+      const { px, py, pixelsPerUnit } = parallaxFor(view, rect, width, height)
+      batch.push({ view, entry, rect, width, height, px, py, steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx), mode: 'full' })
     }
 
     this.showing = showing
@@ -634,9 +671,11 @@ class DepthArtRenderer {
       }
       if (!view.drawn) {
         view.drawn = true
-        view.drawnAfterMs = Math.round(performance.now() - view.shownAt)
-        this.drawDelays.push(view.drawnAfterMs)
-        if (this.drawDelays.length > 200) this.drawDelays.shift()
+        if (view.shownAt) {
+          view.drawnAfterMs = Math.round(performance.now() - view.shownAt)
+          this.drawDelays.push(view.drawnAfterMs)
+          if (this.drawDelays.length > 200) this.drawDelays.shift()
+        }
         view.onDrawn?.()
       }
     }
@@ -696,6 +735,8 @@ if (typeof window !== 'undefined') {
       for (const canvas of document.querySelectorAll('canvas[role=img]')) {
         const box = canvas.getBoundingClientRect()
         if (box.width < 60 || box.bottom < 0 || box.top > viewport.height || box.right < 0 || box.left > viewport.width) continue
+        const clip = canvas.closest('[data-scroller]')?.getBoundingClientRect()
+        if (clip && (box.bottom <= clip.top || box.top >= clip.bottom || box.right <= clip.left || box.left >= clip.right)) continue
         out.onScreen++
         if (canvas.style.opacity !== '0') continue
         out.blank++
