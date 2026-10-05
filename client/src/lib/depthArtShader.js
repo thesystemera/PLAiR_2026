@@ -116,6 +116,16 @@ const VERTEX_300 = `#version 300 es
   }
 `
 
+const FLAT_FRAGMENT = `
+  precision mediump float;
+  uniform sampler2D u_color;
+  varying vec2 v_texCoord;
+
+  void main() {
+    gl_FragColor = texture2D(u_color, v_texCoord);
+  }
+`
+
 const PARALLAX_UNIFORMS = `
   uniform sampler2D u_color;
   uniform sampler2D u_depth;
@@ -543,13 +553,15 @@ export function createDepthArtPrograms(gl, { packedNormals = false } = {}) {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-      return { full, cache, relight, floatHit, bound: { builder, noBound } }
+      const flat = linkProgram(gl, VERTEX_100, FLAT_FRAGMENT, ['u_color'], { color: 0 })
+      return { full, cache, relight, flat, floatHit, bound: { builder, noBound } }
     } catch (error) {
       logger.warn('[DepthArt] Parallax cache unavailable:', error)
     }
   }
   const full = linkProgram(gl, VERTEX_100, withDefines(FULL_FRAGMENT, packedNormals), fullUniforms, fullSamplers)
-  return { full, cache: null, relight: null, floatHit: false, bound: null }
+  const flat = linkProgram(gl, VERTEX_100, FLAT_FRAGMENT, ['u_color'], { color: 0 })
+  return { full, cache: null, relight: null, flat, floatHit: false, bound: null }
 }
 
 export function createDepthBound(gl, programs, depthTexture, width, height) {

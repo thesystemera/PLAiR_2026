@@ -275,7 +275,7 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artwor
         transition={MOTION.settle}
         className="absolute inset-0 overflow-hidden"
       >
-        <TrackArt trackId={trackId} colorUrl={artworkUrl} alt="" className="absolute inset-0" />
+        <TrackArt trackId={trackId} alt="" className="absolute inset-0" />
         <div className="absolute inset-0" style={ARTWORK_DIM_OVERLAY} />
       </motion.div>
 

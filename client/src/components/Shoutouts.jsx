@@ -133,7 +133,6 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
         {profilePictureUrl && (
           <ProfileArt
             userId={shoutout.user_id}
-            colorUrl={profilePictureUrl}
             alt={shoutout.username || 'User'}
             onError={hideBrokenImage}
           />

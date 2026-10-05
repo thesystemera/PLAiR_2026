@@ -70,8 +70,6 @@ class ProfilePictureService(SingletonService):
             return None
         depth_path = await self.get_depth_path(user_id, db)
         normal_path = await self.get_normal_path(user_id, db)
-        if not depth_path or not normal_path:
-            return None
         target = settings.get_user_profile_picture_path(user_id, PACK_FILENAME)
         return await ensure_pack(f"profile:{user_id}", target, (picture_path, depth_path, normal_path), PACK_SIZE, depth_side_by_side=False)
 

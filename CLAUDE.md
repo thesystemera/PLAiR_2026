@@ -624,7 +624,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/Catalog.jsx` - Track catalog panel: genre cards, virtualised track grid, sorting, play now and seed actions.
 - `client/src/components/Conversation.jsx` - DJ conversation view: chat bubbles, internal dialogue, ordered tool activity cards, filters, autoscroll.
 - `client/src/components/CostTicker.jsx` - Small fixed overlay showing today's AI usage cost, refreshed every minute.
-- `client/src/components/DepthArt.jsx` - Depth-lit artwork canvas over the plain image, plus track/profile wrappers and renderer config bridge.
+- `client/src/components/DepthArt.jsx` - Every cover and avatar: one canvas drawn by the shared renderer from the cover's pack (colour | normal x, depth, normal y); 3D Lit Artwork off draws the pack's colour half flat. `TrackArt` / `ProfileArt` and the renderer config bridge.
 - `client/src/components/DevicePicker.jsx` - Multi-device picker hook, button, panel and "Playing on another device" notice with Play here.
 - `client/src/components/DJActivity.jsx` - DJ tool activity cards (plan, calls, results) and the bridge that pops tool chips as notices.
 - `client/src/components/DJTextComposer.jsx` - Text input box for typing messages to the DJs in text mode.
@@ -721,14 +721,14 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/apiCommunity.js` - API part: shoutouts, replies, reviews and their stats.
 - `client/src/lib/apiMusic.js` - API part: catalog, queue, search, stream and artwork URLs, track data, song generation, uploads, artist profiles, share videos.
 - `client/src/lib/apiStation.js` - API part: devices, DJ conversation and timeline, transcription, Radio Mode, music beds.
-- `client/src/lib/artworkPrefetcher.js` - Prioritised, concurrent artwork thumbnail prefetching and decoding queue.
+- `client/src/lib/artworkPrefetcher.js` - Loads cover packs ahead of the virtual scroller in both directions and has the renderer prepare the nearest ones on the GPU, so covers never visibly load.
 - `client/src/lib/audioEngine.js` - Dual-slot audio engine: A/B crossfades, gain ramps, streaming, device enforcement, iOS unlock. All gain automation goes through `_rampGain()`.
 - `client/src/lib/audioInteractionManager.js` - Unlocks audio on user gestures: resumes contexts, runs hooks, primes media elements.
 - `client/src/lib/audioMixer.js` - Ducks and restores the music level under the DJ via the engine's gain ramps.
 - `client/src/lib/backgroundDownloader.js` - Background download queue for offline tracks with daily limits and slow-connection backoff.
 - `client/src/lib/cacheManager.js` - Offline library manager: download tracks with artwork and data, quota, cleanup, track list.
 - `client/src/lib/cacheValidator.js` - Validates track data and blobs before they are stored offline.
-- `client/src/lib/depthArtRenderer.js` - Shared WebGL renderer drawing depth-lit artwork into many canvases: own visibility check (no IntersectionObserver), per-tile parallax cache for light-only frames, one atlas snapshot per frame.
+- `client/src/lib/depthArtRenderer.js` - Shared WebGL renderer drawing every cover pack into its canvas: textures sized to the tile, prepared (warm) covers, flat mode when lit is off, own visibility check, per-tile parallax cache for light-only frames, one atlas snapshot per frame; `__plairArt.stats()` for texture accounting.
 - `client/src/lib/depthArtShader.js` - Depth artwork shaders: full pass (parallax march + lighting), parallax-to-cache and re-light-from-cache passes, the max-depth pyramid that lets the march skip steps that cannot hit, light uniforms and the cached viewport size.
 - `client/src/lib/djBroadcastChain.js` - Web Audio processing chain for DJ voice playback (compression, gain ramps).
 - `client/src/lib/djStreamPlayer.js` - DJ voice stream player: MediaSource per stream, sequential queue, cancel, stall watchdog.
@@ -888,7 +888,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services/api_utils.py` - One helper that reduces a track record to the short summary fields API responses use.
 - `server/services/artist_profile_service.py` - Listeners' artist/band profiles: create, edit, delete, list, slugs, and picking the profile an upload is credited to.
 - `server/services/artwork_generation_service.py` - Generates and upscales track artwork with a lazily loaded Stable Diffusion XL pipeline, unloaded when idle.
-- `server/services/artwork_thumbnail_service.py` - Renders and caches sized artwork thumbnails on demand for the thumb endpoint.
+- `server/services/artwork_thumbnail_service.py` - Renders and caches sized artwork thumbnails and cover packs (colour | normal x, depth, normal y; flat maps until depth and normals exist) on demand.
 - `server/services/asset_integrity_service.py` - The asset doctor: schedules scans of tracks and shoutouts, keeps state and reports, runs repairs.
 - `server/services/asset_integrity_service_checks.py` - Asset doctor's check definitions, finding and subject types, and file/duration probes they use.
 - `server/services/asset_integrity_service_detect.py` - Asset doctor detection: probes each track's and shoutout's files, metadata, DB flags and vector index entry.

@@ -201,6 +201,21 @@ def spectrally_balanced_blend(
     return filtered[:, delay:delay + length], info
 
 
+TAPE_HISS_SHAPE = ((0.0, -12.0), (200.0, -9.0), (1000.0, -5.0), (4000.0, 0.0), (16000.0, 0.0), (19000.0, -4.0))
+TAPE_HISS_TAPS = 4097
+
+
+def tape_hiss(channels: int, length: int, rate: int, level_dbfs: float, seed: Optional[int] = None) -> np.ndarray:
+    white = np.random.default_rng(seed).standard_normal((channels, length))
+    freqs = np.linspace(0.0, rate / 2.0, 4097)
+    points = np.array(TAPE_HISS_SHAPE + ((rate / 2.0, -12.0),))
+    gains = 10 ** (np.interp(freqs, points[:, 0], points[:, 1]) / 20.0)
+    fir = signal.firwin2(TAPE_HISS_TAPS, freqs, gains, fs=rate)
+    delay = (TAPE_HISS_TAPS - 1) // 2
+    hiss = signal.oaconvolve(white, fir[np.newaxis, :], mode="full", axes=-1)[:, delay:delay + length]
+    return hiss / np.sqrt(np.mean(hiss ** 2)) * db_to_linear(level_dbfs)
+
+
 SOURCE_CUTOFF_DROP_DB = 15.0
 SOURCE_CUTOFF_MARGIN_HZ = 300.0
 SOURCE_CROSSOVER_TAPS = 8191

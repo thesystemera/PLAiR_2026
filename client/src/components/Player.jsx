@@ -163,7 +163,7 @@ const TrackArtwork = memo(function TrackArtwork({ url, trackId, hasArtwork, onCl
   const renderLayer = (layer, isFront) => (
     <div className={`absolute inset-0 transition-opacity duration-theme ${isFront ? 'opacity-100' : 'opacity-0'}`}>
       {layer && (
-        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArtwork} colorUrl={layer.url} alt="Album art" />
+        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArtwork} alt="Album art" />
       )}
     </div>
   )

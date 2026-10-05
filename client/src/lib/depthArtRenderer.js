@@ -15,6 +15,7 @@ const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
 const CANVAS_RESIZES_PER_FRAME = 3
 const TEXTURE_STEP_PX = 64
+const PACK_SNAP = 0.6
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
@@ -86,7 +87,7 @@ class DepthArtRenderer {
     this.textures = new Map()
     this.maxIdle = MAX_IDLE_TEXTURES
     this.uploads = []
-    this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, gyroRef: null, mouseRef: null }
+    this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, gyroRef: null, mouseRef: null }
     this.canvas = null
     this.snapshot = false
     this.gl = null
@@ -128,13 +129,13 @@ class DepthArtRenderer {
     for (const view of this.views) view.last = null
   }
 
-  attach({ host, canvas, packUrl, onDrawn, onFailed }) {
+  attach({ host, canvas, packUrl, packSize, onDrawn, onFailed }) {
     if (!this.ensureContext()) {
       queueMicrotask(() => onFailed?.())
       return () => {}
     }
     const view = {
-      host, canvas, ctx: null, packUrl, onDrawn, onFailed, failed: false,
+      host, canvas, ctx: null, packUrl, packSize, onDrawn, onFailed, failed: false,
       clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
       shiftX: 0, shiftY: 0, styleVisible: true, next: null,
     }
@@ -288,7 +289,8 @@ class DepthArtRenderer {
 
   sizeTextures(view, dpr) {
     if (view.rect.width < 2 || view.rect.height < 2) return
-    const size = this.textureSize(view.rect, dpr)
+    const needed = this.textureSize(view.rect, dpr)
+    const size = view.packSize && needed >= view.packSize * PACK_SNAP ? view.packSize : needed
     if (view.next) {
       if (view.next.state === 'ready') {
         view.entry.refs--
@@ -338,11 +340,30 @@ class DepthArtRenderer {
     return entry
   }
 
+  isShowing(packUrl) {
+    if (!packUrl) return false
+    for (const view of this.views) if (view.packUrl === packUrl) return true
+    return false
+  }
+
+  warm(packUrls, packSize) {
+    if (!this.ensureContext()) return
+    const keep = new Set()
+    for (const packUrl of packUrls) {
+      const entry = this.acquire({ packUrl }, packSize)
+      entry.refs--
+      keep.add(entry)
+    }
+    for (const entry of this.textures.values()) entry.warm = keep.has(entry)
+    this.evictIdle()
+    this.schedule()
+  }
+
   evictIdle() {
     let idle = 0
-    for (const entry of this.textures.values()) if (entry.refs <= 0) idle++
+    for (const entry of this.textures.values()) if (entry.refs <= 0 && !entry.warm) idle++
     if (idle <= this.maxIdle) return
-    const byAge = [...this.textures.values()].filter(entry => entry.refs <= 0).sort((a, b) => a.usedAt - b.usedAt)
+    const byAge = [...this.textures.values()].filter(entry => entry.refs <= 0 && !entry.warm).sort((a, b) => a.usedAt - b.usedAt)
     for (const entry of byAge.slice(0, idle - this.maxIdle)) this.release(entry)
   }
 
@@ -443,6 +464,7 @@ class DepthArtRenderer {
     const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const zoom = 1 + INTENSITY * POM.ZOOM_FACTOR
+    const flat = !this.settings.lit
     const batch = []
     let showing = false
     let resized = 0
@@ -466,19 +488,24 @@ class DepthArtRenderer {
       if (!entry || entry.state !== 'ready') continue
       if (!view.shown) continue
       const rect = view.rect
-      showing = true
       const width = Math.min(this.maxSize, Math.round(rect.width * dpr))
       const height = Math.min(this.maxSize, Math.round(rect.height * dpr))
       if (view.canvas.width !== width || view.canvas.height !== height) {
         if (resized >= CANVAS_RESIZES_PER_FRAME) continue
         resized++
       }
+      const last = view.last
+      if (flat) {
+        if (last?.flat && last.entry === entry && last.width === width && last.height === height) continue
+        batch.push({ view, entry, rect, width, height, px: 0, py: 0, steps: 0, mode: 'flat' })
+        continue
+      }
+      showing = true
       const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
       const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
       const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)
       const pixelsPerUnit = INTENSITY * Math.max(width, height) * zoom
       const epsilon = REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit)
-      const last = view.last
       const tiltStill = last && last.entry === entry && last.width === width && last.height === height &&
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
       if (tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
@@ -586,7 +613,18 @@ class DepthArtRenderer {
       }
     }
 
-    const relit = group.filter(item => item.mode !== 'full')
+    const flats = group.filter(item => item.mode === 'flat')
+    if (flats.length) {
+      gl.useProgram(this.programs.flat.program)
+      for (const item of flats) {
+        gl.viewport(item.x, canvas.height - item.y - item.height, item.width, item.height)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+      }
+    }
+
+    const relit = group.filter(item => item.mode === 'relight' || item.mode === 'build')
     if (relit.length) {
       gl.useProgram(relight.program)
       setLightUniforms(gl, relight.uniforms, probe, true)
@@ -618,7 +656,7 @@ class DepthArtRenderer {
       if (!view.ctx) continue
       view.ctx.drawImage(source, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
       view.last = {
-        entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
+        flat: item.mode === 'flat', entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
         light: probe.key, left: item.rect.left, top: item.rect.top,
       }
       if (!view.drawn) {
@@ -646,10 +684,11 @@ if (typeof window !== 'undefined') {
     stats: () => {
       const r = depthArtRenderer
       const mb = bytes => +(bytes / 1048576).toFixed(1)
-      let active = 0, idle = 0, textureBytes = 0, cacheBytes = 0, caches = 0
+      let active = 0, idle = 0, warm = 0, textureBytes = 0, cacheBytes = 0, caches = 0
       const textureSizes = {}
       for (const entry of r.textures.values()) {
         if (entry.refs > 0) active++
+        else if (entry.warm) warm++
         else idle++
         if (!entry.sizes) continue
         const [cw, ch, mw, mh] = entry.sizes
@@ -666,7 +705,7 @@ if (typeof window !== 'undefined') {
         viewSizes[key] = (viewSizes[key] || 0) + 1
       }
       return {
-        views: r.views.size, active, idle, textureMB: mb(textureBytes), textureSizes, caches, cacheMB: mb(cacheBytes),
+        views: r.views.size, active, idle, warm, textureMB: mb(textureBytes), textureSizes, caches, cacheMB: mb(cacheBytes),
         atlas: r.canvas ? `${r.canvas.width}x${r.canvas.height}` : null, viewSizes,
       }
     },

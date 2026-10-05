@@ -1,7 +1,6 @@
 import { ListPlus } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
-import { useArtworkThumb } from '../contexts/UIStateContext'
 import { formatDateShort } from '../lib/utils'
 import { FALLBACK_GRADIENTS, CARD_TRANSITION } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
@@ -30,7 +29,6 @@ import { TrackArt } from './DepthArt'
 
 const CATALOG_ERROR_GRACE_MS = 4000
 
-const hideBrokenImage = (e) => { e.target.style.display = 'none' }
 
 function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   const { totalCount = 0, windowStart = 0, isVirtual = false, itemsPerRow = 2, itemHeight = 320 } = options
@@ -97,7 +95,6 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
   const trackInfo = track.track_info || {}
   const [isLoading, setIsLoading] = useState(false)
   const cardInteraction = usePointerInteraction()
-  const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
   useEffect(() => {
@@ -154,10 +151,8 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
         <TrackArt
           trackId={track.id}
           hasArtwork={track.has_artwork}
-          colorUrl={artworkUrl}
           alt={params.title || 'Track artwork'}
           onLoad={onArtLoad}
-          onError={hideBrokenImage}
         />
         {isPlaying && <MediaPlayingOverlay />}
 

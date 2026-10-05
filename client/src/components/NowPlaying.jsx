@@ -1,6 +1,6 @@
 import {logger} from '../lib/logger'
 import {memo, useEffect, useRef, useState} from 'react'
-import { useArtwork, useArtworkThumb, useUISelector } from '../contexts/UIStateContext'
+import { useArtwork, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import MediaActions from './MediaActions'
 import {PanelHeader} from './Panel'
@@ -198,7 +198,6 @@ const linkLabel = (url) => {
 }
 
 const ArtistTrackRow = memo(function ArtistTrackRow({ item, onPlay }) {
-  const thumb = useArtworkThumb(item.id, item.has_artwork)
   return (
     <button
       type="button"
@@ -206,7 +205,7 @@ const ArtistTrackRow = memo(function ArtistTrackRow({ item, onPlay }) {
       className="ui-press w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors text-left"
     >
       <div className="relative w-10 h-10 rounded bg-white/10 flex items-center justify-center overflow-hidden flex-shrink-0">
-        {thumb ? <TrackArt trackId={item.id} hasArtwork={item.has_artwork} colorUrl={thumb} alt="" /> : <Music size={16} className="text-white/50" />}
+        {item.has_artwork !== false ? <TrackArt trackId={item.id} hasArtwork={item.has_artwork} alt="" /> : <Music size={16} className="text-white/50" />}
       </div>
       <span className="text-sm truncate">{item.title || 'Untitled'}</span>
     </button>

@@ -6,7 +6,6 @@ import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
-import { useArtworkThumb } from '../contexts/UIStateContext'
 import { getFallbackGradientClass } from '../lib/themeManager'
 import { triggerHaptic } from '../lib/haptics'
 import { PanelHeader } from './Panel'
@@ -131,19 +130,16 @@ const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
 
 const TrackArtwork = memo(function TrackArtwork({ track }) {
   const [artworkError, setArtworkError] = useState(false)
-  const artworkUrl = useArtworkThumb(track.id, track.has_artwork)
 
   if (track.has_artwork && !artworkError) {
     return (
       <TrackArt
         trackId={track.id}
         hasArtwork={track.has_artwork}
-        colorUrl={artworkUrl}
         alt={track.title || 'Track artwork'}
         className="relative w-12 h-12 rounded overflow-hidden flex-shrink-0"
-        imgClassName="w-full h-full object-cover"
-        imgRef={noteImageMount}
-        imgProps={QUEUE_ART_PROPS}
+        artRef={noteImageMount}
+        artProps={QUEUE_ART_PROPS}
         onLoad={revealOnLoad}
         onError={() => setArtworkError(true)}
       />

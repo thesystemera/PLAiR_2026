@@ -17,6 +17,7 @@ from services.audio_headroom import (
     limit_true_peak,
     linear_to_db,
     peak_envelope,
+    tape_hiss,
     write_float_wav,
     write_pcm16_dithered,
 )
@@ -296,7 +297,8 @@ class AudioMasterService(SingletonService):
             target_lufs: float,
             wet_mix: Optional[float] = None,
             correct: bool = True,
-            tone: bool = False
+            tone: bool = False,
+            hiss: bool = False
     ) -> Tuple[Optional[Path], dict]:
         try:
             data, rate = sf.read(str(input_path), dtype='float32', always_2d=True)
@@ -313,6 +315,9 @@ class AudioMasterService(SingletonService):
 
             gain_db = target_lufs - loudness if measurable else 0.0
             normalized = data * db_to_linear(gain_db)
+            if hiss and settings.MASTER_TAPE_HISS_DBFS < 0:
+                normalized = normalized + tape_hiss(normalized.shape[0], normalized.shape[1], rate, settings.MASTER_TAPE_HISS_DBFS)
+                info["tape_hiss_dbfs"] = settings.MASTER_TAPE_HISS_DBFS
 
             envelope = peak_envelope(normalized)
             pre_limit_peak_db = linear_to_db(float(envelope.max()) if envelope.size else 0.0)
@@ -355,9 +360,10 @@ class AudioMasterService(SingletonService):
             wet_mix: Optional[float] = None,
             correct: bool = True,
             tone: bool = False,
+            hiss: bool = False,
     ) -> Optional[Path]:
         result, _info = await self.master_audio_with_report(
-            input_path, output_path, target_lufs, progress_callback, wet_mix, correct, tone
+            input_path, output_path, target_lufs, progress_callback, wet_mix, correct, tone, hiss
         )
         return result
 
@@ -392,6 +398,7 @@ class AudioMasterService(SingletonService):
             wet_mix: Optional[float] = None,
             correct: bool = True,
             tone: bool = False,
+            hiss: bool = False,
     ) -> Tuple[Optional[Path], Dict[str, Any]]:
         effective_wet_mix = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         if output_path is None:
@@ -412,7 +419,8 @@ class AudioMasterService(SingletonService):
             target_lufs,
             effective_wet_mix,
             correct,
-            tone
+            tone,
+            hiss
         )
 
         if not result:
@@ -422,6 +430,8 @@ class AudioMasterService(SingletonService):
         if correct or tone:
             self._log_corrections(info, effective_wet_mix)
 
+        if "tape_hiss_dbfs" in info:
+            log_service.upscaling(f"  [TAPE HISS] Steady hiss at {info['tape_hiss_dbfs']:.0f} dBFS")
         limiter = info.get("limiter", {})
         if limiter.get("passes"):
             log_service.upscaling(

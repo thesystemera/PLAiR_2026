@@ -1,39 +1,30 @@
-import { artworkThumbCache } from './mediaCache'
+import { ART_PACK_SIZE, artPackCache } from './mediaCache'
+import { depthArtRenderer } from './depthArtRenderer'
 import { logger } from './logger'
 
 const MAX_CONCURRENT = 6
-const MAX_DECODED = 160
+const WARM_COVERS = 32
+const RETRY_AFTER_MS = 15000
 
-class ArtworkPrefetcher {
+class PackPrefetcher {
   constructor(cache) {
     this.cache = cache
     this.queue = []
-    this.urgent = []
     this.demand = new Set()
     this.running = new Map()
     this.controllers = new Map()
-    this.decoded = new Map()
     this.readyUrls = new Map()
     this.failed = new Map()
     this.active = 0
     this.listeners = new Set()
-    this.isHeld = null
     cache.subscribe((id) => {
-      const url = cache.peekMemory(id)
-      if (this.readyUrls.has(id) && this.readyUrls.get(id) !== url) {
-        this.readyUrls.delete(id)
-        this.decoded.delete(id)
-      }
+      if (this.readyUrls.has(id) && this.readyUrls.get(id) !== cache.peekMemory(id)) this.readyUrls.delete(id)
     })
   }
 
   subscribe(listener) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
-  }
-
-  setHeldChecker(checker) {
-    this.isHeld = checker
   }
 
   isReady(id) {
@@ -57,15 +48,9 @@ class ArtworkPrefetcher {
     this.queue = queue
     if (jumped) {
       for (const [id, controller] of this.controllers) {
-        if (!next.has(id) && !(this.isHeld && this.isHeld(id))) controller.abort()
+        if (!next.has(id)) controller.abort()
       }
     }
-    this._pump()
-  }
-
-  request(id) {
-    if (!id || this.isReady(id) || this.running.has(id) || this.urgent.includes(id)) return
-    this.urgent.push(id)
     this._pump()
   }
 
@@ -74,13 +59,7 @@ class ArtworkPrefetcher {
       const id = this.queue.shift()
       if (!this.demand.has(id) || this.isReady(id) || this.running.has(id)) continue
       const failedAt = this.failed.get(id)
-      if (failedAt && performance.now() - failedAt < 15000) continue
-      return id
-    }
-    while (this.urgent.length) {
-      const id = this.urgent.shift()
-      if (this.isReady(id) || this.running.has(id)) continue
-      if (this.isHeld && !this.isHeld(id)) continue
+      if (failedAt && performance.now() - failedAt < RETRY_AFTER_MS) continue
       return id
     }
     return null
@@ -108,40 +87,42 @@ class ArtworkPrefetcher {
       const url = await this.cache.getMedia(id, { signal })
       if (!url) {
         if (!signal.aborted) this.failed.set(id, performance.now())
-        return null
+        return
       }
       this.failed.delete(id)
-      await this._decode(id, url)
-      return url
+      this.readyUrls.set(id, url)
+      this.listeners.forEach(listener => listener(id))
     } catch (err) {
       this.failed.set(id, performance.now())
-      logger.debug('[ArtworkPrefetcher] Load failed:', id, err)
-      return null
-    }
-  }
-
-  async _decode(id, url) {
-    const img = new Image()
-    img.decoding = 'async'
-    img.src = url
-    try {
-      await img.decode()
-    } catch (err) {
-      logger.debug('[ArtworkPrefetcher] Decode failed:', id, err)
-    }
-    if (this.cache.peekMemory(id) !== url) return
-    this.readyUrls.set(id, url)
-    this.decoded.delete(id)
-    this.decoded.set(id, img)
-    this.listeners.forEach(listener => listener(id))
-    if (this.decoded.size > MAX_DECODED) {
-      for (const key of this.decoded.keys()) {
-        if (this.decoded.size <= MAX_DECODED) break
-        if (this.demand.has(key)) continue
-        this.decoded.delete(key)
-      }
+      logger.debug('[CoverPrefetch] Load failed:', id, err)
     }
   }
 }
 
-export const artworkPrefetcher = new ArtworkPrefetcher(artworkThumbCache)
+const packPrefetcher = new PackPrefetcher(artPackCache)
+artPackCache.setPinnedChecker(id => packPrefetcher.isDemanded(id) || depthArtRenderer.isShowing(artPackCache.peekMemory(id)))
+
+let warmQueued = false
+
+function warmNearest() {
+  warmQueued = false
+  const urls = []
+  for (const id of packPrefetcher.demand) {
+    if (urls.length >= WARM_COVERS) break
+    if (packPrefetcher.isReady(id)) urls.push(artPackCache.peekMemory(id))
+  }
+  depthArtRenderer.warm(urls, ART_PACK_SIZE)
+}
+
+function scheduleWarm() {
+  if (warmQueued) return
+  warmQueued = true
+  queueMicrotask(warmNearest)
+}
+
+packPrefetcher.subscribe(scheduleWarm)
+
+export function prefetchCovers(ids, options) {
+  packPrefetcher.setDemand(ids, options)
+  scheduleWarm()
+}

@@ -43,10 +43,8 @@ const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop,
       {profilePictureUrl ? (
         <ProfileArt
           userId={review.user_id}
-          colorUrl={profilePictureUrl}
           alt={review.username || 'User'}
           className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
-          imgClassName="w-full h-full object-cover"
         />
       ) : (
         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">

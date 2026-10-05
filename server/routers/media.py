@@ -239,28 +239,6 @@ async def get_artwork_thumbnail(track_id: str, size: int):
         }
     )
 
-@router.get("/api/artwork/{track_id}/depth/thumb/{size}")
-async def get_artwork_depth_thumbnail(track_id: str, size: int):
-    if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
-        raise HTTPException(status_code=404, detail="Depth map not found")
-    enriched_path = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
-    if not enriched_path.exists():
-        raise HTTPException(status_code=404, detail="Depth map not found")
-
-    try:
-        thumb_path = await ensure_thumbnail(track_id, enriched_path, size, variant="depth")
-    except Exception as e:
-        log_service.error(f"Depth thumbnail failed for {track_id} ({size}px): {e}")
-        raise HTTPException(status_code=404, detail="Depth map not found")
-
-    return FileResponse(
-        thumb_path,
-        media_type="image/jpeg",
-        headers={
-            "Cache-Control": "public, max-age=31536000"
-        }
-    )
-
 @router.get("/api/artwork/{track_id}/normal")
 async def get_artwork_normal_map(track_id: str):
     if not SAFE_ID.fullmatch(track_id):
@@ -270,28 +248,17 @@ async def get_artwork_normal_map(track_id: str):
         raise HTTPException(status_code=404, detail="Normal map not found")
     return FileResponse(normal_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
 
-@router.get("/api/artwork/{track_id}/normal/thumb/{size}")
-async def get_artwork_normal_thumbnail(track_id: str, size: int):
-    if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
-        raise HTTPException(status_code=404, detail="Normal map not found")
-    normal_path = await ensure_track_normal(track_id)
-    if not normal_path:
-        raise HTTPException(status_code=404, detail="Normal map not found")
-    thumb_path = await ensure_thumbnail(track_id, normal_path, size, variant="normal")
-    return FileResponse(thumb_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
-
 @router.get("/api/artwork/{track_id}/pack/{size}")
 async def get_artwork_pack(track_id: str, size: int):
     if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
         raise HTTPException(status_code=404, detail="Artwork pack not found")
     assert services.catalog_service is not None
     artwork_path = services.catalog_service.get_artwork_path(track_id)
+    if not artwork_path or not artwork_path.exists():
+        raise HTTPException(status_code=404, detail="Artwork pack not found")
     enriched_path = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
-    if not artwork_path or not artwork_path.exists() or not enriched_path.exists():
-        raise HTTPException(status_code=404, detail="Artwork pack not found")
+    enriched_path = enriched_path if enriched_path.exists() else None
     normal_path = await ensure_track_normal(track_id)
-    if not normal_path:
-        raise HTTPException(status_code=404, detail="Artwork pack not found")
     try:
         target = await ensure_pack(track_id, pack_path(track_id, size), (artwork_path, enriched_path, normal_path), size, depth_side_by_side=True)
     except Exception as e:

@@ -2,27 +2,32 @@ import { logger } from './logger'
 import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
 
-const THUMB_SIZES = [256, 512, 768]
-
 function isSlowConnection() {
   const connection = typeof navigator !== 'undefined' ? navigator.connection : null
   if (!connection) return false
   return !!connection.saveData || ['slow-2g', '2g', '3g'].includes(connection.effectiveType)
 }
 
-function pickThumbSize() {
+const PACK_SIZES = [256, 512, 768]
+
+function pickPackSize() {
   if (typeof window === 'undefined') return 512
-  if (isSlowConnection()) return THUMB_SIZES[0]
+  if (isSlowConnection()) return PACK_SIZES[0]
   const dpr = Math.min(window.devicePixelRatio || 1, 3)
-  const width = window.innerWidth || 1024
-  const height = window.innerHeight || 768
+  const width = Math.max(window.innerWidth || 0, window.screen?.width || 0) || 1024
+  const height = Math.max(window.innerHeight || 0, window.screen?.height || 0) || 768
   const phoneLandscape = width > height && height < 640
   const cardCss = width < 1024 ? width / (phoneLandscape ? 4 : 2) : 320
   const needed = cardCss * dpr * 0.85
-  return THUMB_SIZES.find(size => size >= needed) || THUMB_SIZES[THUMB_SIZES.length - 1]
+  return PACK_SIZES.find(size => size >= needed) || PACK_SIZES[PACK_SIZES.length - 1]
 }
 
-const ARTWORK_THUMB_SIZE = pickThumbSize()
+export const ART_PACK_SIZE = pickPackSize()
+
+export function artPackUrl(id) {
+  return `/api/artwork/${id}/pack/${ART_PACK_SIZE}?v=${NORMAL_MAP_VERSION}`
+}
+export const PROFILE_PACK_SIZE = 512
 const NORMAL_MAP_VERSION = 3
 
 const CACHE_CONFIGS = {
@@ -33,17 +38,6 @@ const CACHE_CONFIGS = {
     metadataKey: 'artwork-metadata',
     getUrl: (id) => `/api/artwork/${id}`,
     logPrefix: '[ArtworkCache]'
-  },
-  artwork_thumb: {
-    cacheName: 'artwork-thumb-cache-v1',
-    maxItems: 1500,
-    maxMemoryItems: 400,
-    expiryMs: 14 * 24 * 60 * 60 * 1000,
-    metadataKey: 'artwork-thumb-metadata',
-    getUrl: (id) => `/api/artwork/${id}/thumb/${ARTWORK_THUMB_SIZE}`,
-    fallbackType: 'artwork',
-    networkFirst: true,
-    logPrefix: '[ArtworkThumbCache]'
   },
   enriched_artwork: {
     cacheName: 'enriched-artwork-cache-v1',
@@ -67,7 +61,7 @@ const CACHE_CONFIGS = {
     maxMemoryItems: 300,
     expiryMs: 14 * 24 * 60 * 60 * 1000,
     metadataKey: 'art-pack-metadata',
-    getUrl: (id) => `/api/artwork/${id}/pack/${ARTWORK_THUMB_SIZE}?v=${NORMAL_MAP_VERSION}`,
+    getUrl: artPackUrl,
     logPrefix: '[ArtPackCache]',
     memoryOnly: true
   },
@@ -92,7 +86,8 @@ const CACHE_CONFIGS = {
 }
 
 const MAX_MEMORY_ITEMS = 200
-const OFFLINE_STORE_TYPES = new Set(['artwork', 'artwork_thumb', 'enriched_artwork'])
+const OFFLINE_STORE_TYPES = new Set(['artwork', 'enriched_artwork', 'art_pack'])
+const OFFLINE_BLOB_FIELDS = { artwork: 'artworkBlob', enriched_artwork: 'enrichedArtworkBlob', art_pack: 'packBlob' }
 const openCaches = new Map()
 const METADATA_SAVE_DELAY_MS = 1000
 
@@ -136,7 +131,6 @@ class MediaCache {
     this.isPinned = null
     this.saveTimer = null
     this.maxMemoryItems = this.config.maxMemoryItems || MAX_MEMORY_ITEMS
-    this.fallbackOnly = false
 
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', () => this.flushMetadata())
@@ -262,7 +256,7 @@ class MediaCache {
   async _fromOfflineStore(id) {
     try {
       const cached = await cacheManager.getCachedTrack(id)
-      const blob = this.type === 'enriched_artwork' ? cached?.enrichedArtworkBlob : cached?.artworkBlob
+      const blob = cached?.[OFFLINE_BLOB_FIELDS[this.type]]
       if (!blob) return null
       const blobUrl = createBlobUrl(blob, this.type, id, this.config.memoryOnly)
       this._setMemory(id, blobUrl)
@@ -275,8 +269,8 @@ class MediaCache {
   }
 
   async _fetchNetwork(id, cache, mediaUrl, signal) {
-    const response = this.fallbackOnly ? null : await fetch(mediaUrl, { signal })
-    if (response?.ok) {
+    const response = await fetch(mediaUrl, { signal })
+    if (response.ok) {
       if (cache) {
         cache.put(mediaUrl, response.clone())
           .then(() => this.evictIfNeeded(cache))
@@ -284,14 +278,8 @@ class MediaCache {
       }
       return response
     }
-    if (!this.config.fallbackType) {
-      logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response?.status)
-      return null
-    }
-    const fallback = await this._fetchFallback(id, signal)
-    if (fallback && response?.status === 404) this.fallbackOnly = true
-    if (!fallback) logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response?.status)
-    return fallback
+    logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response.status)
+    return null
   }
 
   async _fetchAndCache(id, signal) {
@@ -302,24 +290,12 @@ class MediaCache {
 
       let response = cache ? await cache.match(mediaUrl) : null
 
-      if (!response && hasOfflineStore && !this.config.networkFirst) {
+      if (!response && hasOfflineStore) {
         const offlineUrl = await this._fromOfflineStore(id)
         if (offlineUrl) return offlineUrl
       }
 
-      if (!response) {
-        try {
-          response = await this._fetchNetwork(id, cache, mediaUrl, signal)
-        } catch (err) {
-          if (err?.name === 'AbortError' || !hasOfflineStore || !this.config.networkFirst) throw err
-          response = null
-        }
-      }
-
-      if (!response && hasOfflineStore && this.config.networkFirst) {
-        return await this._fromOfflineStore(id)
-      }
-
+      if (!response) response = await this._fetchNetwork(id, cache, mediaUrl, signal)
       if (!response) return null
 
       const blob = await response.blob()
@@ -333,20 +309,6 @@ class MediaCache {
       if (err?.name !== 'AbortError') logger.error(`${this.config.logPrefix} ❌ Error fetching media:`, id, err)
       return null
     }
-  }
-
-  async _fetchFallback(id, signal) {
-    const fallback = CACHE_CONFIGS[this.config.fallbackType]
-    const url = fallback.getUrl(id)
-    const cache = await this._openCache(fallback.cacheName)
-    const cached = cache ? await cache.match(url) : null
-    if (cached) return cached
-    const response = await fetch(url, { signal })
-    if (!response.ok) return null
-    if (cache) {
-      cache.put(url, response.clone()).catch(err => logger.debug(`${this.config.logPrefix} Cache write failed:`, err))
-    }
-    return response
   }
 
   updateMetadata(id, size) {
@@ -443,7 +405,6 @@ class MediaCache {
 }
 
 export const artworkCache = new MediaCache('artwork')
-export const artworkThumbCache = new MediaCache('artwork_thumb')
 export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
 export const artPackCache = new MediaCache('art_pack')

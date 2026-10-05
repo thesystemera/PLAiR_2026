@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
 import { flushSync } from 'react-dom'
-import { artworkPrefetcher } from '../lib/artworkPrefetcher'
+import { prefetchCovers } from '../lib/artworkPrefetcher'
 
 const SETTLE_MS = 140
 const VELOCITY_WINDOW_MS = 300
@@ -107,7 +107,7 @@ function VirtualScroller({
       for (let row = firstRow - 1; row >= fetchStart; row--) pushRow(row)
       for (let row = lastRow; row < fetchEnd; row++) pushRow(row)
     }
-    artworkPrefetcher.setDemand(ids, { jumped })
+    prefetchCovers(ids, { jumped })
   }, [])
 
   const compute = useCallback((settled, fromScroll = false) => {

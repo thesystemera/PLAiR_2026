@@ -11,14 +11,13 @@ import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { useDialog } from '../contexts/DialogContext'
 import { api } from '../lib/api'
 import { applySoundMode, SOUND_MODES, soundModeFor } from '../lib/soundModes'
-import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { useDeletePost } from '../hooks/useDeletePost'
 import { profilePackCache, profilePictureCache } from '../lib/mediaCache'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
-import { DepthArt, ProfileArt, TrackArt } from './DepthArt'
+import { ProfileArt, TrackArt } from './DepthArt'
 import { Scroller } from './Scroller'
 import { ExpandSection, Expandable, ExpandChevron } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
@@ -183,7 +182,7 @@ const getNetworkQualityLabel = (networkQuality) => {
 function ArtFor({ art, ...props }) {
   if (art?.kind === 'track') return <TrackArt trackId={art.id} hasArtwork={art.hasArtwork} {...props} />
   if (art?.kind === 'profile') return <ProfileArt userId={art.id} {...props} />
-  return <DepthArt {...props} />
+  return <img src={props.image} alt={props.alt} className="w-full h-full object-cover" />
 }
 
 const MediaRow = memo(function MediaRow({
@@ -229,14 +228,13 @@ const MediaRow = memo(function MediaRow({
         onPointerUp={handlePlay}
         className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
       >
-        {image ? (
+        {(art?.kind === 'track' ? art.hasArtwork !== false : image) ? (
           <div className="relative">
             <ArtFor
               art={art}
-              colorUrl={image}
+              image={image}
               alt={title}
               className={`relative w-12 h-12 rounded overflow-hidden flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`}
-              imgClassName="w-full h-full object-cover"
             />
             {isPlaying && (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -307,7 +305,6 @@ const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, 
 })
 
 const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, onEditUpload, onDeleteUpload, isDeleting }) {
-  const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track.generation_params || {}
   const title = params.title || track.title || 'Untitled'
   const artist = params.artist_name || track.track_info?.artist || 'Unknown Artist'
@@ -317,14 +314,12 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition group">
       <div className="w-12 h-12 rounded bg-gradient-to-br from-emerald-600 to-teal-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
-        {artworkUrl ? (
+        {track.has_artwork !== false ? (
           <TrackArt
             trackId={track.id}
             hasArtwork={track.has_artwork}
-            colorUrl={artworkUrl}
             alt={title}
             className="relative w-full h-full rounded overflow-hidden"
-            imgClassName="w-full h-full object-cover"
           />
         ) : (
           <Music size={20} className="text-white/70" />
@@ -488,14 +483,12 @@ const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDe
 })
 
 const TrackItem = memo(function TrackItem({ track, icon, iconColor, onPlayTrack, onRemovePreference, isLoading }) {
-  const artworkUrl = useArtworkThumb(track?.id, track?.has_artwork)
   const params = track?.generation_params || {}
   const title = params.title || track?.title || 'Untitled'
   const style = params.style || track?.style || 'No style'
 
   return (
     <MediaRow
-      image={artworkUrl}
       art={{ kind: 'track', id: track?.id, hasArtwork: track?.has_artwork }}
       fallbackIcon={<span className="text-lg">🎵</span>}
       title={title}
@@ -1060,7 +1053,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               aria-label={profilePictureUrl ? 'Change profile photo' : 'Add a profile photo'}
             >
               {profilePictureUrl ? (
-                <ProfileArt userId={user?.id} colorUrl={profilePictureUrl} alt={user?.username} className="relative w-10 h-10 rounded-full overflow-hidden" imgClassName="w-full h-full object-cover" />
+                <ProfileArt userId={user?.id} alt={user?.username} className="relative w-10 h-10 rounded-full overflow-hidden" />
               ) : (
                 <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: getUserAvatarGradient(), color: 'white' }}>
                   <UserIcon size={20} />

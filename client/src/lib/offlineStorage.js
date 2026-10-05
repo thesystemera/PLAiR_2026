@@ -6,7 +6,7 @@ const TRACK_STORE = 'tracks'
 const METADATA_STORE = 'metadata'
 const LAST_ACCESSED_TOUCH_INTERVAL_MS = 60 * 60 * 1000
 const OPEN_TIMEOUT_MS = 5000
-const TRANSIENT_METADATA_KEYS = ['fromCache', 'crossfade_hint', 'announcer_hint', 'audioBlob', 'artworkBlob', 'enrichedArtworkBlob', 'audioFeatures']
+const TRANSIENT_METADATA_KEYS = ['fromCache', 'crossfade_hint', 'announcer_hint', 'audioBlob', 'artworkBlob', 'enrichedArtworkBlob', 'packBlob', 'audioFeatures']
 
 export function normalizeTrackMetadata(metadata, trackId = null) {
   const meta = metadata && typeof metadata === 'object' ? { ...metadata } : {}
@@ -187,10 +187,11 @@ class AudioCacheDB {
       audioBlob: trackData.audioBlob,
       artworkBlob: trackData.artworkBlob || null,
       enrichedArtworkBlob: trackData.enrichedArtworkBlob || null,
+      packBlob: trackData.packBlob || null,
       metadata,
       audioFeatures: trackData.audioFeatures || null,
       bitrate: trackData.bitrate || '192k',
-      size: trackData.audioBlob.size + (trackData.artworkBlob?.size || 0) + (trackData.enrichedArtworkBlob?.size || 0),
+      size: trackData.audioBlob.size + (trackData.artworkBlob?.size || 0) + (trackData.enrichedArtworkBlob?.size || 0) + (trackData.packBlob?.size || 0),
       addedAt: now,
       lastAccessed: now,
     }
@@ -218,6 +219,7 @@ class AudioCacheDB {
       audioBlob: track.audioBlob,
       artworkBlob: track.artworkBlob,
       enrichedArtworkBlob: track.enrichedArtworkBlob,
+      packBlob: track.packBlob,
       audioFeatures: track.audioFeatures,
       bitrate: track.bitrate || '192k',
       _isCached: true,

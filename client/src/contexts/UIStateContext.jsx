@@ -63,8 +63,7 @@
  */
 
 import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react'
-import { artworkCache, artworkThumbCache, enrichedArtworkCache } from '../lib/mediaCache'
-import { artworkPrefetcher } from '../lib/artworkPrefetcher'
+import { artworkCache, enrichedArtworkCache } from '../lib/mediaCache'
 import { AudioInteractionManager } from '../lib/audioInteractionManager'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
@@ -949,17 +948,6 @@ export function UIStateProvider({ children }) {
     }
   }, [notifyArtwork])
 
-  const getThumbArtworkUrl = useCallback((trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return null
-    if (artworkPrefetcher.isReady(trackId)) return artworkThumbCache.peekMemory(trackId)
-    return artworkUrlsRef.current.get(trackId) || artworkCache.peekMemory(trackId) || generatePlaceholderDataURL(trackId)
-  }, [])
-
-  const preloadThumbArtwork = useCallback((trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return
-    artworkPrefetcher.request(trackId)
-  }, [])
-
   const preloadArtworkBatch = useCallback(async (trackIds) => {
     const promises = trackIds.filter(id => id && !artworkUrlsRef.current.has(id)).map(id => preloadArtwork(id, true))
     await Promise.all(promises)
@@ -1017,18 +1005,9 @@ export function UIStateProvider({ children }) {
     }
     const unbindArtwork = bind('artwork', artworkCache, artworkUrlsRef, preloadArtwork)
     const unbindEnriched = bind('enriched', enrichedArtworkCache, enrichedArtworkUrlsRef, preloadEnrichedArtwork)
-    artworkThumbCache.setPinnedChecker(id => listeners.has(`thumb:${id}`) || artworkPrefetcher.isDemanded(id))
-    artworkPrefetcher.setHeldChecker(id => listeners.has(`thumb:${id}`))
-    const notifyThumb = (id) => notifyArtwork('thumb', id)
-    const unsubscribeThumbCache = artworkThumbCache.subscribe(notifyThumb)
-    const unsubscribeThumbReady = artworkPrefetcher.subscribe(notifyThumb)
     return () => {
       unbindArtwork()
       unbindEnriched()
-      unsubscribeThumbCache()
-      unsubscribeThumbReady()
-      artworkThumbCache.setPinnedChecker(null)
-      artworkPrefetcher.setHeldChecker(null)
     }
   }, [notifyArtwork, preloadArtwork, preloadEnrichedArtwork])
 
@@ -1167,11 +1146,9 @@ export function UIStateProvider({ children }) {
     subscribeArtwork,
     getArtworkUrl,
     getEnrichedArtworkUrl,
-    getThumbArtworkUrl,
     preloadArtwork,
     preloadEnrichedArtwork,
-    preloadThumbArtwork,
-  }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, getThumbArtworkUrl, preloadArtwork, preloadEnrichedArtwork, preloadThumbArtwork])
+  }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, preloadArtwork, preloadEnrichedArtwork])
 
   const value = useMemo(() => ({
     tiltNeedsPermission: TILT_NEEDS_PERMISSION,
@@ -1410,11 +1387,6 @@ function useArtworkSubscription(kind, trackId, hasArtwork, getUrl, preload) {
 export function useArtwork(trackId, hasArtwork = true) {
   const { getArtworkUrl, preloadArtwork } = useArtworkStore()
   return useArtworkSubscription('artwork', trackId, hasArtwork, getArtworkUrl, preloadArtwork)
-}
-
-export function useArtworkThumb(trackId, hasArtwork = true) {
-  const { getThumbArtworkUrl, preloadThumbArtwork } = useArtworkStore()
-  return useArtworkSubscription('thumb', trackId, hasArtwork, getThumbArtworkUrl, preloadThumbArtwork)
 }
 
 export function useEnrichedArtwork(trackId, hasArtwork = true) {
