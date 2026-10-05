@@ -94,26 +94,17 @@ class DepthArtRenderer {
       this.layoutDirty = true
     }
     this.scrollOffsets = new WeakMap()
+    this.scrollViews = new WeakMap()
+    this.scrolledTargets = new Set()
+    this.viewsVersion = 0
     this.markScrolled = (event) => {
       const target = event.target
       if (!target || target === document || target === document.documentElement || target === document.body) {
         this.layoutDirty = true
         return
       }
-      const last = this.scrollOffsets.get(target)
-      const top = target.scrollTop
-      const left = target.scrollLeft
-      this.scrollOffsets.set(target, { top, left })
-      for (const view of this.views) {
-        if (!target.contains(view.host)) continue
-        if (last && view.rect && !view.dirty) {
-          view.shiftX += last.left - left
-          view.shiftY += last.top - top
-        } else {
-          view.dirty = true
-        }
-        this.scrolled = true
-      }
+      this.scrolledTargets.add(target)
+      this.scrolled = true
     }
     if (typeof document !== 'undefined') {
       document.addEventListener('scroll', this.markScrolled, { capture: true, passive: true })
@@ -135,6 +126,7 @@ class DepthArtRenderer {
     }
     view.entry = this.acquire(view)
     this.views.add(view)
+    this.viewsVersion++
     this.scrolled = true
     this.schedule()
     return () => this.detach(view)
@@ -142,25 +134,62 @@ class DepthArtRenderer {
 
   detach(view) {
     if (!this.views.delete(view)) return
+    this.viewsVersion++
     if (view.entry) view.entry.refs--
     view.entry = null
     this.dropCache(view)
     this.evictIdle()
   }
 
+  applyScrolls() {
+    for (const target of this.scrolledTargets) {
+      const last = this.scrollOffsets.get(target)
+      const top = target.scrollTop
+      const left = target.scrollLeft
+      this.scrollOffsets.set(target, { top, left })
+      let cached = this.scrollViews.get(target)
+      if (!cached || cached.version !== this.viewsVersion) {
+        cached = { version: this.viewsVersion, views: [...this.views].filter(view => target.contains(view.host)) }
+        this.scrollViews.set(target, cached)
+      }
+      for (const view of cached.views) {
+        if (last && view.rect && !view.dirty) {
+          view.shiftX += last.left - left
+          view.shiftY += last.top - top
+        } else {
+          view.dirty = true
+        }
+      }
+    }
+    this.scrolledTargets.clear()
+  }
+
   measure(view, clipRects) {
     view.shiftX = 0
     view.shiftY = 0
     view.styleVisible = !view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true })
-    this.place(view, view.host.getBoundingClientRect(), clipRects)
+    const measured = view.host.getBoundingClientRect()
+    const rect = view.rect || {}
+    rect.left = rect.x = measured.left
+    rect.top = rect.y = measured.top
+    rect.right = measured.right
+    rect.bottom = measured.bottom
+    rect.width = measured.width
+    rect.height = measured.height
+    this.place(view, rect, clipRects)
   }
 
   reposition(view, clipRects) {
     const rect = view.rect
-    const shifted = new DOMRect(rect.x + view.shiftX, rect.y + view.shiftY, rect.width, rect.height)
+    rect.left += view.shiftX
+    rect.right += view.shiftX
+    rect.x = rect.left
+    rect.top += view.shiftY
+    rect.bottom += view.shiftY
+    rect.y = rect.top
     view.shiftX = 0
     view.shiftY = 0
-    this.place(view, shifted, clipRects)
+    this.place(view, rect, clipRects)
   }
 
   place(view, rect, clipRects) {
@@ -358,6 +387,7 @@ class DepthArtRenderer {
       this.layoutDirty = false
       this.lastLayoutAt = timestamp
     }
+    this.applyScrolls()
     const clipRects = new Map()
     const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)

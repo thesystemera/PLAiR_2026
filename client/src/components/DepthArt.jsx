@@ -4,9 +4,9 @@ import { useQuality } from '../contexts/QualityContext'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
 import { CSS_TRANSITION } from '../lib/motion'
 import { useDepthMap } from '../hooks/useDepthMap'
-import { depthThumbCache, normalThumbCache, profileDepthCache, profileNormalCache } from '../lib/mediaCache'
+import { depthThumbCache, isMemoryKey, normalThumbCache, profileDepthCache, profileNormalCache } from '../lib/mediaCache'
 
-const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('http') || url.startsWith('/'))
+const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('http') || url.startsWith('/') || isMemoryKey(url))
 
 export function DepthArtBridge() {
   const { gyroscopeRef, mouseRef } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef }))

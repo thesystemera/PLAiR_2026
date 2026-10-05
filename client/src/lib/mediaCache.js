@@ -68,7 +68,8 @@ const CACHE_CONFIGS = {
     expiryMs: 14 * 24 * 60 * 60 * 1000,
     metadataKey: 'depth-thumb-metadata',
     getUrl: (id) => `/api/artwork/${id}/depth/thumb/${ARTWORK_THUMB_SIZE}`,
-    logPrefix: '[DepthThumbCache]'
+    logPrefix: '[DepthThumbCache]',
+    memoryOnly: true
   },
   normal_thumb: {
     cacheName: 'normal-thumb-cache-v1',
@@ -77,7 +78,8 @@ const CACHE_CONFIGS = {
     expiryMs: 14 * 24 * 60 * 60 * 1000,
     metadataKey: 'normal-thumb-metadata',
     getUrl: (id) => `/api/artwork/${id}/normal/thumb/${ARTWORK_THUMB_SIZE}?v=${NORMAL_MAP_VERSION}`,
-    logPrefix: '[NormalThumbCache]'
+    logPrefix: '[NormalThumbCache]',
+    memoryOnly: true
   },
   normal_full: {
     cacheName: 'normal-full-cache-v1',
@@ -94,7 +96,8 @@ const CACHE_CONFIGS = {
     expiryMs: 7 * 24 * 60 * 60 * 1000,
     metadataKey: 'profile-normal-metadata',
     getUrl: (id) => `/api/user/${id}/profile-picture/normal?v=${NORMAL_MAP_VERSION}`,
-    logPrefix: '[ProfileNormalCache]'
+    logPrefix: '[ProfileNormalCache]',
+    memoryOnly: true
   },
   profile_depth: {
     cacheName: 'profile-depth-cache-v1',
@@ -102,7 +105,8 @@ const CACHE_CONFIGS = {
     expiryMs: 7 * 24 * 60 * 60 * 1000,
     metadataKey: 'profile-depth-metadata',
     getUrl: (id) => `/api/user/${id}/profile-picture/depth`,
-    logPrefix: '[ProfileDepthCache]'
+    logPrefix: '[ProfileDepthCache]',
+    memoryOnly: true
   }
 }
 
@@ -112,22 +116,27 @@ const openCaches = new Map()
 const METADATA_SAVE_DELAY_MS = 1000
 
 const blobsByUrl = new Map()
+const MEMORY_KEY_PREFIX = 'mem:'
+let memoryKeyCount = 0
 
 export function blobForUrl(url) {
   return blobsByUrl.get(url) || null
 }
 
-function createBlobUrl(blob) {
-  const url = URL.createObjectURL(blob)
+export function isMemoryKey(url) {
+  return typeof url === 'string' && url.startsWith(MEMORY_KEY_PREFIX)
+}
+
+function createBlobUrl(blob, type, id, memoryOnly) {
+  const url = memoryOnly ? `${MEMORY_KEY_PREFIX}${type}:${id}:${++memoryKeyCount}` : URL.createObjectURL(blob)
   blobsByUrl.set(url, blob)
   return url
 }
 
 function revokeBlobUrl(url) {
-  if (typeof url === 'string' && url.startsWith('blob:')) {
-    blobsByUrl.delete(url)
-    URL.revokeObjectURL(url)
-  }
+  if (typeof url !== 'string') return
+  blobsByUrl.delete(url)
+  if (url.startsWith('blob:')) URL.revokeObjectURL(url)
 }
 
 class MediaCache {
@@ -274,7 +283,7 @@ class MediaCache {
       const cached = await cacheManager.getCachedTrack(id)
       const blob = this.type === 'enriched_artwork' ? cached?.enrichedArtworkBlob : cached?.artworkBlob
       if (!blob) return null
-      const blobUrl = createBlobUrl(blob)
+      const blobUrl = createBlobUrl(blob, this.type, id, this.config.memoryOnly)
       this._setMemory(id, blobUrl)
       this.updateMetadata(id, blob.size)
       return blobUrl
@@ -333,7 +342,7 @@ class MediaCache {
       if (!response) return null
 
       const blob = await response.blob()
-      const blobUrl = createBlobUrl(blob)
+      const blobUrl = createBlobUrl(blob, this.type, id, this.config.memoryOnly)
 
       this._setMemory(id, blobUrl)
       this.updateMetadata(id, blob.size)

@@ -5,10 +5,12 @@ export function formatDuration(ms) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+const SHORT_DATE = new Intl.DateTimeFormat('en-US', { month: 'short', year: 'numeric' })
+
 export function formatDateShort(dateStr) {
   if (!dateStr) return 'Unknown'
   const date = new Date(dateStr)
-  return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  return Number.isNaN(date.getTime()) ? date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : SHORT_DATE.format(date)
 }
 
 const TIME_AGO_UNITS = [[31536000, 'y'], [2592000, 'mo'], [604800, 'w'], [86400, 'd'], [3600, 'h'], [60, 'm']]
