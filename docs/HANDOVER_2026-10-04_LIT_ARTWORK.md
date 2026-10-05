@@ -1,5 +1,34 @@
 # Handover: lit 3D artwork and the frame-rate drop (4 Oct 2026)
 
+## Update 5 Oct 2026, afternoon: measured on the owner's phone over USB (start here)
+
+Redmi Note 13 4G (Adreno 610), High, Radio tab, music playing. Tools: `tests/gpu_bench/phone.mjs` + README
+(frame-time slope with extra scene passes; GPU busy % is unreliable because the governor moves the clock).
+
+Findings:
+- Chrome on Android holds main-thread frames (rAF, WebGL on the page) to 60 Hz unless the screen is touched
+  (`ThrottleMainFrameTo60Hz`). A canvas in a Web Worker is not throttled (60 vs 120 measured).
+- Every scene frame makes Chrome re-composite the whole screen; each CSS mask over a composited scroller is an
+  extra panel-sized pass per composite.
+- On Adreno, code that rarely runs still costs every pixel (register pressure): the three inlined copies of the
+  effect chain for chromatic aberration doubled the scene pass.
+
+Done (all live):
+| Change | Measured |
+|---|---|
+| Chromatic aberration as a loop over one copy of the effect chain | scene pass 8.8 -> 5.7 ms |
+| Radio chat: edge fade and bubble hole in one mask | 5 -> 4 render passes per frame |
+| Scene in a Web Worker (`lib/sceneRenderer.js`, `lib/sceneWorker.js`) | scene 60 -> ~100 fps untouched |
+| Opaque panel interiors drawn with a glass-only shader | scene pass 5.9 -> 4.5 ms (within 3/255) |
+| Result | scene ~113 fps, page ~52 fps (was 60 / 60, page drops because the GPU is full) |
+
+Tried and rejected: `desynchronized` canvas (half-drawn tiles visible as specks); box-test before the panel loop
+(slower: a variable loop is not unrolled); per-panel/bubble specialised interior shader (~0.1 ms, not worth it).
+
+Open, owner decision first: the scroller edge-fade masks. Off: scene 119, page 57. Options given: keep, remove,
+fade only where there is more to scroll, or thinner. Then: a no-chromatic shader for non-beat frames (~1 ms on the
+non-glass area), lit artwork cost (off: page +2-4 fps), the restrained Auto level.
+
 ## Update 5 Oct 2026, night: where it stands (start here)
 
 The owner's phone (Redmi Note 13 4G, Adreno 610, Android 15, 120 Hz set, no battery saver) still shows no
