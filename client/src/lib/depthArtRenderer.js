@@ -93,17 +93,26 @@ class DepthArtRenderer {
     this.markLayoutDirty = () => {
       this.layoutDirty = true
     }
+    this.scrollOffsets = new WeakMap()
     this.markScrolled = (event) => {
       const target = event.target
       if (!target || target === document || target === document.documentElement || target === document.body) {
         this.layoutDirty = true
         return
       }
+      const last = this.scrollOffsets.get(target)
+      const top = target.scrollTop
+      const left = target.scrollLeft
+      this.scrollOffsets.set(target, { top, left })
       for (const view of this.views) {
-        if (target.contains(view.host)) {
+        if (!target.contains(view.host)) continue
+        if (last && view.rect && !view.dirty) {
+          view.shiftX += last.left - left
+          view.shiftY += last.top - top
+        } else {
           view.dirty = true
-          this.scrolled = true
         }
+        this.scrolled = true
       }
     }
     if (typeof document !== 'undefined') {
@@ -122,6 +131,7 @@ class DepthArtRenderer {
     const view = {
       host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn,
       clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
+      shiftX: 0, shiftY: 0, styleVisible: true,
     }
     view.entry = this.acquire(view)
     this.views.add(view)
@@ -139,7 +149,21 @@ class DepthArtRenderer {
   }
 
   measure(view, clipRects) {
-    const rect = view.host.getBoundingClientRect()
+    view.shiftX = 0
+    view.shiftY = 0
+    view.styleVisible = !view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+    this.place(view, view.host.getBoundingClientRect(), clipRects)
+  }
+
+  reposition(view, clipRects) {
+    const rect = view.rect
+    const shifted = new DOMRect(rect.x + view.shiftX, rect.y + view.shiftY, rect.width, rect.height)
+    view.shiftX = 0
+    view.shiftY = 0
+    this.place(view, shifted, clipRects)
+  }
+
+  place(view, rect, clipRects) {
     view.rect = rect
     let visible = rect.width >= 2 && rect.height >= 2 && overlaps(rect, 0, 0, viewport.width, viewport.height)
     for (const clip of view.clips) {
@@ -152,7 +176,7 @@ class DepthArtRenderer {
       visible = overlaps(rect, clipRect.left, clipRect.top, clipRect.right, clipRect.bottom)
     }
     view.visible = visible
-    view.shown = visible && (!view.host.checkVisibility || view.host.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
+    view.shown = visible && view.styleVisible
     if (!visible) this.dropCache(view)
   }
 
@@ -348,6 +372,8 @@ class DepthArtRenderer {
       if (relayout || view.dirty || !view.rect) {
         view.dirty = false
         this.measure(view, clipRects)
+      } else if (view.shiftX || view.shiftY) {
+        this.reposition(view, clipRects)
       }
       if (!view.shown) continue
       const rect = view.rect
