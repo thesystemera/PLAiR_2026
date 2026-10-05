@@ -391,6 +391,7 @@ class SonicMasterService(SingletonService):
             log_service.upscaling(f"SonicMaster: Enhancing {input_path.name}")
 
             async with gpu_lease("SonicMaster"):
+                _clear_cuda_cache()
                 if not self.sonic_loaded:
                     try:
                         await asyncio.to_thread(self._load_sync)

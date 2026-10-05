@@ -9,10 +9,11 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render Suno tracks that have no master yet through the full chain, "
                                                  "on a chosen GPU, in a process of its own")
-    parser.add_argument("--gpu", type=int, default=1, help="PCI-ordered GPU index (1 = Quadro RTX 6000)")
+    parser.add_argument("--gpu", type=int, default=0, help="PCI-ordered GPU index (0 = Quadro P6000, PLAiR's card; 1 = the RTX 6000 is the owner's other projects)")
     parser.add_argument("--limit", type=int, default=0, help="Process at most N tracks")
     parser.add_argument("--in-flight", type=int, default=4, help="Tracks inside the lanes at once")
     parser.add_argument("--dry-run", action="store_true", help="List what would run")
+    parser.add_argument("--keep-intermediates", action="store_true", help="Keep the decoded, Apollo, premaster and SonicMaster WAVs")
     parser.add_argument("--track", action="append", default=[], help="Render only these track ids (repeatable)")
     parser.add_argument("--rerender", action="store_true",
                         help="After the missing tracks, re-render masters made by an older chain version")
@@ -127,7 +128,7 @@ async def main():
             if job.is_settled():
                 running.remove((job, t0))
                 ok = job.catalog_ready
-                if ok:
+                if ok and not ARGS.keep_intermediates:
                     remove_intermediates(job.track_id)
                 done += ok
                 failed += not ok

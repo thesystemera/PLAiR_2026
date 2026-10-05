@@ -211,7 +211,7 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 ## 7. Large jobs
 
 - **Music catalog re-render (running since 3 Oct, 22:31).** `server/utils/process_backlog.py --rerender` on the
-  RTX 6000: ~870 Suno songs that never had a master, then ~1,350 masters below chain version 3; ~2.5 min per song
+  P6000 (moved off the RTX 6000 on 5 Oct): ~870 Suno songs that never had a master, then ~1,350 masters below chain version 3; ~2.5 min per song
   (GPU-bound), a few days in all. Progress in `data/logs/backlog.log`; restart the same command if it stops
   (finished songs are skipped). While a song is re-rendered (~3 min) its old Opus/WebM are gone, so playback may
   skip it. `utils/relevel_catalog.py` is moving the remaining -14 LUFS masters to -16 by gain (log

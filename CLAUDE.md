@@ -99,7 +99,7 @@ This is the **most critical architectural pattern** in the frontend. Read `docs/
 - Engines call `reportEngineStatus()` to publish their state to UIState
 - Components read from UIState via **slice subscriptions**: `useUISelector(state => ({ a: state.a, isPlaying: state.engineState.is_playing }))` (shallow-compared, re-renders only when the selected slice changes). Select the narrowest values you need (e.g. `state.engineState.currentTrack?.id`, not all of `engineState`). There is no whole-state hook (`useUIState` was removed); `npm run check:ui-state` fails on a selector that reads a field UIState doesn't have. `useUIStateGetter()` reads the latest state on demand inside handlers without subscribing.
 - Playback: components that only call actions use `usePlaybackActions()` (stable: playTrack, next, previous, seek, audio, talkBreak...); `usePlaybackConnected()` for the socket flag. Playback state reaches components through UIState (`engineState`), not a whole-context hook.
-- Theme: `useDynamicTheme()` changes once per track (colours). `getCategoryMetadata` is also a plain export; the canvas artwork is `useThemeArtwork()`; the accent colour is also published as CSS vars `--theme-accent-85` / `--theme-accent-60`.
+- Theme: `useDynamicTheme()` changes once per track (colours). `getCategoryMetadata` is also a plain export; the scene artwork is `useThemeArtwork()` (the current track's pack, section 8); the accent colour is also published as CSS vars `--theme-accent-85` / `--theme-accent-60`.
 - Per-track side effects that aren't UI (media session, lyrics/features loading, connection toast) live in render-nothing bridges in `components/AppBridges.jsx`, mounted next to `<DJVoiceEngine />`, so the root `App` never re-renders on a skip.
 - Keep components "dumb" - they only render based on state
 
@@ -335,44 +335,18 @@ function Parent() {
 xs<640px (phone, 1.0), sm 640-768px (1.0), md 768-1024px (tablet, 1.0), lg 1024-1440px (laptop, 0.8), xl 1440-1920px (desktop, 0.75), 2xl 1920-2560px (1080p, 0.7), 3xl 2560-3840px (QHD, 0.85), 4K 3840px+ (baseline, 1.0). Scaling applies to desktop (≥1024px) only. The root font-size is that scale × `UI_TEXT_SCALE` (ViewportContext, 0.94): the one knob for overall text/UI size on every device, since Tailwind sizes are rem-based.
 
 
-### 8. Artwork Preloading Architecture - Proactive SSOT Pattern
+### 8. Covers: One Pack, One Renderer (owner's rule, 5 Oct)
 
-**Files:** `client/src/contexts/UIStateContext.jsx`, `client/src/lib/mediaCache.js`
+**Files:** `client/src/components/DepthArt.jsx`, `client/src/lib/depthArtRenderer.js`, `client/src/lib/packImage.js` (+ `packDecodeWorker.js`), `client/src/lib/mediaCache.js`, `client/src/lib/artworkPrefetcher.js`, `server/services/artwork_thumbnail_service.py`
 
-UIStateContext automatically manages artwork preloading for smooth crossfades. This is a **proactive** system - artwork is loaded BEFORE track changes.
+- Every cover and avatar is one packed JPEG: colour on the left; normal x (red), depth (green), normal y (blue) on the right. Sizes 256/512/768 for tiles (`ART_PACK_SIZE`, picked per device) and 1024 (`FULL_PACK_SIZE`, the full artwork) for Now Playing. There is no plain-JPEG path anywhere in the app: no `<img>` covers, no `useArtwork`, no enriched or normal-map downloads. The plain `/api/artwork/{id}` route exists only for link-preview cards (`opengraph_service`).
+- Covers draw through ONE renderer (`depthArtRenderer`) via `TrackArt` / `ProfileArt`; anything that changes track uses `TrackArtCrossfade` (the new cover draws behind, the old one is frozen (`held`, no parallax pass) and fades out once the new one has drawn; 1.5 s limit). 3D Lit Artwork off draws the pack's colour half flat in the same renderer.
+- Packs are decoded only in `packDecodeWorker` (`decodePack`): decoding, cutting and resizing an ImageBitmap on the main thread cost ~90 ms per 1024 pack on the owner's phone. Inside the scene worker `decodePack` runs inline.
+- Everything else that needs the cover reads the current track's full pack: `useThemeArtwork()` = `{ key, blob, imageUrl, trackId }` (DynamicThemeContext). The background scene gets `key` + `blob`; colours come from a 100 px decode; `imageUrl` (a 512 JPEG made from the pack in idle time) is for the lock-screen art (Media Session), modal blurs and the no-WebGL fallback.
+- Preloading: UIState preloads current + next track's packs (tile size and full) and pins them; the catalog scroller prefetches packs ahead (`artworkPrefetcher`) and warms the nearest on the GPU. Packs are rendered ahead on the server (`backfill_track_packs` at startup, all sizes); an unrendered pack takes ~0.9 s on demand, a rendered one ~4 ms.
+- Debug: `__plairArt.stats()`, `.views()`, `.drawDelays()`, `.blank()` (each blank cover on screen: no pack yet / decoding / uploading / ready but not drawn).
 
-**How It Works:**
-1. PlaybackContext publishes `currentTrack` + `queue` + `currentIndex` to UIState via `reportEngineStatus()`
-2. UIStateContext watches for changes and automatically preloads:
-   - **Current track:** Regular artwork + enriched artwork (for parallax effects)
-   - **Next track:** Regular artwork + enriched artwork (for instant crossfades)
-3. Components consume preloaded URLs via hooks - NO manual preloading needed
-
-**Component Usage:**
-```javascript
-// Regular artwork (for thumbnails, small images)
-const artworkUrl = useArtwork(trackId, hasArtwork)
-
-// Enriched artwork (for parallax effects - color + depth side-by-side)
-const enrichedUrl = useEnrichedArtwork(trackId, hasArtwork)
-```
-
-**A/B Crossfade Pattern:**
-Both `Player.jsx` and `NowPlaying.jsx` use A/B layer crossfading:
-- Two layers (A and B) render the same component with different artwork
-- `frontLayer` state controls which layer is visible (opacity transition)
-- When track changes, new artwork loads into the back layer, then crossfades to front
-- Because UIState preloads next track, crossfade is instant (no placeholder flash)
-
-**DO NOT:**
-- Manually call `preloadArtwork()` or `preloadEnrichedArtwork()` in components
-- Pass artwork URLs through component props
-- Create separate preloading logic in components
-
-**DO:**
-- Use `useArtwork()` and `useEnrichedArtwork()` hooks to consume URLs
-- Trust that UIState has already preloaded current + next track
-- Use A/B layer pattern for smooth crossfades (see Player.jsx:88-134, NowPlaying.jsx:185-354)
+**DO NOT:** add an `<img>` or plain-JPEG cover, a second renderer or WebGL context for covers, or decode packs on the main thread.
 
 ### 9. Modal System - Dynamic Backgrounds
 
@@ -513,7 +487,7 @@ Design doc: `docs/CITY_PULSE.md`. All open work, bugs and owner decisions are in
 - **Radio Mode:** opt-in scheduled talk breaks (`radio_mode_service.py`, `radio_segments.py`, `radio_schedule.py`, `music_beds.py`; client `lib/talkBreak.js`, `lib/musicBed.js`, `RadioModeSettings.jsx`, `OnAirBadge.jsx`). Music beds are in `CATALOG_DIR/music_beds`, stings in `CATALOG_DIR/stings`, and neither is ever in the main catalog.
 - **Stings & talking clock:** `sting_service.py`, `sting_types.py`, `sting_schedule.py`, `talking_clock.py`, `station_ids.py`, `station_voice.py`. Station voice is `tts_chatterbox/voices/station.wav` with `station_treatment`; the spoken name is `STATION_NAME_SPOKEN` ("Playar"). Between tracks and in mid-song quiet stretches: see "The station uses each song's spaces like a DJ" in section 12.
 - **LLM routing and cost:** `services/llm_router.py` has role chains (`LLM_LIVE` Gemini 3.5 Flash-Lite; `LLM_ANNOUNCE/INTERPRET/BACKGROUND` DeepSeek flash, then Gemini fallback)). Rule (owner, 2026-10-01): Gemini only for what is urgent and interactive (the live DJ turn and its Producer); everything else runs on DeepSeek, split like the live DJ vs the between-track announcer. Voice-take and filler scripts (paralanguage, breaths, impulse and interlude scripts) use `LLM_ANNOUNCE` (`dj_prompt_system_service.VOICE_SCRIPT_ROLE`); `_execute_gpt_stream` has no default role so nothing lands on Gemini by accident. `services/llm_telemetry.py` is the one price table. `services/usage_tracking.py` + `usage_middleware.py` attribute every paid call (and cache savings) to a user, guest or system scope; the admin view is `UsageStatsModal.jsx` / `routers/usage.py` (`ADMIN_USER_IDS`).
-- **Artwork thumbnails:** `GET /api/artwork/{id}/thumb/{size}` (`services/artwork_thumbnail_service.py`); the client prefetches through `lib/artworkPrefetcher.js` and `useArtworkThumb`.
+- **Cover packs:** `GET /api/artwork/{id}/pack/{size}` (`services/artwork_thumbnail_service.py`, section 8); the client prefetches through `lib/artworkPrefetcher.js`.
 - **Semantic sources (one pattern for everything searchable):** tracks, shoutouts, local knowledge (events), news and listener requests are all `CategoryStore` sources (`services/category_store.py`, on the shared `VectorStore`, section 19): a source table of `(rowid, id, metadata_json)`, named semantic categories with weights, a per-category embedding table (text -> vector, each text embedded once), per-category item vectors held as matrices in the live slot, and search that re-weights categories per query (regex presets or the query-intent prompt cache) and ranks every item in a few matrix operations (`services/semantic_source.py` `SemanticSearch`, used by music and shoutout search too). Every source uses one encoder, `SEMANTIC_ENCODER` (all-mpnet-base-v2, 768-dim; the TTS clip cache uses it too). Embedding tables carry the encoder slug (`<category>_mpnet_embeddings`), so changing the encoder rebuilds cleanly; query-intent caches and the Producer cache (both `SemanticCache`) re-embed stale rows in place. New sources subclass `SemanticVectorDatabaseService` with a `category_specs` list: adding a category is one line.
 - **International or nothing (owner's rule):** every City Pulse source must work in any city in the world (general web search, schema.org / iCal pages, global APIs). Never an adapter for a one-country platform (Eventfinda, Skiddle, ...), never code or settings for one city. Auckland is only the test city.
 - **Grassroots events (`services_radio/event_harvest.py`, collector `web_events`):** no code per site. Event searches run through the news store plus venue websites from place memory. Pages are read through `web_fetch`: schema.org Event JSON-LD first, then iCal, then the WordPress events feed, and DeepSeek only for pages with none of these. Every page also offers its links to a focused crawler: links are scored by meaning with the shared encoder against event phrases (no word lists) and the best become `lead` sources, a few hops deep, capped per site; it is our own search, no search API (owner's call). Pages that keep yielding events are remembered in `event_sources` and re-read every 2 days. Results land in `regional_items` as source `web`. Settings `EVENT_HARVEST_*` / `EVENT_SOURCE_*`; probe `tests/event_harvest_probe.py`; details in `docs/CITY_PULSE.md` section 15.
@@ -555,10 +529,11 @@ Design doc: `docs/CITY_PULSE.md`. All open work, bugs and owner decisions are in
 Details, measurements and everything tried and rejected: `docs/HANDOVER_2026-10-02_MUSIC_UPSCALING.md`.
 
 - **Suno chain (orchestrator lanes 1, 1b, 2, 3, 4, 6):** decode -> **Apollo** on the decoded MP3 (what it was trained on), keeping Suno's own signal below its MP3 cutoff (`audio_headroom.keep_source_below_cutoff`: Apollo only fills above it; on the full mix it had pulled 16.5-17.5 kHz down 4-5 dB) -> RoFormer split of the restored mix -> Lew's vocal Apollo on the vocal (no crossover) -> remix -> notches (`correct_audio`: 25 Hz rumble cut, stationary resonances only, 20 kHz safety roll-off) -> SonicMaster (33% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", blend compensation on) -> **reference EQ + final leveler** (lane 6). Intermediates: `DECODED_WAV_DIR` -> `WAV_DIR` (Apollo) -> stems (with `vocal_mix.wav`) -> `PREMASTER_WAV_DIR` (SonicMaster's input) -> `SONIC_WAV_DIR` -> master.
-- **Reference EQ (owner's rule, 5 Oct):** the target is the modern-master average (Pestana et al. 2013, US/UK No.1 singles 2000-2010, per-Hz density; `MODERN_MASTER_HZ/DB` in `audio_master_service.py`), aligned at 500-2000 Hz. Only what falls outside ±3 dB (`REFERENCE_TOLERANCE_DB`) is moved, by the excess (up to 6 dB, 40 Hz-16 kHz, linear phase), so each mix keeps its own fingerprint; never a flat match. The old Elowsson 2017 curve was retired: its folk-heavy CD-era corpus is 6-7 dB darker at 8-12 kHz than modern masters, and matching it made masters sound muddy. Never use the owner's own mixes as a reference. Uploads get the same EQ at their mastering blend.
+- **Reference EQ (owner's rule, 5 Oct):** the target is the modern-master average (Pestana et al. 2013, US/UK No.1 singles 2000-2010, per-Hz density; `MODERN_MASTER_HZ/DB` in `audio_master_service.py`), aligned at 500-2000 Hz. Only what falls outside ±3 dB (`REFERENCE_TOLERANCE_DB`) is moved, by the excess (up to 10 dB, 40 Hz-16 kHz, linear phase; the curve is iterated until the measured result lands on the band edge), so each mix keeps its own fingerprint; never a flat match. The old Elowsson 2017 curve was retired: its folk-heavy CD-era corpus is 6-7 dB darker at 8-12 kHz than modern masters, and matching it made masters sound muddy. Never use the owner's own mixes as a reference. Uploads get the same EQ at their mastering blend.
+- **Tape hiss (owner, 5 Oct):** Suno masters get steady tape-style hiss at `MASTER_TAPE_HISS_DBFS` (-70 dBFS, about clean-cassette level; decorrelated L/R, lighter lows, flat highs) added after the reference EQ, just before the limiter (`audio_headroom.tape_hiss`). It masks the codec holes in the highs (the deepest ones halve) and is heard only in true silence. Not on human uploads.
 - **Station level -16 LUFS** (Apple Music standard, `MASTER_TARGET_LUFS`): masters, uploads and shoutouts; stings -18, station voice -20, beds -22; DJ hosts get `DJ_VOICE_LEVEL_DB` (-2 dB). Never master louder: at -14 the true-peak ceiling capped the peak-to-loudness ratio at 12.5 dB and the owner heard it as squashed.
 - **Versioning:** every master stamps `master_chain_version` (`settings.MASTER_CHAIN_VERSION`) and `master_rendered_at` into its metadata. Bump the version whenever the sound changes; `server/utils/process_backlog.py --rerender` then re-renders only older masters.
-- **Background renders:** `process_backlog.py` runs the orchestrator in its own process on the RTX 6000 (`--gpu 1`, own log `data/logs/backlog.log`, asset doctor off, intermediates deleted after each song), never inside the live backend. The live backend's catalog watcher (`CATALOG_WATCH_INTERVAL_S`) reloads when masters appear from any process; "Recent" sorts by `catalog_added_at`, then `created_at`.
+- **Background renders:** `process_backlog.py` runs the orchestrator in its own process on the P6000 (`--gpu 0`, the default; the RTX 6000 belongs to the owner's other projects such as DeepPBR, 5 Oct; own log `data/logs/backlog.log`, asset doctor off, intermediates deleted after each song), never inside the live backend. The live backend's catalog watcher (`CATALOG_WATCH_INTERVAL_S`) reloads when masters appear from any process; "Recent" sorts by `catalog_added_at`, then `created_at`.
 - `server/utils/relevel_catalog.py` moves masters above the station level down by gain only and re-encodes their Opus/WebM.
 - A/B work: measure every render (`data/upscale_test_2026-10-02/scripts/proof.py`), compare by beep cycles and difference files, loudness-matched, with raw Suno alongside.
 
@@ -624,7 +599,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/Catalog.jsx` - Track catalog panel: genre cards, virtualised track grid, sorting, play now and seed actions.
 - `client/src/components/Conversation.jsx` - DJ conversation view: chat bubbles, internal dialogue, ordered tool activity cards, filters, autoscroll.
 - `client/src/components/CostTicker.jsx` - Small fixed overlay showing today's AI usage cost, refreshed every minute.
-- `client/src/components/DepthArt.jsx` - Every cover and avatar: one canvas drawn by the shared renderer from the cover's pack (colour | normal x, depth, normal y); 3D Lit Artwork off draws the pack's colour half flat. `TrackArt` / `ProfileArt` and the renderer config bridge.
+- `client/src/components/DepthArt.jsx` - Every cover and avatar: one canvas drawn by the shared renderer from the cover's pack (colour | normal x, depth, normal y); 3D Lit Artwork off draws the pack's colour half flat. `TrackArt` / `ProfileArt`, `TrackArtCrossfade` (player and Now Playing) and the renderer config bridge.
 - `client/src/components/DevicePicker.jsx` - Multi-device picker hook, button, panel and "Playing on another device" notice with Play here.
 - `client/src/components/DJActivity.jsx` - DJ tool activity cards (plan, calls, results) and the bridge that pops tool chips as notices.
 - `client/src/components/DJTextComposer.jsx` - Text input box for typing messages to the DJs in text mode.
@@ -642,10 +617,9 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/Motion.jsx` - Motion building blocks: Expandable, ExpandChevron, ExpandSection and FadeSwap.
 - `client/src/components/Notice.jsx` - NoticeChip pop-up pill and InlineNote status line with tone colours and icons.
 - `client/src/components/NoticeStack.jsx` - Renders the UIState notice channel as a stack of NoticeChips at the top.
-- `client/src/components/NowPlaying.jsx` - Now playing panel: A/B artwork, synced lyrics, audio features, artist info, reviews, share.
+- `client/src/components/NowPlaying.jsx` - Now playing panel: full-size crossfading cover, synced lyrics, audio features, artist info, reviews, share.
 - `client/src/components/OnAirBadge.jsx` - ON AIR notice and frame shown during Radio Mode talk breaks.
 - `client/src/components/Panel.jsx` - Generic panel wrapper, header, curved backdrop, panel ids/config and text radio icon.
-- `client/src/components/ParallaxArtwork.jsx` - WebGL parallax artwork using colour plus depth maps, driven by tilt or mouse.
 - `client/src/components/Player.jsx` - Main player bar: artwork, transport controls, waveform progress, talk break progress, device status.
 - `client/src/components/Queue.jsx` - Playback queue list with now-playing highlight, preference badges and seed/list mode buttons.
 - `client/src/components/Radio.jsx` - Radio panel container holding the radio talk button, conversation and timeline.
@@ -691,7 +665,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/contexts/PreferencesContext.jsx` - Track and shoutout likes, super likes and bans with optimistic updates.
 - `client/src/contexts/QualityContext.jsx` - The visual quality level (Low / Medium / High, or Auto adapting between them against the screen's refresh rate): scene DPR, glass taps, parallax detail; never frame rate. Also the reduced-motion policy.
 - `client/src/contexts/StorageContext.jsx` - Offline storage usage, quota and data usage info with refresh trigger.
-- `client/src/contexts/UIStateContext.jsx` - SSOT for UI state: engine status, visual state, modals, notices, settings, artwork preloading.
+- `client/src/contexts/UIStateContext.jsx` - SSOT for UI state: engine status, visual state, modals, notices, settings, current/next cover pack preloading.
 - `client/src/contexts/ViewportContext.jsx` - Responsive breakpoints, scale, device detection and root font size.
 - `client/src/contexts/VoiceRecordingContext.jsx` - Microphone recording engine provider for voice turns and shoutouts.
 - `client/src/contexts/WebSocketContext.jsx` - WebSocket client: auth handshake, ping/pong health, reconnect, outbox, subscribe and emit hooks.
@@ -738,7 +712,9 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/lightProbe.js` - Turns the background's 16x16 light grid into tracked lights for depth artwork; says when a probe is worth reading (lit art on screen, light up, no panel resizing).
 - `client/src/lib/backgroundProbe.js` - Computes the 16x16 light probe on the CPU from small copies of the artwork and lyric word plus the background's own transform and colour uniforms (no GPU readback; Chrome's readback stalled the main thread behind every queued frame).
 - `client/src/lib/logger.js` - Logger with levels and a sink hook used by the error reporter.
-- `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for artwork, depth and profile images.
+- `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for cover packs (tile and full size) and profile pictures; deletes retired caches.
+- `client/src/lib/packImage.js` - Decodes cover packs (colour and map halves) in `packDecodeWorker`, and makes the pack's colour half into a JPEG URL for the lock screen and modal blurs.
+- `client/src/lib/packDecodeWorker.js` - Worker that decodes, cuts and resizes cover packs off the main thread.
 - `client/src/lib/mediaSupport.js` - Detects MSE and WebM/Opus support and picks streaming and download formats.
 - `client/src/lib/microMotion.js` - Web Animations micro-interactions: press pop, nope, burst, art pop, arrival glow.
 - `client/src/lib/motion.js` - Motion tokens: durations, easings, springs, variants, presets and CSS transitions.
@@ -807,7 +783,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/routers/devices.py` - List, activate, rename and remove a user's playback devices.
 - `server/routers/dj.py` - Speech transcription and typed DJ talk endpoints.
 - `server/routers/generation.py` - Start, list, check and cancel Suno music generation jobs.
-- `server/routers/media.py` - Streams tracks (MP3/Opus/WebM), artwork, thumbnails, depth/normal maps, audio features, video clips, lyric timing.
+- `server/routers/media.py` - Streams tracks (MP3/Opus/WebM), cover packs, the plain artwork (link previews only), audio features, video clips, lyric timing.
 - `server/routers/playback.py` - REST playback controls: play, pause, stop, seek, queue add/remove and seed radio.
 - `server/routers/preferences.py` - Set, clear and list a listener's track likes, super likes and bans.
 - `server/routers/radio.py` - Read and update Radio Mode settings and serve music beds.
@@ -888,7 +864,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services/api_utils.py` - One helper that reduces a track record to the short summary fields API responses use.
 - `server/services/artist_profile_service.py` - Listeners' artist/band profiles: create, edit, delete, list, slugs, and picking the profile an upload is credited to.
 - `server/services/artwork_generation_service.py` - Generates and upscales track artwork with a lazily loaded Stable Diffusion XL pipeline, unloaded when idle.
-- `server/services/artwork_thumbnail_service.py` - Renders and caches sized artwork thumbnails and cover packs (colour | normal x, depth, normal y; flat maps until depth and normals exist) on demand.
+- `server/services/artwork_thumbnail_service.py` - Renders cover packs (colour | normal x, depth, normal y; flat maps until depth and normals exist) on demand, and backfills every missing or stale pack at startup.
 - `server/services/asset_integrity_service.py` - The asset doctor: schedules scans of tracks and shoutouts, keeps state and reports, runs repairs.
 - `server/services/asset_integrity_service_checks.py` - Asset doctor's check definitions, finding and subject types, and file/duration probes they use.
 - `server/services/asset_integrity_service_detect.py` - Asset doctor detection: probes each track's and shoutout's files, metadata, DB flags and vector index entry.
@@ -1144,7 +1120,6 @@ async def my_endpoint(db: AsyncSession = Depends(get_db)):
 - Make Radio.jsx a "bridge" component (it's just a panel container)
 - Pass viewport state through props (components subscribe directly)
 - Pass artwork URLs through component props (components subscribe directly)
-- Manually call `preloadArtwork()` or `preloadEnrichedArtwork()` in components
 - Use `useIsMobile()` helper (removed - use `useViewport()` directly)
 - Hard-code GPU indexes (`cuda:1`, `set_device(n)`) or float16 for Whisper/CTranslate2 — the app runs on a Pascal P6000 selected via `CUDA_VISIBLE_DEVICES`
 - Reintroduce cloud TTS (ElevenLabs was retired), or replace the phonetic paralanguage converter with engine emotion tags
@@ -1166,7 +1141,7 @@ async def my_endpoint(db: AsyncSession = Depends(get_db)):
 - Trust UIState to automatically preload current + next track artwork
 - Engines report directly to UIState via `reportEngineStatus()` (including queue + currentTrack + isActiveDevice)
 - Components subscribe to contexts directly - NO prop drilling
-- Use `useArtwork()` and `useEnrichedArtwork()` hooks to consume preloaded URLs
+- Use `TrackArt` / `TrackArtCrossfade` / `ProfileArt` for every cover (section 8)
 - Use optimistic updates for user actions
 - Broadcast playback state changes via WebSocket (including `active_device_id`)
 - Normalize mode names between backend and frontend
@@ -1213,7 +1188,7 @@ The app supports iOS Safari with graceful degradation. Key patterns:
   - A rejected `play()` (`NotAllowedError`), or a context that isn't running, sets `engineState.audioNeedsTap` and shows `AudioUnlockPrompt` ("Tap to start audio"). `togglePlay` never pauses while blocked. `ensureContext()` waits at most 300 ms for `resume()`, since WebKit leaves it pending until a tap. DJ voice lines blocked by autoplay wait for the next tap instead of being dropped.
 - **Claim-on-open** only claims after real user activation (`navigator.userActivation.hasBeenActive`); otherwise the claim waits for the first tap (within 2 min).
 - **Streaming on iPhone:** `lib/mediaSupport.js` detects MSE + WebM/Opus. Without it (iPhone), the engine plays `/api/stream/{id}` (MP3) as a progressive `<audio src>`, and offline downloads are saved as MP3 (`downloadFormat()`). Downloads the device can't play are ignored (`canPlayCachedBlob`). DJ voice still needs MSE/ManagedMediaSource with WebM/Opus; if unsupported, a one-time notice explains it.
-- **Media Session / outside pauses:** separate `play`/`pause`/`seekto` handlers (`resumePlayback`/`pausePlayback`), `playbackState`, `setPositionState` and https artwork. Pauses the engine didn't cause (calls, other apps, headphones) and a context `interrupted` state go through `engine.onExternalPause` → `pauseFromOutside`, which updates UI + server. `navigator.audioSession.type = 'playback'` is set where supported; the voice recorder switches it to `play-and-record` only while capturing and back to `playback` as soon as the mic tracks stop (released on stop, not after `MediaRecorder.onstop`), so Bluetooth headsets return from hands-free to A2DP.
+- **Media Session / outside pauses:** separate `play`/`pause`/`seekto` handlers (`resumePlayback`/`pausePlayback`), `playbackState`, `setPositionState` and the cover as a local image made from its pack. Pauses the engine didn't cause (calls, other apps, headphones) and a context `interrupted` state go through `engine.onExternalPause` → `pauseFromOutside`, which updates UI + server. `navigator.audioSession.type = 'playback'` is set where supported; the voice recorder switches it to `play-and-record` only while capturing and back to `playback` as soon as the mic tracks stop (released on stop, not after `MediaRecorder.onstop`), so Bluetooth headsets return from hands-free to A2DP.
 - **3D Lit Artwork** (`settingsState.litArtwork`, default ON) turns parallax and lighting on covers and profile pictures on or off. On iOS the motion permission is requested on the first tap while it is on; a refused permission never turns the setting off.
 - `pagehide`/`pageshow` listeners supplement `visibilitychange` for reliable tab lifecycle.
 - **Layout:** Body uses `height: 100dvh` (dynamic viewport height) to handle iOS address bar. `position: fixed` elements work correctly because no parent transforms interfere.

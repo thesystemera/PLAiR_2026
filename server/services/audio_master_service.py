@@ -17,6 +17,7 @@ from services.audio_headroom import (
     limit_true_peak,
     linear_to_db,
     peak_envelope,
+    tape_hiss,
     write_float_wav,
     write_pcm16_dithered,
 )
@@ -33,9 +34,9 @@ MODERN_MASTER_DB = np.array([22.8, 15.5, 10.6, 5.5, 0.0, -4.1, -9.1, -16.2, -18.
 REFERENCE_ALIGN_HZ = (500.0, 2000.0)
 REFERENCE_RANGE_HZ = (40.0, 16000.0)
 REFERENCE_TOLERANCE_DB = 3.0
-REFERENCE_MAX_CORRECTION_DB = 6.0
+REFERENCE_MAX_CORRECTION_DB = 10.0
 REFERENCE_GRID = np.geomspace(20.0, 22000.0, 600)
-REFERENCE_ITERATIONS = 8
+REFERENCE_ITERATIONS = 24
 REFERENCE_EQ_TAPS = 8191
 REFERENCE_REPORT_HZ = (63, 125, 250, 500, 1000, 2000, 4000, 8000, 10000, 12500, 16000)
 
@@ -66,7 +67,7 @@ def reference_eq_curve(deviation: np.ndarray) -> np.ndarray:
     window *= np.clip((np.log2(high * 1.0625) - log_grid) / np.log2(1.0625), 0, 1)
     correction = np.zeros_like(deviation)
     for _ in range(REFERENCE_ITERATIONS):
-        residual = deviation + _grid_smooth(correction, 1.0 / 6.0) * window
+        residual = deviation + _grid_smooth(_grid_smooth(correction, 1.0 / 6.0) * window, 1.0 / 3.0)
         excess = np.sign(residual) * np.maximum(0.0, np.abs(residual) - REFERENCE_TOLERANCE_DB)
         correction = np.clip(correction - excess, -REFERENCE_MAX_CORRECTION_DB, REFERENCE_MAX_CORRECTION_DB)
     return np.clip(_grid_smooth(correction, 1.0 / 6.0) * window, -REFERENCE_MAX_CORRECTION_DB, REFERENCE_MAX_CORRECTION_DB)
@@ -296,7 +297,8 @@ class AudioMasterService(SingletonService):
             target_lufs: float,
             wet_mix: Optional[float] = None,
             correct: bool = True,
-            tone: bool = False
+            tone: bool = False,
+            hiss: bool = False
     ) -> Tuple[Optional[Path], dict]:
         try:
             data, rate = sf.read(str(input_path), dtype='float32', always_2d=True)
@@ -313,6 +315,9 @@ class AudioMasterService(SingletonService):
 
             gain_db = target_lufs - loudness if measurable else 0.0
             normalized = data * db_to_linear(gain_db)
+            if hiss and settings.MASTER_TAPE_HISS_DBFS < 0:
+                normalized = normalized + tape_hiss(normalized.shape[0], normalized.shape[1], rate, settings.MASTER_TAPE_HISS_DBFS)
+                info["tape_hiss_dbfs"] = settings.MASTER_TAPE_HISS_DBFS
 
             envelope = peak_envelope(normalized)
             pre_limit_peak_db = linear_to_db(float(envelope.max()) if envelope.size else 0.0)
@@ -355,9 +360,10 @@ class AudioMasterService(SingletonService):
             wet_mix: Optional[float] = None,
             correct: bool = True,
             tone: bool = False,
+            hiss: bool = False,
     ) -> Optional[Path]:
         result, _info = await self.master_audio_with_report(
-            input_path, output_path, target_lufs, progress_callback, wet_mix, correct, tone
+            input_path, output_path, target_lufs, progress_callback, wet_mix, correct, tone, hiss
         )
         return result
 
@@ -392,6 +398,7 @@ class AudioMasterService(SingletonService):
             wet_mix: Optional[float] = None,
             correct: bool = True,
             tone: bool = False,
+            hiss: bool = False,
     ) -> Tuple[Optional[Path], Dict[str, Any]]:
         effective_wet_mix = self.master_wet_mix if wet_mix is None else float(np.clip(wet_mix, 0.0, 1.0))
         if output_path is None:
@@ -412,7 +419,8 @@ class AudioMasterService(SingletonService):
             target_lufs,
             effective_wet_mix,
             correct,
-            tone
+            tone,
+            hiss
         )
 
         if not result:
@@ -422,6 +430,8 @@ class AudioMasterService(SingletonService):
         if correct or tone:
             self._log_corrections(info, effective_wet_mix)
 
+        if "tape_hiss_dbfs" in info:
+            log_service.upscaling(f"  [TAPE HISS] Steady hiss at {info['tape_hiss_dbfs']:.0f} dBFS")
         limiter = info.get("limiter", {})
         if limiter.get("passes"):
             log_service.upscaling(

@@ -613,6 +613,7 @@ class Settings:
     SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
+    MASTER_TAPE_HISS_DBFS: float = float(os.getenv("MASTER_TAPE_HISS_DBFS", "-70"))
     BANDWIDTH_STAGE: str = os.getenv("BANDWIDTH_STAGE", "apollo").lower()
     SEPARATION_MODEL: str = os.getenv("SEPARATION_MODEL", "roformer").lower()
     QUALITY_SCORER: str = os.getenv("QUALITY_SCORER", "").lower()

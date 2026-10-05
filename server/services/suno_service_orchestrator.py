@@ -855,7 +855,7 @@ class SunoServiceOrchestrator(SingletonService):
             if job.progress_callback:
                 await job.progress_callback("Mastering")
             final_path = settings.ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False, tone=True)
+            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False, tone=True, hiss=True)
             if result:
                 job.master_wav_path = result
                 await asyncio.to_thread(stages.stamp_master_version, job.track_id)

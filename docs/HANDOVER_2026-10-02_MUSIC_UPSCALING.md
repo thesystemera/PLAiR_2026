@@ -6,12 +6,12 @@
 - Short answers, results not plans, no running commentary. One task at a time.
 - Send loudness-matched files with short names; FLAC (16-bit) so they fit the 30 MB phone limit. Give a raw Suno version next to every render.
 - Comparisons the owner liked: **beep cycles** (sections switch every 4 s, low/mid/high beep marks A/B/C) and **difference files** (B minus A, boosted, gain in the filename).
-- Render on the **RTX 6000** (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=1`), one model at a time, full songs. Profile a new model on 5 s first.
+- Render on the **P6000** (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=0`; since 5 Oct the RTX 6000 is the owner's DeepPBR card), one model at a time, full songs. Profile a new model on 5 s first.
 - E: is nearly full: keep renders on D: (`D:\_audio_quality_scratch\`; `data/upscale_test_2026-10-03` is a junction to it).
 
 ## Locked chain (master chain version 4, 5 Oct)
 
-Suno MP3 -> decode -> **Apollo** on the decoded MP3 (what it was trained on), keeping Suno's own signal below its MP3 cutoff (`audio_headroom.keep_source_below_cutoff`: Apollo only fills above it; on the full mix it had pulled 16.5-17.5 kHz down 4-5 dB) -> RoFormer split of the restored mix -> Lew's vocal Apollo on the vocal (no crossover) -> remix -> notches (`correct_audio`: 25 Hz rumble cut, stationary resonances only, 20 kHz safety roll-off) -> SonicMaster (33% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", blend compensation on) -> **reference EQ + final leveler** (lane 6) at **-16 LUFS** (Apple Music standard; true-peak -1.5 dBTP, limiter up to 6 dB). `SONIC_MASTER_PRECISION=auto` would use fp16 on the RTX: 1.7x faster, a slightly different take.
+Suno MP3 -> decode -> **Apollo** on the decoded MP3 (what it was trained on), keeping Suno's own signal below its MP3 cutoff (`audio_headroom.keep_source_below_cutoff`: Apollo only fills above it; on the full mix it had pulled 16.5-17.5 kHz down 4-5 dB) -> RoFormer split of the restored mix -> Lew's vocal Apollo on the vocal (no crossover) -> remix -> notches (`correct_audio`: 25 Hz rumble cut, stationary resonances only, 20 kHz safety roll-off) -> SonicMaster (33% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", blend compensation on) -> **reference EQ + -70 dBFS tape hiss + final leveler** (lane 6) at **-16 LUFS** (Apple Music standard; true-peak -1.5 dBTP, limiter up to 6 dB). `SONIC_MASTER_PRECISION=auto` would use fp16 on the RTX: 1.7x faster, a slightly different take.
 
 What changed from version 3 (5 Oct, measured on Digital Dollhouse, Faded Signal, Static & Silhouette, Carbon Copy):
 - Apollo moved first. It is trained on 32-128 kbps MP3 decodes; in version 3 it got a remix with an already restored vocal. On the spectrum the two orders are nearly identical (difference 23 dB under the music), v4 keeps about 0.7 dB more at 18 kHz.
@@ -25,7 +25,7 @@ Lanes: 1 decode, 1b Apollo, 2 separation, 3 vocals + remix + notches, 4 SonicMas
 
 Master chain versions: 1 = Nov 2025 (Apollo first, Demucs, ClearVoice SE/SR chain, SonicMaster 50%, master -14 with the notch bug); 2 = the earlier 3 Oct renders (-14, 25%); 3 = 3 Oct night (Apollo after the remix, Elowsson tone before SonicMaster); 4 = above. Bump `MASTER_CHAIN_VERSION` whenever the sound changes.
 
-Backlog: `server/utils/process_backlog.py [--rerender]` runs on the RTX 6000 in its own process (log `data/logs/backlog.log`): Suno tracks without a master first, then (with `--rerender`) masters below the current version; super-likes, likes, then the rest; ~2.5 min per song (GPU-bound). The live backend picks finished songs up within a minute (`CATALOG_WATCH_INTERVAL_S`), and "Recent" sorts by `catalog_added_at`.
+Backlog: `server/utils/process_backlog.py [--rerender]` runs on the P6000 (`--gpu 0`) in its own process (log `data/logs/backlog.log`): Suno tracks without a master first, then (with `--rerender`) masters below the current version; super-likes, likes, then the rest; ~2.5 min per song (GPU-bound). The live backend picks finished songs up within a minute (`CATALOG_WATCH_INTERVAL_S`), and "Recent" sorts by `catalog_added_at`.
 
 ## Measured facts (3 Oct)
 

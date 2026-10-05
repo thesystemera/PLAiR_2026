@@ -422,7 +422,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
     staged["master"] = staging / "master.wav"
     result, info = await asyncio.to_thread(
         engines.master._master_audio_sync, source, staged["master"], MASTER_TARGET_LUFS, plan["wet_mix"],
-        plan["is_upload"], not plan["is_upload"]
+        plan["is_upload"], not plan["is_upload"], not plan["is_upload"]
     )
     if not result:
         raise RuntimeError(f"mastering failed: {info.get('error')}")
