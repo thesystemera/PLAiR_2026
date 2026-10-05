@@ -22,27 +22,29 @@ export const MediaSearch = memo(function MediaSearch({
   audio
 }) {
   const {
-    queueState,
+    hasActiveJobs,
     toastError,
     toastInfo,
-    interfaceState,
+    catalogView,
+    isScrolling,
     openUploadModal,
     toggleCatalogView,
-    audioState,
+    offlineMode,
   } = useUISelector(state => ({
-    queueState: state.queueState,
+    hasActiveJobs: state.queueState?.hasActiveJobs,
     toastError: state.toastError,
     toastInfo: state.toastInfo,
-    interfaceState: state.interfaceState,
+    catalogView: state.interfaceState.catalogView,
+    isScrolling: state.interfaceState.isScrolling,
     openUploadModal: state.openUploadModal,
     toggleCatalogView: state.toggleCatalogView,
-    audioState: state.audioState,
+    offlineMode: state.audioState.offlineMode,
   }))
   const { isLG } = useViewport()
   const compact = isLG
-  const currentView = interfaceState.catalogView
+  const currentView = catalogView
   const showError = toastError
-  const isGenerating = queueState?.hasActiveJobs
+  const isGenerating = hasActiveJobs
   const [query, setQuery] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
@@ -80,7 +82,7 @@ export const MediaSearch = memo(function MediaSearch({
 
   const handleRecordingComplete = async (audioBlob) => {
     if (!audioBlob || audioBlob.size === 0) return
-    if (audioState.offlineMode) {
+    if (offlineMode) {
       toastInfo('Voice search needs a connection to PLAiR. You can still type to search your downloads.', 4000, 'bottom', 'search')
       return
     }
@@ -152,7 +154,7 @@ export const MediaSearch = memo(function MediaSearch({
       className="absolute top-0 left-0 right-0 z-10"
       style={{ height: `${PANEL.headerHeight}px` }}
       animate={{
-        opacity: interfaceState.isScrolling ? 0.15 : 1
+        opacity: isScrolling ? 0.15 : 1
       }}
       transition={TRANSITIONS.fade}
     >

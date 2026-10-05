@@ -565,9 +565,24 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
   const { level: qualityLevel } = useQuality()
   const {
-    audioState,
-    downloadState,
-    settingsState,
+    isOnline,
+    networkQuality,
+    currentTrackTitle,
+    dailyDownloadedBytes,
+    dailyLimit,
+    downloadedCount,
+    isDownloading,
+    audioQuality,
+    autoClaimOnOpen,
+    backgroundDownloads,
+    costTickerEnabled,
+    dataSaverMode,
+    fpsEnabled,
+    litArtwork,
+    notificationsMuted,
+    ttsMuted,
+    videoClipsEnabled,
+    visualQuality,
     publishSettings,
     toastSuccess,
     toastError,
@@ -582,9 +597,24 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     reviewUpdates,
     uploadUpdates,
   } = useUISelector(state => ({
-    audioState: state.audioState,
-    downloadState: state.downloadState,
-    settingsState: state.settingsState,
+    isOnline: state.audioState.isOnline,
+    networkQuality: state.audioState.networkQuality,
+    currentTrackTitle: state.downloadState.currentTrackTitle,
+    dailyDownloadedBytes: state.downloadState.dailyDownloadedBytes,
+    dailyLimit: state.downloadState.dailyLimit,
+    downloadedCount: state.downloadState.downloadedCount,
+    isDownloading: state.downloadState.isDownloading,
+    audioQuality: state.settingsState.audioQuality,
+    autoClaimOnOpen: state.settingsState.autoClaimOnOpen,
+    backgroundDownloads: state.settingsState.backgroundDownloads,
+    costTickerEnabled: state.settingsState.costTickerEnabled,
+    dataSaverMode: state.settingsState.dataSaverMode,
+    fpsEnabled: state.settingsState.fpsEnabled,
+    litArtwork: state.settingsState.litArtwork,
+    notificationsMuted: state.settingsState.notificationsMuted,
+    ttsMuted: state.settingsState.ttsMuted,
+    videoClipsEnabled: state.settingsState.videoClipsEnabled,
+    visualQuality: state.settingsState.visualQuality,
     publishSettings: state.publishSettings,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
@@ -856,7 +886,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     }
   }
 
-  const soundMode = soundModeFor(settingsState.ttsMuted, settingsState.notificationsMuted)
+  const soundMode = soundModeFor(ttsMuted, notificationsMuted)
 
   const handlePlayShoutout = useCallback((shoutout) => {
     if (!shoutout) return
@@ -903,17 +933,17 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }
 
   const handleToggleFpsEnabled = () => {
-    publishSettings({ fpsEnabled: !settingsState.fpsEnabled })
+    publishSettings({ fpsEnabled: !fpsEnabled })
   }
 
   const handleToggleLitArtwork = () => {
-    const newVal = !settingsState.litArtwork
+    const newVal = !litArtwork
     publishSettings({ litArtwork: newVal })
     if (newVal && tiltNeedsPermission) void requestMotionAccess()
   }
 
   const handleToggleVideoClips = () => {
-    publishSettings({ videoClipsEnabled: !settingsState.videoClipsEnabled })
+    publishSettings({ videoClipsEnabled: !videoClipsEnabled })
   }
 
   const handleSetVisualQuality = (quality) => {
@@ -921,7 +951,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   }
 
   const handleToggleBackgroundDownloads = () => {
-    const newValue = !settingsState.backgroundDownloads
+    const newValue = !backgroundDownloads
     publishSettings({ backgroundDownloads: newValue })
     success(`Background downloads ${newValue ? 'enabled' : 'disabled'}`)
   }
@@ -998,7 +1028,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const periodEnd = billingStatus?.current_period_end ? new Date(billingStatus.current_period_end) : null
 
   const getNetworkQualityColor = () => {
-    switch (audioState.networkQuality) {
+    switch (networkQuality) {
       case 'excellent': return getNetworkExcellent()
       case 'good': return getNetworkGood()
       case 'fair': return getNetworkFair()
@@ -1175,8 +1205,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             color="text-blue-400"
             headerContent={
               <ToggleChip
-                on={settingsState.autoClaimOnOpen}
-                onClick={() => publishSettings({ autoClaimOnOpen: !settingsState.autoClaimOnOpen })}
+                on={autoClaimOnOpen}
+                onClick={() => publishSettings({ autoClaimOnOpen: !autoClaimOnOpen })}
                 activeClassName="bg-blue-500 text-white"
                 label="Auto-switch playback to the device I open"
               />
@@ -1184,7 +1214,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           />
 
           <SettingRow icon={Music} label="Audio Quality" headerContent={null}>
-            <select value={settingsState.audioQuality} onChange={(e) => handleAudioQualityChange(e.target.value)} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
+            <select value={audioQuality} onChange={(e) => handleAudioQualityChange(e.target.value)} className="w-full px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition">
               <option value="auto">Auto</option>
               <option value="256k">Premium (256kbps)</option>
               <option value="192k">Standard (192kbps)</option>
@@ -1239,11 +1269,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           contentClassName="space-y-3 pl-2"
         >
           <SettingRow
-            icon={audioState.isOnline ? Wifi : WifiOff}
+            icon={isOnline ? Wifi : WifiOff}
             label="Network Status"
-            color={audioState.isOnline ? getNetworkQualityColor() : "text-red-500"}
+            color={isOnline ? getNetworkQualityColor() : "text-red-500"}
             headerContent={
-              <span className="text-xs font-medium" style={{ color: audioState.isOnline ? getNetworkQualityColor() : getNetworkPoor() }}>{audioState.isOnline ? getNetworkQualityLabel(audioState.networkQuality) : 'Offline'}</span>
+              <span className="text-xs font-medium" style={{ color: isOnline ? getNetworkQualityColor() : getNetworkPoor() }}>{isOnline ? getNetworkQualityLabel(networkQuality) : 'Offline'}</span>
             }
           />
 
@@ -1252,7 +1282,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Data Saver Mode"
             color="text-green-400"
             headerContent={
-              <button onClick={() => publishSettings({ dataSaverMode: !settingsState.dataSaverMode })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.dataSaverMode ? 'ON' : 'OFF'}</button>
+              <button onClick={() => publishSettings({ dataSaverMode: !dataSaverMode })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{dataSaverMode ? 'ON' : 'OFF'}</button>
             }
           />
 
@@ -1261,7 +1291,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="FPS Counter"
             color="text-blue-400"
             headerContent={
-              <button onClick={handleToggleFpsEnabled} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.fpsEnabled ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleFpsEnabled} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{fpsEnabled ? 'ON' : 'OFF'}</button>
             }
           />
 
@@ -1286,7 +1316,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               label="Cost Ticker"
               color="text-violet-400"
               headerContent={
-                <button onClick={() => publishSettings({ costTickerEnabled: !settingsState.costTickerEnabled })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.costTickerEnabled ? 'bg-violet-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.costTickerEnabled ? 'ON' : 'OFF'}</button>
+                <button onClick={() => publishSettings({ costTickerEnabled: !costTickerEnabled })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${costTickerEnabled ? 'bg-violet-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{costTickerEnabled ? 'ON' : 'OFF'}</button>
               }
             />
           )}
@@ -1299,25 +1329,25 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <div className="flex gap-1">
                 <button
                   onClick={() => handleSetVisualQuality('high')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'high' ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${visualQuality === 'high' ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
                 >
                   HIGH
                 </button>
                 <button
                   onClick={() => handleSetVisualQuality('medium')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'medium' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${visualQuality === 'medium' ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
                 >
                   MID
                 </button>
                 <button
                   onClick={() => handleSetVisualQuality('low')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'low' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${visualQuality === 'low' ? 'bg-green-500/30 text-green-300 border border-green-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
                 >
                   LOW
                 </button>
                 <button
                   onClick={() => handleSetVisualQuality('auto')}
-                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${settingsState.visualQuality === 'auto' ? 'bg-sky-500/30 text-sky-300 border border-sky-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
+                  className={`ui-press px-2 py-1 rounded text-xs font-medium transition ${visualQuality === 'auto' ? 'bg-sky-500/30 text-sky-300 border border-sky-500/50' : 'bg-dark-card text-gray-400 border border-gray-700/50'}`}
                 >
                   AUTO
                 </button>
@@ -1325,7 +1355,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             }
           >
             <div className="text-xs text-gray-400">
-              {settingsState.visualQuality === 'auto'
+              {visualQuality === 'auto'
                 ? `Auto picks the level this device keeps at full frame rate (now ${qualityLevel.toUpperCase()}).`
                 : 'Controls background visual effects intensity. Use LOW for better battery life on mobile devices.'}
             </div>
@@ -1336,7 +1366,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="3D Lit Artwork"
             color="text-sky-400"
             headerContent={
-              <button onClick={handleToggleLitArtwork} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.litArtwork ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.litArtwork ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleLitArtwork} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${litArtwork ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{litArtwork ? 'ON' : 'OFF'}</button>
             }
           >
             <div className="text-xs text-gray-400">
@@ -1349,7 +1379,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Video Clips"
             color="text-pink-400"
             headerContent={
-              <button onClick={handleToggleVideoClips} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.videoClipsEnabled ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleVideoClips} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{videoClipsEnabled ? 'ON' : 'OFF'}</button>
             }
           >
             <div className="text-xs text-gray-400">
@@ -1362,20 +1392,20 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Background Downloads"
             color="text-purple-400"
             headerContent={
-              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${settingsState.backgroundDownloads ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{settingsState.backgroundDownloads ? 'ON' : 'OFF'}</button>
+              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${backgroundDownloads ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{backgroundDownloads ? 'ON' : 'OFF'}</button>
             }
           >
-            {settingsState.backgroundDownloads && (
+            {backgroundDownloads && (
               <div className="text-xs text-gray-400 space-y-1">
-                {downloadState.isDownloading && (
+                {isDownloading && (
                   <div className="flex items-center gap-2">
                     <Loader2 size={12} className="animate-spin text-purple-400" />
-                    <span>Downloading: {downloadState.currentTrackTitle}</span>
+                    <span>Downloading: {currentTrackTitle}</span>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
-                  <span>Today: {formatBytes(downloadState.dailyDownloadedBytes)} / {formatBytes(downloadState.dailyLimit)}</span>
-                  {downloadState.downloadedCount > 0 && <span>{downloadState.downloadedCount} tracks downloaded</span>}
+                  <span>Today: {formatBytes(dailyDownloadedBytes)} / {formatBytes(dailyLimit)}</span>
+                  {downloadedCount > 0 && <span>{downloadedCount} tracks downloaded</span>}
                 </div>
               </div>
             )}

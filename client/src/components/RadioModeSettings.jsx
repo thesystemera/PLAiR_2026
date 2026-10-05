@@ -24,13 +24,13 @@ const MUSIC_SOURCE_OPTIONS = [
 export const RadioModeSettings = memo(function RadioModeSettings({ className = '' }) {
   const { radioMode, radioOptions, radioModeSaving, updateRadioMode } = usePreferences()
   const {
-    settingsState,
+    ttsMuted,
     toastSuccess,
-    audioState,
+    offlineMode,
   } = useUISelector(state => ({
-    settingsState: state.settingsState,
+    ttsMuted: state.settingsState.ttsMuted,
     toastSuccess: state.toastSuccess,
-    audioState: state.audioState,
+    offlineMode: state.audioState.offlineMode,
   }))
   const [open, setOpen] = useState(() => safeStorage.get('userPanel_radioMode') === 'true')
 
@@ -46,7 +46,7 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
   }, [radioMode.enabled, updateRadioMode, toastSuccess])
 
   const intervals = radioOptions?.feature_intervals_min || [15, 20, 30]
-  const djMuted = !!settingsState.ttsMuted
+  const djMuted = !!ttsMuted
   const stingsOutside = radioOptions?.stings_outside_radio_mode !== false
 
   const stingsRow = (
@@ -94,7 +94,7 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
         {djMuted && radioMode.enabled && (
           <InlineNote tone="warning" className="mt-1">DJ voice is muted, so breaks are paused.</InlineNote>
         )}
-        {audioState.offlineMode && (
+        {offlineMode && (
           <InlineNote tone="warning" className="mt-1">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</InlineNote>
         )}
       </SettingRow>

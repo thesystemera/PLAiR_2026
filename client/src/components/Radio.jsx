@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle, History } from 'lucide-react'
-import { useRadioUI, uiState, useUISelector } from '../contexts/UIStateContext'
+import { useRadioButton, uiState, useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
 import { api } from '../lib/api'
@@ -59,11 +59,17 @@ export function Radio() {
   const { isMobile, isPhoneLandscape } = useViewport()
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
-  const { reportEngineStatus, buttonOpacity, buttonForegroundOpacity, engineState, buttonInteraction } = useRadioUI()
-  const { interfaceState, radioInput, toggleRadioInput } = useUISelector(state => ({ interfaceState: state.interfaceState, radioInput: state.settingsState.radioInput, toggleRadioInput: state.toggleRadioInput }))
-  const mobilePanel = interfaceState.currentMobilePanel
+  const { radioButtonOpacity: buttonOpacity, radioButtonForegroundOpacity: buttonForegroundOpacity, radioButtonInteraction: buttonInteraction } = useRadioButton()
+  const { reportEngineStatus, isMusicPlaying, mobilePanel, playerHeight, isFullscreenVisuals, radioInput, toggleRadioInput } = useUISelector(state => ({
+    reportEngineStatus: state.reportEngineStatus,
+    isMusicPlaying: state.engineState.isMusicPlaying,
+    mobilePanel: state.interfaceState.currentMobilePanel,
+    playerHeight: state.interfaceState.playerHeight,
+    isFullscreenVisuals: state.interfaceState.isFullscreenVisuals,
+    radioInput: state.settingsState.radioInput,
+    toggleRadioInput: state.toggleRadioInput,
+  }))
   const isTextInput = radioInput === 'text'
-  const playerHeight = interfaceState.playerHeight
 
   const [messageFilter, setMessageFilter] = useState('all')
   const [showTimeline, setShowTimeline] = useState(false)
@@ -87,7 +93,6 @@ export function Radio() {
   const uiSound = useUISound(window.audioEngine)
   const emitWebSocketEvent = useWebSocketEmit()
 
-  const isMusicPlaying = engineState.isMusicPlaying
 
   const talkToDJ = useCallback(async ({ audio = null, text = null }, offlineLabel) => {
     reportEngineStatus({ isAIProcessing: true })
@@ -138,7 +143,7 @@ export function Radio() {
     setFilterCounts(counts)
   }, [])
 
-  const isPanelActive = !interfaceState.isFullscreenVisuals && (!isMobile || mobilePanel === 2)
+  const isPanelActive = !isFullscreenVisuals && (!isMobile || mobilePanel === 2)
   const showButtonMask = buttonOpacity > 0.5 && !isPhoneLandscape
   const besideButton = isPhoneLandscape && !isTextInput
 

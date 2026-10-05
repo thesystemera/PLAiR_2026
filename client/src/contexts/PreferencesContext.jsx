@@ -72,7 +72,7 @@ function loadRadioModeFor(user) {
 export function PreferencesProvider({ children }) {
   const { isAuthenticated, user } = useAuth()
   const { toastSuccess, toastError } = useUIActions()
-  const { settingsState } = useUISelector(state => ({ settingsState: state.settingsState }))
+  const { ttsMutedSetting } = useUISelector(state => ({ ttsMutedSetting: state.settingsState.ttsMuted }))
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
   const success = toastSuccess
   const error = toastError
@@ -86,7 +86,7 @@ export function PreferencesProvider({ children }) {
   const userIdRef = useRef(user?.id ?? null)
   useEffect(() => { radioModeRef.current = radioMode }, [radioMode])
   useEffect(() => { userIdRef.current = user?.id ?? null }, [user?.id])
-  const ttsMuted = !!settingsState.ttsMuted
+  const ttsMuted = !!ttsMutedSetting
 
   const [preferencesByType, setPreferencesByType] = useState({
     track: {

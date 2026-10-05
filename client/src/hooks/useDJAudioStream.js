@@ -54,20 +54,19 @@ function useDJAudioStream() {
     speakerColorRef,
     isActiveDevice,
     isMicRecording,
-    settingsState,
+    ttsMuted,
     toastInfo,
   } = useUISelector(state => ({
     reportEngineStatus: state.reportEngineStatus,
     speakerColorRef: state.speakerColorRef,
     isActiveDevice: state.engineState.isActiveDevice,
     isMicRecording: state.engineState.isMicRecording,
-    settingsState: state.settingsState,
+    ttsMuted: state.settingsState.ttsMuted,
     toastInfo: state.toastInfo,
   }))
   const toastInfoRef = useRef(toastInfo)
   useEffect(() => { toastInfoRef.current = toastInfo }, [toastInfo])
   const { audio, talkBreak } = usePlaybackActions()
-  const ttsMuted = settingsState.ttsMuted
 
   const [isDJSpeaking, setIsDJSpeaking] = useState(false)
   const [analyser, setAnalyser] = useState(null)

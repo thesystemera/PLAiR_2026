@@ -52,7 +52,7 @@
  * - useUISelector(state => slice) - Subscribe to ONE slice; re-renders only when that slice changes
  *   (shallow compare). There is no whole-state hook.
  * - useUIStateGetter() - Read the latest state inside a handler without subscribing
- * - useRadioUI() - Convenience hook for radio-specific state
+ * - useRadioButton() - The radio button's opacity and interaction (its own context)
  *
  * ENGINES publish data → UIState derives visual state → VIEWS subscribe and render
  *
@@ -1196,13 +1196,12 @@ export function useVideoClips(trackId) {
   const {
     videoClipsByTrack,
     fetchVideoClips,
-    settingsState,
+    enabled,
   } = useUISelector(state => ({
     videoClipsByTrack: state.videoClipsByTrack,
     fetchVideoClips: state.fetchVideoClips,
-    settingsState: state.settingsState,
+    enabled: state.settingsState.videoClipsEnabled,
   }))
-  const enabled = settingsState.videoClipsEnabled
   const clips = enabled && trackId ? videoClipsByTrack[trackId] : EMPTY_CLIPS
 
   useEffect(() => {
@@ -1212,65 +1211,9 @@ export function useVideoClips(trackId) {
   return clips || EMPTY_CLIPS
 }
 
-export function useRadioUI() {
+export function useRadioButton() {
   const radioButton = useContext(RadioButtonContext)
-  if (!radioButton) throw new Error('useRadioUI must be used within UIStateProvider')
-  const { radioButtonOpacity, radioButtonForegroundOpacity, radioButtonInteraction } = radioButton
-  const {
-    reportEngineStatus,
-    visualState,
-    radioProgressData,
-    visualColorData,
-    updateRadioButtonOpacity,
-    updateRadioButtonForegroundOpacity,
-    updateRadioButtonInteraction,
-    reportInterfaceState,
-    engineState,
-    engineRef,
-    lastProgressUpdateTimeRef,
-    djFftDataRef,
-    micFftDataRef,
-    shoutoutFftDataRef,
-    speakerColorRef,
-    interfaceRef,
-  } = useUISelector(state => ({
-    reportEngineStatus: state.reportEngineStatus,
-    visualState: state.visualState,
-    radioProgressData: state.radioProgressData,
-    visualColorData: state.visualColorData,
-    updateRadioButtonOpacity: state.updateRadioButtonOpacity,
-    updateRadioButtonForegroundOpacity: state.updateRadioButtonForegroundOpacity,
-    updateRadioButtonInteraction: state.updateRadioButtonInteraction,
-    reportInterfaceState: state.reportInterfaceState,
-    engineState: state.engineState,
-    engineRef: state.engineRef,
-    lastProgressUpdateTimeRef: state.lastProgressUpdateTimeRef,
-    djFftDataRef: state.djFftDataRef,
-    micFftDataRef: state.micFftDataRef,
-    shoutoutFftDataRef: state.shoutoutFftDataRef,
-    speakerColorRef: state.speakerColorRef,
-    interfaceRef: state.interfaceRef,
-  }))
-
-  return {
-    reportEngineStatus,
-    visualState,
-    buttonOpacity: radioButtonOpacity,
-    buttonForegroundOpacity: radioButtonForegroundOpacity,
-    buttonInteraction: radioButtonInteraction,
-    progressData: radioProgressData,
-    visualColorData,
-    updateButtonOpacity: updateRadioButtonOpacity,
-    updateButtonForegroundOpacity: updateRadioButtonForegroundOpacity,
-    updateButtonInteraction: updateRadioButtonInteraction,
-    reportInterfaceState,
-    engineState,
-    engineRef,
-    lastProgressUpdateTimeRef,
-    djFftDataRef,
-    micFftDataRef,
-    shoutoutFftDataRef,
-    speakerColorRef,
-    interfaceRef
-  }
+  if (!radioButton) throw new Error('useRadioButton must be used within UIStateProvider')
+  return radioButton
 }
+

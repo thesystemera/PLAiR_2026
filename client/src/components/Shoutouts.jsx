@@ -237,15 +237,15 @@ export function Shoutouts() {
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const scrollContainerRef = useRef(null)
   const {
-    contentUpdates,
+    shoutoutsUpdates,
     toastError,
     toastSuccess,
-    audioState,
+    offlineMode,
   } = useUISelector(state => ({
-    contentUpdates: state.contentUpdates,
+    shoutoutsUpdates: state.contentUpdates.shoutouts,
     toastError: state.toastError,
     toastSuccess: state.toastSuccess,
-    audioState: state.audioState,
+    offlineMode: state.audioState.offlineMode,
   }))
   const { showConfirm } = useDialog()
 
@@ -312,7 +312,7 @@ export function Shoutouts() {
 
   useEffect(() => {
     void fetchShoutouts()
-  }, [fetchShoutouts, contentUpdates.shoutouts])
+  }, [fetchShoutouts, shoutoutsUpdates])
 
   const handleDelete = useCallback(async (e, id) => {
     e?.preventDefault()
@@ -540,7 +540,7 @@ export function Shoutouts() {
                 onBackToGenres={handleBackToCategories}
                 contentType="shoutouts"
               />
-              {audioState.offlineMode ? (
+              {offlineMode ? (
                 <MediaOfflineState icon={ShoutoutsIcon} title="Shoutouts need a connection" />
               ) : (
                 <MediaEmptyState

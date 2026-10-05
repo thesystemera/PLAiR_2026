@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mic, Loader } from 'lucide-react'
 import { triggerHaptic } from '../lib/haptics'
-import { useRadioUI } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { useQuality } from '../contexts/QualityContext'
 import { useVoiceRecording } from '../contexts/VoiceRecordingContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
@@ -40,7 +40,14 @@ export function InteractiveEngagementButton({
   buttonType = 'radio',
   title = 'Hold to record voice'
 }) {
-  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef } = useRadioUI()
+  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef } = useUISelector(state => ({
+    visualState: state.visualState,
+    updateButtonInteraction: state.updateRadioButtonInteraction,
+    visualColorData: state.visualColorData,
+    djFftDataRef: state.djFftDataRef,
+    micFftDataRef: state.micFftDataRef,
+    speakerColorRef: state.speakerColorRef,
+  }))
   const { isHigh } = useQuality()
   const blobDprCap = isHigh ? Infinity : 2
   const { isRecording, recordingSource: activeRecordingSource, startRecording, stopRecording, abortRecording } = useVoiceRecording()

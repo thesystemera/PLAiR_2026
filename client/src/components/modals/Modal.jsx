@@ -554,10 +554,10 @@ export const ModalButton = memo(function ModalButton({
   className = '',
   ...props
 }) {
-  const { radioState } = useUISelector(state => ({ radioState: state.radioState }))
+  const { activeSeedMode } = useUISelector(state => ({ activeSeedMode: state.radioState.activeSeedMode }))
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
 
-  const activeCategory = radioState.activeSeedMode || 'all'
+  const activeCategory = activeSeedMode || 'all'
   const categoryMeta = getCategoryMetadata(activeCategory)
   const categoryColor = categoryMeta?.color || '#6366f1'
 
@@ -780,10 +780,10 @@ export const ModalProgress = memo(function ModalProgress({
   onCancel,
   className = ''
 }) {
-  const { radioState } = useUISelector(state => ({ radioState: state.radioState }))
+  const { activeSeedMode } = useUISelector(state => ({ activeSeedMode: state.radioState.activeSeedMode }))
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
 
-  const activeCategory = radioState.activeSeedMode || 'all'
+  const activeCategory = activeSeedMode || 'all'
   const categoryMeta = getCategoryMetadata(activeCategory)
   const categoryColor = categoryMeta?.color || '#6366f1'
 

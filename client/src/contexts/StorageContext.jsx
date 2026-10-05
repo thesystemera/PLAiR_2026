@@ -22,11 +22,11 @@ export function StorageProvider({ children }) {
   const {
     toastSuccess,
     toastError,
-    audioState,
+    isOnline,
   } = useUISelector(state => ({
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
-    audioState: state.audioState,
+    isOnline: state.audioState.isOnline,
   }))
   const success = toastSuccess
   const showError = toastError
@@ -157,7 +157,6 @@ export function StorageProvider({ children }) {
     }
   }, [refreshDataUsage])
 
-  const isOnline = audioState.isOnline
 
   const value = useMemo(() => ({
     storageInfo,

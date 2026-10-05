@@ -86,11 +86,13 @@ for (const { path, text } of sources) {
     const body = after.trimStart().startsWith('(')
       ? balanced(after, after.indexOf('('))
       : after.slice(0, after.indexOf(')'))
-    for (const access of body.matchAll(/\bstate\.(\w+)(?:\.(\w+))?/g)) {
+    for (const access of body.matchAll(/\bstate\.(\w+)(?:\??\.(\w+))?/g)) {
       const [, top, nested] = access
       const line = text.slice(0, call.index).split('\n').length
       if (!valueKeys.has(top)) problems.push(`${file}:${line} reads state.${top}, which UIState does not provide`)
-      else if (nested && nestedKeys[top] && !nestedKeys[top].has(nested)) {
+      else if (!nested && nestedKeys[top]) {
+        problems.push(`${file}:${line} selects all of state.${top}; select only the fields it reads, or it re-renders whenever any of them changes`)
+      } else if (nested && nestedKeys[top] && !nestedKeys[top].has(nested)) {
         problems.push(`${file}:${line} reads state.${top}.${nested}, which nothing ever sets`)
       }
     }

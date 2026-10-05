@@ -13,13 +13,21 @@ export function useBitratePicker(onReloadTrackQuality) {
   const { isAuthenticated } = useAuth()
   const {
     toastError,
-    audioState,
-    settingsState,
+    actualBitrate,
+    isOnline,
+    networkQuality,
+    detectedBitrate,
+    dataSaverMode,
+    currentBitrate,
     publishSettings,
   } = useUISelector(state => ({
     toastError: state.toastError,
-    audioState: state.audioState,
-    settingsState: state.settingsState,
+    actualBitrate: state.audioState?.bitrate,
+    isOnline: state.audioState?.isOnline ?? true,
+    networkQuality: state.audioState?.networkQuality,
+    detectedBitrate: state.audioState?.detectedBitrate,
+    dataSaverMode: state.settingsState.dataSaverMode,
+    currentBitrate: state.settingsState.audioQuality,
     publishSettings: state.publishSettings,
   }))
   const {
@@ -32,15 +40,9 @@ export function useBitratePicker(onReloadTrackQuality) {
   const [isOpen, setIsOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
-  const dataSaverMode = settingsState.dataSaverMode
-  const currentBitrate = settingsState.audioQuality
-  const actualBitrate = audioState?.bitrate
   // Data saver overrides effective bitrate to 128k
   const effectiveBitrate = dataSaverMode ? '128k' : (actualBitrate || getEffectiveBitrate(currentBitrate, isAuthenticated))
 
-  const isOnline = audioState?.isOnline ?? true
-  const networkQuality = audioState?.networkQuality
-  const detectedBitrate = audioState?.detectedBitrate
   const lastDetectedRef = useRef(detectedBitrate)
   const reloadRef = useRef(onReloadTrackQuality)
   useEffect(() => {

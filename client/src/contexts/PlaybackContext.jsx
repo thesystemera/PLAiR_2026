@@ -119,18 +119,19 @@ export function PlaybackProvider({ children }) {
   const progressMsRef = useRef(0)
   const { user } = useAuth()
   const {
-    reportEngineStatus, publishAudioState, publishRadioState, settingsState, toastInfo, offlineMode, buffering, isActiveDevice,
+    reportEngineStatus, publishAudioState, publishRadioState, dataSaverMode, audioQuality, toastInfo, offlineMode, buffering, isActiveDevice,
   } = useUISelector(state => ({
     reportEngineStatus: state.reportEngineStatus,
     publishAudioState: state.publishAudioState,
     publishRadioState: state.publishRadioState,
-    settingsState: state.settingsState,
+    dataSaverMode: state.settingsState.dataSaverMode,
+    audioQuality: state.settingsState.audioQuality,
     toastInfo: state.toastInfo,
     offlineMode: state.audioState.offlineMode,
     buffering: state.audioState.buffering,
     isActiveDevice: state.engineState.isActiveDevice,
   }))
-  const settingsStateRef = useRef(settingsState)
+  const settingsStateRef = useRef({ dataSaverMode, audioQuality })
   const { getEffectiveBitrate } = useNetwork()
   const { send: wsSend, connected: wsConnected } = useContext(WebSocketContext) || {}
   const deviceId = useMemo(() => getDeviceId(), [])
@@ -217,7 +218,7 @@ export function PlaybackProvider({ children }) {
 
   useEffect(() => { stateRef.current = state }, [state])
   useEffect(() => { userRef.current = user }, [user])
-  useEffect(() => { settingsStateRef.current = settingsState }, [settingsState])
+  useEffect(() => { settingsStateRef.current = { dataSaverMode, audioQuality } }, [dataSaverMode, audioQuality])
 
   useEffect(() => {
     const isMusicPlaying = state.is_playing

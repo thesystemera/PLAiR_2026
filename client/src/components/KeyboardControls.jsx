@@ -19,10 +19,10 @@ export function KeyboardControls({
   const playback = usePlaybackActions()
   const { isRecording, startRecording, stopRecording } = useVoiceRecording()
   const {
-    interfaceState,
+    isFullscreenVisuals,
     reportInterfaceState,
   } = useUISelector(state => ({
-    interfaceState: state.interfaceState,
+    isFullscreenVisuals: state.interfaceState.isFullscreenVisuals,
     reportInterfaceState: state.reportInterfaceState,
   }))
   const uiSound = useUISound()
@@ -39,7 +39,7 @@ export function KeyboardControls({
       showRegister,
       onCloseLogin,
       onCloseRegister,
-      isFullscreenVisuals: interfaceState.isFullscreenVisuals,
+      isFullscreenVisuals,
       reportInterfaceState,
     }
   })

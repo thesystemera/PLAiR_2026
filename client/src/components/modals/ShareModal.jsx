@@ -13,12 +13,12 @@ import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 export function ShareModal({ isOpen, onClose, track }) {
   const {
     playingTrack,
-    settingsState,
+    videoClipsEnabled,
     setIsOfflineRendering,
     setVideoPreviewPlaying,
   } = useUISelector(state => ({
     playingTrack: state.engineState.currentTrack,
-    settingsState: state.settingsState,
+    videoClipsEnabled: state.settingsState.videoClipsEnabled,
     setIsOfflineRendering: state.setIsOfflineRendering,
     setVideoPreviewPlaying: state.setVideoPreviewPlaying,
   }))
@@ -34,7 +34,7 @@ export function ShareModal({ isOpen, onClose, track }) {
   const [linkCopied, setLinkCopied] = useState(false)
   const [videoLinkCopied, setVideoLinkCopied] = useState(false)
 
-  const includeVideoClips = settingsState.videoClipsEnabled
+  const includeVideoClips = videoClipsEnabled
 
   const abortRef = useRef(false)
   const videoRef = useRef(null)
