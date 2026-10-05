@@ -13,7 +13,6 @@
     "quality": "npm run lint && npm run check:ui-state && npm run dead-code && npm run build"
   },
   "dependencies": {
-    "@react-three/fiber": "^8.18.0",
     "@simplewebauthn/browser": "^14.0.0",
     "framer-motion": "^11.11.17",
     "lucide-react": "^0.462.0",

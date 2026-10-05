@@ -35,6 +35,7 @@ socket.addEventListener('message', e => {
 const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); socket.send(JSON.stringify({ id: i, method, params })) })
 await send('Runtime.enable')
 await send('Log.enable')
+if (process.env.PRELOAD) { await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: process.env.PRELOAD }) }
 await send('Page.navigate', { url })
 await sleep(2000)
 await send('Tracing.start', { categories: 'toplevel,gpu,disabled-by-default-gpu.service', transferMode: 'ReportEvents' })

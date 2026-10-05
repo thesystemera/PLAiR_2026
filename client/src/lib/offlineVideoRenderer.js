@@ -1,16 +1,15 @@
 import { logger } from './logger'
 import * as THREE from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
+import { backgroundVertexShader, backgroundFragmentShader } from './sceneShaders'
 import {
-  backgroundVertexShader,
-  backgroundFragmentShader,
   createInitialEffects,
   buildVisualCueMap,
   calculateFrameEffects,
   processLyricTimestamps,
   getLyricAt,
   renderLyricToCanvas,
-} from '../components/AudioReactiveCanvas'
+} from './sceneEffects'
 
 function seededRandom(seed) {
   let s = seed

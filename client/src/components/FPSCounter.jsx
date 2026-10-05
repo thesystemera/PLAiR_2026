@@ -11,14 +11,23 @@ const formatWork = (work, name) => {
   return name.endsWith('gpu') && !work.gpuTimers ? '?' : '-'
 }
 
+const sceneOnMain = () => window.__plairScene?.thread?.() !== 'worker'
+
 const otherWork = (work) => {
   if (!work.main) return '-'
-  const ours = (work['scene js']?.avg || 0) + (work['art js']?.avg || 0)
+  const ours = (sceneOnMain() ? work['scene js']?.avg || 0 : 0) + (work['art js']?.avg || 0)
   return Math.max(0, work.main.avg - ours).toFixed(1)
 }
 
+const perSceneFrame = (work, name, frames) => {
+  const entry = work[name]
+  const scenes = work['scene frames']?.count
+  if (!entry || !scenes) return formatWork(work, name)
+  return (entry.avg * frames / scenes).toFixed(1)
+}
+
 export function FPSCounter() {
-  const [stats, setStats] = useState({ fps: 60, screenHz: 0, dropped: 0, worst: 0, work: {} })
+  const [stats, setStats] = useState({ fps: 60, sceneFps: 0, frames: 1, screenHz: 0, dropped: 0, worst: 0, work: {} })
 
   useEffect(() => {
     const intervals = new Float32Array(MAX_INTERVALS)
@@ -53,12 +62,15 @@ export function FPSCounter() {
       frames++
       if (now - windowStart >= 1000) {
         const { refresh, dropped } = closeWindow()
+        const work = takeFrameWork(frames)
         setStats({
           fps: Math.round((frames * 1000) / (now - windowStart)),
+          sceneFps: Math.round(((work['scene frames']?.count || 0) * 1000) / (now - windowStart)),
+          frames,
           screenHz: Math.round(1000 / refresh),
           dropped,
           worst: Math.round(worst),
-          work: takeFrameWork(frames)
+          work
         })
         count = 0
         frames = 0
@@ -96,9 +108,12 @@ export function FPSCounter() {
         pointerEvents: 'none',
       }}
     >
-      <div>{stats.fps} FPS · screen {stats.screenHz} Hz · {stats.dropped} dropped · worst {stats.worst} ms</div>
+      <div>{stats.fps} FPS · scene {stats.sceneFps} FPS · screen {stats.screenHz} Hz · {stats.dropped} dropped · worst {stats.worst} ms</div>
       <div style={{ color: '#e5e7eb' }}>
-        ms per frame: main {formatWork(work, 'main')} = scene js {formatWork(work, 'scene js')} + art js {formatWork(work, 'art js')} + other {otherWork(work)} · gpu: scene {formatWork(work, 'scene gpu')} art {formatWork(work, 'art gpu')}
+        page ms/frame: main {formatWork(work, 'main')} = {sceneOnMain() ? `scene js ${formatWork(work, 'scene js')} + ` : ''}art js {formatWork(work, 'art js')} + other {otherWork(work)} · art gpu {formatWork(work, 'art gpu')}
+      </div>
+      <div style={{ color: '#e5e7eb' }}>
+        scene ({sceneOnMain() ? 'main thread' : 'worker'}) ms/frame: js {perSceneFrame(work, 'scene js', stats.frames)} · gpu {perSceneFrame(work, 'scene gpu', stats.frames)}
       </div>
     </div>
   )

@@ -37,7 +37,7 @@ PLAiR open in Chrome on the phone and in front (a hidden tab stops its frame loo
 | `canvastest.mjs '<json>'` | Bare full-screen WebGL canvas in a new tab (`dpr`, `alpha`, `desync`, `overlay`), GPU busy while it clears every frame. |
 | `drawcount.js` | `node phone.mjs eval "$(cat drawcount.js)"`: WebGL calls per canvas per second. |
 
-Page hooks for ablation: `__plairScene.skip / force / uniforms {name: value} / timing`, `__plairQuality.override({ level, sceneDpr, glassTaps, ... })`.
+Page hooks for ablation (the scene runs in a worker): `__plairScene.set({ skip, force, extra, uniforms: {name: value}, timing })`, `__plairScene.eval('...code with scene = the renderer...')`, `__plairQuality.override({ level, sceneDpr, glassTaps, ... })`.
 
 Measured on the Redmi Note 13 4G (Adreno 610), High, Radio tab, music playing: Chrome on Android throttles main-thread
 frames to 60 Hz unless the screen is touched (`ThrottleMainFrameTo60Hz`); the background canvas changing every frame
