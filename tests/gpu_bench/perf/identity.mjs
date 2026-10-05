@@ -13,7 +13,7 @@ if (panel) await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] bu
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await sleep(2500)
 const level = await p.evaluate('window.__plairLight.read().level')
-await p.evaluate(`window.__plairLight.debug({ freeze: true, kick: 0, pulse: 0, level: ${Math.max(0.3, level)} }), window.__plairArt.set({ bench: { forceFull: true, extraFull: 0, extraCopy: 0 } }), window.__idShots = {}, 1`)
+await p.evaluate(`window.__plairLight.debug({ freeze: true, kick: 0, pulse: 0, level: ${Math.max(0.3, level)} }), window.__plairArt.set({ bench: { forceFull: true, extraFull: 0, extraCopy: 0 }, tilt: { x: 0.6, y: 0.4 } }), window.__idShots = {}, 1`)
 const rows = []
 try {
   for (const [index, name] of names.entries()) {
@@ -70,7 +70,7 @@ try {
   }
 } finally {
   await removeShaderEdits(p)
-  await p.evaluate(`window.__plairLight.debug({ off: false, freeze: false, kick: null, pulse: null, level: null }), window.__plairArt.set({ bench: { forceFull: false, extraFull: 0, extraCopy: 0 } }), delete window.__idShots, 1`)
+  await p.evaluate(`window.__plairLight.debug({ off: false, freeze: false, kick: null, pulse: null, level: null }), window.__plairArt.set({ bench: { forceFull: false, extraFull: 0, extraCopy: 0 }, tilt: null }), delete window.__idShots, 1`)
   await p.send('DeviceOrientation.clearDeviceOrientationOverride')
 }
 writeFileSync(`${outDir}/results.txt`, rows.join('\n') + '\n')

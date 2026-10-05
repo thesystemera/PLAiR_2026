@@ -4,7 +4,7 @@
 <script type="module">
 // Renders real cover packs with the working-copy shader (/src) and a reference copy (/old, from `git show`),
 // compares every pixel at several tilts and times the full pass with GPU timer queries.
-// ?ids=a,b&size=1024&out=989&rounds=6&reps=20&options={"depthFromBound":true} (options for the working-copy programs)
+// ?ids=a,b&size=1024&out=989&rounds=6&reps=20&options={"mediumpShading":false} (options for the working-copy programs)
 import * as NEW from '/src/lib/depthArtShader.js'
 import * as OLD from '/old/depthArtShader.js'
 
@@ -30,6 +30,8 @@ const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: 
 const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2')
 const versions = { old: { mod: OLD }, new: { mod: NEW } }
 for (const version of Object.values(versions)) {
+  version.vao = gl.createVertexArray()
+  gl.bindVertexArray(version.vao)
   version.set = version.mod.createDepthArtPrograms(gl, { packedNormals: true, ...(version.mod === NEW ? JSON.parse(params.get('options') || '{}') : {}) })
   for (const entry of [version.set.full, version.set.cache]) {
     gl.useProgram(entry.program)
@@ -51,6 +53,7 @@ function texture(source, format) {
 function draw(version, cover, [px, py], times = 1) {
   const { mod, set } = version
   const full = set.full
+  gl.bindVertexArray(version.vao)
   gl.useProgram(full.program)
   gl.viewport(0, 0, out, out)
   gl.activeTexture(gl.TEXTURE0)
@@ -110,7 +113,9 @@ for (const id of ids) {
   const colorBitmap = await createImageBitmap(packed, 0, 0, half, packed.height)
   const mapBitmap = await createImageBitmap(packed, half, 0, half, packed.height)
   const cover = { color: texture(colorBitmap, gl.RGBA), map: texture(mapBitmap, gl.RGB), bounds: {} }
+  gl.bindVertexArray(versions.old.vao)
   cover.bounds.old = OLD.createDepthBound(gl, versions.old.set, cover.map, half, packed.height)
+  gl.bindVertexArray(versions.new.vao)
   cover.bounds.new = NEW.createDepthBound(gl, versions.new.set, cover.map, half, packed.height)
   const poses = []
   for (const pose of POSES) {

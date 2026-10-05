@@ -21,7 +21,15 @@ export const STAGES = {
   'show edge': { edits: [['return clamp(lit, 0.0, 1.0);', 'return vec3(edge);']] },
   'lights per cover': { edits: [['return skylight(color, hitUV, u_rect.xy + texCoord * u_rect.zw);', 'return skylight(color, hitUV, u_rect.xy + 0.5 * u_rect.zw);']] },
   'bound fixed sizes': { edits: [['vec2 size = vec2(textureSize(u_depth, 0));', 'vec2 size = vec2(1024.0);'], ['ivec2 last = textureSize(u_depth_bound, lod) - 1;', 'ivec2 last = ivec2(1023 >> lod);']] },
-  'depth one channel': { shader: { depthFromBound: true } },
+  'light 1 of 4': { edits: [['for (int i = 0; i < 4; i++) {', 'for (int i = 0; i < 1; i++) {']] },
+  'light 2 of 4': { edits: [['for (int i = 0; i < 4; i++) {', 'for (int i = 0; i < 2; i++) {']] },
+  'light no specular': { edits: [['glint += light * max(shine(max(dot(n, H), 0.0)) - shine(H.z), 0.0);', '']] },
+  'light no rim': { edits: [['rim += light * max(dot(facing, dir), 0.0);', '']] },
+  'light flat normal': { edits: [['SHADE vec2 packedNormal = NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;', 'SHADE vec2 packedNormal = vec2(0.1, 0.2);']] },
+  'march dynamic': { edits: [["for (int i = 0; i < LINEAR_STEPS; i++) {", "for (int i = 0; i < int(u_steps - skipped); i++) {"]] },
+  'march dynamic light 1': { edits: [["for (int i = 0; i < LINEAR_STEPS; i++) {", "for (int i = 0; i < int(u_steps - skipped); i++) {"], ["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < 1; i++) {"]] },
+  'lights dynamic': { edits: [["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < (u_light > 0.0 ? 4 : 0); i++) {"]] },
+  'both dynamic': { edits: [["for (int i = 0; i < LINEAR_STEPS; i++) {", "for (int i = 0; i < int(u_steps - skipped); i++) {"], ["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < (u_light > 0.0 ? 4 : 0); i++) {"]] },
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
 }
@@ -31,16 +39,14 @@ export async function installShaderEdits(p) {
     const proto = WebGL2RenderingContext.prototype
     if (!proto.__originalShaderSource) proto.__originalShaderSource = proto.shaderSource
     window.__shaderEdits = []
-    window.__shaderEditHits = 0
+    window.__shaderEditHits = []
     proto.shaderSource = function (shader, source) {
       let edited = source
-      if (source.includes('vec4 parallax(')) {
-        for (const [from, to] of window.__shaderEdits) {
-          if (!edited.includes(from)) throw new Error('shader edit not found: ' + from)
-          edited = edited.split(from).join(to)
-        }
-        if (window.__shaderEdits.length) window.__shaderEditHits++
-      }
+      window.__shaderEdits.forEach(([from, to], index) => {
+        if (!edited.includes(from)) return
+        edited = edited.split(from).join(to)
+        window.__shaderEditHits[index] = (window.__shaderEditHits[index] || 0) + 1
+      })
       return proto.__originalShaderSource.call(this, shader, edited)
     }
     return 1
@@ -50,13 +56,23 @@ export async function installShaderEdits(p) {
 export async function applyStage(p, stage) {
   const result = await p.evaluate(`(() => {
     window.__shaderEdits = ${JSON.stringify(stage.edits || [])}
-    window.__shaderEditHits = 0
-    window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, ...${JSON.stringify(stage.art || {})} })
+    window.__shaderEditHits = []
+    let warned = ''
+    const warn = console.warn
+    console.warn = (...args) => { warned += args.join(' '); warn(...args) }
+    try {
+      window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, ...${JSON.stringify(stage.art || {})} })
+    } finally {
+      console.warn = warn
+    }
     window.__plairLight.debug({ off: false, ...${JSON.stringify(stage.light || {})} })
-    return window.__shaderEditHits
+    return JSON.stringify({ hits: window.__shaderEdits.map((_, i) => window.__shaderEditHits[i] || 0), fallback: /unavailable/i.test(warned) })
   })()`)
-  if (typeof result === 'string') throw new Error(result)
-  return result
+  if (typeof result === 'string' && result.startsWith('ERR')) throw new Error(result)
+  const { hits, fallback } = JSON.parse(result)
+  if (fallback) throw new Error('the renderer fell back to its WebGL1 shader: a variant broke the WebGL2 programs')
+  if (hits.some(count => !count)) throw new Error('a shader edit matched nothing: ' + JSON.stringify(hits))
+  return hits.reduce((a, b) => Math.max(a, b), 0)
 }
 
 export async function removeShaderEdits(p) {

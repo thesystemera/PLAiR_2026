@@ -11,7 +11,7 @@ const measure = (ms) => p.evaluate(`new Promise(resolve => { const f = []; const
 
 await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === 'Playing').click(), 1`)
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
-await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), 1')
+await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 } }), 1')
 await sleep(1500)
 
 const results = Object.fromEntries(names.map(n => [n, []]))
@@ -40,7 +40,7 @@ try {
 } finally {
   await p.send('DeviceOrientation.clearDeviceOrientationOverride')
   await removeShaderEdits(p)
-  await p.evaluate(`(() => { window.__plairArt.set({ bench: { forceFull: false, extraFull: 0, extraCopy: 0 } }); window.__plairLight.debug({ off: false, level: null, kick: null, pulse: null }); return 1 })()`)
+  await p.evaluate(`(() => { window.__plairArt.set({ bench: { forceFull: false, extraFull: 0, extraCopy: 0 }, tilt: null }); window.__plairLight.debug({ off: false, level: null, kick: null, pulse: null }); return 1 })()`)
 }
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
 const base = median(results['as is'] || [NaN])

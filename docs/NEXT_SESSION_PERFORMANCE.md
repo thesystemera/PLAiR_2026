@@ -114,20 +114,21 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
   at the hit point, the 4-light loop, the specular power) with `stages.mjs` edits.
 - Bound setup with the texture sizes as uniforms: -0.35 ms (4%), not done yet.
 
-## 3d. Ready for a phone A/B (6 Oct, night; built on the desktop, the live app was not touched)
+## 3d. Phone results, 7 Oct morning (tilt pinned at 0.6/0.4, light level 0.6, `stages.mjs`, 3-4 rounds)
 
-- Texture sizes are uniforms instead of `textureSize` per pixel (on by default; pixel-identical on the P6000
-  bench at 1024 and 768 packs; measured -0.35 ms on the phone as a source edit).
-- `depthFromBound` (off by default): the march, refine, edge and fill read depth from the one-channel max-depth
-  pyramid's level 0 (R8, linear magnification) instead of the RGB map: a quarter of the memory per read.
-  Identical at 1024 and 256 packs, ~8 pixels in 200k differ at 768 (padded pyramid; a 1/255 depth difference
-  flips a hit on a silhouette). The P6000 cannot judge it (0.12 ms per pass, huge caches; it reads ~10% slower
-  there from the extra scale and clamp), so A/B it on the phone first:
-  `node tests/gpu_bench/perf/stages.mjs "as is,depth one channel" 3 6`, and `identity.mjs "as is,as is,depth one
-  channel"` on Playing and Catalog. If it wins, make it the default in `createDepthArtPrograms`. If a device
-  cannot build the pyramid, the renderer recompiles without it (`processUploads`).
-- Then split the lighting cost (section 3c) and look at the scene: with the cover pass at zero the frame under
-  motion is still ~13 ms of scene and compositing.
+- Now Playing full pass: ~11.6 ms. Lighting is 4.6 ms of it: ~0.94 ms per light (specular ~0.25, rim ~0.2,
+  direction/falloff/relief ~0.5) plus the normal read at the hit point (~1.8 ms with its maths).
+- Texture sizes as uniforms: kept (-0.35 ms).
+- Depth from the R8 pyramid: no gain on the phone (9.24 -> 9.19 ms, noise); removed.
+- Runtime-length march loop: no gain (+0.14 ms).
+- Lights computed per cover (screen terms constant): -2.0 ms, but that changes the look. Doing the same per vertex
+  of a 24x24 grid with the values carried as varyings made the pass 22.4 ms vs 13.1 ms (Adreno pays heavily for
+  varyings, and the grid alone cost ~1.4 ms): rejected and reverted.
+- Rig fixes: `edits.mjs` applies an edit only where its text exists and aborts if one matches nothing or if the
+  renderer falls back to its WebGL1 shader (earlier light variants had silently fallen back and read 1.7x slower;
+  the 6 Oct "lights per cover saves nothing" result was the same bug). `__plairArt.set({ tilt: { x, y } })` pins
+  the tilt for tests (the rolling-average tilt drifts back to centre while a pose is held).
+- Frame under motion: cover pass + ~13 ms of scene and compositing. Next lever: the scene.
 
 ## 4. Next steps, in order
 

@@ -69,6 +69,7 @@ class DepthArtRenderer {
     this.bench = { forceFull: false, extraFull: 0, extraCopy: 0 }
     this.shaderOptions = {}
     this.stepScale = 1
+    this.tiltOverride = null
     this.skipDraw = false
     this.drawDelays = []
     this.uploads = []
@@ -384,10 +385,6 @@ class DepthArtRenderer {
       entry.color = this.createTexture(color, gl.RGBA)
       entry.map = this.createTexture(map, gl.RGB)
       entry.bound = createDepthBound(gl, this.programs, entry.map, map.width, map.height)
-      if (!entry.bound && this.programs.depthFromBound) {
-        this.shaderOptions = { ...this.shaderOptions, depthFromBound: false }
-        this.setupContext(gl)
-      }
       entry.sizes = [color.width, color.height, map.width, map.height]
       entry.state = 'ready'
       color.close()
@@ -400,6 +397,7 @@ class DepthArtRenderer {
   }
 
   baseParallax() {
+    if (this.tiltOverride) return this.tiltOverride
     if (this.settings.reduceMotion) return NO_PARALLAX
     const gyro = this.settings.gyroRef?.current || NO_PARALLAX
     const mouse = this.settings.mouseRef?.current || NO_PARALLAX
@@ -765,7 +763,8 @@ if (typeof window !== 'undefined') {
       }
       return out
     },
-    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx } = {}) => {
+    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt } = {}) => {
+      if (tilt !== undefined) depthArtRenderer.tiltOverride = tilt && { parallaxX: tilt.x, parallaxY: tilt.y }
       if (stepPx !== undefined) depthArtRenderer.configure({ stepPx })
       if (bench !== undefined) Object.assign(depthArtRenderer.bench, bench)
       if (shader !== undefined && depthArtRenderer.gl) {
