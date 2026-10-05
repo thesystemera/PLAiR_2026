@@ -4,9 +4,10 @@ const MISSING_RETRY_MS = 10 * 60 * 1000
 const missingSince = new Map()
 
 export function useDepthMap(cache, id, enabled = true) {
-  const [url, setUrl] = useState(() => (enabled && id ? cache.peekMemory(id) : null))
+  const [state, setState] = useState(() => ({ url: enabled && id ? cache.peekMemory(id) : null, missing: false }))
 
   useEffect(() => {
+    const setUrl = (url, missing = false) => setState(prev => (prev.url === url && prev.missing === missing ? prev : { url, missing }))
     if (!enabled || !id) {
       queueMicrotask(() => setUrl(null))
       return
@@ -18,14 +19,14 @@ export function useDepthMap(cache, id, enabled = true) {
     const load = () => {
       const missingAt = missingSince.get(key)
       if (missingAt && performance.now() - missingAt < MISSING_RETRY_MS) {
-        queueMicrotask(() => alive && setUrl(null))
+        queueMicrotask(() => alive && setUrl(null, true))
         return
       }
       cache.getMedia(id).then((next) => {
         if (!alive) return
         if (next) missingSince.delete(key)
         else missingSince.set(key, performance.now())
-        setUrl(next || null)
+        setUrl(next || null, !next)
       })
     }
 
@@ -50,5 +51,5 @@ export function useDepthMap(cache, id, enabled = true) {
     }
   }, [cache, id, enabled])
 
-  return url
+  return state
 }

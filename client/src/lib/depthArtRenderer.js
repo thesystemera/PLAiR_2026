@@ -18,35 +18,30 @@ const TEXTURE_STEP_PX = 64
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
-async function loadImage(url, size) {
-  if (typeof createImageBitmap === 'function') {
-    let blob = blobForUrl(url)
-    if (!blob) {
-      const response = await fetch(url)
-      if (!response.ok) throw new Error(`image ${response.status}`)
-      blob = await response.blob()
-    }
-    const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
-    const side = Math.max(bitmap.width, bitmap.height)
-    if (side <= size) return bitmap
-    const scale = size / side
-    try {
-      const resized = await createImageBitmap(bitmap, {
-        resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
-        resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
-        resizeQuality: 'high',
-      })
-      bitmap.close()
-      return resized
-    } catch {
-      return bitmap
-    }
+async function loadPack(url, size) {
+  if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap unavailable')
+  let blob = blobForUrl(url)
+  if (!blob) {
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`pack ${response.status}`)
+    blob = await response.blob()
   }
-  const image = new Image()
-  image.decoding = 'async'
-  image.src = url
-  await image.decode()
-  return image
+  const packed = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
+  const half = Math.floor(packed.width / 2)
+  const height = packed.height
+  const scale = Math.min(1, size / Math.max(half, height))
+  const options = scale < 1
+    ? { resizeWidth: Math.max(1, Math.round(half * scale)), resizeHeight: Math.max(1, Math.round(height * scale)), resizeQuality: 'high' }
+    : {}
+  try {
+    const [color, map] = await Promise.all([
+      createImageBitmap(packed, 0, 0, half, height, options),
+      createImageBitmap(packed, half, 0, half, height, options),
+    ])
+    return { color, map }
+  } finally {
+    packed.close()
+  }
 }
 
 function createAtlas() {
@@ -133,10 +128,13 @@ class DepthArtRenderer {
     for (const view of this.views) view.last = null
   }
 
-  attach({ host, canvas, colorUrl, depthUrl, normalUrl, onDrawn }) {
-    if (!this.ensureContext()) return () => {}
+  attach({ host, canvas, packUrl, onDrawn, onFailed }) {
+    if (!this.ensureContext()) {
+      queueMicrotask(() => onFailed?.())
+      return () => {}
+    }
     const view = {
-      host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn,
+      host, canvas, ctx: null, packUrl, onDrawn, onFailed, failed: false,
       clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
       shiftX: 0, shiftY: 0, styleVisible: true, next: null,
     }
@@ -269,7 +267,7 @@ class DepthArtRenderer {
   }
 
   setupContext(gl) {
-    const programs = createDepthArtPrograms(gl)
+    const programs = createDepthArtPrograms(gl, { packedNormals: true })
     for (const entry of [programs.full, programs.cache]) {
       if (!entry) continue
       gl.useProgram(entry.program)
@@ -312,22 +310,27 @@ class DepthArtRenderer {
     }
   }
 
-  acquire({ colorUrl, depthUrl, normalUrl }, size) {
-    const key = `${colorUrl}|${depthUrl}|${normalUrl}|${size}`
+  acquire({ packUrl }, size) {
+    const key = `${packUrl}|${size}`
     let entry = this.textures.get(key)
     if (!entry) {
-      entry = { key, size, capped: false, refs: 0, state: 'loading', color: null, depth: null, bound: null, normal: null, usedAt: 0 }
+      entry = { key, size, capped: false, refs: 0, state: 'loading', color: null, map: null, bound: null, usedAt: 0 }
       this.textures.set(key, entry)
-      Promise.all([loadImage(colorUrl, size), loadImage(depthUrl, size), loadImage(normalUrl, size)])
-        .then(([color, depth, normal]) => {
-          if (this.textures.get(key) !== entry) return
+      loadPack(packUrl, size)
+        .then(({ color, map }) => {
+          if (this.textures.get(key) !== entry) {
+            color.close()
+            map.close()
+            return
+          }
           entry.capped = Math.max(color.width, color.height) < size
-          this.uploads.push({ entry, color, depth, normal })
+          this.uploads.push({ entry, color, map })
           this.schedule()
         })
         .catch((error) => {
-          logger.debug('[DepthArt] Image load failed:', error)
+          logger.debug('[DepthArt] Pack load failed:', error)
           entry.state = 'failed'
+          this.schedule()
         })
     }
     entry.refs++
@@ -347,9 +350,8 @@ class DepthArtRenderer {
     this.textures.delete(entry.key)
     if (this.gl && !this.contextLost) {
       if (entry.color) this.gl.deleteTexture(entry.color)
-      if (entry.depth) this.gl.deleteTexture(entry.depth)
+      if (entry.map) this.gl.deleteTexture(entry.map)
       if (entry.bound) this.gl.deleteTexture(entry.bound.texture)
-      if (entry.normal) this.gl.deleteTexture(entry.normal)
     }
   }
 
@@ -374,19 +376,20 @@ class DepthArtRenderer {
   processUploads() {
     const gl = this.gl
     for (let i = 0; i < UPLOADS_PER_FRAME && this.uploads.length; i++) {
-      const { entry, color, depth, normal } = this.uploads.shift()
+      const { entry, color, map } = this.uploads.shift()
       if (this.textures.get(entry.key) !== entry) {
-        for (const image of [color, depth, normal]) image.close?.()
+        color.close()
+        map.close()
         continue
       }
       gl.activeTexture(gl.TEXTURE0)
       entry.color = this.createTexture(color, gl.RGBA)
-      entry.depth = this.createTexture(depth, gl.LUMINANCE)
-      entry.bound = createDepthBound(gl, this.programs, entry.depth, depth.width, depth.height)
-      entry.normal = this.createTexture(normal, gl.RGB)
-      entry.sizes = [color.width, color.height, depth.width, depth.height, normal.width, normal.height]
+      entry.map = this.createTexture(map, gl.RGB)
+      entry.bound = createDepthBound(gl, this.programs, entry.map, map.width, map.height)
+      entry.sizes = [color.width, color.height, map.width, map.height]
       entry.state = 'ready'
-      for (const image of [color, depth, normal]) image.close?.()
+      color.close()
+      map.close()
     }
   }
 
@@ -453,6 +456,13 @@ class DepthArtRenderer {
       }
       this.sizeTextures(view, dpr)
       const entry = view.entry
+      if (entry?.state === 'failed') {
+        if (!view.failed) {
+          view.failed = true
+          view.onFailed?.()
+        }
+        continue
+      }
       if (!entry || entry.state !== 'ready') continue
       if (!view.shown) continue
       const rect = view.rect
@@ -546,7 +556,7 @@ class DepthArtRenderer {
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
         gl.activeTexture(gl.TEXTURE1)
-        gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         gl.uniform2f(cache.uniforms.gyro, item.px, item.py)
         gl.uniform1f(cache.uniforms.steps, item.steps)
         bindDepthBound(gl, this.programs, cache.uniforms, item.entry.bound)
@@ -565,9 +575,9 @@ class DepthArtRenderer {
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
         gl.activeTexture(gl.TEXTURE1)
-        gl.bindTexture(gl.TEXTURE_2D, item.entry.depth)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         gl.activeTexture(gl.TEXTURE2)
-        gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         gl.uniform2f(full.uniforms.gyro, item.px, item.py)
         gl.uniform1f(full.uniforms.steps, item.steps)
         bindDepthBound(gl, this.programs, full.uniforms, item.entry.bound)
@@ -588,7 +598,7 @@ class DepthArtRenderer {
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, cached.hit)
         gl.activeTexture(gl.TEXTURE2)
-        gl.bindTexture(gl.TEXTURE_2D, item.entry.normal)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         setLightRect(gl, relight.uniforms, item.rect)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
         item.px = cached.px
@@ -642,8 +652,8 @@ if (typeof window !== 'undefined') {
         if (entry.refs > 0) active++
         else idle++
         if (!entry.sizes) continue
-        const [cw, ch, dw, dh, nw, nh] = entry.sizes
-        textureBytes += cw * ch * 4 + dw * dh * (1 + 4 / 3) + nw * nh * 4
+        const [cw, ch, mw, mh] = entry.sizes
+        textureBytes += cw * ch * 4 + mw * mh * (4 + 4 / 3)
         textureSizes[cw] = (textureSizes[cw] || 0) + 1
       }
       const viewSizes = {}

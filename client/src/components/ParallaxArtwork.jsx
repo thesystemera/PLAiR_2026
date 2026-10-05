@@ -36,7 +36,7 @@ export const ParallaxArtwork = memo(function ParallaxArtwork({
   isActive = true
 }) {
   const enrichedArtworkUrl = useEnrichedArtwork(trackId)
-  const normalUrl = useDepthMap(normalFullCache, trackId)
+  const { url: normalUrl } = useDepthMap(normalFullCache, trackId)
 
   const canvasRef = useRef(null)
   const glRef = useRef(null)

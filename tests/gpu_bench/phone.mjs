@@ -4,7 +4,7 @@ setTimeout(() => { console.error('phone.mjs timed out (tab hidden?)'); process.e
 const [cmd = 'fps', arg = '5', arg2] = process.argv.slice(2)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const list = await (await fetch('http://127.0.0.1:9222/json')).json()
-const page = list.find(p => p.type === 'page' && p.url.includes('plair.live'))
+const page = list.find(p => p.type === 'page' && p.url.includes(process.env.PAGE || 'plair.live'))
 if (!page) { console.error('no plair.live tab'); process.exit(1) }
 
 function connect(url) {
@@ -197,7 +197,7 @@ if (cmd === 'busy') {
     if (m.method === 'Tracing.dataCollected') events.push(...m.params.value)
     if (m.method === 'Tracing.tracingComplete') done?.()
   })
-  await b.send('Tracing.start', { categories: 'toplevel,viz,gpu,cc,benchmark,disabled-by-default-devtools.timeline', transferMode: 'ReportEvents' })
+  await b.send('Tracing.start', { categories: process.env.CATS || 'toplevel,viz,gpu,cc,benchmark,disabled-by-default-devtools.timeline', transferMode: 'ReportEvents' })
   const fps = evaluate(FPS_EXPR(Number(arg)))
   if (process.env.SCROLL) {
     const end = Date.now() + Number(arg) * 1000

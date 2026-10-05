@@ -14,7 +14,7 @@ import { applySoundMode, SOUND_MODES, soundModeFor } from '../lib/soundModes'
 import { useArtworkThumb } from '../contexts/UIStateContext'
 import { useProfilePicture } from '../hooks/useProfilePicture'
 import { useDeletePost } from '../hooks/useDeletePost'
-import { profileDepthCache, profileNormalCache, profilePictureCache } from '../lib/mediaCache'
+import { profilePackCache, profilePictureCache } from '../lib/mediaCache'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
@@ -886,7 +886,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     try {
       setUploadingProfilePicture(true)
       await api.uploadProfilePicture(file)
-      await Promise.all([profilePictureCache.invalidate(user?.id), profileDepthCache.invalidate(user?.id), profileNormalCache.invalidate(user?.id)])
+      await Promise.all([profilePictureCache.invalidate(user?.id), profilePackCache.invalidate(user?.id)])
       await refreshUser()
       success('Profile picture uploaded')
     } catch (err) {

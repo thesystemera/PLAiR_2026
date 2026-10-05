@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional
 
 from services.youtube_clip_service import get_youtube_clip_service
-from services.artwork_thumbnail_service import THUMBNAIL_SIZES, ensure_thumbnail
+from services.artwork_thumbnail_service import THUMBNAIL_SIZES, ensure_pack, ensure_thumbnail, pack_path
 from services.normal_map_service import ensure_track_normal
 from services.device_settings_service import settings_for, valid_kind
 from services import log_service
@@ -279,6 +279,25 @@ async def get_artwork_normal_thumbnail(track_id: str, size: int):
         raise HTTPException(status_code=404, detail="Normal map not found")
     thumb_path = await ensure_thumbnail(track_id, normal_path, size, variant="normal")
     return FileResponse(thumb_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
+
+@router.get("/api/artwork/{track_id}/pack/{size}")
+async def get_artwork_pack(track_id: str, size: int):
+    if not SAFE_ID.fullmatch(track_id) or size not in THUMBNAIL_SIZES:
+        raise HTTPException(status_code=404, detail="Artwork pack not found")
+    assert services.catalog_service is not None
+    artwork_path = services.catalog_service.get_artwork_path(track_id)
+    enriched_path = settings.ARTWORK_ENRICHED_DIR / f"{track_id}.jpeg"
+    if not artwork_path or not artwork_path.exists() or not enriched_path.exists():
+        raise HTTPException(status_code=404, detail="Artwork pack not found")
+    normal_path = await ensure_track_normal(track_id)
+    if not normal_path:
+        raise HTTPException(status_code=404, detail="Artwork pack not found")
+    try:
+        target = await ensure_pack(track_id, pack_path(track_id, size), (artwork_path, enriched_path, normal_path), size, depth_side_by_side=True)
+    except Exception as e:
+        log_service.error(f"Artwork pack failed for {track_id} ({size}px): {e}")
+        raise HTTPException(status_code=404, detail="Artwork pack not found")
+    return FileResponse(target, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
 
 @router.api_route("/api/artwork/{track_id}/enriched", methods=["GET", "HEAD"])
 async def get_enriched_artwork(track_id: str):

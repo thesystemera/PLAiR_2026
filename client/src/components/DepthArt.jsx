@@ -4,7 +4,9 @@ import { useQuality } from '../contexts/QualityContext'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
 import { CSS_TRANSITION } from '../lib/motion'
 import { useDepthMap } from '../hooks/useDepthMap'
-import { depthThumbCache, isMemoryKey, normalThumbCache, profileDepthCache, profileNormalCache } from '../lib/mediaCache'
+import { artPackCache, isMemoryKey, profilePackCache } from '../lib/mediaCache'
+
+const HIDDEN = { visibility: 'hidden' }
 
 const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:') || url.startsWith('http') || url.startsWith('/') || isMemoryKey(url))
 
@@ -26,29 +28,29 @@ export function DepthArtBridge() {
 }
 
 export const DepthArt = memo(function DepthArt({
-  colorUrl, depthUrl, normalUrl, alt, onLoad, onError,
+  colorUrl, packUrl, packMissing = false, alt, onLoad, onError,
   className = 'absolute inset-0', imgClassName = 'absolute inset-0 w-full h-full object-cover', imgRef, imgProps,
 }) {
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const [drawnKey, setDrawnKey] = useState(null)
+  const [failedKey, setFailedKey] = useState(null)
   const litArtwork = useUISelector(state => state.settingsState.litArtwork)
-  const usable = litArtwork && isLoadedImage(colorUrl) && isLoadedImage(depthUrl) && isLoadedImage(normalUrl)
-  const key = usable ? `${colorUrl}|${depthUrl}|${normalUrl}` : null
+  const key = litArtwork && isLoadedImage(packUrl) ? packUrl : null
 
   useEffect(() => {
     if (!key) return
     return depthArtRenderer.attach({
       host: hostRef.current,
       canvas: canvasRef.current,
-      colorUrl,
-      depthUrl,
-      normalUrl,
+      packUrl: key,
       onDrawn: () => setDrawnKey(key),
+      onFailed: () => setFailedKey(key),
     })
-  }, [key, colorUrl, depthUrl, normalUrl])
+  }, [key])
 
-  const drawn = key !== null && drawnKey === key
+  const flat = !litArtwork || packMissing || packUrl === undefined || (key !== null && failedKey === key)
+  const drawn = !flat && key !== null && drawnKey === key
 
   return (
     <div ref={hostRef} className={className}>
@@ -58,6 +60,7 @@ export const DepthArt = memo(function DepthArt({
         alt={alt}
         decoding="async"
         className={imgClassName}
+        style={flat ? undefined : HIDDEN}
         onLoad={onLoad}
         onError={onError}
         {...imgProps}
@@ -74,14 +77,12 @@ export const DepthArt = memo(function DepthArt({
 
 export const TrackArt = memo(function TrackArt({ trackId, hasArtwork = true, ...props }) {
   const enabled = useUISelector(state => state.settingsState.litArtwork) && !!trackId && hasArtwork !== false
-  const depthUrl = useDepthMap(depthThumbCache, trackId, enabled)
-  const normalUrl = useDepthMap(normalThumbCache, trackId, enabled)
-  return <DepthArt depthUrl={depthUrl} normalUrl={normalUrl} {...props} />
+  const { url, missing } = useDepthMap(artPackCache, trackId, enabled)
+  return <DepthArt packUrl={url} packMissing={missing || (!!trackId && hasArtwork === false)} {...props} />
 })
 
 export const ProfileArt = memo(function ProfileArt({ userId, hasPicture = true, ...props }) {
   const enabled = useUISelector(state => state.settingsState.litArtwork) && !!userId && hasPicture !== false
-  const depthUrl = useDepthMap(profileDepthCache, userId, enabled)
-  const normalUrl = useDepthMap(profileNormalCache, userId, enabled)
-  return <DepthArt depthUrl={depthUrl} normalUrl={normalUrl} {...props} />
+  const { url, missing } = useDepthMap(profilePackCache, userId, enabled)
+  return <DepthArt packUrl={url} packMissing={missing || (!!userId && hasPicture === false)} {...props} />
 })

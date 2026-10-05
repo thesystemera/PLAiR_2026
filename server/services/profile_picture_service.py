@@ -14,10 +14,13 @@ from services import log_service
 from services.base_service import SingletonService
 from services.suno_artwork_enrichment_service import artwork_enrichment_service
 from services.normal_map_service import ensure_image_normal
+from services.artwork_thumbnail_service import ensure_pack
 
 Image.MAX_IMAGE_PIXELS = 40_000_000
 DEPTH_FILENAME = "profile_depth.jpg"
 NORMAL_FILENAME = "profile_normal_v2.jpg"
+PACK_FILENAME = "profile_pack_v1.jpg"
+PACK_SIZE = 512
 
 class ProfilePictureService(SingletonService):
     def __init__(self):
@@ -60,6 +63,17 @@ class ProfilePictureService(SingletonService):
             return None
         target = settings.get_user_profile_picture_path(user_id, NORMAL_FILENAME)
         return await ensure_image_normal(f"profile:{user_id}", picture_path, target)
+
+    async def get_pack_path(self, user_id: int, db: AsyncSession) -> Optional[Path]:
+        picture_path = await self.get_profile_picture_path(user_id, db)
+        if not picture_path:
+            return None
+        depth_path = await self.get_depth_path(user_id, db)
+        normal_path = await self.get_normal_path(user_id, db)
+        if not depth_path or not normal_path:
+            return None
+        target = settings.get_user_profile_picture_path(user_id, PACK_FILENAME)
+        return await ensure_pack(f"profile:{user_id}", target, (picture_path, depth_path, normal_path), PACK_SIZE, depth_side_by_side=False)
 
     def _render_profile_jpeg(self, file_contents: bytes) -> bytes:
         image = Image.open(io.BytesIO(file_contents))
@@ -161,6 +175,7 @@ class ProfilePictureService(SingletonService):
             log_service.api(f"Profile picture deleted for user {user_id_val}")
         self.depth_path(user_id_val).unlink(missing_ok=True)
         settings.get_user_profile_picture_path(user_id_val, NORMAL_FILENAME).unlink(missing_ok=True)
+        settings.get_user_profile_picture_path(user_id_val, PACK_FILENAME).unlink(missing_ok=True)
 
         user.profile_picture = None  # type: ignore
         await db.commit()

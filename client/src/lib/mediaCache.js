@@ -61,24 +61,14 @@ const CACHE_CONFIGS = {
     getUrl: (id) => `/api/user/${id}/profile-picture`,
     logPrefix: '[ProfilePictureCache]'
   },
-  depth_thumb: {
-    cacheName: 'depth-thumb-cache-v1',
+  art_pack: {
+    cacheName: 'art-pack-cache-v1',
     maxItems: 1500,
     maxMemoryItems: 300,
     expiryMs: 14 * 24 * 60 * 60 * 1000,
-    metadataKey: 'depth-thumb-metadata',
-    getUrl: (id) => `/api/artwork/${id}/depth/thumb/${ARTWORK_THUMB_SIZE}`,
-    logPrefix: '[DepthThumbCache]',
-    memoryOnly: true
-  },
-  normal_thumb: {
-    cacheName: 'normal-thumb-cache-v1',
-    maxItems: 1500,
-    maxMemoryItems: 300,
-    expiryMs: 14 * 24 * 60 * 60 * 1000,
-    metadataKey: 'normal-thumb-metadata',
-    getUrl: (id) => `/api/artwork/${id}/normal/thumb/${ARTWORK_THUMB_SIZE}?v=${NORMAL_MAP_VERSION}`,
-    logPrefix: '[NormalThumbCache]',
+    metadataKey: 'art-pack-metadata',
+    getUrl: (id) => `/api/artwork/${id}/pack/${ARTWORK_THUMB_SIZE}?v=${NORMAL_MAP_VERSION}`,
+    logPrefix: '[ArtPackCache]',
     memoryOnly: true
   },
   normal_full: {
@@ -90,22 +80,13 @@ const CACHE_CONFIGS = {
     getUrl: (id) => `/api/artwork/${id}/normal?v=${NORMAL_MAP_VERSION}`,
     logPrefix: '[NormalCache]'
   },
-  profile_normal: {
-    cacheName: 'profile-normal-cache-v1',
+  profile_pack: {
+    cacheName: 'profile-pack-cache-v1',
     maxItems: 500,
     expiryMs: 7 * 24 * 60 * 60 * 1000,
-    metadataKey: 'profile-normal-metadata',
-    getUrl: (id) => `/api/user/${id}/profile-picture/normal?v=${NORMAL_MAP_VERSION}`,
-    logPrefix: '[ProfileNormalCache]',
-    memoryOnly: true
-  },
-  profile_depth: {
-    cacheName: 'profile-depth-cache-v1',
-    maxItems: 500,
-    expiryMs: 7 * 24 * 60 * 60 * 1000,
-    metadataKey: 'profile-depth-metadata',
-    getUrl: (id) => `/api/user/${id}/profile-picture/depth`,
-    logPrefix: '[ProfileDepthCache]',
+    metadataKey: 'profile-pack-metadata',
+    getUrl: (id) => `/api/user/${id}/profile-picture/pack?v=${NORMAL_MAP_VERSION}`,
+    logPrefix: '[ProfilePackCache]',
     memoryOnly: true
   }
 }
@@ -465,8 +446,6 @@ export const artworkCache = new MediaCache('artwork')
 export const artworkThumbCache = new MediaCache('artwork_thumb')
 export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
-export const depthThumbCache = new MediaCache('depth_thumb')
-export const profileDepthCache = new MediaCache('profile_depth')
-export const normalThumbCache = new MediaCache('normal_thumb')
+export const artPackCache = new MediaCache('art_pack')
 export const normalFullCache = new MediaCache('normal_full')
-export const profileNormalCache = new MediaCache('profile_normal')
+export const profilePackCache = new MediaCache('profile_pack')

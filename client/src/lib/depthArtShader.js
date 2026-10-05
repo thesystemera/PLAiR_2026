@@ -197,7 +197,7 @@ const PARALLAX = `
         testDepth -= layerStep;
         continue;
       }
-      sampledDepth = texture2D(u_depth, clamp(testUV, 0.0, 1.0)).r;
+      sampledDepth = texture2D(u_depth, clamp(testUV, 0.0, 1.0)).g;
 
       if (sampledDepth >= testDepth) {
         hit = true;
@@ -216,7 +216,7 @@ const PARALLAX = `
       for (int j = 0; j < REFINE_STEPS; j++) {
         float mid = (lo + hi) * 0.5;
         vec2 midUV = uv - (mid - 0.5) * displacement;
-        float midSample = texture2D(u_depth, clamp(midUV, 0.0, 1.0)).r;
+        float midSample = texture2D(u_depth, clamp(midUV, 0.0, 1.0)).g;
 
         if (midSample >= mid) {
           lo = mid;
@@ -237,15 +237,15 @@ const PARALLAX = `
     float dispGate = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
     if (dispGate <= 0.0) return pomColor;
 
-    float baseDepth = texture2D(u_depth, clamp(uv, 0.0, 1.0)).r;
+    float baseDepth = texture2D(u_depth, clamp(uv, 0.0, 1.0)).g;
     float foregroundness = smoothstep(${G(POM.FG_DEPTH_SOFT)}, ${G(POM.FG_DEPTH_HARD)}, baseDepth);
     if (foregroundness <= 0.0) return pomColor;
 
     float texel = ${G(POM.EDGE_RADIUS)};
-    float dL = texture2D(u_depth, clamp(testUV - vec2(texel, 0.0), 0.0, 1.0)).r;
-    float dR = texture2D(u_depth, clamp(testUV + vec2(texel, 0.0), 0.0, 1.0)).r;
-    float dU = texture2D(u_depth, clamp(testUV - vec2(0.0, texel), 0.0, 1.0)).r;
-    float dD = texture2D(u_depth, clamp(testUV + vec2(0.0, texel), 0.0, 1.0)).r;
+    float dL = texture2D(u_depth, clamp(testUV - vec2(texel, 0.0), 0.0, 1.0)).g;
+    float dR = texture2D(u_depth, clamp(testUV + vec2(texel, 0.0), 0.0, 1.0)).g;
+    float dU = texture2D(u_depth, clamp(testUV - vec2(0.0, texel), 0.0, 1.0)).g;
+    float dD = texture2D(u_depth, clamp(testUV + vec2(0.0, texel), 0.0, 1.0)).g;
     float gradient = abs(dR - dL) + abs(dD - dU);
 
     float edgeness = smoothstep(${G(POM.EDGE_SOFT)}, ${G(POM.EDGE_HARD)}, gradient);
@@ -261,10 +261,10 @@ const PARALLAX = `
     vec2 s3 = uv - dispDir * spread;
     vec2 s4 = uv - dispDir * spread * 2.0;
 
-    float fd1 = texture2D(u_depth, clamp(s1, 0.0, 1.0)).r;
-    float fd2 = texture2D(u_depth, clamp(s2, 0.0, 1.0)).r;
-    float fd3 = texture2D(u_depth, clamp(s3, 0.0, 1.0)).r;
-    float fd4 = texture2D(u_depth, clamp(s4, 0.0, 1.0)).r;
+    float fd1 = texture2D(u_depth, clamp(s1, 0.0, 1.0)).g;
+    float fd2 = texture2D(u_depth, clamp(s2, 0.0, 1.0)).g;
+    float fd3 = texture2D(u_depth, clamp(s3, 0.0, 1.0)).g;
+    float fd4 = texture2D(u_depth, clamp(s4, 0.0, 1.0)).g;
 
     float w1 = max(0.01, pow(1.0 - fd1, ${G(POM.FILL_DEPTH_POWER)}));
     float w2 = max(0.01, pow(1.0 - fd2, ${G(POM.FILL_DEPTH_POWER)}));
@@ -312,7 +312,12 @@ const SKYLIGHT = `
   ${powerFunction(LIGHT.SHININESS)}
 
   vec3 skylight(vec3 color, vec2 hitUV, vec2 screenUV) {
+#ifdef PACKED_NORMALS
+    vec2 packedNormal = texture2D(u_normal, clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;
+    vec3 n = normalize(vec3(sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))), packedNormal));
+#else
     vec3 n = normalize(texture2D(u_normal, clamp(hitUV, 0.0, 1.0)).rgb * 2.0 - 1.0);
+#endif
     float slopeLen = length(n.xy);
     vec2 facing = slopeLen > 0.0001 ? n.xy / slopeLen : vec2(0.0);
 
@@ -409,7 +414,7 @@ const BOUND_BUILD_FRAGMENT = `#version 300 es
     ivec2 p = ivec2(gl_FragCoord.xy);
     ivec2 last = textureSize(u_source, u_level) - 1;
     if (u_reduce == 0) {
-      o_value = vec4(all(lessThanEqual(p, last)) ? texelFetch(u_source, p, u_level).r : 0.0);
+      o_value = vec4(all(lessThanEqual(p, last)) ? texelFetch(u_source, p, u_level).g : 0.0);
       return;
     }
     ivec2 q = p * 2;
@@ -504,7 +509,13 @@ function linkProgram(gl, vertexSource, fragmentSource, uniformNames, samplers) {
   return { program, uniforms }
 }
 
-export function createDepthArtPrograms(gl) {
+function withDefines(source, packedNormals) {
+  if (!packedNormals) return source
+  const versionEnd = source.startsWith('#version') ? source.indexOf(String.fromCharCode(10)) + 1 : 0
+  return [source.slice(0, versionEnd), '#define PACKED_NORMALS', source.slice(versionEnd)].join(String.fromCharCode(10))
+}
+
+export function createDepthArtPrograms(gl, { packedNormals = false } = {}) {
   const posBuffer = gl.createBuffer()
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer)
   gl.bufferData(gl.ARRAY_BUFFER, QUAD_POSITIONS, gl.STATIC_DRAW)
@@ -525,8 +536,8 @@ export function createDepthArtPrograms(gl) {
       const hit = floatHit ? HIT_FLOAT : HIT_PACKED
       const builder = linkProgram(gl, VERTEX_300, BOUND_BUILD_FRAGMENT, ['u_source', 'u_reduce', 'u_level'], { source: BUILD_UNIT })
       const cache = linkProgram(gl, VERTEX_300, cacheFragment(hit), [...PARALLAX_UNIFORM_NAMES, 'u_depth_bound', 'u_bound_levels'], { color: 0, depth: 1, depth_bound: BOUND_UNIT })
-      const relight = linkProgram(gl, VERTEX_100, relightFragment(hit), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
-      const full = linkProgram(gl, VERTEX_300, FULL_FRAGMENT_300, [...fullUniforms, 'u_depth_bound', 'u_bound_levels'], { ...fullSamplers, depth_bound: BOUND_UNIT })
+      const relight = linkProgram(gl, VERTEX_100, withDefines(relightFragment(hit), packedNormals), ['u_cached_color', 'u_cached_hit', ...LIGHT_UNIFORM_NAMES], { cached_color: 0, cached_hit: 1, normal: 2 })
+      const full = linkProgram(gl, VERTEX_300, withDefines(FULL_FRAGMENT_300, packedNormals), [...fullUniforms, 'u_depth_bound', 'u_bound_levels'], { ...fullSamplers, depth_bound: BOUND_UNIT })
       const noBound = gl.createTexture()
       gl.bindTexture(gl.TEXTURE_2D, noBound)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
@@ -537,7 +548,7 @@ export function createDepthArtPrograms(gl) {
       logger.warn('[DepthArt] Parallax cache unavailable:', error)
     }
   }
-  const full = linkProgram(gl, VERTEX_100, FULL_FRAGMENT, fullUniforms, fullSamplers)
+  const full = linkProgram(gl, VERTEX_100, withDefines(FULL_FRAGMENT, packedNormals), fullUniforms, fullSamplers)
   return { full, cache: null, relight: null, floatHit: false, bound: null }
 }
 
