@@ -14,10 +14,11 @@ const REDRAW_SHIFT_PX = 0.1
 const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
 const CANVAS_RESIZES_PER_FRAME = 3
+const TEXTURE_STEP_PX = 64
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
-async function loadImage(url) {
+async function loadImage(url, size) {
   if (typeof createImageBitmap === 'function') {
     let blob = blobForUrl(url)
     if (!blob) {
@@ -25,7 +26,21 @@ async function loadImage(url) {
       if (!response.ok) throw new Error(`image ${response.status}`)
       blob = await response.blob()
     }
-    return createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
+    const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
+    const side = Math.max(bitmap.width, bitmap.height)
+    if (side <= size) return bitmap
+    const scale = size / side
+    try {
+      const resized = await createImageBitmap(bitmap, {
+        resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
+        resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
+        resizeQuality: 'high',
+      })
+      bitmap.close()
+      return resized
+    } catch {
+      return bitmap
+    }
   }
   const image = new Image()
   image.decoding = 'async'
@@ -123,9 +138,8 @@ class DepthArtRenderer {
     const view = {
       host, canvas, ctx: null, colorUrl, depthUrl, normalUrl, onDrawn,
       clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
-      shiftX: 0, shiftY: 0, styleVisible: true,
+      shiftX: 0, shiftY: 0, styleVisible: true, next: null,
     }
-    view.entry = this.acquire(view)
     this.views.add(view)
     this.viewsVersion++
     this.scrolled = true
@@ -137,7 +151,9 @@ class DepthArtRenderer {
     if (!this.views.delete(view)) return
     this.viewsVersion++
     if (view.entry) view.entry.refs--
+    if (view.next) view.next.refs--
     view.entry = null
+    view.next = null
     this.dropCache(view)
     this.evictIdle()
   }
@@ -228,6 +244,7 @@ class DepthArtRenderer {
         this.uploads = []
         for (const view of this.views) {
           view.entry = null
+          view.next = null
           view.last = null
           view.cache = null
         }
@@ -236,7 +253,6 @@ class DepthArtRenderer {
         try {
           this.setupContext(canvas.getContext(gl instanceof WebGLRenderingContext ? 'webgl' : 'webgl2', options))
           this.contextLost = false
-          for (const view of this.views) view.entry = this.acquire(view)
           this.schedule()
         } catch (error) {
           logger.error('[DepthArt] WebGL restore failed:', error)
@@ -267,15 +283,45 @@ class DepthArtRenderer {
     this.maxSize = Math.min(4096, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), dims[0], dims[1])
   }
 
-  acquire({ colorUrl, depthUrl, normalUrl }) {
-    const key = `${colorUrl}|${depthUrl}|${normalUrl}`
+  textureSize(rect, dpr) {
+    const side = Math.max(rect.width, rect.height) * dpr * (1 + INTENSITY * POM.ZOOM_FACTOR)
+    return Math.min(this.maxSize, Math.max(TEXTURE_STEP_PX, Math.ceil(side / TEXTURE_STEP_PX) * TEXTURE_STEP_PX))
+  }
+
+  sizeTextures(view, dpr) {
+    if (view.rect.width < 2 || view.rect.height < 2) return
+    const size = this.textureSize(view.rect, dpr)
+    if (view.next) {
+      if (view.next.state === 'ready') {
+        view.entry.refs--
+        view.entry = view.next
+        view.next = null
+        view.last = null
+        this.dropCache(view)
+        this.evictIdle()
+      } else if (view.next.state === 'failed') {
+        view.next.refs--
+        view.next = null
+      }
+      return
+    }
+    if (!view.entry) {
+      view.entry = this.acquire(view, size)
+    } else if (size > view.entry.size && !view.entry.capped && view.entry.state === 'ready') {
+      view.next = this.acquire(view, size)
+    }
+  }
+
+  acquire({ colorUrl, depthUrl, normalUrl }, size) {
+    const key = `${colorUrl}|${depthUrl}|${normalUrl}|${size}`
     let entry = this.textures.get(key)
     if (!entry) {
-      entry = { key, refs: 0, state: 'loading', color: null, depth: null, bound: null, normal: null, usedAt: 0 }
+      entry = { key, size, capped: false, refs: 0, state: 'loading', color: null, depth: null, bound: null, normal: null, usedAt: 0 }
       this.textures.set(key, entry)
-      Promise.all([loadImage(colorUrl), loadImage(depthUrl), loadImage(normalUrl)])
+      Promise.all([loadImage(colorUrl, size), loadImage(depthUrl, size), loadImage(normalUrl, size)])
         .then(([color, depth, normal]) => {
           if (this.textures.get(key) !== entry) return
+          entry.capped = Math.max(color.width, color.height) < size
           this.uploads.push({ entry, color, depth, normal })
           this.schedule()
         })
@@ -399,14 +445,15 @@ class DepthArtRenderer {
     let resized = 0
 
     for (const view of this.views) {
-      const entry = view.entry
-      if (!entry || entry.state !== 'ready') continue
       if (relayout || view.dirty || !view.rect) {
         view.dirty = false
         this.measure(view, clipRects)
       } else if (view.shiftX || view.shiftY) {
         this.reposition(view, clipRects)
       }
+      this.sizeTextures(view, dpr)
+      const entry = view.entry
+      if (!entry || entry.state !== 'ready') continue
       if (!view.shown) continue
       const rect = view.rect
       showing = true
