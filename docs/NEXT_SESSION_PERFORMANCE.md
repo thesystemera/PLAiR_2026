@@ -8,31 +8,26 @@ A steady **60 fps on the current settings (High), while the phone is held and mo
 scrolled**, with no loss of visual flair: no resolution cuts, no fps caps, no removing effects, the dynamic theme
 fade stays. Optimise the work, never the look.
 
-## 1. FIRST: the page goes black (WebGL context loss)
+## 1. SOLVED (5 Oct, late): the page went black (WebGL context loss)
 
-On 5 Oct, after about a minute of interleaved A/B runs on the phone (`tests/gpu_bench/perf/interleave.mjs`
-toggling `skipCopy` / light), **both WebGL contexts died together**: the background scene
-(`__plairScene.eval('return scene.renderer.getContext().isContextLost()')` -> true) and the cover renderer
-(`__plairArt.stats().textureMB` -> 0). The owner saw "everything black, no graphs, no background". Once it
-also left `window.__plairScene` undefined. A reload fixes it; on one reload the scene came up in its static
-fallback ("WebGL2 unavailable").
+Both blackouts (23:04:35 and 23:12:40) and a third on purpose (23:43:45) were **the `skipCopy` bench switch**,
+not the shipped renderer. With the copy skipped nothing reads the cover atlas, so Chrome never submitted its
+GPU work; seconds of full passes piled up and went to the GPU in one submission when the copy resumed. The
+Adreno driver took that as a hang and reset the GPU. Phone log at the moment: `GLES2DecoderPassthroughImpl:
+Context reset detected after MakeCurrent` -> `Restarting GPU process due to unrecoverable error. Context was
+lost.` -> `GPU process exited unexpectedly`. GPU process memory was flat (128 MB GL), so not memory.
 
-- It happened twice. The first time I had been recompiling shaders and recreating the cover context with
-  debug switches; the second time I had not. A 72 s soak with motion only and no switches
-  (`perf/soak.mjs`) did NOT lose context. So it may be the debug switches, or something new in today's build.
-- New today and suspect: the cover atlas is now a regular canvas with `preserveDrawingBuffer: true`
-  (`depthArtRenderer.createAtlas`, commit f1dffda); half-precision shading (`MEDIUMP_SHADING`); one march step
-  per device pixel on High (`QualityContext` high `parallaxStepPx: 1`); covers drawn ahead of the viewport
-  (720edba); four pack sizes at native size (more texture memory: ~100-110 MB in `__plairArt.stats()`).
-- Both contexts dying at once points at the GPU process (out of memory, or a GPU hang and reset), not one
-  context. Measure Chrome's GPU process memory while reproducing:
-  `adb shell dumpsys meminfo --package com.android.chrome` (the `privileged_process` entry: `GL mtrack`,
-  `EGL mtrack`; 371 MB was seen on 5 Oct morning). My quick watcher (`memwatch.sh` in the old scratchpad)
-  parsed the columns wrong; redo it. Also watch for its pid changing (a restart).
-- Reproduce, find the cause, fix it before anything else. Until then, every fps number taken after a run of
-  switches is suspect: **always confirm covers are drawing (`frames > 0` in the profile, `textureMB > 0`) and
-  the scene context is alive before trusting a high fps.** I reported a false "60 fps everywhere" once because
-  nothing was rendering.
+- Fix: `skipCopy` now calls `gl.flush()` every frame. Same switching test afterwards: 12 switches, no loss
+  (before: lost within 2 rounds, 3 runs out of 3). `tests/gpu_bench/perf/ctxloss.mjs` is the test (it logs
+  every WebGL context the page creates or loses; the app's own startup check loses one on purpose).
+- **Rule for bench switches:** any switch that skips the consumer of GPU work must flush, or the "saving" it
+  measures is just deferred work (that's why "no copy" read ~60 fps).
+- After a GPU reset Chrome blocks WebGL for the site: the lost contexts are never restored and new ones fail.
+  A reload lifts the block a moment later; context creation during the first ~2 s of that load can still fail,
+  and then the scene stays in its static fallback and the covers stay off for that page load (seen twice).
+  Not fixed; only matters after a reset.
+- Still true: **always confirm covers are drawing (`textureMB > 0`) and the scene context is alive before
+  trusting a high fps.**
 
 ## 2. What was done on 5 Oct (all pushed, live)
 
@@ -62,8 +57,9 @@ use; do not blame or report it, design the test around it).
 - Under motion every visible cover re-runs the full parallax pass every frame. Now Playing's cover is ~1M px
   (989x989). **One extra full pass costs ~14-17 ms** on this GPU (slope method). Breakdown of the full pass on
   Now Playing (forced full every frame, interleaved): lighting ~4.4 ms, march steps ~3.4 ms (since reduced by
-  one step per pixel), copying the drawn cover into its own canvas ~3.9 ms (measured before the atlas change;
-  re-measure, the clean re-measure was ruined by the context loss).
+  one step per pixel). Copying the drawn cover into its own canvas costs nothing measurable (interleaved with
+  the flushed `skipCopy`, 6 rounds: with copy 35-43 fps, without 34-43); the earlier ~3.9 ms and "no copy ->
+  60 fps" readings were unsubmitted GPU work (section 1).
 - Not worth it (measured): explicit `textureLod` sampling (no change, removed); split passes (cache + relight)
   instead of the single full shader (no gain); half the march steps (+2 fps only).
 - **After a skip** (first second): JS ~600 ms busy, of which React re-renders (Queue rows 577 of 1165: every
@@ -76,11 +72,9 @@ use; do not blame or report it, design the test around it).
 
 ## 4. Next steps, in order
 
-1. **Fix the context loss** (section 1).
-2. **Draw the Now Playing cover straight into its own canvas** (its own WebGL context, no per-frame copy).
-   Needs persistent A/B slots in `TrackArtCrossfade` (two canvases that live for the panel's lifetime, the
-   track swapping between them) or every track change compiles shaders and makes a context. Keep it inside the
-   one renderer (a second "surface" type), not a second renderer.
+1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
+   the copy costs nothing measurable, section 3).
+2. **The full parallax pass itself** is the cost under motion (covers flat -> 60 everywhere).
 3. **Lighting cost** (~4.4 ms on the big cover): per-pixel loop over 4 lights; look for maths that can move
    per vertex or per draw without changing the image, and verify with a pixel diff (method below).
 4. **Skip jank**: land the theme colours in a different frame from the track/queue commit (one full restyle
@@ -117,8 +111,8 @@ hard-code the old scratchpad's adb path or `client/dist`; fix the path when you 
 - **Skips**: the Next button fires on `pointerdown` (`.click()` does nothing). `adb input` is blocked on this
   Xiaomi; use `Input.synthesizeScrollGesture` for touch flings (3000-5000 px/s).
 - Renderer switches (`__plairArt.set`): `lit`, `redrawShiftPx`, `skipCopy`, `skipDraw`, `forceSplit`,
-  `stepScale`, `stepPx`, `shader: { mediumpShading }` (recompiles: debug only, possibly involved in the
-  context loss), `bench`. Diagnostics: `__plairArt.stats()`, `.views()`, `.blank()` (why each on-screen cover
+  `stepScale`, `stepPx`, `shader: { mediumpShading }` (recompiles: debug only), `bench`. `skipDraw` leaves
+  nothing to submit; any new switch that skips the copy must flush (section 1). Diagnostics: `__plairArt.stats()`, `.views()`, `.blank()` (why each on-screen cover
   is blank, clip-aware), `.drawDelays()`; renderer profile: `window.__plairProfile = {}` then read `.tiles`.
   Scene: `__plairScene.set({ skip })`, `__plairScene.eval(code)`. Light: `__plairLight.debug({ off, level })`.
 

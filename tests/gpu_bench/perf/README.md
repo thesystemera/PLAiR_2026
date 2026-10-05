@@ -10,6 +10,7 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.
 - `slope.mjs <panel> '<variants json>' [reload]` - slope method (extra passes) for GPU cost per stage.
+- `ctxloss.mjs '<variants json>' <rounds> [panel]` - reload, then interleaved switches under simulated tilt, logging every WebGL context created or lost; stops at the first real loss. Run `adb logcat` alongside: Chrome logs the GPU reset reason there.
 - `soak.mjs <rounds>` - fresh reload, then motion on Now Playing, watching for WebGL context loss.
 - `catwhy2.mjs <px/s>` - catalog fling, classifies every blank tile per frame (no data / no pack / decoding / ready not drawn).
 - `fadeab.mjs` - skips with the theme transitions on vs off.

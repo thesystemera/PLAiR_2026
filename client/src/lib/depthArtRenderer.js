@@ -678,6 +678,7 @@ class DepthArtRenderer {
         view.onDrawn?.()
       }
     }
+    if (this.skipCopy) gl.flush()
     if (profile) {
       const pixels = group.reduce((total, item) => total + item.width * item.height, 0)
       profile.tiles = profile.tiles || { frames: 0, drawMs: 0, copyMs: 0, pixels: 0, full: 0, build: 0, relight: 0 }
