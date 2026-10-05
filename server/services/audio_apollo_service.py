@@ -10,7 +10,7 @@ from services import log_service
 from services.base_service import SingletonService
 from config import settings
 from models_global import gpu_lease, raise_if_cuda_oom
-from services.audio_headroom import write_float_wav
+from services.audio_headroom import keep_source_below_cutoff, write_float_wav
 
 sys.path.insert(0, str(settings.APOLLO_DIR))
 from look2hear.models import BaseModel
@@ -21,6 +21,7 @@ class AudioApolloService(SingletonService):
     CHUNK_SECONDS = 20
     OVERLAP_SECONDS = 2
     BATCH = 1
+    KEEP_SOURCE_BELOW_CUTOFF = True
 
     def checkpoint(self) -> Optional[Path]:
         checkpoints = list(settings.APOLLO_CHECKPOINTS_DIR.glob("*.bin")) + list(
@@ -140,6 +141,9 @@ class AudioApolloService(SingletonService):
             else:
                 enhanced = enhanced_padded[:, :original_length]
 
+            if self.KEEP_SOURCE_BELOW_CUTOFF:
+                enhanced, metadata["source_cutoff_hz"] = keep_source_below_cutoff(audio, enhanced, 44100)
+
             output_path.parent.mkdir(parents=True, exist_ok=True)
             write_float_wav(output_path, enhanced, 44100)
 
@@ -188,6 +192,7 @@ class AudioApolloService(SingletonService):
                 f"  Duration: {metadata['duration']:.1f}s | "
                 f"Channels: {metadata['channels']} | "
                 f"Chunks: {metadata['num_chunks']}"
+                + (f" | source kept below {metadata['source_cutoff_hz']:.0f}Hz" if metadata.get("source_cutoff_hz", 22050) < 21600 else "")
             )
             log_service.upscaling(f"{self.LABEL} complete: {output_path.name}")
 

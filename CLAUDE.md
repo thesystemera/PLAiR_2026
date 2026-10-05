@@ -550,11 +550,12 @@ Design doc: `docs/CITY_PULSE.md`. All open work, bugs and owner decisions are in
 - **On air:** `community_on_air.pick` is the one way to choose shoutouts for the DJ (`play_shoutouts`), Community Corner and Pulse: shoutouts only, minus the listener's bans, items buried by bans (≥3 bans and more bans than likes) and anything aired to this listener in the last 30 min; each carries its `top_reply` (ranked by likes/plays) and the DJ is told to play it right after. Plays inside the DJ mix are logged (`record_on_air_play`, deduped 6 h). Pulse has a `review` kind (`ReviewsNode`); community `detail()` includes the top reply.
 - **Tests:** `tests/community_test.py --base URL [--recording file.webm] [--keep]` (typed review, spoken review + sting, typed reply, ranking, no coordinates; cleans up after itself).
 
-### 18. Music Mastering Chain (master chain version 3, 3 Oct 2026)
+### 18. Music Mastering Chain (master chain version 4, 5 Oct 2026)
 
 Details, measurements and everything tried and rejected: `docs/HANDOVER_2026-10-02_MUSIC_UPSCALING.md`.
 
-- **Suno chain (orchestrator lanes):** decode -> RoFormer split -> Lew's vocal Apollo on the vocal -> remix -> Apollo on the mix -> corrective EQ (25 Hz rumble cut, notches only for stationary resonances, tone vs the commercial-master average with tolerances) -> SonicMaster (33% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", blend compensation on) -> final leveler.
+- **Suno chain (orchestrator lanes 1, 1b, 2, 3, 4, 6):** decode -> **Apollo** on the decoded MP3 (what it was trained on), keeping Suno's own signal below its MP3 cutoff (`audio_headroom.keep_source_below_cutoff`: Apollo only fills above it; on the full mix it had pulled 16.5-17.5 kHz down 4-5 dB) -> RoFormer split of the restored mix -> Lew's vocal Apollo on the vocal (no crossover) -> remix -> notches (`correct_audio`: 25 Hz rumble cut, stationary resonances only, 20 kHz safety roll-off) -> SonicMaster (33% wet, 20 steps, fp32, prompt "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics", blend compensation on) -> **reference EQ + final leveler** (lane 6). Intermediates: `DECODED_WAV_DIR` -> `WAV_DIR` (Apollo) -> stems (with `vocal_mix.wav`) -> `PREMASTER_WAV_DIR` (SonicMaster's input) -> `SONIC_WAV_DIR` -> master.
+- **Reference EQ (owner's rule, 5 Oct):** the target is the modern-master average (Pestana et al. 2013, US/UK No.1 singles 2000-2010, per-Hz density; `MODERN_MASTER_HZ/DB` in `audio_master_service.py`), aligned at 500-2000 Hz. Only what falls outside ±3 dB (`REFERENCE_TOLERANCE_DB`) is moved, by the excess (up to 6 dB, 40 Hz-16 kHz, linear phase), so each mix keeps its own fingerprint; never a flat match. The old Elowsson 2017 curve was retired: its folk-heavy CD-era corpus is 6-7 dB darker at 8-12 kHz than modern masters, and matching it made masters sound muddy. Never use the owner's own mixes as a reference. Uploads get the same EQ at their mastering blend.
 - **Station level -16 LUFS** (Apple Music standard, `MASTER_TARGET_LUFS`): masters, uploads and shoutouts; stings -18, station voice -20, beds -22; DJ hosts get `DJ_VOICE_LEVEL_DB` (-2 dB). Never master louder: at -14 the true-peak ceiling capped the peak-to-loudness ratio at 12.5 dB and the owner heard it as squashed.
 - **Versioning:** every master stamps `master_chain_version` (`settings.MASTER_CHAIN_VERSION`) and `master_rendered_at` into its metadata. Bump the version whenever the sound changes; `server/utils/process_backlog.py --rerender` then re-renders only older masters.
 - **Background renders:** `process_backlog.py` runs the orchestrator in its own process on the RTX 6000 (`--gpu 1`, own log `data/logs/backlog.log`, asset doctor off, intermediates deleted after each song), never inside the live backend. The live backend's catalog watcher (`CATALOG_WATCH_INTERVAL_S`) reloads when masters appear from any process; "Recent" sorts by `catalog_added_at`, then `created_at`.
@@ -833,7 +834,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/utils/catalog_audit.py` - Audits catalog metadata for missing titles, artists, credits and malformed fields.
 - `server/utils/find_dead_functions.py` - Finds Python functions that are never called, aware of routes and node registrations.
 - `server/utils/generate_radio_drops.py` - Makes radio drop candidates: DeepSeek prompts, Stable Audio renders, pick page, install and relevel.
-- `server/utils/process_backlog.py` - Renders Suno tracks without masters (or stale chain versions) on a chosen GPU, own process.
+- `server/utils/process_backlog.py` - Renders Suno tracks without masters (or stale chain versions, `--rerender`; one song with `--track ID`) on a chosen GPU, own process.
 - `server/utils/relevel_catalog.py` - Turns masters louder than the station level down by gain and re-encodes Opus/WebM.
 - `server/utils/reprocess_catalog_audio.py` - Resumable re-process of catalog audio through the mastering chain, with A/B, verify, swap and restore.
 - `server/utils/upscale_voice_cache.py` - Upscales cached voice takes (sentences, paralanguage, breaths) to 48 kHz in place, keeping tags.
@@ -892,15 +893,15 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services/asset_integrity_service_checks.py` - Asset doctor's check definitions, finding and subject types, and file/duration probes they use.
 - `server/services/asset_integrity_service_detect.py` - Asset doctor detection: probes each track's and shoutout's files, metadata, DB flags and vector index entry.
 - `server/services/asset_integrity_service_repair.py` - Asset doctor repairs: per-check fixes, repair gating (GPU, busy, back-off) and quarantine.
-- `server/services/audio_apollo_service.py` - Apollo bandwidth restoration on a full mix, chunked on GPU; base for the vocal Apollo.
+- `server/services/audio_apollo_service.py` - Apollo bandwidth restoration on a full mix, chunked on GPU, keeping the source below its own cutoff; base for the vocal Apollo.
 - `server/services/audio_clearvoice_service.py` - Re-exports ClearVoice, patched to use the current CUDA device instead of picking a free GPU.
 - `server/services/audio_demucs_service.py` - Demucs stem separation (vocals, drums, bass, other) for the processing pipeline.
 - `server/services/audio_features_service.py` - Analyses a track: tempo, beats, key, loudness, sections, energy-style features, crossfade points, announcer safe zones.
 - `server/services/audio_fingerprint.py` - Chromaprint fingerprints of uploads via ffmpeg, encoding and similarity scoring for duplicate detection.
 - `server/services/audio_flashsr_service.py` - Optional FlashSR bandwidth stage: super-resolves audio above its detected cutoff and merges bands back.
-- `server/services/audio_headroom.py` - Shared DSP helpers: true-peak measurement and limiting, dithered PCM16 writing, spectrally balanced stem remixing.
+- `server/services/audio_headroom.py` - Shared DSP helpers: true-peak measurement and limiting, dithered PCM16 writing, spectrally balanced stem remixing, source-cutoff detection and the restore crossover.
 - `server/services/audio_lyrical_timestamp_service.py` - Aligns lyrics to the vocal with Whisper word timings and writes per-line/word lyric timestamps.
-- `server/services/audio_master_service.py` - Corrective EQ (rumble cut, resonance notches, tone vs commercial average) and final loudness leveler.
+- `server/services/audio_master_service.py` - Corrective EQ (rumble cut, resonance notches), the ±3 dB reference EQ to the modern-master average, and the final loudness leveler.
 - `server/services/audio_quality_score_service.py` - Audiobox Aesthetics scorer: rates audio quality on four axes and compares renders, loaded on demand.
 - `server/services/audio_roformer_service.py` - Mel-Band RoFormer vocal/music separation on GPU, windowed, unloaded when idle.
 - `server/services/audio_sonic_master_service.py` - SonicMaster generative mastering applied as a partial wet mix with RMS matching.

@@ -1068,7 +1068,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             settings.WAV_DIR / f"{track_id}.wav",
             settings.UPSCALED_WAV_DIR / f"{track_id}.wav",
             settings.SONIC_WAV_DIR / f"{track_id}.wav",
-            settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav",
+            settings.PREMASTER_WAV_DIR / f"{track_id}.wav",
             settings.DEMUCS_STEMS_DIR / track_id,
         ])
         return paths

@@ -201,6 +201,36 @@ def spectrally_balanced_blend(
     return filtered[:, delay:delay + length], info
 
 
+SOURCE_CUTOFF_DROP_DB = 15.0
+SOURCE_CUTOFF_MARGIN_HZ = 300.0
+SOURCE_CROSSOVER_TAPS = 8191
+
+
+def source_cutoff_hz(data: np.ndarray, rate: int) -> float:
+    freqs, power = _average_psd(as_channels_first(data), rate, 8192)
+    power_db = 10.0 * np.log10(power + 1e-30)
+    reference = np.median(power_db[(freqs >= 12000.0) & (freqs <= 16000.0)])
+    below = np.where((freqs > 14000.0) & (power_db < reference - SOURCE_CUTOFF_DROP_DB))[0]
+    return float(freqs[below[0]]) if below.size else rate / 2.0
+
+
+def keep_source_below_cutoff(source: np.ndarray, restored: np.ndarray, rate: int) -> Tuple[np.ndarray, float]:
+    source = as_channels_first(source)
+    restored = as_channels_first(restored)
+    length = min(source.shape[1], restored.shape[1])
+    source, restored = source[:, :length], restored[:, :length]
+    cutoff = source_cutoff_hz(source, rate)
+    if cutoff >= rate / 2.0 * 0.98:
+        return restored, cutoff
+    lowpass = signal.firwin(SOURCE_CROSSOVER_TAPS, cutoff - SOURCE_CUTOFF_MARGIN_HZ, window=("kaiser", 10.0), fs=rate)
+    delay = (SOURCE_CROSSOVER_TAPS - 1) // 2
+
+    def low(x: np.ndarray) -> np.ndarray:
+        return signal.oaconvolve(x, lowpass[np.newaxis, :], mode="full", axes=-1)[:, delay:delay + length]
+
+    return low(source) + restored - low(restored), cutoff
+
+
 def mix_stems_to_file(vocals_path: Path, instrumentals_path: Path, output_path: Path) -> Dict[str, Any]:
     vocals, vocals_rate = sf.read(str(vocals_path), dtype='float32', always_2d=True)
     instrumentals, rate = sf.read(str(instrumentals_path), dtype='float32', always_2d=True)

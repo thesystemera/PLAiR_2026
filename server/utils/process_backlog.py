@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0, help="Process at most N tracks")
     parser.add_argument("--in-flight", type=int, default=4, help="Tracks inside the lanes at once")
     parser.add_argument("--dry-run", action="store_true", help="List what would run")
+    parser.add_argument("--track", action="append", default=[], help="Render only these track ids (repeatable)")
     parser.add_argument("--rerender", action="store_true",
                         help="After the missing tracks, re-render masters made by an older chain version")
     return parser.parse_args()
@@ -64,15 +65,16 @@ def backlog():
 
 
 def clear_previous_render(track_id: str):
-    for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.VOCAL_ENHANCED_WAV_DIR, settings.SONIC_WAV_DIR):
+    for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.PREMASTER_WAV_DIR, settings.SONIC_WAV_DIR):
         (folder / f"{track_id}.wav").unlink(missing_ok=True)
+    shutil.rmtree(settings.DEMUCS_STEMS_DIR / track_id, ignore_errors=True)
     for bitrate in stages.OPUS_BITRATES:
         stages.opus_path(track_id, bitrate).unlink(missing_ok=True)
         stages.webm_path(track_id, bitrate).unlink(missing_ok=True)
 
 
 def remove_intermediates(track_id: str):
-    for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.VOCAL_ENHANCED_WAV_DIR, settings.SONIC_WAV_DIR):
+    for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.PREMASTER_WAV_DIR, settings.SONIC_WAV_DIR):
         (folder / f"{track_id}.wav").unlink(missing_ok=True)
     shutil.rmtree(settings.DEMUCS_STEMS_DIR / track_id, ignore_errors=True)
 
@@ -92,6 +94,8 @@ faulthandler.enable(file=CRASH_LOG, all_threads=True)
 
 async def main():
     ids, rank, missing = backlog()
+    if ARGS.track:
+        ids = list(ARGS.track)
     if ARGS.limit:
         ids = ids[:ARGS.limit]
     print(f"Backlog: {len(ids)} tracks (super-liked {sum(rank.get(t) == 0 for t in ids)}, "

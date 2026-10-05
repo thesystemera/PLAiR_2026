@@ -168,12 +168,12 @@ def plan_track(track_id: str, plan_stage_override: Optional[str] = None) -> Dict
         "stems_dir": stems_dir,
         "vocal_stem": stages.demucs_vocal_stem(track_id),
         "no_vocals": stems_dir / "no_vocals.wav",
-        "vocal_mix": settings.VOCAL_ENHANCED_WAV_DIR / f"{track_id}.wav",
+        "premaster": settings.PREMASTER_WAV_DIR / f"{track_id}.wav",
         "sonic": settings.SONIC_WAV_DIR / f"{track_id}.wav",
         "master": stages.master_wav_path(track_id),
         "original": stages.uploaded_original_path(track_id, metadata) if is_upload else None,
     }
-    infos = {key: wav_info(paths[key]) for key in ("apollo", "vocal_stem", "no_vocals", "vocal_mix", "sonic", "master")}
+    infos = {key: wav_info(paths[key]) for key in ("apollo", "vocal_stem", "no_vocals", "premaster", "sonic", "master")}
     reference = infos["apollo"]["duration"] if infos["apollo"] else None
     if reference is None and (metadata.get("track_info") or {}).get("duration"):
         reference = float(metadata["track_info"]["duration"]) / 1000.0
@@ -196,11 +196,11 @@ def plan_track(track_id: str, plan_stage_override: Optional[str] = None) -> Dict
         plan["blocked"] = "metadata missing"
         return plan
 
-    mix_ok = matches(infos["vocal_mix"], reference) and (infos["vocal_mix"] or {}).get("rate") == 44100
+    premaster_ok = matches(infos["premaster"], reference) and (infos["premaster"] or {}).get("rate") == 44100
     sonic_ok = matches(infos["sonic"], reference)
-    if infos["vocal_mix"] and not mix_ok:
+    if infos["premaster"] and not premaster_ok:
         plan["problems"].append(
-            f"vocal mix is {infos['vocal_mix']['duration']:.2f}s @ {infos['vocal_mix']['rate']}Hz (expected {reference}s @ 44100Hz)")
+            f"premaster is {infos['premaster']['duration']:.2f}s @ {infos['premaster']['rate']}Hz (expected {reference}s @ 44100Hz)")
     if infos["sonic"] and not sonic_ok:
         plan["problems"].append(f"SonicMaster WAV is {infos['sonic']['duration']:.2f}s (expected {reference}s)")
     if infos["master"] and not matches(infos["master"], reference):
@@ -236,8 +236,8 @@ def plan_track(track_id: str, plan_stage_override: Optional[str] = None) -> Dict
             plan["steps"] += ["demucs", "vocals", "mix"]
         plan["steps"] += ["apollo"] + (["sonic"] if settings.SONIC_MASTER_ENABLED else []) + ["master", "transcode"]
     elif stage == "sonic":
-        if not (infos["apollo"] and matches(infos["apollo"], reference)):
-            plan["blocked"] = "no intact SonicMaster input (Apollo WAV of the vocal mix)"
+        if not premaster_ok:
+            plan["blocked"] = "no intact SonicMaster input (premaster WAV)"
             return plan
         plan["steps"] += ["sonic", "master", "transcode"]
     else:
@@ -275,7 +275,7 @@ def live_outputs(plan: Dict[str, Any]) -> Dict[str, Path]:
     else:
         outputs["apollo"] = plan["paths"]["apollo"]
         outputs["stems_dir"] = plan["paths"]["stems_dir"]
-        outputs["vocal_mix"] = plan["paths"]["vocal_mix"]
+        outputs["premaster"] = plan["paths"]["premaster"]
         outputs["sonic"] = plan["paths"]["sonic"]
     return outputs
 
@@ -372,6 +372,14 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
         elif not await transcoding.extract_audio_to_wav(paths["source_mp3"], source, sample_rate="44100", codec="pcm_f32le"):
             raise RuntimeError("could not decode the Suno MP3")
 
+    if "apollo" in steps:
+        staged["apollo"] = staging / "apollo.wav"
+        if bandwidth == "off":
+            shutil.copyfile(source, staged["apollo"])
+        elif not await engines.stage("bandwidth", bandwidth).process_audio(source, staged["apollo"]):
+            raise RuntimeError(f"bandwidth stage '{bandwidth}' failed")
+        source = staged["apollo"]
+
     if "demucs" in steps:
         staged["stems_dir"] = staging / "stems"
         stems = await engines.stage("separation", separation).separate_stems(source, staged["stems_dir"])
@@ -380,23 +388,18 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
         restored = await engines.vocal_enhancer.enhance_vocals(stems["vocals"], staged["stems_dir"] / "vocals_enhanced.wav")
         if not restored:
             raise RuntimeError("vocal restoration failed")
-        staged["vocal_mix"] = staging / "vocal_mix.wav"
-        mix_stems_to_file(restored, stems["no_vocals"], staged["vocal_mix"])
-        source = staged["vocal_mix"]
+        source = staged["stems_dir"] / "vocal_mix.wav"
+        mix_stems_to_file(restored, stems["no_vocals"], source)
 
     if "apollo" in steps:
-        staged["apollo"] = staging / "apollo.wav"
-        if bandwidth == "off":
-            shutil.copyfile(source, staged["apollo"])
-        elif not await engines.stage("bandwidth", bandwidth).process_audio(source, staged["apollo"]):
-            raise RuntimeError(f"bandwidth stage '{bandwidth}' failed")
-        if not await engines.master.correct_audio(staged["apollo"], staged["apollo"], plan["wet_mix"]):
+        staged["premaster"] = staging / "premaster.wav"
+        if not await engines.master.correct_audio(source, staged["premaster"], plan["wet_mix"]):
             raise RuntimeError("corrective EQ failed")
-        source = staged["apollo"]
+        source = staged["premaster"]
 
     if "sonic" in steps:
         if source is None:
-            source = paths["apollo"]
+            source = paths["premaster"]
         staged["sonic"] = staging / "sonic.wav"
         restore_settings = apply_sonic_variant(engines, variant.get("sonic"))
         try:
@@ -409,7 +412,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
         source = staged["sonic"]
 
     if source is None:
-        source = paths["sonic"] if settings.SONIC_MASTER_ENABLED else paths["apollo"]
+        source = paths["sonic"] if settings.SONIC_MASTER_ENABLED else paths["premaster"]
 
     if plan["is_upload"]:
         loudness = engines.master._analyze_loudness_sync(source)
@@ -419,7 +422,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
     staged["master"] = staging / "master.wav"
     result, info = await asyncio.to_thread(
         engines.master._master_audio_sync, source, staged["master"], MASTER_TARGET_LUFS, plan["wet_mix"],
-        plan["is_upload"]
+        plan["is_upload"], not plan["is_upload"]
     )
     if not result:
         raise RuntimeError(f"mastering failed: {info.get('error')}")

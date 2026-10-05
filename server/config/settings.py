@@ -46,7 +46,7 @@ class Settings:
     OPUS_256K_DIR: Path = CATALOG_DIR / "opus_256k"
 
     DEMUCS_STEMS_DIR: Path = CATALOG_DIR / "demucs_stems"
-    VOCAL_ENHANCED_WAV_DIR: Path = CATALOG_DIR / "vocal_enhanced_wav"
+    PREMASTER_WAV_DIR: Path = CATALOG_DIR / "premaster_wav"
     ANALYTICS_DIR: Path = CATALOG_DIR / "analytics"
     MUSIC_BEDS_DIR: Path = Path(os.getenv("MUSIC_BEDS_DIR", str(CATALOG_DIR / "music_beds")))
     FAILED_PROMPTS_DIR: Path = BASE_DIR / "data" / "failed_prompts"
@@ -601,7 +601,7 @@ class Settings:
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
-    MASTER_CHAIN_VERSION: int = 3
+    MASTER_CHAIN_VERSION: int = 4
     SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "true").lower() == "true"
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "fp32").lower()
     SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
@@ -810,7 +810,7 @@ class Settings:
         cls.OPUS_192K_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_256K_DIR.mkdir(parents=True, exist_ok=True)
         cls.DEMUCS_STEMS_DIR.mkdir(parents=True, exist_ok=True)
-        cls.VOCAL_ENHANCED_WAV_DIR.mkdir(parents=True, exist_ok=True)
+        cls.PREMASTER_WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)
         (cls.ANALYTICS_DIR / "tracks").mkdir(parents=True, exist_ok=True)
         (cls.ANALYTICS_DIR / "daily_events").mkdir(parents=True, exist_ok=True)
