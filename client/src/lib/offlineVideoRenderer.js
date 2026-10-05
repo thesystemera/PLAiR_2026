@@ -318,6 +318,8 @@ export async function renderVideo({
     lastBeatIndex: 0,
     tempoTime: 0,
     energyHistory: [],
+    energyStamps: [],
+    energyScratch: [],
   }
   const rand = seededRandom(42)
 

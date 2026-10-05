@@ -122,8 +122,13 @@ export function calculateFrameEffects({
   const rawEnergy = Math.max(0, Math.min(1, (currentSegment.loudness - minL) / (peakL - minL)))
   effects.currentEnergy = rawEnergy
 
-  if (!trackingState.energyScratch) trackingState.energyScratch = []
-  const energyThreshold = pushEnergySample(trackingState.energyHistory, trackingState.energyScratch, rawEnergy)
+  const energyThreshold = pushEnergySample(
+    trackingState.energyHistory,
+    trackingState.energyStamps,
+    trackingState.energyScratch,
+    rawEnergy,
+    currentTime * 1000,
+  )
   const intensity = Math.max(0, (rawEnergy - energyThreshold) / (1.0 - energyThreshold))
 
   let onBeat = false
