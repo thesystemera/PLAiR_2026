@@ -36,7 +36,6 @@ export const POM = {
 
   // --- POM Ray March Quality ---
   LINEAR_STEPS:     24,     // Ray march steps through depth field (16-48). More = sharper edges, more GPU.
-  REFINE_STEPS:     5,      // Binary refinement iterations after hit (3-8). More = sub-pixel precision.
 
   // --- Auto Zoom ---
   ZOOM_FACTOR:      0.8,    // Zoom multiplier (× intensity) to hide edge reveal. 0.5 = subtle, 1.2 = aggressive crop.
@@ -206,7 +205,6 @@ const PARALLAX = `
     float dispLen = length(displacement);
 
     const int LINEAR_STEPS = ${POM.LINEAR_STEPS};
-    const int REFINE_STEPS = ${POM.REFINE_STEPS};
     float layerStep = 1.0 / u_steps;
 
     float testDepth = 1.0;
@@ -215,9 +213,15 @@ const PARALLAX = `
     float sampledDepth;
     bool hit = false;
     float bound = marchBound(uv, displacement);
+    float prevSampled = min(bound, 1.0);
+    float skipped = max(0.0, ceil((1.0 - bound) * u_steps));
+    if (skipped > 0.0) {
+      prevTestDepth = 1.0 - (skipped - 1.0) * layerStep;
+      testDepth = 1.0 - skipped * layerStep;
+    }
 
     for (int i = 0; i < LINEAR_STEPS; i++) {
-      if (float(i) >= u_steps) break;
+      if (float(i) + skipped >= u_steps) break;
       testUV = uv - (testDepth - 0.5) * displacement;
       if (testDepth > bound) {
         prevTestDepth = testDepth;
@@ -231,29 +235,26 @@ const PARALLAX = `
         break;
       }
 
+      prevSampled = sampledDepth;
       prevTestDepth = testDepth;
       testDepth -= layerStep;
     }
 
     if (hit) {
-      float lo = testDepth;
-      float hi = prevTestDepth;
-      vec2 bestUV = testUV;
-
-      for (int j = 0; j < REFINE_STEPS; j++) {
-        float mid = (lo + hi) * 0.5;
-        vec2 midUV = uv - (mid - 0.5) * displacement;
-        float midSample = DEPTH_AT(clamp(midUV, 0.0, 1.0));
-
-        if (midSample >= mid) {
-          lo = mid;
-          bestUV = midUV;
-        } else {
-          hi = mid;
-        }
+      float aboveDepth = prevTestDepth;
+      float belowDepth = testDepth;
+      float aboveGap = prevTestDepth - prevSampled;
+      float belowGap = testDepth - sampledDepth;
+      float midDepth = mix(aboveDepth, belowDepth, aboveGap / max(aboveGap - belowGap, 1e-5));
+      float midSample = DEPTH_AT(clamp(uv - (midDepth - 0.5) * displacement, 0.0, 1.0));
+      if (midSample >= midDepth) {
+        belowDepth = midDepth;
+        belowGap = midDepth - midSample;
+      } else {
+        aboveDepth = midDepth;
+        aboveGap = midDepth - midSample;
       }
-
-      testUV = bestUV;
+      testUV = uv - (mix(aboveDepth, belowDepth, aboveGap / max(aboveGap - belowGap, 1e-5)) - 0.5) * displacement;
     } else {
       testUV = uv + 0.5 * displacement;
     }

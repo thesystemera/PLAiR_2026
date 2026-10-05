@@ -429,7 +429,7 @@ class DepthArtRenderer {
     const input = this.lastInput
     const moved = !input || Math.abs(input.x - base.parallaxX) > 1e-4 || Math.abs(input.y - base.parallaxY) > 1e-4
     const lit = !input || input.light !== probe.key
-    if (!relayout && !scrolled && !moved && !uploaded && !lit && !this.aheadPending) return
+    if (!relayout && !scrolled && !moved && !uploaded && !lit && !this.aheadPending && !this.bench.forceFull) return
     this.lastInput = { x: base.parallaxX, y: base.parallaxY, light: probe.key }
     this.scrolled = false
     if (relayout) {

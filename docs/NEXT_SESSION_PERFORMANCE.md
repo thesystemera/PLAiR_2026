@@ -70,6 +70,22 @@ use; do not blame or report it, design the test around it).
   one; the theme sets 69 of them once per track. The theme colour fade itself (CSS transitions) costs only
   3-10 fps in that first second: keep it.
 
+## 3b. Cost of one cover pass, measured 6 Oct (Now Playing, 989x989, lights held on)
+
+`tests/gpu_bench/perf/stages.mjs`, 3 interleaved rounds agreeing within 0.2 ms. Start of 6 Oct: 13.5 ms per pass:
+lighting 4.3, refinement (5 bisection reads) 2.5, march 2.3, depth-bound lookup and setup ~2.8, edge fill 1.1,
+fixed cost (one read + write) 0.6. Catalog tiles run the same shader; 4-6 tiles on screen are about as many pixels
+as one Now Playing cover.
+
+Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every pixel compared):
+- The march starts at the depth bound instead of stepping through the empty steps above it: same image (max 2-5
+  levels on a handful of pixels), -1.1 ms.
+- Secant refinement with one extra read replaces 5 bisection reads: against a 96-step reference, pixels off by >8
+  went 0.36% -> 0.53% (Now Playing) and 0.67% -> 0.78% (Catalog), -2 ms. Plain secant (no read) was -2.5 ms but
+  doubled the error.
+- Rejected: fewer march steps (x0.5: -0.4 ms, 1-5% of pixels off by >8); mediump light uniforms (2x slower).
+- Now ~10.5 ms per pass. Left: lighting 4.3, bound/setup ~2.8, march ~2, fill ~1.1.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

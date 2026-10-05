@@ -24,7 +24,7 @@ const state = {
   version: 0, lastBlendAt: 0, kickLevel: 0, kickAt: 0, pulse: 0, level: 0, target: 0, hasProbe: false, glow: null,
   consumerAt: -Infinity, probeAt: -Infinity, motionAt: -Infinity, wasActive: false, snap: false,
 }
-const debug = { off: false, kick: null, level: null }
+const debug = { off: false, kick: null, level: null, pulse: null, freeze: false }
 
 export function publishLightProbe(rgbaBottomUp) {
   for (let row = 0; row < PROBE_GRID; row++) {
@@ -182,7 +182,7 @@ export function readLightProbe(now) {
   const kick = debug.kick ?? currentKick(now)
   const level = debug.level ?? state.level
   const active = state.hasProbe && !debug.off && level > 0.001
-  if (active && state.lastBlendAt !== now) {
+  if (active && !debug.freeze && state.lastBlendAt !== now) {
     const dt = state.lastBlendAt ? Math.min(0.1, Math.max(0, now - state.lastBlendAt) / 1000) : 0
     const snap = state.snap || !state.wasActive
     state.snap = false
@@ -192,7 +192,8 @@ export function readLightProbe(now) {
     if (moved > 1 / 1024) state.version++
   }
   state.wasActive = active
-  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse: state.pulse, level, version: state.version, active, key: active ? `${state.version}|${kick}|${state.pulse}` : 'off' }
+  const pulse = debug.pulse ?? state.pulse
+  return { lights, lightColors, kick: kick < 0.002 ? 0 : kick, pulse, level, version: state.version, active, key: active ? `${state.version}|${kick}|${pulse}` : 'off' }
 }
 
 if (typeof window !== 'undefined') {

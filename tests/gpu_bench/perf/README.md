@@ -11,6 +11,9 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.
 - `slope.mjs <panel> '<variants json>' [reload]` - slope method (extra passes) for GPU cost per stage.
 - `ctxloss.mjs '<variants json>' <rounds> [panel]` - reload, then interleaved switches under simulated tilt, logging every WebGL context created or lost; stops at the first real loss. Run `adb logcat` alongside: Chrome logs the GPU reset reason there.
+- `stages.mjs '<stage,stage>' <rounds> [extra passes]` - GPU ms per cover pass on Now Playing by the slope method (forced full pass + N extra passes, fixed tilt, fixed light level, settles after each shader swap), for shader variants from `edits.mjs` (live source edits, no build); interleaved rounds, medians.
+- `identity.mjs '<stage,stage>' <out dir> [panel]` - reads the largest on-screen cover's own canvas with tilt and lights frozen and compares every pixel to the first shot (mean, max, % of pixels off by >2 / >8), saving PNGs and x8 diff images. Put `reference` first to score variants against a 96-step march.
+- `edits.mjs` - the shader variants both use (`as is`, `lights off`, `no parallax`, `reference`, ...).
 - `soak.mjs <rounds>` - fresh reload, then motion on Now Playing, watching for WebGL context loss.
 - `catwhy2.mjs <px/s>` - catalog fling, classifies every blank tile per frame (no data / no pack / decoding / ready not drawn).
 - `fadeab.mjs` - skips with the theme transitions on vs off.
