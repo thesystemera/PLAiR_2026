@@ -87,6 +87,7 @@ export function useVirtualWindow({
           scheduleRetry()
           return
         }
+        if (total && totalRef.current && total !== totalRef.current) pagesRef.current.clear()
         totalRef.current = total || Math.max(totalRef.current, skip + list.length)
         failedRef.current.delete(page)
         pagesRef.current.set(page, list)
