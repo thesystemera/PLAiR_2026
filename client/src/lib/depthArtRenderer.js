@@ -11,7 +11,7 @@ const SCROLL_TILT = 0.9
 const MAX_PARALLAX = 1.6
 const MAX_IDLE_TEXTURES = 8
 const UPLOADS_PER_FRAME = 2
-const REDRAW_SHIFT_PX = 0.1
+const REDRAW_SHIFT_PX = 0.5
 const LAYOUT_REFRESH_MS = 250
 const CACHE_AFTER_STILL_DRAWS = 2
 const CANVAS_RESIZES_PER_FRAME = 3
@@ -69,6 +69,12 @@ class DepthArtRenderer {
     this.views = new Set()
     this.textures = new Map()
     this.maxIdle = MAX_IDLE_TEXTURES
+    this.redrawShiftPx = REDRAW_SHIFT_PX
+    this.skipCopy = false
+    this.forceSplit = false
+    this.bench = { forceFull: false, extraFull: 0, extraCopy: 0 }
+    this.stepScale = 1
+    this.skipDraw = false
     this.drawDelays = []
     this.uploads = []
     this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, gyroRef: null, mouseRef: null }
@@ -502,18 +508,18 @@ class DepthArtRenderer {
       }
       showing = true
       const { px, py, pixelsPerUnit } = parallaxFor(view, rect, width, height)
-      const epsilon = REDRAW_SHIFT_PX / (0.5 * pixelsPerUnit)
+      const epsilon = this.redrawShiftPx / (0.5 * pixelsPerUnit)
       const tiltStill = last && last.entry === entry && last.width === width && last.height === height &&
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
-      if (tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
+      if (!this.bench.forceFull && tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
       const cache = view.cache
-      const cached = probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
+      const cached = !this.bench.forceFull && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
         Math.abs(cache.px - px) < epsilon && Math.abs(cache.py - py) < epsilon
       view.stillDraws = tiltStill ? (view.stillDraws || 0) + 1 : 0
-      const build = !cached && probe.active && !!this.programs.cache && view.stillDraws >= CACHE_AFTER_STILL_DRAWS
+      const build = !this.bench.forceFull && !cached && probe.active && !!this.programs.cache && (this.forceSplit || view.stillDraws >= CACHE_AFTER_STILL_DRAWS)
       batch.push({
         view, entry, rect, width, height, px, py,
-        steps: parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx),
+        steps: Math.max(1, Math.round(parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) * this.stepScale)),
         mode: cached ? 'relight' : build ? 'build' : 'full',
       })
     }
@@ -530,7 +536,7 @@ class DepthArtRenderer {
     }
 
     this.showing = showing
-    if (!batch.length) return
+    if (!batch.length || this.skipDraw) return
     this.gpuTimer.begin()
     this.drawBatch(batch, probe)
     this.gpuTimer.end()
@@ -619,7 +625,7 @@ class DepthArtRenderer {
         gl.uniform1f(full.uniforms.steps, item.steps)
         bindDepthBound(gl, this.programs, full.uniforms, item.entry.bound)
         if (lit) setLightRect(gl, full.uniforms, item.rect)
-        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        for (let extra = 0; extra <= this.bench.extraFull; extra++) gl.drawArrays(gl.TRIANGLES, 0, 6)
       }
     }
 
@@ -657,6 +663,7 @@ class DepthArtRenderer {
     const copyStart = profile ? (gl.finish(), performance.now()) : 0
     const source = this.snapshot ? canvas.transferToImageBitmap() : canvas
     for (const item of group) {
+      if (this.skipCopy && item.view.drawn) continue
       const view = item.view
       if (view.canvas.width !== item.width || view.canvas.height !== item.height) {
         view.canvas.width = item.width
@@ -664,7 +671,7 @@ class DepthArtRenderer {
       }
       if (!view.ctx) view.ctx = view.canvas.getContext('2d', { alpha: false })
       if (!view.ctx) continue
-      view.ctx.drawImage(source, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
+      for (let extra = 0; extra <= this.bench.extraCopy; extra++) view.ctx.drawImage(source, item.x, item.y, item.width, item.height, 0, 0, item.width, item.height)
       view.last = {
         flat: item.mode === 'flat', entry: item.entry, width: item.width, height: item.height, px: item.px, py: item.py,
         light: probe.key, left: item.rect.left, top: item.rect.top,
@@ -748,8 +755,14 @@ if (typeof window !== 'undefined') {
       }
       return out
     },
-    set: ({ maxIdle, lit } = {}) => {
+    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench } = {}) => {
+      if (bench !== undefined) Object.assign(depthArtRenderer.bench, bench)
+      if (forceSplit !== undefined) depthArtRenderer.forceSplit = forceSplit
+      if (stepScale !== undefined) depthArtRenderer.stepScale = stepScale
+      if (skipCopy !== undefined) depthArtRenderer.skipCopy = skipCopy
+      if (skipDraw !== undefined) depthArtRenderer.skipDraw = skipDraw
       if (maxIdle !== undefined) depthArtRenderer.maxIdle = maxIdle
+      if (redrawShiftPx !== undefined) depthArtRenderer.redrawShiftPx = redrawShiftPx
       if (lit !== undefined) depthArtRenderer.configure({ lit })
       depthArtRenderer.evictIdle()
     },
