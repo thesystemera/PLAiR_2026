@@ -26,7 +26,9 @@ Paste this as the first message of a new session. Read `CLAUDE.md` first.
   `useArtworkThumb`, the `artwork_thumb` cache, the thumbnail prefetcher and the separate depth/normal thumb routes are
   deleted. `lib/artworkPrefetcher.js` now loads packs ahead of the virtual scroller and warms the nearest 32 on the GPU
   (`depthArtRenderer.warm`). Offline downloads save the pack (`packBlob`).
-- Debug: `__plairArt.stats()`, `__plairArt.views()` (state of each on-screen cover), `__plairArt.set({ maxIdle })`.
+- Covers scrolling in draw within one frame (measured 1-28 ms from on screen to drawn): on-screen covers upload before
+  warmed ones, and canvases are sized while still just off screen. Only the first open after a page load waits ~1 s.
+- Debug: `__plairArt.stats()`, `__plairArt.views()` (state of each on-screen cover), `__plairArt.drawDelays()`, `__plairArt.set({ maxIdle })`.
 
 ## Still to do, in this order
 
