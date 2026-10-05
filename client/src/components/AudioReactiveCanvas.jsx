@@ -130,7 +130,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
           for (const name in message.work) {
             if (name !== 'gpuTimers') addFrameWork(name, message.work[name].avg)
           }
-          addFrameWork('scene frames', 1)
         }
         break
       }

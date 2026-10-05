@@ -118,6 +118,26 @@ if (cmd === 'busy') {
   await p.send('Page.reload', { ignoreCache: false })
   await sleep(Number(arg) * 1000)
   console.log(out.filter(l => !/AudioContext|autoplay/i.test(l)).slice(0, 25).join(String.fromCharCode(10)))
+} else if (cmd === 'profile') {
+  await p.send('Profiler.enable')
+  await p.send('Profiler.setSamplingInterval', { interval: 200 })
+  await p.send('Profiler.start')
+  const end = Date.now() + Number(arg) * 1000
+  while (Date.now() < end) await p.send('Input.synthesizeScrollGesture', { x: Number(process.env.SX || 187), y: Number(process.env.SY || 400), yDistance: -Number(process.env.SD || 500), speed: 1000, gestureSourceType: 'touch', repeatCount: 0 })
+  const { result } = await p.send('Profiler.stop')
+  const prof = result.profile
+  const byId = new Map(prof.nodes.map(n => [n.id, n]))
+  const self = new Map()
+  const dt = prof.timeDeltas
+  for (let i = 0; i < prof.samples.length; i++) {
+    const n = byId.get(prof.samples[i])
+    const f = n.callFrame
+    const key = `${f.functionName || '(anon)'} ${(f.url || '').split('/').pop()}:${f.lineNumber}`
+    self.set(key, (self.get(key) || 0) + (dt[i] || 0))
+  }
+  const total = [...self.values()].reduce((a, b) => a + b, 0)
+  console.log('total sampled ms', (total / 1000).toFixed(0))
+  for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, Number(arg2 || 30))) console.log((v / 1000).toFixed(0).padStart(6), 'ms', k)
 } else if (cmd === 'eval') {
   console.log(await evaluate(arg))
 } else if (cmd === 'fps') {
@@ -136,7 +156,7 @@ if (cmd === 'busy') {
   const fps = evaluate(FPS_EXPR(Number(arg)))
   if (process.env.SCROLL) {
     const end = Date.now() + Number(arg) * 1000
-    while (Date.now() < end) await p.send('Input.synthesizeScrollGesture', { x: 187, y: 400, yDistance: -500, speed: 1000, gestureSourceType: 'touch', repeatCount: 0 })
+    while (Date.now() < end) await p.send('Input.synthesizeScrollGesture', { x: Number(process.env.SX || 187), y: Number(process.env.SY || 400), yDistance: -Number(process.env.SD || 500), speed: 1000, gestureSourceType: 'touch', repeatCount: 0 })
   } else {
     await sleep(Number(arg) * 1000 + 300)
   }

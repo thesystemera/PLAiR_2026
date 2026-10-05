@@ -9,6 +9,7 @@ self.onmessage = ({ data }) => {
       captureResolution: data.captureResolution,
       glassBlurFactor: data.glassBlurFactor,
       emit: message => self.postMessage(message),
+      relayWork: true,
     })
     return
   }

@@ -16,11 +16,17 @@ const CANVAS_RESIZES_PER_FRAME = 3
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
-function loadImage(url) {
+async function loadImage(url) {
+  if (typeof createImageBitmap === 'function') {
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`image ${response.status}`)
+    return createImageBitmap(await response.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'default' })
+  }
   const image = new Image()
   image.decoding = 'async'
   image.src = url
-  return image.decode().then(() => image)
+  await image.decode()
+  return image
 }
 
 function createAtlas() {
@@ -264,13 +270,17 @@ class DepthArtRenderer {
     const gl = this.gl
     for (let i = 0; i < UPLOADS_PER_FRAME && this.uploads.length; i++) {
       const { entry, color, depth, normal } = this.uploads.shift()
-      if (this.textures.get(entry.key) !== entry) continue
+      if (this.textures.get(entry.key) !== entry) {
+        for (const image of [color, depth, normal]) image.close?.()
+        continue
+      }
       gl.activeTexture(gl.TEXTURE0)
       entry.color = this.createTexture(color, gl.RGBA)
       entry.depth = this.createTexture(depth, gl.LUMINANCE)
       entry.bound = createDepthBound(gl, this.programs, entry.depth, depth.width, depth.height)
       entry.normal = this.createTexture(normal, gl.RGB)
       entry.state = 'ready'
+      for (const image of [color, depth, normal]) image.close?.()
     }
   }
 

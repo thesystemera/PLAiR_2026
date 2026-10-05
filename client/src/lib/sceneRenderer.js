@@ -291,8 +291,9 @@ function createDefaultState() {
 }
 
 export class SceneRenderer {
-  constructor({ canvas, captureResolution = 128, glassBlurFactor = 1, emit }) {
+  constructor({ canvas, captureResolution = 128, glassBlurFactor = 1, emit, relayWork = false }) {
     this.emit = emit
+    this.relayWork = relayWork
     this.captureResolution = captureResolution
     this.glassBlurFactor = glassBlurFactor
     this.state = createDefaultState()
@@ -1233,7 +1234,8 @@ export class SceneRenderer {
     let work = null
     if (state.statsActive) {
       addFrameWork('scene js', performance.now() - frameStart)
-      work = takeFrameWork(1)
+      addFrameWork('scene frames', 1)
+      if (this.relayWork) work = takeFrameWork(1)
     }
 
     this.emit({
