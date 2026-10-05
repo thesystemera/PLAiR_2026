@@ -38,7 +38,7 @@ export function DepthArtBridge() {
 }
 
 const DepthArt = memo(function DepthArt({
-  packUrl, identity, packMissing = false, intensity, held = false, alt, onLoad, onError, onHost, placeholder = null, className = 'absolute inset-0', artRef, artProps,
+  packUrl, identity, packMissing = false, intensity, scrollTilt = true, held = false, alt, onLoad, onError, onHost, placeholder = null, className = 'absolute inset-0', artRef, artProps,
 }) {
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
@@ -72,13 +72,14 @@ const DepthArt = memo(function DepthArt({
       canvas: canvasRef.current,
       packUrl: key,
       intensity,
+      scrollTilt,
       onDrawn: () => {
         setDrawnFor(identityRef.current)
         callbacksRef.current.onLoad?.({ currentTarget: canvasRef.current, target: canvasRef.current })
       },
       onFailed: () => callbacksRef.current.onError?.({ currentTarget: canvasRef.current, target: canvasRef.current }),
     })
-  }, [key, intensity])
+  }, [key, intensity, scrollTilt])
 
   useEffect(() => {
     if (key) depthArtRenderer.hold(canvasRef.current, held)
@@ -216,7 +217,7 @@ export const TrackArtCrossfade = memo(function TrackArtCrossfade({ trackId, hasA
         className={`absolute inset-0 transition-opacity duration-theme ${front && layers.leaving ? 'opacity-0' : 'opacity-100'}`}
         style={front ? FRONT : BACK}
       >
-        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArt} intensity={intensity} held={front && layers.leaving} alt={alt} onLoad={onDone} onError={onDone} />
+        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArt} intensity={intensity} scrollTilt={false} held={front && layers.leaving} alt={alt} onLoad={onDone} onError={onDone} />
       </div>
     )
   })

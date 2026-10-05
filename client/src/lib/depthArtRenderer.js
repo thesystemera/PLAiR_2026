@@ -7,7 +7,7 @@ import { blobForUrl, packSizeFor } from './mediaCache'
 import { decodePack } from './packImage'
 
 const INTENSITY = 0.1
-const SCROLL_TILT = 0.9
+const SCROLL_TILT = 1.3
 const MAX_PARALLAX = 1.6
 const MAX_IDLE_TEXTURES = 8
 const UPLOADS_PER_FRAME = 2
@@ -121,14 +121,14 @@ class DepthArtRenderer {
     return packSizeFor(cssPx * dpr * (1 + intensity * POM.ZOOM_FACTOR))
   }
 
-  attach({ host, canvas, packUrl, intensity = INTENSITY, onDrawn, onFailed }) {
+  attach({ host, canvas, packUrl, intensity = INTENSITY, scrollTilt = true, onDrawn, onFailed }) {
     if (!this.ensureContext()) {
       queueMicrotask(() => onFailed?.())
       return () => {}
     }
     const view = {
       host, canvas, ctx: null, packUrl, intensity, onDrawn, onFailed, failed: false,
-      clips: clippingAncestors(host.parentElement), visible: false, dirty: true, entry: null, last: null, drawn: false,
+      clips: clippingAncestors(host.parentElement), scroller: scrollTilt ? host.closest('[data-scroller]') : null, visible: false, dirty: true, entry: null, last: null, drawn: false,
       shiftX: 0, shiftY: 0, styleVisible: true,
     }
     this.views.add(view)
@@ -439,15 +439,27 @@ class DepthArtRenderer {
     this.applyScrolls()
     this.aheadMargin = clamp(this.scrollSpeed * AHEAD_FRAMES, viewport.height * AHEAD_MIN_VIEWPORTS, viewport.height * AHEAD_MAX_VIEWPORTS)
     const clipRects = new Map()
-    const viewportHalf = Math.max(1, viewport.height / 2)
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const flat = !this.settings.lit
     const batch = []
     const ahead = []
     let showing = false
     let resized = 0
+    const scrollTiltFor = (view, rect) => {
+      if (reduceMotion || !view.scroller) return 0
+      let box = clipRects.get(view.scroller)
+      if (!box) {
+        box = view.scroller.getBoundingClientRect()
+        clipRects.set(view.scroller, box)
+      }
+      if (view.scrollInset === undefined) view.scrollInset = parseFloat(getComputedStyle(view.scroller).paddingTop) || 0
+      const top = box.top + view.scrollInset
+      const room = (box.bottom - top - rect.height) / 2
+      if (room < 1) return 0
+      return clamp((rect.top + rect.height / 2 - (top + box.bottom) / 2) / room, -1, 1) * SCROLL_TILT
+    }
     const parallaxFor = (view, rect, width, height) => {
-      const tilt = reduceMotion ? 0 : clamp((rect.top + rect.height / 2 - viewportHalf) / viewportHalf, -1, 1) * SCROLL_TILT
+      const tilt = scrollTiltFor(view, rect)
       const px = clamp(base.parallaxX, -MAX_PARALLAX, MAX_PARALLAX)
       const py = clamp(base.parallaxY + tilt, -MAX_PARALLAX, MAX_PARALLAX)
       const pixelsPerUnit = view.intensity * Math.max(width, height) * (1 + view.intensity * POM.ZOOM_FACTOR)
@@ -726,8 +738,10 @@ if (typeof window !== 'undefined') {
     views: () => [...depthArtRenderer.views].filter(view => view.rect && view.rect.bottom > 0 && view.rect.top < viewport.height && view.rect.width > 60).map(view => ({
       top: Math.round(view.rect.top), shown: view.shown, drawn: view.drawn, entry: view.entry?.state || 'none', warmHit: !!view.entry?.warmed,
       size: view.entry?.sizes?.[0], canvas: `${view.canvas.width}x${view.canvas.height}`, drawnAfterMs: view.drawnAfterMs,
+      px: view.last ? +view.last.px.toFixed(2) : null, py: view.last ? +view.last.py.toFixed(2) : null,
     })),
     drawDelays: () => depthArtRenderer.drawDelays.splice(0),
+    tilt: () => { const { parallaxX, parallaxY } = depthArtRenderer.baseParallax(); return { x: +parallaxX.toFixed(3), y: +parallaxY.toFixed(3) } },
     blank: () => {
       const byCanvas = new Map([...depthArtRenderer.views].map(view => [view.canvas, view]))
       const out = { onScreen: 0, blank: 0, noPack: 0, decoding: 0, uploading: 0, readyNotDrawn: 0 }

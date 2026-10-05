@@ -86,6 +86,28 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
 - Rejected: fewer march steps (x0.5: -0.4 ms, 1-5% of pixels off by >8); mediump light uniforms (2x slower).
 - Now ~10.5 ms per pass. Left: lighting 4.3, bound/setup ~2.8, march ~2, fill ~1.1.
 
+## 3c. Tilt and lighting fixes (6 Oct, late)
+
+- **Tilt** (`UIStateContext`): the phone's pose is a quaternion from alpha/beta/gamma (no gimbal jitter when held
+  upright; a left/right turn of an upright phone registers); parallax = rotation from a rolling-average pose
+  (`HOLD_AVERAGE_MS` 3 s, advanced every frame, not per event: Chrome only sends events when the angles change),
+  full at `FULL_TILT_DEGREES` 20, rotated into screen axes (`screen.orientation.angle`), time-based smoothing
+  (50 + 60 ms). Chrome 154 on Android has `DeviceOrientationEvent.requestPermission`, so the old code waited for
+  a tap before listening: the listener is now always added at once (the tap request stays for iOS). Check:
+  `__plairArt.tilt()`.
+- **Scroll tilt**: list covers tilt by their place in their own `[data-scroller]` (below its header padding):
+  top row about -0.8 to -1.3, middle about 0, bottom +1.3 (`SCROLL_TILT` 1.3). Current-track covers
+  (`TrackArtCrossfade`: Now Playing, player) take phone motion only. Check: `__plairArt.views()` (px, py).
+- **Lighting colour**: light colours were divided by luma (a saturated blue light came out ~14x too strong); now
+  by the peak channel. The rim light covered ~68% of a cover (normals lean almost everywhere) and screen-blended
+  the light colour, cutting saturation 0.44 -> 0.32 with bluish lights; it now tints the cover's own colour
+  (`RIM` 0.9 keeps today's brightness, saturation 0.446 vs 0.438 unlit). `identity.mjs` prints brightness,
+  saturation and near-white per shot.
+- **Lighting cost**: lights off saves 5.3 of 9.0 ms (landscape layout). Working out the per-light screen terms
+  once per cover saved nothing, so per-area lighting is not worth building. Next: split the 5.3 ms (normal read
+  at the hit point, the 4-light loop, the specular power) with `stages.mjs` edits.
+- Bound setup with the texture sizes as uniforms: -0.35 ms (4%), not done yet.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
@@ -97,8 +119,7 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
    instead of stacking); the Queue's `popLayout` forced layout; Queue rows re-rendering for `layoutKey`.
 5. **Catalog draw-ahead**: owner says "much better but not perfect". Tune `AHEAD_*` in `depthArtRenderer` and
    the warm set; measure with `perf/catwhy2.mjs` (classifies every blank tile per frame).
-6. Later (owner's call): tilt re-centring (the baseline is set 1 s after page load, so a page loaded flat has
-   forward/back stuck at the limit when held).
+6. ~~Tilt re-centring~~ (done 6 Oct, section 3c).
 
 ## 5. How to measure (learned the hard way)
 

@@ -77,6 +77,52 @@ const INITIAL_SETTINGS = loadLocalSettings()
 
 const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
 const MAX_PASSING_NOTICES = 3
+const HOLD_AVERAGE_MS = 3000
+const FULL_TILT_DEGREES = 20
+const TILT_INPUT_SMOOTHING_MS = 50
+const TILT_OUTPUT_SMOOTHING_MS = 60
+const HALF_DEGREE = Math.PI / 360
+
+function orientationQuaternion(alpha, beta, gamma) {
+  const ca = Math.cos(alpha * HALF_DEGREE), sa = Math.sin(alpha * HALF_DEGREE)
+  const cb = Math.cos(beta * HALF_DEGREE), sb = Math.sin(beta * HALF_DEGREE)
+  const cg = Math.cos(gamma * HALF_DEGREE), sg = Math.sin(gamma * HALF_DEGREE)
+  return {
+    w: ca * cb * cg - sa * sb * sg,
+    x: ca * sb * cg - sa * cb * sg,
+    y: ca * cb * sg + sa * sb * cg,
+    z: sa * cb * cg + ca * sb * sg,
+  }
+}
+
+function tiltFrom(reference, pose) {
+  let w = reference.w * pose.w + reference.x * pose.x + reference.y * pose.y + reference.z * pose.z
+  let x = reference.w * pose.x - reference.x * pose.w - reference.y * pose.z + reference.z * pose.y
+  let y = reference.w * pose.y + reference.x * pose.z - reference.y * pose.w - reference.z * pose.x
+  const z = reference.w * pose.z - reference.x * pose.y + reference.y * pose.x - reference.z * pose.w
+  if (w < 0) {
+    w = -w
+    x = -x
+    y = -y
+  }
+  const sine = Math.hypot(x, y, z)
+  const scale = sine > 1e-6 ? (2 * Math.atan2(sine, w) / sine) * (180 / Math.PI) : 360 / Math.PI
+  return { x: x * scale, y: y * scale }
+}
+
+function followPose(reference, pose, amount) {
+  const sign = reference.w * pose.w + reference.x * pose.x + reference.y * pose.y + reference.z * pose.z < 0 ? -1 : 1
+  reference.w += (sign * pose.w - reference.w) * amount
+  reference.x += (sign * pose.x - reference.x) * amount
+  reference.y += (sign * pose.y - reference.y) * amount
+  reference.z += (sign * pose.z - reference.z) * amount
+  const length = Math.hypot(reference.w, reference.x, reference.y, reference.z) || 1
+  reference.w /= length
+  reference.x /= length
+  reference.y /= length
+  reference.z /= length
+}
+
 const TILT_NEEDS_PERMISSION = typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function'
 
@@ -251,20 +297,13 @@ export function UIStateProvider({ children }) {
   const physicsState = useRef({
     x: 0,
     y: 0,
-    vx: 0,
-    vy: 0,
     rawTargetX: 0,
     rawTargetY: 0,
     smoothTargetX: 0,
     smoothTargetY: 0
   })
 
-  const sensorBaseline = useRef({
-    beta: 0,
-    gamma: 0,
-    isCalibrated: false,
-    startTime: Date.now()
-  })
+  const holdPose = useRef({ reference: null, pose: null })
 
   const mixerRefInternal = useRef(null)
 
@@ -353,25 +392,9 @@ export function UIStateProvider({ children }) {
     const handleOrientation = (event) => {
       const { beta, gamma } = event
       if (beta === null || gamma === null) return
-
-      const now = Date.now()
-      if (!sensorBaseline.current.isCalibrated) {
-        if (now - sensorBaseline.current.startTime > 1000) {
-          sensorBaseline.current.beta = beta
-          sensorBaseline.current.gamma = gamma
-          sensorBaseline.current.isCalibrated = true
-        }
-        return
-      }
-
-      const deltaBeta = beta - sensorBaseline.current.beta
-      const deltaGamma = gamma - sensorBaseline.current.gamma
-
-      const clampedBeta = Math.max(-30, Math.min(30, deltaBeta))
-      const clampedGamma = Math.max(-30, Math.min(30, deltaGamma))
-
-      physicsState.current.rawTargetX = -(clampedGamma / 30)
-      physicsState.current.rawTargetY = -(clampedBeta / 30)
+      const hold = holdPose.current
+      hold.pose = orientationQuaternion(event.alpha ?? 0, beta, gamma)
+      if (!hold.reference) hold.reference = { ...hold.pose }
       physicsKickRef.current?.()
     }
 
@@ -380,6 +403,7 @@ export function UIStateProvider({ children }) {
       mouseRef.current.parallaxY = (e.clientY / window.innerHeight - 0.5) * 2
     }
 
+    window.addEventListener('deviceorientation', handleOrientation, { passive: true })
     if (TILT_NEEDS_PERMISSION) {
       let granted = false
       const request = () => granted ? Promise.resolve(true) : DeviceOrientationEvent.requestPermission()
@@ -398,8 +422,6 @@ export function UIStateProvider({ children }) {
       cancelGesture = AudioInteractionManager.onUserGesture(() => {
         if (uiState.settingsState.litArtwork !== false) void request()
       })
-    } else {
-      window.addEventListener('deviceorientation', handleOrientation, { passive: true })
     }
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true })
@@ -421,40 +443,47 @@ export function UIStateProvider({ children }) {
 
     let animationFrameId = null
     let lastInputTime = Date.now()
+    let lastFrameAt = 0
     const IDLE_TIMEOUT = 2000
-
-    const TENSION = 0.12
-    const FRICTION = 0.80
-    const INPUT_SMOOTHING = 0.10
 
     const handleInput = () => {
       lastInputTime = Date.now()
       if (!animationFrameId) {
+        lastFrameAt = 0
         animationFrameId = requestAnimationFrame(loop)
       }
     }
 
-    const loop = () => {
+    const loop = (timestamp) => {
       const p = physicsState.current
+      const dt = lastFrameAt ? Math.min(100, timestamp - lastFrameAt) : 1000 / 60
+      lastFrameAt = timestamp
+      const hold = holdPose.current
+      if (hold.pose) {
+        followPose(hold.reference, hold.pose, 1 - Math.exp(-dt / HOLD_AVERAGE_MS))
+        const tilt = tiltFrom(hold.reference, hold.pose)
+        const turn = (window.screen?.orientation?.angle || 0) * Math.PI / 180
+        const aboutUp = tilt.x * Math.sin(turn) + tilt.y * Math.cos(turn)
+        const aboutRight = tilt.x * Math.cos(turn) - tilt.y * Math.sin(turn)
+        p.rawTargetX = Math.max(-1, Math.min(1, -aboutUp / FULL_TILT_DEGREES))
+        p.rawTargetY = Math.max(-1, Math.min(1, -aboutRight / FULL_TILT_DEGREES))
+      }
+      const input = 1 - Math.exp(-dt / TILT_INPUT_SMOOTHING_MS)
+      const output = 1 - Math.exp(-dt / TILT_OUTPUT_SMOOTHING_MS)
 
-      p.smoothTargetX += (p.rawTargetX - p.smoothTargetX) * INPUT_SMOOTHING
-      p.smoothTargetY += (p.rawTargetY - p.smoothTargetY) * INPUT_SMOOTHING
-
-      const forceX = (p.smoothTargetX - p.x) * TENSION
-      const forceY = (p.smoothTargetY - p.y) * TENSION
-
-      p.vx = (p.vx + forceX) * FRICTION
-      p.vy = (p.vy + forceY) * FRICTION
-
-      p.x += p.vx
-      p.y += p.vy
+      p.smoothTargetX += (p.rawTargetX - p.smoothTargetX) * input
+      p.smoothTargetY += (p.rawTargetY - p.smoothTargetY) * input
+      const stepX = (p.smoothTargetX - p.x) * output
+      const stepY = (p.smoothTargetY - p.y) * output
+      p.x += stepX
+      p.y += stepY
 
       gyroscopeRef.current.parallaxX = p.x
       gyroscopeRef.current.parallaxY = p.y
 
       window.__rafDebug?.sources && (window.__rafDebug.sources['UIState-physics'] = (window.__rafDebug.sources['UIState-physics'] || 0) + 1)
 
-      const isMoving = Math.abs(p.vx) > 0.001 || Math.abs(p.vy) > 0.001
+      const isMoving = Math.abs(stepX) > 0.0005 || Math.abs(stepY) > 0.0005 || Math.abs(p.x) > 0.002 || Math.abs(p.y) > 0.002
       const isRecentInput = Date.now() - lastInputTime < IDLE_TIMEOUT
       if (isMoving || isRecentInput) {
         animationFrameId = requestAnimationFrame(loop)

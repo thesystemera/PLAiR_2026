@@ -43,17 +43,28 @@ try {
         if (pixelMax > 8) over8++
       }
       const pixels = data.length / 4
+      let lum = 0, sat = 0, white = 0, clipped = 0
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2]
+        const hi = Math.max(r, g, b), lo = Math.min(r, g, b)
+        const s = hi ? (hi - lo) / hi : 0
+        lum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+        sat += s
+        if (lo >= 215 && s < 0.15) white++
+        if (hi === 255) clipped++
+      }
+      const look = { lum: +(lum / pixels).toFixed(1), sat: +(sat / pixels).toFixed(3), white: +(white / pixels * 100).toFixed(2), clipped: +(clipped / pixels * 100).toFixed(2) }
       const out = document.createElement('canvas')
       out.width = canvas.width
       out.height = canvas.height
       out.getContext('2d').putImageData(diff, 0, 0)
-      return JSON.stringify({ size: canvas.width + 'x' + canvas.height, mean: +(sum / (pixels * 3)).toFixed(3), max, over2: +(over2 / pixels * 100).toFixed(3), over8: +(over8 / pixels * 100).toFixed(3), image: canvas.toDataURL('image/png'), diff: out.toDataURL('image/png') })
+      return JSON.stringify({ look, size: canvas.width + 'x' + canvas.height, mean: +(sum / (pixels * 3)).toFixed(3), max, over2: +(over2 / pixels * 100).toFixed(3), over8: +(over8 / pixels * 100).toFixed(3), image: canvas.toDataURL('image/png'), diff: out.toDataURL('image/png') })
     })()`)
     const r = JSON.parse(shot)
     const file = `${index}_${name.replace(/\W+/g, '_')}`
     writeFileSync(`${outDir}/${file}.png`, Buffer.from(r.image.split(',')[1], 'base64'))
     if (index > 0) writeFileSync(`${outDir}/${file}_diff_x8.png`, Buffer.from(r.diff.split(',')[1], 'base64'))
-    const row = `${String(index).padStart(2)} ${name.padEnd(18)} ${r.size} vs shot 0: mean ${r.mean}, max ${r.max}, pixels off by >2: ${r.over2}%, by >8: ${r.over8}%`
+    const row = `${String(index).padStart(2)} ${name.padEnd(18)} ${r.size} vs shot 0: mean ${r.mean}, max ${r.max}, pixels off by >2: ${r.over2}%, by >8: ${r.over8}% | brightness ${r.look.lum}, saturation ${r.look.sat}, near-white ${r.look.white}%, clipped ${r.look.clipped}%`
     rows.push(row)
     console.log(row)
   }

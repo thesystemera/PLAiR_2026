@@ -121,13 +121,13 @@ function findLightSources() {
     let crowded = false
     for (let k = 0; k < count && !crowded; k++) crowded = Math.hypot(found[k].x - x, found[k].y - y) < MIN_LIGHT_SPACING
     if (crowded) continue
-    const level = Math.max(brightest, 1e-3)
+    const peak = Math.max(grid[cell * 3], grid[cell * 3 + 1], grid[cell * 3 + 2], 1e-3)
     const light = found[count++]
     light.x = x
     light.y = y
-    light.r = grid[cell * 3] / level
-    light.g = grid[cell * 3 + 1] / level
-    light.b = grid[cell * 3 + 2] / level
+    light.r = grid[cell * 3] / peak
+    light.g = grid[cell * 3 + 1] / peak
+    light.b = grid[cell * 3 + 2] / peak
     light.intensity = Math.min(MAX_INTENSITY, contrast)
   }
   return count
