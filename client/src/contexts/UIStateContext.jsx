@@ -77,9 +77,9 @@ const INITIAL_SETTINGS = loadLocalSettings()
 
 const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
 const MAX_PASSING_NOTICES = 3
-const HOLD_AVERAGE_MS = 3000
+const HOLD_AVERAGE_MS = 5000
 const FULL_TILT_DEGREES = 20
-const TILT_INPUT_SMOOTHING_MS = 50
+const TILT_INPUT_SMOOTHING_MS = 150
 const TILT_OUTPUT_SMOOTHING_MS = 60
 const HALF_DEGREE = Math.PI / 360
 
