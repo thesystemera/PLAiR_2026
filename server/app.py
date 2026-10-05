@@ -17,6 +17,7 @@ from services.suno_prompt_service import MusicPromptService
 from services.suno_service_orchestrator import SunoServiceOrchestrator
 from services.audio_transcoding_service import AudioTranscodingService
 from services.catalog_database_service import CatalogDatabaseService
+from services.artwork_thumbnail_service import backfill_track_packs
 from services.user_content_database_service import UserContentDatabaseService
 from services.playback_service import PlaybackService
 from services.catalog_vector_database_service import CatalogVectorDatabaseService
@@ -98,6 +99,13 @@ from services.task_utils import spawn
 from routers import (system, auth, playback, catalog, share, analytics, preferences, user, shoutouts, artists,
                      conversation, devices, search, dj, media, generation, user_music, ws, usage, radio,
                      client_log, account, settings as settings_routes)
+
+async def _backfill_cover_packs(catalog_service: CatalogDatabaseService) -> None:
+    tracks = [(track_id, path) for track_id in list(catalog_service.tracks) if (path := catalog_service.get_artwork_path(track_id))]
+    rendered = await backfill_track_packs(tracks)
+    if rendered:
+        log_service.system(f"Cover packs: rendered {rendered} missing or stale packs")
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -229,6 +237,7 @@ async def lifespan(_app: FastAPI):
     log_service.success("✓ Catalog vector database service initialized")
     human_music_upload_service.attach_services(vector_db_service=catalog_vector_db_service)
     spawn(human_music_upload_service.backfill_fingerprints(), name="upload_fingerprint_backfill")
+    spawn(_backfill_cover_packs(catalog_service), name="cover_pack_backfill")
 
     log_service.system("Initializing catalog vector search prompt cache service...")
     try:

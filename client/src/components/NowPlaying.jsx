@@ -1,14 +1,13 @@
 import {logger} from '../lib/logger'
-import {memo, useEffect, useRef, useState} from 'react'
-import { useArtwork, useUISelector } from '../contexts/UIStateContext'
+import {memo, useCallback, useEffect, useRef, useState} from 'react'
+import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import MediaActions from './MediaActions'
 import {PanelHeader} from './Panel'
 import {useGenerationQueue} from '../contexts/GenerationQueueContext'
 import {BUTTON} from '../lib/themeManager.js'
 import {Scroller} from './Scroller'
-import {ParallaxArtwork} from './ParallaxArtwork'
-import { TrackArt } from './DepthArt'
+import { TrackArt, TrackArtCrossfade } from './DepthArt'
 import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
@@ -18,6 +17,7 @@ import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
 
 const NO_LYRICS = []
+const NOW_PLAYING_INTENSITY = 0.05
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
 const LYRIC_STATE_CLASSES = [
   'px-1 rounded transition-colors duration-micro text-white font-bold bg-white/20',
@@ -323,15 +323,9 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
 })
 
 export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
-  const [layerA, setLayerA] = useState(null)
-  const [layerB, setLayerB] = useState(null)
-  const [frontLayer, setFrontLayer] = useState('A')
   const [analytics, setAnalytics] = useState(null)
-  const previousArtworkUrlRef = useRef(null)
-  const layerSwapTimeoutRef = useRef(null)
   const artBoxRef = useRef(null)
-
-  useEffect(() => () => clearTimeout(layerSwapTimeoutRef.current), [])
+  const popArt = useCallback(() => artPop(artBoxRef.current, 'artPopLarge'), [])
 
   const { togglePanel: toggleQueuePanel } = useGenerationQueue()
   const {
@@ -353,35 +347,6 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   const track = engineState.currentTrack
   const isFullscreen = interfaceState.isFullscreenVisuals
   const hasActiveJobs = queueState.hasActiveJobs
-  const artworkUrl = useArtwork(track?.id, track?.has_artwork)
-
-  useEffect(() => {
-    if (artworkUrl && artworkUrl !== previousArtworkUrlRef.current) {
-      const newImage = {
-        id: track?.id,
-        url: artworkUrl,
-        hasArtwork: track?.has_artwork,
-        title: track?.generation_params?.title || 'Track artwork'
-      }
-
-      const swapTo = (layer) => {
-        setFrontLayer(layer)
-        artPop(artBoxRef.current, 'artPopLarge')
-      }
-
-      clearTimeout(layerSwapTimeoutRef.current)
-      if (frontLayer === 'A') {
-        queueMicrotask(() => setLayerB(newImage))
-        layerSwapTimeoutRef.current = setTimeout(() => swapTo('B'), 50)
-      } else {
-        queueMicrotask(() => setLayerA(newImage))
-        layerSwapTimeoutRef.current = setTimeout(() => swapTo('A'), 50)
-      }
-
-      previousArtworkUrlRef.current = artworkUrl
-    }
-  }, [artworkUrl, frontLayer, track?.id, track?.has_artwork, track?.generation_params?.title])
-
   const hasTrack = !!track
   useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])
 
@@ -431,35 +396,13 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
           ref={artBoxRef}
           className={`aspect-square w-full rounded-xl flex items-center justify-center shadow-2xl overflow-hidden relative ${isSplit ? '' : 'mb-4'}`}
         >
-          {layerA && (
-            <div className={`absolute inset-0 transition-opacity duration-theme ${
-              frontLayer === 'A' ? 'opacity-100' : 'opacity-0'
-            }`}>
-              <ParallaxArtwork
-                trackId={layerA.id}
-                artworkUrl={layerA.url}
-                alt={layerA.title}
-                className="w-full h-full"
-                intensity={0.05}
-                isActive={frontLayer === 'A'}
-              />
-            </div>
-          )}
-
-          {layerB && (
-            <div className={`absolute inset-0 transition-opacity duration-theme ${
-              frontLayer === 'B' ? 'opacity-100' : 'opacity-0'
-            }`}>
-              <ParallaxArtwork
-                trackId={layerB.id}
-                artworkUrl={layerB.url}
-                alt={layerB.title}
-                className="w-full h-full"
-                intensity={0.05}
-                isActive={frontLayer === 'B'}
-              />
-            </div>
-          )}
+          <TrackArtCrossfade
+            trackId={track.id}
+            hasArtwork={track.has_artwork}
+            alt={params.title || 'Track artwork'}
+            intensity={NOW_PLAYING_INTENSITY}
+            onShow={popArt}
+          />
 
           <div className="absolute top-4 left-4 z-10">
             <button

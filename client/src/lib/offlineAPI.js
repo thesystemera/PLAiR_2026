@@ -133,7 +133,6 @@ class OfflineBackend {
       .map(entry => ({
         ...entry.metadata,
         has_artwork: entry.hasArtwork || !!entry.metadata.has_artwork,
-        has_enriched_artwork: entry.hasEnrichedArtwork,
         _addedAt: entry.addedAt || 0
       }))
   }

@@ -1,4 +1,4 @@
-import { ART_PACK_SIZE, artPackCache } from './mediaCache'
+import { PACK_SIZES, packCache } from './mediaCache'
 import { depthArtRenderer } from './depthArtRenderer'
 import { logger } from './logger'
 
@@ -99,19 +99,25 @@ class PackPrefetcher {
   }
 }
 
-const packPrefetcher = new PackPrefetcher(artPackCache)
-artPackCache.setPinnedChecker(id => packPrefetcher.isDemanded(id) || depthArtRenderer.isShowing(artPackCache.peekMemory(id)))
-
+const prefetchers = new Map()
+let activePrefetcher = null
 let warmQueued = false
+
+for (const size of PACK_SIZES) {
+  const cache = packCache(size)
+  cache.addPinnedChecker(id => depthArtRenderer.isShowing(cache.peekMemory(id)))
+}
 
 function warmNearest() {
   warmQueued = false
+  const prefetcher = activePrefetcher
+  if (!prefetcher) return
   const urls = []
-  for (const id of packPrefetcher.demand) {
+  for (const id of prefetcher.demand) {
     if (urls.length >= WARM_COVERS) break
-    if (packPrefetcher.isReady(id)) urls.push(artPackCache.peekMemory(id))
+    if (prefetcher.isReady(id)) urls.push(prefetcher.cache.peekMemory(id))
   }
-  depthArtRenderer.warm(urls, ART_PACK_SIZE)
+  depthArtRenderer.warm(urls)
 }
 
 function scheduleWarm() {
@@ -120,9 +126,21 @@ function scheduleWarm() {
   queueMicrotask(warmNearest)
 }
 
-packPrefetcher.subscribe(scheduleWarm)
+function prefetcherFor(size) {
+  let prefetcher = prefetchers.get(size)
+  if (!prefetcher) {
+    prefetcher = new PackPrefetcher(packCache(size))
+    prefetcher.cache.addPinnedChecker(id => prefetcher.isDemanded(id))
+    prefetcher.subscribe(scheduleWarm)
+    prefetchers.set(size, prefetcher)
+  }
+  return prefetcher
+}
 
-export function prefetchCovers(ids, options) {
-  packPrefetcher.setDemand(ids, options)
+export function prefetchCovers(ids, { size, jumped = false }) {
+  const prefetcher = prefetcherFor(size)
+  if (activePrefetcher && activePrefetcher !== prefetcher) activePrefetcher.setDemand([])
+  activePrefetcher = prefetcher
+  prefetcher.setDemand(ids, { jumped })
   scheduleWarm()
 }

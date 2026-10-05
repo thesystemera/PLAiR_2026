@@ -2,6 +2,8 @@ import {memo, useCallback, useEffect, useRef, useState} from 'react'
 import {TextRenderer} from '../lib/textRenderer'
 import { useVideoClips, useUISelector } from '../contexts/UIStateContext'
 import {PANEL, useDynamicTheme, useThemeArtwork} from '../contexts/DynamicThemeContext'
+import {useDepthMap} from '../hooks/useDepthMap'
+import {FULL_PACK_SIZE, SCENE_PACK_SIZE, blobForUrl, packCache} from '../lib/mediaCache'
 import {VisualErrorBoundary} from './VisualErrorBoundary'
 import {isWebGL2Available} from '../lib/utils'
 import {logger} from '../lib/logger'
@@ -77,7 +79,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   glassBlurFactor = 1.0,
   onContextLostChange,
 }) {
-  const currentArtwork = useThemeArtwork()
   const ui = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
@@ -98,6 +99,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     activeSeedMode: state.radioState.activeSeedMode,
     isFullscreen: state.interfaceState?.isFullscreenVisuals ?? false,
   }))
+  const trackId = ui.engineState.currentTrack?.id
+  const hasArtwork = !!trackId && ui.engineState.currentTrack?.has_artwork !== false
+  const { url: artworkPack } = useDepthMap(packCache(ui.isFullscreen ? FULL_PACK_SIZE : SCENE_PACK_SIZE), trackId, hasArtwork)
   const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
   const { sceneDpr, level: visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer } = useQuality()
   const deviceDpr = window.devicePixelRatio || 1
@@ -230,8 +234,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   }, [send, ui.audioFeatures])
 
   useEffect(() => {
-    if (currentArtwork) send({ type: 'artwork', url: currentArtwork, fullscreen: ui.isFullscreen })
-  }, [send, currentArtwork, ui.isFullscreen])
+    const blob = artworkPack ? blobForUrl(artworkPack) : null
+    if (blob) send({ type: 'artwork', key: artworkPack, blob })
+  }, [send, artworkPack])
 
   useEffect(() => {
     const lyric = lyricRef.current
@@ -408,7 +413,7 @@ const VisualFallback = memo(function VisualFallback() {
       {currentArtwork && (
         <div
           className="absolute -inset-16 bg-cover bg-center opacity-60"
-          style={{ backgroundImage: `url(${currentArtwork})`, filter: 'blur(48px)' }}
+          style={{ backgroundImage: `url(${currentArtwork.imageUrl})`, filter: 'blur(48px)' }}
         />
       )}
       <div className="absolute inset-0 bg-black/50" />

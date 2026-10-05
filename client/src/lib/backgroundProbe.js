@@ -1,6 +1,5 @@
 import { PROBE_GRID } from './lightProbe'
 
-const ART_SIZE = 96
 const SUBSAMPLES = 3
 const FALLBACK_TOP = [0.231, 0.509, 0.964]
 const FALLBACK_BOTTOM = [0.545, 0.360, 0.964]
@@ -23,9 +22,9 @@ export function artworkPixels(image) {
   const cached = pixelCache.get(image)
   if (cached) return cached
   try {
-    const ctx = makeCanvas(ART_SIZE, ART_SIZE).getContext('2d', { willReadFrequently: true })
-    ctx.drawImage(image, 0, 0, ART_SIZE, ART_SIZE)
-    const pixels = { data: ctx.getImageData(0, 0, ART_SIZE, ART_SIZE).data, width: ART_SIZE, height: ART_SIZE }
+    const ctx = image.getContext ? image.getContext('2d', { willReadFrequently: true }) : null
+    if (!ctx) return null
+    const pixels = { data: ctx.getImageData(0, 0, image.width, image.height).data, width: image.width, height: image.height }
     pixelCache.set(image, pixels)
     return pixels
   } catch {

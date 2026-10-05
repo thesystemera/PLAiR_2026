@@ -2,7 +2,7 @@ import { logger } from './logger'
 import { audioCacheDB, normalizeTrackMetadata } from './offlineStorage'
 import { api } from './api'
 import { canPlayCachedBlob, downloadFormat } from './mediaSupport'
-import { artPackUrl } from './mediaCache'
+import { PACK_SIZES, artPackUrl } from './mediaCache'
 
 const isIOS = typeof navigator !== 'undefined' &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1))
@@ -99,8 +99,7 @@ class CacheManager {
         addedAt: record.addedAt,
         lastAccessed: record.lastAccessed,
         playable: record.audioBlob instanceof Blob && record.audioBlob.size > 0 && canPlayCachedBlob(record.audioBlob),
-        hasArtwork: record.artworkBlob instanceof Blob,
-        hasEnrichedArtwork: record.enrichedArtworkBlob instanceof Blob,
+        hasArtwork: PACK_SIZES.every(size => record.packBlobs?.[size] instanceof Blob),
         hasAudioFeatures: !!record.audioFeatures,
       })))
       .catch(error => {
@@ -192,9 +191,7 @@ class CacheManager {
       return allTracks.map(cached => ({
         trackId: cached.trackId,
         audioBlob: cached.audioBlob,
-        artworkBlob: cached.artworkBlob,
-        enrichedArtworkBlob: cached.enrichedArtworkBlob,
-        packBlob: cached.packBlob,
+        packBlobs: cached.packBlobs,
         metadata: normalizeTrackMetadata(cached.metadata, cached.trackId),
         audioFeatures: cached.audioFeatures,
         bitrate: cached.bitrate,
@@ -348,30 +345,10 @@ class CacheManager {
 
     await this._updateDataUsage(audioBlob.size)
 
-    let artworkBlob = null
-    let enrichedArtworkBlob = null
-    let packBlob = null
+    let packBlobs = null
     if (fullTrackData.has_artwork || fullTrackData.hasArtwork) {
       try {
-        artworkBlob = await this._downloadArtwork(trackId, signal)
-        logger.info(`[CacheManager] Downloaded artwork for ${trackId}`)
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          logger.warn(`[CacheManager] Failed to download artwork for ${trackId}:`, err)
-        }
-      }
-
-      try {
-        enrichedArtworkBlob = await this._downloadEnrichedArtwork(trackId, signal)
-        logger.info(`[CacheManager] Downloaded enriched artwork for ${trackId}`)
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          logger.warn(`[CacheManager] Failed to download enriched artwork for ${trackId}:`, err)
-        }
-      }
-
-      try {
-        packBlob = await this._downloadPack(trackId, signal)
+        packBlobs = await this._downloadPacks(trackId, signal)
       } catch (err) {
         if (err.name !== 'AbortError') {
           logger.warn(`[CacheManager] Failed to download cover pack for ${trackId}:`, err)
@@ -415,9 +392,7 @@ class CacheManager {
 
     const trackData = {
       audioBlob,
-      artworkBlob,
-      enrichedArtworkBlob,
-      packBlob,
+      packBlobs,
       metadata: fullTrackData,
       audioFeatures,
       lyricTimestamps,
@@ -431,32 +406,13 @@ class CacheManager {
     return savedTrack
   }
 
-  async _downloadArtwork(trackId, signal = null) {
-    const artworkUrl = api.getArtworkUrl(trackId)
-    const response = await fetch(artworkUrl, { signal })
-
-    if (!response.ok) {
-      throw new Error(`Artwork fetch failed: ${response.status}`)
-    }
-
-    return await response.blob()
-  }
-
-  async _downloadPack(trackId, signal = null) {
-    const response = await fetch(artPackUrl(trackId), { signal })
-    if (!response.ok) throw new Error(`Cover pack fetch failed: ${response.status}`)
-    return await response.blob()
-  }
-
-  async _downloadEnrichedArtwork(trackId, signal = null) {
-    const enrichedUrl = `/api/artwork/${trackId}/enriched`
-    const response = await fetch(enrichedUrl, { signal })
-
-    if (!response.ok) {
-      throw new Error(`Enriched artwork fetch failed: ${response.status}`)
-    }
-
-    return await response.blob()
+  async _downloadPacks(trackId, signal = null) {
+    const blobs = await Promise.all(PACK_SIZES.map(async (size) => {
+      const response = await fetch(artPackUrl(trackId, size), { signal })
+      if (!response.ok) throw new Error(`Cover pack ${size} fetch failed: ${response.status}`)
+      return await response.blob()
+    }))
+    return Object.fromEntries(PACK_SIZES.map((size, index) => [size, blobs[index]]))
   }
 
   async _updateDataUsage(bytes) {
@@ -617,25 +573,11 @@ class CacheManager {
       const audioBlob = new Blob(stream.chunks, { type: 'audio/webm' })
       await this._updateDataUsage(audioBlob.size)
 
-      let artworkBlob = null
-      let enrichedArtworkBlob = null
-      let packBlob = null
+      let packBlobs = null
       const metadata = stream.metadata
       if (metadata.has_artwork || metadata.hasArtwork) {
         try {
-          artworkBlob = await this._downloadArtwork(trackId)
-        } catch {
-          // Artwork download errors are intentionally suppressed
-        }
-
-        try {
-          enrichedArtworkBlob = await this._downloadEnrichedArtwork(trackId)
-        } catch {
-          // Enriched artwork download errors are intentionally suppressed
-        }
-
-        try {
-          packBlob = await this._downloadPack(trackId)
+          packBlobs = await this._downloadPacks(trackId)
         } catch {
           // Cover pack download errors are intentionally suppressed
         }
@@ -660,9 +602,7 @@ class CacheManager {
 
       const trackData = {
         audioBlob,
-        artworkBlob,
-        enrichedArtworkBlob,
-        packBlob,
+        packBlobs,
         metadata,
         audioFeatures,
         lyricTimestamps,

@@ -190,13 +190,6 @@ export const musicMethods = {
     return `${baseUrl}?${params.toString()}`
   },
 
-  getArtworkUrl(trackId) {
-    if (window.__artworkBlobCache && window.__artworkBlobCache[trackId]) {
-      return window.__artworkBlobCache[trackId]
-    }
-    return `/api/artwork/${trackId}`
-  },
-
   async getAudioFeatures(trackId) {
     return this._routeRequest('getAudioFeatures', [trackId], async () => {
       const res = await this._fetch(`${API_BASE}/audio-features/${trackId}`, {

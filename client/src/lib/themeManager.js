@@ -1,42 +1,11 @@
-import { logger } from './logger'
 import { DURATION, MOTION } from './motion'
 
 function rgbToCss({ r, g, b }, opacity = 1) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`
 }
 
-export async function extractColorsFromImage(imageUrl) {
-  return new Promise((resolve, _reject) => {
-    const img = new Image()
-    img.crossOrigin = 'Anonymous'
-
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-
-      const size = 100
-      canvas.width = size
-      canvas.height = size
-
-      ctx.drawImage(img, 0, 0, size, size)
-
-      try {
-        const imageData = ctx.getImageData(0, 0, size, size)
-        const colors = analyzeColors(imageData.data)
-        resolve(colors)
-      } catch (error) {
-        logger.error('Failed to extract colors:', error)
-        resolve(getDefaultColors())
-      }
-    }
-
-    img.onerror = () => {
-      logger.error('Failed to load image for color extraction')
-      resolve(getDefaultColors())
-    }
-
-    img.src = imageUrl
-  })
+export function extractColorsFromPixels(pixels) {
+  return analyzeColors(pixels)
 }
 
 function buildHistogram(data) {
@@ -470,7 +439,7 @@ function hslToRgb(h, s, l) {
   }
 }
 
-function getDefaultColors() {
+export function getDefaultColors() {
   const hue = 258
   const saturation = 0.1
   const primary = { r: 139, g: 92, b: 246 }
@@ -778,14 +747,6 @@ export const CATALOG_HEADER = {
     inactive: 'ui-press px-2.5 py-1 text-xs md:text-sm rounded-full transition-colors bg-dark-card hover:bg-dark-hover'
   }
 }
-
-export const FALLBACK_GRADIENT_HEX = [
-  ['#9333ea', '#2563eb'],
-  ['#db2777', '#9333ea'],
-  ['#2563eb', '#06b6d4'],
-  ['#16a34a', '#14b8a6'],
-  ['#ea580c', '#dc2626'],
-]
 
 export const FALLBACK_GRADIENTS = [
   'from-purple-600 to-blue-600',

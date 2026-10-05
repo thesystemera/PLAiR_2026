@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
 import { flushSync } from 'react-dom'
 import { prefetchCovers } from '../lib/artworkPrefetcher'
+import { depthArtRenderer } from '../lib/depthArtRenderer'
 
 const SETTLE_MS = 140
 const VELOCITY_WINDOW_MS = 300
@@ -65,7 +66,17 @@ function VirtualScroller({
     const list = listRef.current
     if (!container || !list) return
     motionRef.current.listTop = list.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    motionRef.current.coverPx = 0
   }, [scrollContainerRef])
+
+  const coverSize = useCallback(() => {
+    const motion = motionRef.current
+    if (!motion.coverPx) {
+      const cover = listRef.current?.querySelector('[data-depth-art]')
+      motion.coverPx = cover ? Math.max(cover.offsetWidth, cover.offsetHeight) : 0
+    }
+    return motion.coverPx ? depthArtRenderer.packSizeFor(motion.coverPx) : 0
+  }, [])
 
   const updateDemand = useCallback((firstRow, lastRow, down, speed, idle, jumped) => {
     const latest = latestRef.current
@@ -87,6 +98,11 @@ function VirtualScroller({
     onRange?.(fetchStart * perRow, fetchEnd * perRow, focusIndex)
 
     if (!getId) return
+    const size = coverSize()
+    if (!size) {
+      demandKeyRef.current = ''
+      return
+    }
     const ids = []
     const pushRow = (row) => {
       const base = row * perRow
@@ -107,8 +123,8 @@ function VirtualScroller({
       for (let row = firstRow - 1; row >= fetchStart; row--) pushRow(row)
       for (let row = lastRow; row < fetchEnd; row++) pushRow(row)
     }
-    prefetchCovers(ids, { jumped })
-  }, [])
+    prefetchCovers(ids, { jumped, size })
+  }, [coverSize])
 
   const compute = useCallback((settled, fromScroll = false) => {
     const container = scrollContainerRef?.current

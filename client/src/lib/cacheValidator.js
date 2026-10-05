@@ -13,16 +13,10 @@ export class CacheValidator {
     errors.push(...audioBlobValidation.errors)
     warnings.push(...audioBlobValidation.warnings)
 
-    if (trackData.artworkBlob) {
-      const artworkValidation = this.validateBlob(trackData.artworkBlob, 'artworkBlob', { required: false, minSize: 1 })
-      errors.push(...artworkValidation.errors)
-      warnings.push(...artworkValidation.warnings)
-    }
-
-    if (trackData.enrichedArtworkBlob) {
-      const enrichedValidation = this.validateBlob(trackData.enrichedArtworkBlob, 'enrichedArtworkBlob', { required: false, minSize: 1 })
-      errors.push(...enrichedValidation.errors)
-      warnings.push(...enrichedValidation.warnings)
+    for (const [size, blob] of Object.entries(trackData.packBlobs || {})) {
+      const packValidation = this.validateBlob(blob, `packBlobs.${size}`, { required: false, minSize: 1 })
+      errors.push(...packValidation.errors)
+      warnings.push(...packValidation.warnings)
     }
 
     const metadataValidation = this.validateMetadata(trackData.metadata)
@@ -156,12 +150,9 @@ export class CacheValidator {
     if (result.isValid) {
       const parts = [`${(trackData.audioBlob.size / 1024 / 1024).toFixed(2)} MB audio`]
 
-      if (trackData.artworkBlob) {
-        parts.push(`${(trackData.artworkBlob.size / 1024).toFixed(1)} KB artwork`)
-      }
-
-      if (trackData.enrichedArtworkBlob) {
-        parts.push(`${(trackData.enrichedArtworkBlob.size / 1024).toFixed(1)} KB enriched artwork`)
+      const packBytes = Object.values(trackData.packBlobs || {}).reduce((total, blob) => total + blob.size, 0)
+      if (packBytes) {
+        parts.push(`${(packBytes / 1024).toFixed(1)} KB cover packs`)
       }
 
       if (trackData.audioFeatures) {

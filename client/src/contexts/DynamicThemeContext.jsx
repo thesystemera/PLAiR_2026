@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react'
 import {
   Heart,
   Mic2,
@@ -23,7 +23,8 @@ import {
   Clock
 } from 'lucide-react'
 import {
-  extractColorsFromImage,
+  extractColorsFromPixels,
+  getDefaultColors,
   PANEL,
   PANEL_SCROLL,
   TRANSITIONS,
@@ -33,7 +34,21 @@ import {
 } from '../lib/themeManager'
 import { logger } from '../lib/logger'
 
-import { useUISelector, useArtwork } from './UIStateContext'
+import { useUISelector } from './UIStateContext'
+import { useDepthMap } from '../hooks/useDepthMap'
+import { FULL_PACK_SIZE, blobForUrl, packCache } from '../lib/mediaCache'
+import { packColorSamples, packImageUrl } from '../lib/packImage'
+
+const IDLE_TIMEOUT_MS = 2000
+
+function whenIdle(callback) {
+  if (typeof requestIdleCallback === 'function') {
+    const handle = requestIdleCallback(callback, { timeout: IDLE_TIMEOUT_MS })
+    return () => cancelIdleCallback(handle)
+  }
+  const timer = setTimeout(callback, IDLE_TIMEOUT_MS)
+  return () => clearTimeout(timer)
+}
 
 export {
   PANEL,
@@ -184,6 +199,32 @@ export function getCategoryMetadata(key) {
   return null
 }
 
+const FILTER_KEYS = ['filterAllActive', 'filterInteractiveActive', 'filterAnnouncerActive', 'filterExternalActive', 'filterShoutoutsActive', 'filterInactive']
+const kebab = name => name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)
+const themeVar = name => `var(--theme-${kebab(name)})`
+const channels = ({ r, g, b }) => `${r} ${g} ${b}`
+
+const FILTER_STYLES = Object.fromEntries(FILTER_KEYS.map(key => [key, {
+  background: themeVar(`${key}Background`),
+  color: themeVar(`${key}Color`),
+  borderColor: themeVar(`${key}BorderColor`),
+}]))
+
+function themeCssVars(theme) {
+  const vars = {}
+  for (const [key, value] of Object.entries(theme)) {
+    if (typeof value === 'string') vars[`--theme-${kebab(key)}`] = value
+  }
+  for (const key of FILTER_KEYS) {
+    for (const [property, value] of Object.entries(theme[key] || {})) vars[`--theme-${kebab(key)}-${kebab(property)}`] = value
+  }
+  const rgb = theme._rgb || {}
+  if (rgb.accentRgb) vars['--theme-accent-rgb'] = channels(rgb.accentRgb)
+  if (rgb.primaryRgb) vars['--theme-primary-rgb'] = channels(rgb.primaryRgb)
+  if (rgb.secondaryRgb) vars['--theme-secondary-rgb'] = channels(rgb.secondaryRgb)
+  return vars
+}
+
 export function DynamicThemeProvider({ children }) {
   const currentTrack = useUISelector(state => state.engineState?.currentTrack)
 
@@ -197,36 +238,57 @@ export function DynamicThemeProvider({ children }) {
     reselect: { active: false, targetId: null, color: null, timestamp: 0 }
   })
 
-  const artworkUrl = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
+  const trackId = currentTrack?.id
+  const hasArtwork = !!trackId && currentTrack?.has_artwork !== false
+  const { url: packUrl } = useDepthMap(packCache(FULL_PACK_SIZE), trackId, hasArtwork)
 
   useEffect(() => {
-    if (!currentTrack) return
-
-    if (artworkUrl && artworkUrl === processedArtworkUrl.current) {
-      return
-    }
-
-    const updateTheme = async () => {
-      if (currentTrack.has_artwork && artworkUrl) {
-        processedArtworkUrl.current = artworkUrl
-        try {
-          const extractedColors = await extractColorsFromImage(artworkUrl)
-          setColors(extractedColors)
-          setCurrentArtwork(artworkUrl)
-        } catch (error) {
-          logger.error('Failed to extract colors:', error)
-          setCurrentArtwork(artworkUrl)
-        }
-      }
-      else if (!currentTrack.has_artwork) {
-        processedArtworkUrl.current = null
+    if (!trackId) return
+    if (!hasArtwork) {
+      processedArtworkUrl.current = null
+      queueMicrotask(() => {
         setCurrentArtwork(null)
         setColors(null)
-      }
+      })
+      return
     }
+    const blob = packUrl ? blobForUrl(packUrl) : null
+    if (!blob || packUrl === processedArtworkUrl.current || packCache(FULL_PACK_SIZE).peekMemory(trackId) !== packUrl) return
+    processedArtworkUrl.current = packUrl
 
-    void updateTheme()
-  }, [currentTrack, artworkUrl])
+    let cancelled = false
+    let idle = null
+    packColorSamples(blob)
+      .then((samples) => {
+        if (cancelled) return
+        setColors(extractColorsFromPixels(samples))
+        idle = whenIdle(() => {
+          packImageUrl(blob).then((imageUrl) => {
+            if (cancelled) {
+              URL.revokeObjectURL(imageUrl)
+              return
+            }
+            setCurrentArtwork({ key: packUrl, imageUrl, trackId })
+          })
+        })
+      })
+      .catch((error) => {
+        logger.error('Failed to read artwork pack:', error)
+        if (processedArtworkUrl.current === packUrl) processedArtworkUrl.current = null
+      })
+    return () => {
+      cancelled = true
+      idle?.()
+      if (processedArtworkUrl.current === packUrl) processedArtworkUrl.current = null
+    }
+  }, [trackId, hasArtwork, packUrl])
+
+  useEffect(() => {
+    const imageUrl = currentArtwork?.imageUrl
+    return () => {
+      if (imageUrl) URL.revokeObjectURL(imageUrl)
+    }
+  }, [currentArtwork])
 
   const triggerEffect = useCallback((type, options = {}) => {
     const effect = interactionEffectsRef.current[type]
@@ -275,91 +337,101 @@ export function DynamicThemeProvider({ children }) {
     }
   }, [colors])
 
+  const colorsRef = useRef(null)
+
+  useLayoutEffect(() => {
+    const theme = colors || getDefaultColors()
+    colorsRef.current = theme
+    const style = document.documentElement.style
+    for (const [name, value] of Object.entries(themeCssVars(theme))) style.setProperty(name, value)
+  }, [colors])
+
   const getters = useMemo(() => ({
     getCategoryMetadata,
 
-    getGradient: (opacity) => opacity === undefined ? colors?.gradient : colors?.gradient?.replace('0.3)', `${opacity})`),
-    getAccentColor: (opacity = 1) => colors?.accent ? colors.accent.replace('1)', `${opacity})`) : colors?.accent,
-    getAccentRgb: () => colors?._rgb?.accentRgb || { r: 139, g: 92, b: 246 },
+    getGradient: (opacity) => opacity === undefined
+      ? themeVar('gradient')
+      : `linear-gradient(135deg, rgb(var(--theme-primary-rgb) / ${opacity}), rgb(var(--theme-secondary-rgb) / 0.3))`,
+    getAccentColor: (opacity = 1) => `rgb(var(--theme-accent-rgb) / ${opacity})`,
+    getAccentRgb: () => colorsRef.current?._rgb?.accentRgb || { r: 139, g: 92, b: 246 },
 
-    getBorder: (opacity) => opacity ? colors?.borderColorRgb ? `rgba(${colors.borderColorRgb.r}, ${colors.borderColorRgb.g}, ${colors.borderColorRgb.b}, ${opacity})` : colors?.border : colors?.border,
-    getPanelBorder: () => colors?.panelBorder,
-    getInputBorder: () => colors?.inputBorder,
-    getSubtleBorder: () => colors?.subtleBorder,
-    getActiveBorder: () => colors?.activeBorder,
-    getBorderColor: () => colors?.border,
+    getBorder: () => themeVar('border'),
+    getPanelBorder: () => themeVar('panelBorder'),
+    getInputBorder: () => themeVar('inputBorder'),
+    getSubtleBorder: () => themeVar('subtleBorder'),
+    getActiveBorder: () => themeVar('activeBorder'),
+    getBorderColor: () => themeVar('border'),
 
-    getPrimaryText: () => colors?.primaryText,
-    getSecondaryText: () => colors?.secondaryText,
-    getMutedText: () => colors?.mutedText,
-    getTertiaryText: () => colors?.tertiaryText,
-    getWhite: () => colors?.primaryText,
+    getPrimaryText: () => themeVar('primaryText'),
+    getSecondaryText: () => themeVar('secondaryText'),
+    getMutedText: () => themeVar('mutedText'),
+    getTertiaryText: () => themeVar('tertiaryText'),
+    getWhite: () => themeVar('primaryText'),
 
-    getAppBackground: () => colors?.appBackground,
-    getCardBackground: () => colors?.cardBackground,
-    getCardHoverBackground: () => colors?.cardHoverBackground,
-    getPanelBackground: () => colors?.panelBackground,
-    getInputBackground: () => colors?.inputBackground,
-    getOverlayBackground: () => colors?.overlayBackground,
-    getButtonHoverBg: () => colors?.buttonHoverBg,
-    getButtonActiveBg: () => colors?.buttonActiveBg,
-    getButtonInactiveBg: () => colors?.buttonInactiveBg,
+    getAppBackground: () => themeVar('appBackground'),
+    getCardBackground: () => themeVar('cardBackground'),
+    getCardHoverBackground: () => themeVar('cardHoverBackground'),
+    getPanelBackground: () => themeVar('panelBackground'),
+    getInputBackground: () => themeVar('inputBackground'),
+    getOverlayBackground: () => themeVar('overlayBackground'),
+    getButtonHoverBg: () => themeVar('buttonHoverBg'),
+    getButtonActiveBg: () => themeVar('buttonActiveBg'),
+    getButtonInactiveBg: () => themeVar('buttonInactiveBg'),
 
-    getGrey800: () => colors?.panelBackground,
-    getGrey700: () => colors?.cardHoverBackground,
-    getGrey500: () => colors?.border,
-    getGrey400: () => colors?.secondaryText,
-    getGrey300: () => colors?.mutedText,
-    getLightGrey: () => colors?.mutedText,
+    getGrey800: () => themeVar('panelBackground'),
+    getGrey700: () => themeVar('cardHoverBackground'),
+    getGrey500: () => themeVar('border'),
+    getGrey400: () => themeVar('secondaryText'),
+    getGrey300: () => themeVar('mutedText'),
+    getLightGrey: () => themeVar('mutedText'),
 
-    getPlayingBackground: () => colors?.playingBackground,
-    getPlayingRingColor: () => colors?.playingRing,
-    getQueuedRingColor: () => colors?.queuedRing,
-    getLoadingSpinner: () => colors?.loadingSpinner,
+    getPlayingBackground: () => themeVar('playingBackground'),
+    getPlayingRingColor: () => themeVar('playingRing'),
+    getQueuedRingColor: () => themeVar('queuedRing'),
+    getLoadingSpinner: () => themeVar('loadingSpinner'),
 
-    getPurpleBase: () => colors?.purpleBase,
-    getPurpleDark: () => colors?.purpleDark,
-    getPurpleLight: () => colors?.purpleLight,
+    getPurpleBase: () => themeVar('purpleBase'),
+    getPurpleDark: () => themeVar('purpleDark'),
+    getPurpleLight: () => themeVar('purpleLight'),
 
-    getRadioButtonBase: () => colors?.radioButtonBase,
-    getRadioButtonBaseRgb: () => colors?._rgb?.radioButtonBaseRgb || { r: 34, g: 197, b: 94 },
+    getRadioButtonBase: () => themeVar('radioButtonBase'),
+    getRadioButtonBaseRgb: () => colorsRef.current?._rgb?.radioButtonBaseRgb || { r: 34, g: 197, b: 94 },
 
-    getPrimaryActionText: () => colors?.primaryActionText,
-    getPrimaryActionHover: () => colors?.primaryActionHover,
-    getDangerActionText: () => colors?.dangerActionText,
-    getDangerActionBg: () => colors?.dangerActionBg,
+    getPrimaryActionText: () => themeVar('primaryActionText'),
+    getPrimaryActionHover: () => themeVar('primaryActionHover'),
+    getDangerActionText: () => themeVar('dangerActionText'),
+    getDangerActionBg: () => themeVar('dangerActionBg'),
 
-    getSuccessColor: () => colors?.success,
-    getErrorColor: () => colors?.error,
-    getWarningColor: () => colors?.warning,
-    getInfoColor: () => colors?.info,
+    getSuccessColor: () => themeVar('success'),
+    getErrorColor: () => themeVar('error'),
+    getWarningColor: () => themeVar('warning'),
+    getInfoColor: () => themeVar('info'),
 
-    getNetworkExcellent: () => colors?.networkExcellent,
-    getNetworkGood: () => colors?.networkGood,
-    getNetworkFair: () => colors?.networkFair,
-    getNetworkPoor: () => colors?.networkPoor,
+    getNetworkExcellent: () => themeVar('networkExcellent'),
+    getNetworkGood: () => themeVar('networkGood'),
+    getNetworkFair: () => themeVar('networkFair'),
+    getNetworkPoor: () => themeVar('networkPoor'),
 
-    getLikeBadgeBg: () => colors?.likeBadgeBg,
-    getSuperLikeBadgeBg: () => colors?.superLikeBadgeBg,
-    getBanBadgeBg: () => colors?.banBadgeBg,
+    getLikeBadgeBg: () => themeVar('likeBadgeBg'),
+    getSuperLikeBadgeBg: () => themeVar('superLikeBadgeBg'),
+    getBanBadgeBg: () => themeVar('banBadgeBg'),
 
-    getFilterAllActive: () => colors?.filterAllActive,
-    getFilterInteractiveActive: () => colors?.filterInteractiveActive,
-    getFilterAnnouncerActive: () => colors?.filterAnnouncerActive,
-    getFilterExternalActive: () => colors?.filterExternalActive,
-    getFilterShoutoutsActive: () => colors?.filterShoutoutsActive,
-    getFilterInactive: () => colors?.filterInactive,
+    getFilterAllActive: () => FILTER_STYLES.filterAllActive,
+    getFilterInteractiveActive: () => FILTER_STYLES.filterInteractiveActive,
+    getFilterAnnouncerActive: () => FILTER_STYLES.filterAnnouncerActive,
+    getFilterExternalActive: () => FILTER_STYLES.filterExternalActive,
+    getFilterShoutoutsActive: () => FILTER_STYLES.filterShoutoutsActive,
+    getFilterInactive: () => FILTER_STYLES.filterInactive,
 
-    getUserAvatarGradient: () => colors?.userAvatarGradient,
-    getPremiumGradient: () => colors?.premiumGradient
-  }), [colors])
+    getUserAvatarGradient: () => themeVar('userAvatarGradient'),
+    getPremiumGradient: () => themeVar('premiumGradient')
+  }), [])
 
   const value = useMemo(() => ({
-    colors,
     interactionEffectsRef,
     triggerEffect,
     ...getters
-  }), [colors, getters, triggerEffect])
+  }), [getters, triggerEffect])
 
   return (
     <ThemeArtworkContext.Provider value={currentArtwork}>

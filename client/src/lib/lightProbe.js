@@ -51,10 +51,6 @@ export function noteLayoutMotion() {
   state.motionAt = performance.now()
 }
 
-export function layoutMotionAge() {
-  return performance.now() - state.motionAt
-}
-
 export function lightProbeWanted(now) {
   if (debug.off || now - state.consumerAt > CONSUMER_TIMEOUT_MS || now - state.motionAt < MOTION_QUIET_MS) return false
   return (debug.level ?? Math.max(state.level, state.target)) > 0

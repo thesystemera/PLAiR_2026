@@ -3,8 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { startTransition, useDeferredValue, useEffect, useState, useRef, memo, useCallback, createContext, useContext } from 'react'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
+import { PACK_SIZES, blobForUrl, packCache } from '../../lib/mediaCache'
+import { packBlurUrls } from '../../lib/packImage'
 import { usePointerInteraction } from '../../hooks/usePointerInteraction'
-import { useArtwork, useUISelector } from '../../contexts/UIStateContext'
+import { useUISelector } from '../../contexts/UIStateContext'
 import { DURATION, MOTION, PRESETS, SPRING, TWEEN } from '../../lib/motion'
 import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
@@ -114,40 +116,6 @@ function scheduleIdle(callback, delay) {
   }
 }
 
-function createBlurredImage(src, blurRadius) {
-  const key = `${src}_${blurRadius}`
-  if (blurCache.has(key)) return Promise.resolve(blurCache.get(key))
-
-  return new Promise((resolve) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      const size = 256
-      canvas.width = size
-      canvas.height = size
-      const ctx = canvas.getContext('2d')
-      ctx.filter = `blur(${blurRadius}px)`
-      const scale = Math.max(size / img.width, size / img.height)
-      const w = img.width * scale
-      const h = img.height * scale
-      ctx.drawImage(img, (size - w) / 2 - blurRadius, (size - h) / 2 - blurRadius, w + blurRadius * 2, h + blurRadius * 2)
-      canvas.toBlob((blob) => {
-        const url = blob ? URL.createObjectURL(blob) : canvas.toDataURL('image/jpeg', 0.8)
-        blurCache.set(key, url)
-        while (blurCache.size > BLUR_CACHE_LIMIT) {
-          const [oldestKey, oldestUrl] = blurCache.entries().next().value
-          blurCache.delete(oldestKey)
-          if (oldestUrl.startsWith('blob:')) URL.revokeObjectURL(oldestUrl)
-        }
-        resolve(url)
-      }, 'image/jpeg', 0.8)
-    }
-    img.onerror = () => resolve(null)
-    img.src = src
-  })
-}
-
 function decodeUrl(url) {
   if (!url) return Promise.resolve(null)
   const pending = decodedArtwork.get(url)
@@ -177,84 +145,70 @@ function isDecoded(url) {
   return !!url && decodedArtwork.get(url)?.ready === true
 }
 
-function getCachedBlurs(src) {
-  if (!src) return null
-  const [heavy, medium, light] = BLUR_RADII.map(radius => blurCache.get(`${src}_${radius}`))
+function getCachedBlurs(trackId) {
+  if (!trackId) return null
+  const [heavy, medium, light] = BLUR_RADII.map(radius => blurCache.get(`${trackId}_${radius}`))
   if (!heavy || !medium || !light || !isDecoded(heavy) || !isDecoded(medium) || !isDecoded(light)) return null
   return { heavy, medium, light }
 }
 
-async function createAllBlurs(src, betweenSteps) {
-  const urls = []
-  for (const radius of BLUR_RADII) {
-    const url = await createBlurredImage(src, radius)
-    await decodeUrl(url)
-    urls.push(url)
-    if (betweenSteps) await betweenSteps()
+async function createAllBlurs(trackId) {
+  const cached = getCachedBlurs(trackId)
+  if (cached) return cached
+  const packUrl = await packCache(PACK_SIZES[0]).getMedia(trackId)
+  const blob = packUrl ? blobForUrl(packUrl) : null
+  if (!blob) return null
+  const urls = await packBlurUrls(blob, BLUR_RADII)
+  await Promise.all(urls.map(decodeUrl))
+  BLUR_RADII.forEach((radius, index) => blurCache.set(`${trackId}_${radius}`, urls[index]))
+  while (blurCache.size > BLUR_CACHE_LIMIT) {
+    const [oldestKey, oldestUrl] = blurCache.entries().next().value
+    blurCache.delete(oldestKey)
+    decodedArtwork.delete(oldestUrl)
+    URL.revokeObjectURL(oldestUrl)
   }
   const [heavy, medium, light] = urls
   return { heavy, medium, light }
 }
 
-const nextIdle = () => new Promise(resolve => {
-  if ('requestIdleCallback' in window) window.requestIdleCallback(() => resolve(), { timeout: 1500 })
-  else setTimeout(resolve, 50)
-})
-
-export function prewarmModalAssets(artworkUrl) {
-  if (!artworkUrl) return Promise.resolve(null)
-  return decodeUrl(artworkUrl).then(() => createAllBlurs(artworkUrl, nextIdle))
+export function prewarmModalAssets(trackId) {
+  if (!trackId) return Promise.resolve(null)
+  return createAllBlurs(trackId)
 }
 
 const ModalBlurContext = createContext(null)
 
-const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artworkUrl, trackId, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
-  const [loadedUrl, setLoadedUrl] = useState(() => (isDecoded(artworkUrl) ? artworkUrl : null))
+const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ trackId, categoryColor, gradientOpacity = 0.85, onBlurReady }) {
   const mountedAtRef = useRef(0)
-  const imageLoaded = !!artworkUrl && (loadedUrl === artworkUrl || isDecoded(artworkUrl))
 
   useEffect(() => {
     mountedAtRef.current = performance.now()
   }, [])
 
   useEffect(() => {
-    if (!artworkUrl) {
+    if (!trackId) {
       onBlurReady?.(null)
       return
     }
 
     let cancelled = false
-    const cancels = []
-    const afterEntrance = (callback) => {
-      const remaining = Math.max(0, ENTRANCE_MS - (performance.now() - mountedAtRef.current))
-      cancels.push(scheduleIdle(callback, remaining))
-    }
-
-    if (!isDecoded(artworkUrl)) {
-      decodeUrl(artworkUrl).then((url) => {
-        if (cancelled || !url) return
-        afterEntrance(() => {
-          if (!cancelled) setLoadedUrl(url)
-        })
-      })
-    }
-
-    const cachedBlurs = getCachedBlurs(artworkUrl)
+    const cachedBlurs = getCachedBlurs(trackId)
     if (cachedBlurs) {
       onBlurReady?.(cachedBlurs)
-    } else {
-      afterEntrance(() => {
-        createAllBlurs(artworkUrl).then((result) => {
-          if (!cancelled) onBlurReady?.(result)
-        })
-      })
+      return
     }
+    const remaining = Math.max(0, ENTRANCE_MS - (performance.now() - mountedAtRef.current))
+    const cancel = scheduleIdle(() => {
+      createAllBlurs(trackId).then((result) => {
+        if (!cancelled) onBlurReady?.(result)
+      })
+    }, remaining)
 
     return () => {
       cancelled = true
-      cancels.forEach(cancel => cancel())
+      cancel()
     }
-  }, [artworkUrl, onBlurReady])
+  }, [trackId, onBlurReady])
 
   const gradientBase = (
     <div
@@ -265,7 +219,7 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ artwor
     />
   )
 
-  if (!artworkUrl || !imageLoaded) return gradientBase
+  if (!trackId) return gradientBase
 
   return (
     <>
@@ -334,12 +288,12 @@ export function Modal({
   const dialogRef = useRef(null)
 
   const currentTrack = engineState.currentTrack
-  const artworkUrl = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
-  const [blurState, setBlurState] = useState(() => ({ url: artworkUrl, blurs: getCachedBlurs(artworkUrl) }))
-  const blurs = blurState.url === artworkUrl ? (blurState.blurs || getCachedBlurs(artworkUrl)) : getCachedBlurs(artworkUrl)
+  const artTrackId = currentTrack?.has_artwork !== false ? currentTrack?.id || null : null
+  const [blurState, setBlurState] = useState(() => ({ trackId: artTrackId, blurs: getCachedBlurs(artTrackId) }))
+  const blurs = blurState.trackId === artTrackId ? (blurState.blurs || getCachedBlurs(artTrackId)) : getCachedBlurs(artTrackId)
   const setBlurs = useCallback((result) => {
-    setBlurState(prev => (prev.url === artworkUrl && prev.blurs === result ? prev : { url: artworkUrl, blurs: result }))
-  }, [artworkUrl])
+    setBlurState(prev => (prev.trackId === artTrackId && prev.blurs === result ? prev : { trackId: artTrackId, blurs: result }))
+  }, [artTrackId])
 
   const activeCategory = categoryOverride || radioState.activeSeedMode || 'all'
   const categoryMeta = getCategoryMetadata(activeCategory)
@@ -462,8 +416,7 @@ export function Modal({
             onMouseUp={stopAllEvents}
           >
             <BlurredArtworkBackground
-              artworkUrl={artworkUrl}
-              trackId={currentTrack?.id}
+              trackId={artTrackId}
               categoryColor={categoryColor}
               gradientOpacity={gradientOpacity}
               onBlurReady={setBlurs}

@@ -6,6 +6,8 @@ import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useUISelector } from '../../contexts/UIStateContext'
 import { ToggleChip } from '../SettingRow'
 import { ModalTagList } from './Modal'
+import { TrackArt } from '../DepthArt'
+import { PACK_SIZES, packCache } from '../../lib/mediaCache'
 
 const DESCRIPTION_MAX = 2000
 
@@ -475,7 +477,7 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
   const { getWhite, getGrey400, getBorder } = useDynamicTheme()
   const { toastError } = useUISelector(state => ({ toastError: state.toastError }))
   const [uploading, setUploading] = useState(false)
-  const [artworkUrl, setArtworkUrl] = useState(hasArtwork ? `/api/artwork/${trackId}?t=${Date.now()}` : null)
+  const [artwork, setArtwork] = useState({ shown: !!hasArtwork, version: 0 })
   const fileInputRef = useRef(null)
 
   const handleFileSelect = async (e) => {
@@ -500,7 +502,8 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
 
     try {
       await api.uploadTrackArtwork(trackId, file)
-      setArtworkUrl(`/api/artwork/${trackId}?t=${Date.now()}`)
+      await Promise.all(PACK_SIZES.map(size => packCache(size).invalidate(trackId)))
+      setArtwork(prev => ({ shown: true, version: prev.version + 1 }))
       onArtworkUploaded?.(true)
       triggerHaptic('success')
     } catch (err) {
@@ -513,7 +516,7 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
   }
 
   const getArtworkLabel = () => {
-    if (!artworkUrl) return 'No Artwork'
+    if (!artwork.shown) return 'No Artwork'
     if (artworkGenerated) return 'Generated Artwork'
     return 'Cover Artwork'
   }
@@ -524,12 +527,8 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
         className="relative w-24 h-24 rounded-lg overflow-hidden flex-shrink-0 border"
         style={{ borderColor: getBorder(0.3), backgroundColor: 'rgba(0,0,0,0.3)' }}
       >
-        {artworkUrl ? (
-          <img decoding="async"
-            src={artworkUrl}
-            alt="Track artwork"
-            className="w-full h-full object-cover"
-          />
+        {artwork.shown ? (
+          <TrackArt key={artwork.version} trackId={trackId} alt="Track artwork" />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <Image size={32} className="text-gray-500" />
@@ -548,7 +547,7 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
           {artworkGenerated && <Sparkles size={12} className="text-purple-400" />}
         </p>
         <p className="text-xs mb-3" style={{ color: getGrey400() }}>
-          {artworkUrl
+          {artwork.shown
             ? 'Upload your own image to replace'
             : 'No artwork available'}
         </p>
@@ -571,7 +570,7 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
           }}
         >
           <Upload size={14} />
-          {uploading ? 'Uploading...' : artworkUrl ? 'Replace Artwork' : 'Upload Artwork'}
+          {uploading ? 'Uploading...' : artwork.shown ? 'Replace Artwork' : 'Upload Artwork'}
         </button>
       </div>
     </div>

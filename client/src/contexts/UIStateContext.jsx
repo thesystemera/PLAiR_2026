@@ -53,7 +53,6 @@
  *   (shallow compare). There is no whole-state hook.
  * - useUIStateGetter() - Read the latest state inside a handler without subscribing
  * - useRadioUI() - Convenience hook for radio-specific state
- * - useArtwork() - Artwork URL management
  *
  * ENGINES publish data → UIState derives visual state → VIEWS subscribe and render
  *
@@ -63,11 +62,13 @@
  */
 
 import { createContext, startTransition, useContext, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react'
-import { artworkCache, enrichedArtworkCache } from '../lib/mediaCache'
+import { FULL_PACK_SIZE, PACK_SIZES, SCENE_PACK_SIZE, packCache } from '../lib/mediaCache'
+
+const CURRENT_TRACK_PACK_SIZES = [PACK_SIZES[0], SCENE_PACK_SIZE, FULL_PACK_SIZE]
 import { AudioInteractionManager } from '../lib/audioInteractionManager'
 import { logger } from '../lib/logger'
 import { safeStorage } from '../lib/safeStorage'
-import { UI_FULLSCREEN, FALLBACK_GRADIENT_HEX, getOnAirSegment } from '../lib/themeManager'
+import { UI_FULLSCREEN, getOnAirSegment } from '../lib/themeManager'
 import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
@@ -123,13 +124,11 @@ export const GLASS_EFFECT_CONFIG = {
 const DJ_DUCK_RELEASE_HOLD_MS = 350
 
 const UIStateContext = createContext(null)
-const ArtworkStoreContext = createContext(null)
 const RadioButtonContext = createContext(null)
 const UIActionsContext = createContext(null)
 const RadioStateContext = createContext(null)
 const UIStoreContext = createContext(null)
 const EMPTY_CLIPS = []
-const noopUnsubscribe = () => {}
 const NO_SELECTION = Symbol('no-selection')
 
 function createUIStore() {
@@ -155,21 +154,6 @@ function shallowEqual(a, b) {
     if (!Object.prototype.hasOwnProperty.call(b, key) || !Object.is(a[key], b[key])) return false
   }
   return true
-}
-
-const GRADIENT_COLORS = FALLBACK_GRADIENT_HEX
-
-function gradientSvgDataUrl(color1, color2) {
-  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:${color1}"/><stop offset="100%" style="stop-color:${color2}"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/><text x="50" y="65" font-size="40" text-anchor="middle" fill="white" opacity="0.8">🎵</text></svg>`)}`
-}
-
-function generatePlaceholderDataURL(id) {
-  try {
-    const index = id ? parseInt(id.slice(0, 2), 16) % GRADIENT_COLORS.length : 0
-    return gradientSvgDataUrl(...GRADIENT_COLORS[index])
-  } catch {
-    return gradientSvgDataUrl(...GRADIENT_COLORS[0])
-  }
 }
 
 export const uiState = {
@@ -241,12 +225,7 @@ function hexToRgb(hex) {
 }
 
 export function UIStateProvider({ children }) {
-  const artworkUrlsRef = useRef(new Map())
-  const enrichedArtworkUrlsRef = useRef(new Map())
-  const artworkListenersRef = useRef(new Map())
   const pinnedArtworkIdsRef = useRef(new Set())
-  const loadingTracksRef = useRef(new Set())
-  const loadingEnrichedRef = useRef(new Set())
   const [audioFeatures, setAudioFeatures] = useState(null)
   const [lyricTimestamps, setLyricTimestamps] = useState(null)
 
@@ -885,131 +864,11 @@ export function UIStateProvider({ children }) {
 
   const updateRadioButtonForegroundOpacity = setRadioButtonForegroundOpacity
 
-  const notifyArtwork = useCallback((kind, trackId) => {
-    const listeners = artworkListenersRef.current.get(`${kind}:${trackId}`)
-    if (listeners) listeners.forEach(listener => listener())
-  }, [])
-
-  const subscribeArtwork = useCallback((kind, trackId, listener) => {
-    const key = `${kind}:${trackId}`
-    const registry = artworkListenersRef.current
-    let listeners = registry.get(key)
-    if (!listeners) {
-      listeners = new Set()
-      registry.set(key, listeners)
-    }
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-      if (listeners.size === 0 && registry.get(key) === listeners) {
-        registry.delete(key)
-      }
-    }
-  }, [])
-
-  const getArtworkUrl = useCallback((trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return null
-    if (artworkUrlsRef.current.has(trackId)) return artworkUrlsRef.current.get(trackId)
-    const memoryCached = artworkCache.getMemory(trackId)
-    if (memoryCached) {
-      artworkUrlsRef.current.set(trackId, memoryCached)
-      return memoryCached
-    }
-    return generatePlaceholderDataURL(trackId)
-  }, [])
-
-  const getEnrichedArtworkUrl = useCallback((trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return null
-    if (enrichedArtworkUrlsRef.current.has(trackId)) return enrichedArtworkUrlsRef.current.get(trackId)
-    const memoryCached = enrichedArtworkCache.getMemory(trackId)
-    if (memoryCached) {
-      enrichedArtworkUrlsRef.current.set(trackId, memoryCached)
-      return memoryCached
-    }
-    return generatePlaceholderDataURL(trackId)
-  }, [])
-
-
-  const preloadArtwork = useCallback(async (trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return
-    if (artworkUrlsRef.current.has(trackId)) return
-    if (loadingTracksRef.current.has(trackId)) return
-    loadingTracksRef.current.add(trackId)
-    try {
-      const url = await artworkCache.getMedia(trackId)
-      if (url) {
-        artworkUrlsRef.current.set(trackId, url)
-        notifyArtwork('artwork', trackId)
-      }
-    } catch (error) {
-      logger.error(`[UIState] Failed to load artwork:`, error)
-    } finally {
-      loadingTracksRef.current.delete(trackId)
-    }
-  }, [notifyArtwork])
-
-  const preloadArtworkBatch = useCallback(async (trackIds) => {
-    const promises = trackIds.filter(id => id && !artworkUrlsRef.current.has(id)).map(id => preloadArtwork(id, true))
-    await Promise.all(promises)
-  }, [preloadArtwork])
-
-  const clearArtwork = useCallback((trackId) => {
-    artworkCache.releaseMemory(trackId)
-    artworkUrlsRef.current.delete(trackId)
-    notifyArtwork('artwork', trackId)
-  }, [notifyArtwork])
-
-  const preloadEnrichedArtwork = useCallback(async (trackId, hasArtwork = true) => {
-    if (!trackId || hasArtwork === false) return
-    if (enrichedArtworkUrlsRef.current.has(trackId)) return
-    if (loadingEnrichedRef.current.has(trackId)) return
-    loadingEnrichedRef.current.add(trackId)
-    try {
-      const url = await enrichedArtworkCache.getMedia(trackId)
-      if (url) {
-        enrichedArtworkUrlsRef.current.set(trackId, url)
-        notifyArtwork('enriched', trackId)
-      }
-    } catch (error) {
-      logger.error(`[UIState] Failed to load enriched artwork:`, error)
-    } finally {
-      loadingEnrichedRef.current.delete(trackId)
-    }
-  }, [notifyArtwork])
-
-  const clearEnrichedArtwork = useCallback((trackId) => {
-    enrichedArtworkCache.releaseMemory(trackId)
-    enrichedArtworkUrlsRef.current.delete(trackId)
-    notifyArtwork('enriched', trackId)
-  }, [notifyArtwork])
-
   useEffect(() => {
-    const listeners = artworkListenersRef.current
     const pinned = pinnedArtworkIdsRef.current
-    const bind = (kind, cache, urlsRef, preload) => {
-      cache.setPinnedChecker(id => pinned.has(id) || listeners.has(`${kind}:${id}`))
-      const unsubscribe = cache.subscribe((id) => {
-        const url = cache.peekMemory(id)
-        if (url) {
-          urlsRef.current.set(id, url)
-        } else {
-          urlsRef.current.delete(id)
-          if (listeners.has(`${kind}:${id}`)) void preload(id, true)
-        }
-        notifyArtwork(kind, id)
-      })
-      return () => {
-        unsubscribe()
-        cache.setPinnedChecker(null)
-      }
-    }
-    const unbindArtwork = bind('artwork', artworkCache, artworkUrlsRef, preloadArtwork)
-    const unbindEnriched = bind('enriched', enrichedArtworkCache, enrichedArtworkUrlsRef, preloadEnrichedArtwork)
-    return () => {
-      unbindArtwork()
-      unbindEnriched()
-    }
-  }, [notifyArtwork, preloadArtwork, preloadEnrichedArtwork])
+    const unpins = CURRENT_TRACK_PACK_SIZES.map(size => packCache(size).addPinnedChecker(id => pinned.has(id)))
+    return () => unpins.forEach(unpin => unpin())
+  }, [])
 
   const fetchVideoClips = useCallback(async (trackId) => {
     if (!trackId) return
@@ -1053,23 +912,20 @@ export function UIStateProvider({ children }) {
   useEffect(() => {
     if (!currentTrackId) return
 
-    preloadArtwork(currentTrackId, currentTrackHasArtwork)
-    preloadEnrichedArtwork(currentTrackId, currentTrackHasArtwork)
-
     const nextTrack = engineQueue?.[engineIndex + 1]
     const pinned = pinnedArtworkIdsRef.current
     pinned.clear()
-    pinned.add(currentTrackId)
-    if (nextTrack) pinned.add(nextTrack.id)
-    if (nextTrack) {
-      preloadArtwork(nextTrack.id, nextTrack.has_artwork)
-      preloadEnrichedArtwork(nextTrack.id, nextTrack.has_artwork)
+    for (const track of [{ id: currentTrackId, has_artwork: currentTrackHasArtwork }, nextTrack]) {
+      if (!track?.id) continue
+      pinned.add(track.id)
+      if (track.has_artwork === false) continue
+      for (const size of CURRENT_TRACK_PACK_SIZES) void packCache(size).getMedia(track.id)
     }
 
     if (settingsState.videoClipsEnabled) {
       fetchVideoClips(currentTrackId)
     }
-  }, [currentTrackId, currentTrackHasArtwork, engineQueue, engineIndex, preloadArtwork, preloadEnrichedArtwork, fetchVideoClips, settingsState.videoClipsEnabled])
+  }, [currentTrackId, currentTrackHasArtwork, engineQueue, engineIndex, fetchVideoClips, settingsState.videoClipsEnabled])
 
   useEffect(() => {
     logger.info(`[UIState] 🎬 Video clips setting: ${settingsState.videoClipsEnabled ? 'ENABLED' : 'DISABLED'}`)
@@ -1142,14 +998,6 @@ export function UIStateProvider({ children }) {
     setEngineState(prev => ({ ...prev, isVideoPreviewPlaying: isPlaying }))
   }, [])
 
-  const artworkStore = useMemo(() => ({
-    subscribeArtwork,
-    getArtworkUrl,
-    getEnrichedArtworkUrl,
-    preloadArtwork,
-    preloadEnrichedArtwork,
-  }), [subscribeArtwork, getArtworkUrl, getEnrichedArtworkUrl, preloadArtwork, preloadEnrichedArtwork])
-
   const value = useMemo(() => ({
     tiltNeedsPermission: TILT_NEEDS_PERMISSION,
     requestMotionAccess,
@@ -1219,14 +1067,6 @@ export function UIStateProvider({ children }) {
     updateShaderRegions,
     updateShaderRadioButtonPos,
 
-    subscribeArtwork,
-    getArtworkUrl,
-    preloadArtwork,
-    preloadArtworkBatch,
-    clearArtwork,
-    getEnrichedArtworkUrl,
-    preloadEnrichedArtwork,
-    clearEnrichedArtwork,
     videoClipsMapRef,
     videoClipsByTrack,
     fetchVideoClips,
@@ -1269,8 +1109,6 @@ export function UIStateProvider({ children }) {
     notices, showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
     reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
-    subscribeArtwork, getArtworkUrl, preloadArtwork, preloadArtworkBatch, clearArtwork,
-    getEnrichedArtworkUrl, preloadEnrichedArtwork, clearEnrichedArtwork,
     videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
     shoutoutModalState, openShoutoutModal, closeShoutoutModal,
     reviewModalState, openReviewModal, closeReviewModal,
@@ -1310,11 +1148,9 @@ export function UIStateProvider({ children }) {
     <UIStateContext.Provider value={value}>
       <UIActionsContext.Provider value={actionsValue}>
         <RadioStateContext.Provider value={radioState}>
-          <ArtworkStoreContext.Provider value={artworkStore}>
-            <RadioButtonContext.Provider value={radioButtonValue}>
-              {children}
-            </RadioButtonContext.Provider>
-          </ArtworkStoreContext.Provider>
+          <RadioButtonContext.Provider value={radioButtonValue}>
+            {children}
+          </RadioButtonContext.Provider>
         </RadioStateContext.Provider>
       </UIActionsContext.Provider>
     </UIStateContext.Provider>
@@ -1354,44 +1190,6 @@ export function useRadioState() {
   const context = useContext(RadioStateContext)
   if (!context) throw new Error('useRadioState must be used within UIStateProvider')
   return context
-}
-
-function useArtworkStore() {
-  const context = useContext(ArtworkStoreContext)
-  if (!context) throw new Error('useArtwork must be used within UIStateProvider')
-  return context
-}
-
-function useArtworkSubscription(kind, trackId, hasArtwork, getUrl, preload) {
-  const { subscribeArtwork } = useArtworkStore()
-  const enabled = !!trackId && hasArtwork !== false
-
-  const subscribe = useCallback(
-    (onChange) => (enabled ? subscribeArtwork(kind, trackId, onChange) : noopUnsubscribe),
-    [enabled, kind, trackId, subscribeArtwork]
-  )
-  const getSnapshot = useCallback(
-    () => (enabled ? getUrl(trackId, hasArtwork) : null),
-    [enabled, trackId, hasArtwork, getUrl]
-  )
-
-  const url = useSyncExternalStore(subscribe, getSnapshot)
-
-  useEffect(() => {
-    if (enabled) void preload(trackId, hasArtwork)
-  }, [enabled, trackId, hasArtwork, preload])
-
-  return url
-}
-
-export function useArtwork(trackId, hasArtwork = true) {
-  const { getArtworkUrl, preloadArtwork } = useArtworkStore()
-  return useArtworkSubscription('artwork', trackId, hasArtwork, getArtworkUrl, preloadArtwork)
-}
-
-export function useEnrichedArtwork(trackId, hasArtwork = true) {
-  const { getEnrichedArtworkUrl, preloadEnrichedArtwork } = useArtworkStore()
-  return useArtworkSubscription('enriched', trackId, hasArtwork, getEnrichedArtworkUrl, preloadEnrichedArtwork)
 }
 
 export function useVideoClips(trackId) {

@@ -29,6 +29,7 @@ import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, 
 import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
+import { decodePack } from './packImage'
 
 const GLOW_FALLOFF_SCALE = Math.sqrt(6 / Math.LN2)
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
@@ -57,7 +58,6 @@ const SIGNATURE_EPSILON = 1e-4
 const SIGNATURE_SIZE = 160
 const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
-const ARTWORK_SIZE = 512
 const CLICK_DECAY_MS = 500
 const ARTWORK_SWAP_FRAMES = 2
 const PANEL_CORNER_RADIUS = 0.015
@@ -172,14 +172,11 @@ function generateNoiseTexture() {
   return texture
 }
 
-async function loadArtworkTexture(url, targetSize) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`artwork ${response.status}`)
-  const bitmap = await createImageBitmap(await response.blob())
-  const shrink = targetSize && (bitmap.width > targetSize || bitmap.height > targetSize)
-  const canvas = makeCanvas(shrink ? targetSize : bitmap.width, shrink ? targetSize : bitmap.height)
-  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  bitmap.close?.()
+async function loadArtworkTexture(blob) {
+  const { color } = await decodePack(blob, { map: false })
+  const canvas = makeCanvas(color.width, color.height)
+  canvas.getContext('2d').drawImage(color, 0, 0)
+  color.close()
   const texture = new CanvasTexture(canvas)
   texture.wrapS = ClampToEdgeWrapping
   texture.wrapT = ClampToEdgeWrapping
@@ -366,7 +363,6 @@ export class SceneRenderer {
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
     this.frontLayer = 'A'
     this.artworkUrl = null
-    this.artworkSize = undefined
     this.artworkTokens = { A: 0, B: 0 }
     this.pendingSwap = null
     this.clips = { textures: [], currentIndex: 0, blend: 0, count: 0, rate: 0 }
@@ -521,7 +517,7 @@ export class SceneRenderer {
       case 'size': this.setSize(message); break
       case 'state': Object.assign(this.state, message.state); this.updateStats(); break
       case 'features': this.setFeatures(message.features); break
-      case 'artwork': this.setArtwork(message.url, message.fullscreen); break
+      case 'artwork': this.setArtwork(message.key, message.blob); break
       case 'lyric': this.setLyric(message); break
       case 'clips': this.setClipCount(message.count); break
       case 'clipFrame': this.setClipFrame(message); break
@@ -578,16 +574,12 @@ export class SceneRenderer {
     this.tempoTime = 0
   }
 
-  setArtwork(url, fullscreen) {
-    if (!url) return
-    const targetSize = fullscreen ? null : ARTWORK_SIZE
-    const isNew = url !== this.artworkUrl
-    if (!isNew && targetSize === this.artworkSize) return
-    const layer = isNew ? (this.frontLayer === 'A' ? 'B' : 'A') : this.frontLayer
+  setArtwork(url, blob) {
+    if (!url || !blob || url === this.artworkUrl) return
+    const layer = this.frontLayer === 'A' ? 'B' : 'A'
     const token = ++this.artworkTokens[layer]
     this.artworkUrl = url
-    this.artworkSize = targetSize
-    loadArtworkTexture(url, targetSize).then(texture => {
+    loadArtworkTexture(blob).then(texture => {
       if (this.disposed || this.artworkTokens[layer] !== token) {
         texture.dispose()
         return
@@ -595,8 +587,7 @@ export class SceneRenderer {
       const old = this.layers[layer]
       this.layers[layer] = texture
       if (old !== this.transparentPixel) old.dispose()
-      if (isNew) this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
-      else this.applyLayers()
+      this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
     }).catch(error => {
       if (this.artworkTokens[layer] === token) this.emit({ type: 'warn', message: `Failed to load artwork texture: ${error?.message || error}` })
     })

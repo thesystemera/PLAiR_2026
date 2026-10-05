@@ -2,51 +2,22 @@ import { logger } from './logger'
 import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
 
-function isSlowConnection() {
-  const connection = typeof navigator !== 'undefined' ? navigator.connection : null
-  if (!connection) return false
-  return !!connection.saveData || ['slow-2g', '2g', '3g'].includes(connection.effectiveType)
+export const PACK_SIZES = [256, 512, 768, 1024]
+export const FULL_PACK_SIZE = 1024
+export const SCENE_PACK_SIZE = 512
+const PACK_MEMORY_ITEMS = { 256: 300, 512: 300, 768: 150, 1024: 8 }
+const PACK_STORED_ITEMS = { 256: 2000, 512: 2000, 768: 2000, 1024: 300 }
+
+export function packSizeFor(px) {
+  return PACK_SIZES.find(size => size >= px) || FULL_PACK_SIZE
 }
 
-const PACK_SIZES = [256, 512, 768]
-
-function pickPackSize() {
-  if (typeof window === 'undefined') return 512
-  if (isSlowConnection()) return PACK_SIZES[0]
-  const dpr = Math.min(window.devicePixelRatio || 1, 3)
-  const width = Math.max(window.innerWidth || 0, window.screen?.width || 0) || 1024
-  const height = Math.max(window.innerHeight || 0, window.screen?.height || 0) || 768
-  const phoneLandscape = width > height && height < 640
-  const cardCss = width < 1024 ? width / (phoneLandscape ? 4 : 2) : 320
-  const needed = cardCss * dpr * 0.85
-  return PACK_SIZES.find(size => size >= needed) || PACK_SIZES[PACK_SIZES.length - 1]
+export function artPackUrl(id, size) {
+  return `/api/artwork/${id}/pack/${size}?v=${NORMAL_MAP_VERSION}`
 }
-
-export const ART_PACK_SIZE = pickPackSize()
-
-export function artPackUrl(id) {
-  return `/api/artwork/${id}/pack/${ART_PACK_SIZE}?v=${NORMAL_MAP_VERSION}`
-}
-export const PROFILE_PACK_SIZE = 512
 const NORMAL_MAP_VERSION = 3
 
 const CACHE_CONFIGS = {
-  artwork: {
-    cacheName: 'artwork-cache-v1',
-    maxItems: 1000,
-    expiryMs: 7 * 24 * 60 * 60 * 1000, // 7 days
-    metadataKey: 'artwork-metadata',
-    getUrl: (id) => `/api/artwork/${id}`,
-    logPrefix: '[ArtworkCache]'
-  },
-  enriched_artwork: {
-    cacheName: 'enriched-artwork-cache-v1',
-    maxItems: 1000,
-    expiryMs: 7 * 24 * 60 * 60 * 1000, // 7 days
-    metadataKey: 'enriched-artwork-metadata',
-    getUrl: (id) => `/api/artwork/${id}/enriched`,
-    logPrefix: '[EnrichedArtworkCache]'
-  },
   profile_picture: {
     cacheName: 'profile-picture-cache-v1',
     maxItems: 500,
@@ -55,25 +26,17 @@ const CACHE_CONFIGS = {
     getUrl: (id) => `/api/user/${id}/profile-picture`,
     logPrefix: '[ProfilePictureCache]'
   },
-  art_pack: {
-    cacheName: 'art-pack-cache-v1',
-    maxItems: 1500,
-    maxMemoryItems: 300,
+  ...Object.fromEntries(PACK_SIZES.map(size => [`art_pack_${size}`, {
+    cacheName: `art-pack-${size}-cache-v1`,
+    maxItems: PACK_STORED_ITEMS[size],
+    maxMemoryItems: PACK_MEMORY_ITEMS[size],
     expiryMs: 14 * 24 * 60 * 60 * 1000,
-    metadataKey: 'art-pack-metadata',
-    getUrl: artPackUrl,
-    logPrefix: '[ArtPackCache]',
-    memoryOnly: true
-  },
-  normal_full: {
-    cacheName: 'normal-full-cache-v1',
-    maxItems: 300,
-    maxMemoryItems: 20,
-    expiryMs: 14 * 24 * 60 * 60 * 1000,
-    metadataKey: 'normal-full-metadata',
-    getUrl: (id) => `/api/artwork/${id}/normal?v=${NORMAL_MAP_VERSION}`,
-    logPrefix: '[NormalCache]'
-  },
+    metadataKey: `art-pack-${size}-metadata`,
+    getUrl: (id) => artPackUrl(id, size),
+    logPrefix: `[ArtPack${size}]`,
+    memoryOnly: true,
+    offlineBlob: (cached) => cached?.packBlobs?.[size],
+  }])),
   profile_pack: {
     cacheName: 'profile-pack-cache-v1',
     maxItems: 500,
@@ -86,8 +49,18 @@ const CACHE_CONFIGS = {
 }
 
 const MAX_MEMORY_ITEMS = 200
-const OFFLINE_STORE_TYPES = new Set(['artwork', 'enriched_artwork', 'art_pack'])
-const OFFLINE_BLOB_FIELDS = { artwork: 'artworkBlob', enriched_artwork: 'enrichedArtworkBlob', art_pack: 'packBlob' }
+const RETIRED_CACHES = [
+  ['art-pack-cache-v1', 'art-pack-metadata'],
+  ['art-pack-full-cache-v1', 'art-pack-full-metadata'],
+  ['artwork-cache-v1', 'artwork-metadata'],
+  ['enriched-artwork-cache-v1', 'enriched-artwork-metadata'],
+  ['normal-full-cache-v1', 'normal-full-metadata'],
+  ['artwork-thumb-cache-v1', 'artwork-thumb-metadata'],
+  ['depth-thumb-cache-v1', 'depth-thumb-metadata'],
+  ['normal-thumb-cache-v1', 'normal-thumb-metadata'],
+  ['profile-normal-cache-v1', 'profile-normal-metadata'],
+  ['profile-depth-cache-v1', 'profile-depth-metadata'],
+]
 const openCaches = new Map()
 const METADATA_SAVE_DELAY_MS = 1000
 
@@ -128,9 +101,10 @@ class MediaCache {
     this.metadata = new Map()
     this.initialized = false
     this.listeners = new Set()
-    this.isPinned = null
+    this.pinCheckers = new Set()
     this.saveTimer = null
     this.maxMemoryItems = this.config.maxMemoryItems || MAX_MEMORY_ITEMS
+    this.reloads = new Set()
 
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', () => this.flushMetadata())
@@ -142,8 +116,14 @@ class MediaCache {
     return () => this.listeners.delete(listener)
   }
 
-  setPinnedChecker(checker) {
-    this.isPinned = checker
+  addPinnedChecker(checker) {
+    this.pinCheckers.add(checker)
+    return () => this.pinCheckers.delete(checker)
+  }
+
+  isPinned(id) {
+    for (const checker of this.pinCheckers) if (checker(id)) return true
+    return false
   }
 
   _emit(id) {
@@ -183,7 +163,7 @@ class MediaCache {
     if (this.memoryCache.size <= this.maxMemoryItems) return
     for (const id of this.memoryCache.keys()) {
       if (this.memoryCache.size <= this.maxMemoryItems) break
-      if (this.isPinned?.(id)) continue
+      if (this.isPinned(id)) continue
       this.releaseMemory(id)
     }
   }
@@ -255,8 +235,7 @@ class MediaCache {
 
   async _fromOfflineStore(id) {
     try {
-      const cached = await cacheManager.getCachedTrack(id)
-      const blob = cached?.[OFFLINE_BLOB_FIELDS[this.type]]
+      const blob = this.config.offlineBlob(await cacheManager.getCachedTrack(id))
       if (!blob) return null
       const blobUrl = createBlobUrl(blob, this.type, id, this.config.memoryOnly)
       this._setMemory(id, blobUrl)
@@ -269,7 +248,8 @@ class MediaCache {
   }
 
   async _fetchNetwork(id, cache, mediaUrl, signal) {
-    const response = await fetch(mediaUrl, { signal })
+    const reload = this.reloads.delete(id)
+    const response = await fetch(mediaUrl, reload ? { signal, cache: 'reload' } : { signal })
     if (response.ok) {
       if (cache) {
         cache.put(mediaUrl, response.clone())
@@ -286,7 +266,7 @@ class MediaCache {
     try {
       const cache = await this._openCache()
       const mediaUrl = this.config.getUrl(id)
-      const hasOfflineStore = OFFLINE_STORE_TYPES.has(this.type)
+      const hasOfflineStore = !!this.config.offlineBlob
 
       let response = cache ? await cache.match(mediaUrl) : null
 
@@ -356,7 +336,7 @@ class MediaCache {
     const toEvict = entries.slice(0, entries.length - this.config.maxItems)
 
     for (const [id] of toEvict) {
-      if (this.isPinned?.(id)) continue
+      if (this.isPinned(id)) continue
       await cache.delete(this.config.getUrl(id))
       this.releaseMemory(id)
       this.metadata.delete(id)
@@ -393,6 +373,7 @@ class MediaCache {
       const cache = await caches.open(this.config.cacheName)
       await cache.delete(this.config.getUrl(id))
 
+      this.reloads.add(id)
       this.metadata.delete(id)
       this.releaseMemory(id)
       this.saveMetadata()
@@ -404,9 +385,17 @@ class MediaCache {
   }
 }
 
-export const artworkCache = new MediaCache('artwork')
-export const enrichedArtworkCache = new MediaCache('enriched_artwork')
 export const profilePictureCache = new MediaCache('profile_picture')
-export const artPackCache = new MediaCache('art_pack')
-export const normalFullCache = new MediaCache('normal_full')
+const packCaches = new Map(PACK_SIZES.map(size => [size, new MediaCache(`art_pack_${size}`)]))
+
+export function packCache(size) {
+  return packCaches.get(size)
+}
 export const profilePackCache = new MediaCache('profile_pack')
+
+if (typeof caches !== 'undefined') {
+  for (const [cacheName, metadataKey] of RETIRED_CACHES) {
+    caches.delete(cacheName).catch(() => {})
+    safeStorage.remove(metadataKey)
+  }
+}

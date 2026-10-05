@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
 import { fetchFinishedUploadJob, uploadJobTitle, UPLOAD_FINISHED_STATUSES } from '../lib/uploadJobs'
-import { useArtwork, useUISelector, useUIStateGetter, uiState } from '../contexts/UIStateContext'
+import { useUISelector, useUIStateGetter, uiState } from '../contexts/UIStateContext'
 import { onSettingsChanged, pickValidSettings } from '../lib/settings'
 import { deviceKind } from '../lib/session'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
@@ -12,6 +12,7 @@ import { usePlaybackActions, usePlaybackConnected } from '../contexts/PlaybackCo
 import { useStorage } from '../contexts/StorageContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
@@ -20,17 +21,17 @@ const MEDIA_POSITION_REFRESH_MS = 10000
 export function TrackDataLoader() {
   const { trackId, hasArtwork, setTrackData } = useUISelector(state => ({
     trackId: state.engineState.currentTrack?.id,
-    hasArtwork: state.engineState.currentTrack?.has_artwork,
+    hasArtwork: state.engineState.currentTrack?.has_artwork !== false,
     setTrackData: state.setTrackData,
   }))
-  const currentTrackArtwork = useArtwork(trackId, hasArtwork)
+  const artTrackId = hasArtwork ? trackId : null
 
   useEffect(() => {
-    if (!currentTrackArtwork || currentTrackArtwork.startsWith('data:')) return
+    if (!artTrackId) return
     let cancelled = false
     const warmModalArtwork = () => {
       import('./modals/Modal')
-        .then(module => { if (!cancelled) return module.prewarmModalAssets(currentTrackArtwork) })
+        .then(module => { if (!cancelled) return module.prewarmModalAssets(artTrackId) })
         .catch(err => logger.warn('[App] Failed to prewarm modal artwork:', err))
     }
     if ('requestIdleCallback' in window) {
@@ -39,7 +40,7 @@ export function TrackDataLoader() {
     }
     const timeoutId = setTimeout(warmModalArtwork, 3000)
     return () => { cancelled = true; clearTimeout(timeoutId) }
-  }, [currentTrackArtwork])
+  }, [artTrackId])
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +95,8 @@ export function MediaSessionBridge() {
     isCrossfading: state.engineState.isCrossfading,
   }))
   const { resumePlayback, pausePlayback, previous, next, seek, audio } = usePlaybackActions()
+  const themeArtwork = useThemeArtwork()
+  const artworkUrl = themeArtwork && themeArtwork.trackId === currentTrack?.id ? themeArtwork.imageUrl : null
 
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
@@ -104,14 +107,14 @@ export function MediaSessionBridge() {
         title: params.title || currentTrack.title || 'Unknown Track',
         artist: params.artist_name || currentTrack.artist_name || derivedTags?.inspired_artist || 'PLAiR Radio',
         album: 'PLAiR',
-        artwork: currentTrack.has_artwork ? [
-          { src: `${window.location.origin}/api/artwork/${currentTrack.id}/thumb/512`, sizes: '512x512', type: 'image/jpeg' }
+        artwork: artworkUrl ? [
+          { src: artworkUrl, sizes: '512x512', type: 'image/jpeg' }
         ] : [
           { src: `${window.location.origin}/images/plair_icon_512.png`, sizes: '512x512', type: 'image/png' }
         ]
       })
     }
-  }, [currentTrack])
+  }, [currentTrack, artworkUrl])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return

@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { decodePack } from './packImage'
 import * as THREE from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader } from './sceneShaders'
@@ -62,7 +63,7 @@ async function decodeRenderAudio(audioUrl, durationMs, onStatus) {
 }
 
 export async function renderVideo({
-  artworkUrl,
+  artworkBlob,
   audioUrl,
   audioFeatures,
   lyricTimestamps,
@@ -127,7 +128,7 @@ export async function renderVideo({
   resources.lyricTexture = lyricTexture
 
   onStatus?.('Loading artwork...')
-  const artworkTexture = await loadTexture(artworkUrl)
+  const artworkTexture = await loadTexture(artworkBlob)
   resources.artworkTexture = artworkTexture
   const texWidth = artworkTexture.image.width
   const texHeight = artworkTexture.image.height
@@ -513,12 +514,10 @@ export async function renderVideo({
   }
 }
 
-async function loadTexture(url) {
-  const response = await fetch(url)
-  const blob = await response.blob()
-  const bitmap = await createImageBitmap(blob)
-  const texture = new THREE.CanvasTexture(bitmap)
-  texture.image = bitmap
+async function loadTexture(packBlob) {
+  const { color } = await decodePack(packBlob, { map: false })
+  const texture = new THREE.CanvasTexture(color)
+  texture.image = color
   texture.flipY = false
   return texture
 }

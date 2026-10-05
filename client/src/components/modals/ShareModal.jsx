@@ -6,6 +6,8 @@ import { useUISelector } from '../../contexts/UIStateContext'
 import { triggerHaptic } from '../../lib/haptics'
 import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
+import { FULL_PACK_SIZE, blobForUrl, packCache } from '../../lib/mediaCache'
+import { TrackArt } from '../DepthArt'
 import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
@@ -141,13 +143,12 @@ export function ShareModal({ isOpen, onClose, track }) {
 
       if (abortRef.current) return
 
-      const artworkUrl = currentTrack.has_artwork
-        ? `${window.location.origin}/api/artwork/${trackId}`
-        : null
+      const packUrl = currentTrack.has_artwork ? await packCache(FULL_PACK_SIZE).getMedia(trackId) : null
+      const artworkBlob = packUrl ? blobForUrl(packUrl) : null
 
       const audioUrl = `${window.location.origin}${api.getRenderAudioUrl(trackId)}`
 
-      if (!artworkUrl) {
+      if (!artworkBlob) {
         throw new Error('Track has no artwork')
       }
 
@@ -159,7 +160,7 @@ export function ShareModal({ isOpen, onClose, track }) {
 
       const blob = await renderVideo({
         trackId,
-        artworkUrl,
+        artworkBlob,
         audioUrl,
         audioFeatures,
         lyricTimestamps,
@@ -301,11 +302,9 @@ export function ShareModal({ isOpen, onClose, track }) {
       <div className="space-y-6">
         <div className="flex items-center gap-4">
           {currentTrack?.has_artwork && (
-            <img decoding="async"
-              src={`/api/artwork/${trackId}`}
-              alt={trackTitle}
-              className="w-16 h-16 rounded-lg object-cover"
-            />
+            <div className="relative w-16 h-16 rounded-lg overflow-hidden flex-shrink-0">
+              <TrackArt trackId={trackId} alt={trackTitle} />
+            </div>
           )}
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-white truncate">{trackTitle}</div>

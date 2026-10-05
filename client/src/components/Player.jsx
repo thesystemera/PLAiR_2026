@@ -8,13 +8,13 @@ import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useDevicePicker, DevicePickerButton, DeviceNotice, DevicePickerPanel } from './DevicePicker'
 import { useBitratePicker, BitratePickerButton, BitratePickerPanel } from './BitratePicker'
 import { GenerationQueuePanel } from './GenerationQueuePanel'
-import { useArtwork, useUISelector } from '../contexts/UIStateContext'
+import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
 import { ON_AIR_LAMP } from '../lib/themeManager'
-import { TrackArt } from './DepthArt'
+import { TrackArtCrossfade } from './DepthArt'
 
 const PLAYED_WINDOW_STYLE = {
   transition: CSS_TRANSITION.progress
@@ -129,45 +129,9 @@ const PLAYER_SAFE_AREA_STYLE = {
   paddingRight: 'var(--safe-right)'
 }
 
-const TrackArtwork = memo(function TrackArtwork({ url, trackId, hasArtwork, onClick, sizeClass }) {
-  const [layerA, setLayerA] = useState(null)
-  const [layerB, setLayerB] = useState(null)
-  const [frontLayer, setFrontLayer] = useState('A')
-  const previousArtworkUrlRef = useRef(null)
+const TrackArtwork = memo(function TrackArtwork({ trackId, hasArtwork, onClick, sizeClass }) {
   const containerRef = useRef(null)
-
-  useEffect(() => {
-    if (url && url !== previousArtworkUrlRef.current) {
-      const newImage = {
-        url: url,
-        trackId: trackId,
-        hasArtwork: hasArtwork
-      }
-      const swapTo = (layer) => {
-        setFrontLayer(layer)
-        artPop(containerRef.current)
-      }
-
-      if (frontLayer === 'A') {
-        queueMicrotask(() => setLayerB(newImage))
-        setTimeout(() => swapTo('B'), 50)
-      } else {
-        queueMicrotask(() => setLayerA(newImage))
-        setTimeout(() => swapTo('A'), 50)
-      }
-
-      previousArtworkUrlRef.current = url
-    }
-  }, [url, trackId, hasArtwork, frontLayer])
-
-  const renderLayer = (layer, isFront) => (
-    <div className={`absolute inset-0 transition-opacity duration-theme ${isFront ? 'opacity-100' : 'opacity-0'}`}>
-      {layer && (
-        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArtwork} alt="Album art" />
-      )}
-    </div>
-  )
-
+  const popArt = useCallback(() => artPop(containerRef.current), [])
   const { getBorder } = useDynamicTheme()
 
   return (
@@ -181,8 +145,7 @@ const TrackArtwork = memo(function TrackArtwork({ url, trackId, hasArtwork, onCl
       }}
       onClick={onClick}
     >
-      {layerA && renderLayer(layerA, frontLayer === 'A')}
-      {layerB && renderLayer(layerB, frontLayer === 'B')}
+      <TrackArtCrossfade trackId={trackId} hasArtwork={hasArtwork} alt="Album art" onShow={popArt} />
     </div>
   )
 })
@@ -239,7 +202,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const compact = isPhoneLandscape
   const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
   const { getGradient, getAccentColor, getGrey800, getGrey500, getWhite, getGrey400, getErrorColor } = useDynamicTheme()
-  const artworkUrl = useArtwork(currentTrack?.id, currentTrack?.has_artwork)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [bufferedPercent, setBufferedPercent] = useState(0)
@@ -525,7 +487,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const trackInfo = currentTrack ? (
     <>
       <TrackArtwork
-        url={artworkUrl}
         trackId={currentTrack.id}
         hasArtwork={currentTrack.has_artwork}
         onClick={onArtworkClick}

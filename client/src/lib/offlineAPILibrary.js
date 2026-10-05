@@ -23,8 +23,8 @@ export const libraryMethods = {
       issues.push('audioBlob is empty')
     }
 
-    if (cached.artworkBlob && !(cached.artworkBlob instanceof Blob)) {
-      issues.push('artworkBlob is not a valid Blob')
+    for (const [size, blob] of Object.entries(cached.packBlobs || {})) {
+      if (!(blob instanceof Blob)) issues.push(`packBlobs.${size} is not a valid Blob`)
     }
 
     return {
