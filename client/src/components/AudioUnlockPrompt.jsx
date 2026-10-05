@@ -6,9 +6,11 @@ import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { PRESETS } from '../lib/motion'
 
 export const AudioUnlockPrompt = memo(function AudioUnlockPrompt() {
-  const { engineState, interfaceState } = useUISelector(state => ({ engineState: state.engineState, interfaceState: state.interfaceState }))
+  const { visible, playerHeight } = useUISelector(state => ({
+    visible: !!state.engineState.audioNeedsTap && !!state.engineState.isActiveDevice && !state.interfaceState.isFullscreenVisuals,
+    playerHeight: state.interfaceState.playerHeight || 0,
+  }))
   const { togglePlay } = usePlaybackActions()
-  const visible = !!engineState.audioNeedsTap && !!engineState.isActiveDevice && !interfaceState.isFullscreenVisuals
 
   return (
     <AnimatePresence>
@@ -17,7 +19,7 @@ export const AudioUnlockPrompt = memo(function AudioUnlockPrompt() {
           key="audio-unlock"
           {...PRESETS.fadeSlide}
           className="fixed left-1/2 -translate-x-1/2 z-[60]"
-          style={{ bottom: `calc(${interfaceState.playerHeight || 0}px + 1rem)` }}
+          style={{ bottom: `calc(${playerHeight}px + 1rem)` }}
         >
           <button
             type="button"

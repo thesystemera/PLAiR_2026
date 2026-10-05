@@ -331,22 +331,21 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   const {
     audioFeatures,
     lyricTimestamps,
-    queueState,
-    interfaceState,
-    engineState,
+    hasActiveJobs,
+    playerHeight,
+    isFullscreen,
+    track,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
-    queueState: state.queueState,
-    interfaceState: state.interfaceState,
-    engineState: state.engineState,
+    hasActiveJobs: state.queueState.hasActiveJobs,
+    playerHeight: state.interfaceState.playerHeight,
+    isFullscreen: state.interfaceState.isFullscreenVisuals,
+    track: state.engineState.currentTrack,
   }))
   const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
   const isSplit = isMobile && isLandscape
-  const splitOffset = interfaceState.playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32
-  const track = engineState.currentTrack
-  const isFullscreen = interfaceState.isFullscreenVisuals
-  const hasActiveJobs = queueState.hasActiveJobs
+  const splitOffset = playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32
   const hasTrack = !!track
   useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])
 

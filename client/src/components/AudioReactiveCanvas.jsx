@@ -1,6 +1,6 @@
 import {memo, useCallback, useEffect, useRef, useState} from 'react'
 import {TextRenderer} from '../lib/textRenderer'
-import { useVideoClips, useUISelector } from '../contexts/UIStateContext'
+import { useVideoClips, useUISelector, useUIStateGetter } from '../contexts/UIStateContext'
 import {PANEL, useDynamicTheme, useThemeArtwork} from '../contexts/DynamicThemeContext'
 import {useDepthMap} from '../hooks/useDepthMap'
 import {FULL_PACK_SIZE, SCENE_PACK_SIZE, blobForUrl, packCache} from '../lib/mediaCache'
@@ -82,7 +82,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const ui = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
-    engineState: state.engineState,
+    currentTrackId: state.engineState.currentTrack?.id,
+    currentTrackHasArtwork: state.engineState.currentTrack?.has_artwork,
+    isPlaying: !!state.engineState.is_playing,
     isOfflineRendering: state.isOfflineRendering,
     isScreenVisible: state.isScreenVisible,
     panelRegionsRef: state.shaderPanelRegions,
@@ -99,15 +101,16 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     activeSeedMode: state.radioState.activeSeedMode,
     isFullscreen: state.interfaceState?.isFullscreenVisuals ?? false,
   }))
-  const trackId = ui.engineState.currentTrack?.id
-  const hasArtwork = !!trackId && ui.engineState.currentTrack?.has_artwork !== false
+  const trackId = ui.currentTrackId
+  const hasArtwork = !!trackId && ui.currentTrackHasArtwork !== false
+  const getUIState = useUIStateGetter()
   const { url: artworkPack } = useDepthMap(packCache(ui.isFullscreen ? FULL_PACK_SIZE : SCENE_PACK_SIZE), trackId, hasArtwork)
   const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
   const { sceneDpr, level: visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer } = useQuality()
   const deviceDpr = window.devicePixelRatio || 1
   const referenceDpr = Math.min(deviceDpr, visualQuality === 'high' ? REFERENCE_SCENE_DPR : 1.0)
   const canvasDpr = Math.min(deviceDpr, sceneDpr)
-  const videoClips = useVideoClips(ui.engineState?.currentTrack?.id)
+  const videoClips = useVideoClips(trackId)
 
   const canvasRef = useRef(null)
   const channelRef = useRef(null)
@@ -117,7 +120,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const lyricRef = useRef({ canvas: null, words: null, index: -1 })
   const evalsRef = useRef(new Map())
 
-  latestRef.current = { ui, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
+  latestRef.current = { ui, getUIState, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
 
   const send = useCallback((message, transfer) => channelRef.current?.send(message, transfer), [])
 
@@ -254,7 +257,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     if (words.length > 0) lyric.words = wordData
   }, [send, ui.lyricTimestamps])
 
-  const isPlaying = !!ui.engineState?.is_playing
+  const isPlaying = ui.isPlaying
   useEffect(() => {
     if (!ui.isScreenVisible) return undefined
     const lyric = lyricRef.current
@@ -332,7 +335,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       frame = requestAnimationFrame(tick)
       const latest = latestRef.current
       const state = latest.ui
-      const engine = state.engineState || {}
+      const engine = latest.getUIState().engineState || {}
       const now = performance.now()
       const click = latest.interactionEffectsRef?.current?.click
       if (click?.active && click.timestamp !== lastClick) {

@@ -12,17 +12,17 @@ import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
   const {
-    engineState,
+    playingTrack,
     settingsState,
     setIsOfflineRendering,
     setVideoPreviewPlaying,
   } = useUISelector(state => ({
-    engineState: state.engineState,
+    playingTrack: state.engineState.currentTrack,
     settingsState: state.settingsState,
     setIsOfflineRendering: state.setIsOfflineRendering,
     setVideoPreviewPlaying: state.setVideoPreviewPlaying,
   }))
-  const currentTrack = track || engineState.currentTrack
+  const currentTrack = track || playingTrack
 
   const [status, setStatus] = useState('idle')
   const [statusText, setStatusText] = useState('')

@@ -601,7 +601,7 @@ function QueueComponent({ onSeedRadio, onList }) {
                 glowRef={glowRef}
               />
             )}
-            <AnimatePresence initial={false} custom={exitMode} mode="popLayout">
+            <AnimatePresence initial={false} custom={exitMode} mode="popLayout" presenceAffectsLayout={false}>
               {visibleQueue.map(({ track, key: uniqueKey }) => {
                 const isPlaying = track.id === currentTrackId
                 return (

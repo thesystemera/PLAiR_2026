@@ -277,7 +277,7 @@ export function Modal({
   categoryOverride = null,
   gradientOpacity = 0.85,
 }) {
-  const { engineState, radioState } = useUISelector(state => ({ engineState: state.engineState, radioState: state.radioState }))
+  const { currentTrack, activeSeedMode } = useUISelector(state => ({ currentTrack: state.engineState.currentTrack, activeSeedMode: state.radioState.activeSeedMode }))
   const { isShortViewport } = useViewport()
   const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
   const { pauseRendering } = useQuality()
@@ -287,7 +287,6 @@ export function Modal({
   const closeButtonInteraction = usePointerInteraction()
   const dialogRef = useRef(null)
 
-  const currentTrack = engineState.currentTrack
   const artTrackId = currentTrack?.has_artwork !== false ? currentTrack?.id || null : null
   const [blurState, setBlurState] = useState(() => ({ trackId: artTrackId, blurs: getCachedBlurs(artTrackId) }))
   const blurs = blurState.trackId === artTrackId ? (blurState.blurs || getCachedBlurs(artTrackId)) : getCachedBlurs(artTrackId)
@@ -295,7 +294,7 @@ export function Modal({
     setBlurState(prev => (prev.trackId === artTrackId && prev.blurs === result ? prev : { trackId: artTrackId, blurs: result }))
   }, [artTrackId])
 
-  const activeCategory = categoryOverride || radioState.activeSeedMode || 'all'
+  const activeCategory = categoryOverride || activeSeedMode || 'all'
   const categoryMeta = getCategoryMetadata(activeCategory)
   const categoryColor = categoryMeta?.color || '#6366f1'
 

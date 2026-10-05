@@ -67,8 +67,8 @@ const EDGE_LEFT = 'linear-gradient(to right, var(--on-air-accent), transparent)'
 const EDGE_RIGHT = 'linear-gradient(to left, var(--on-air-accent), transparent)'
 
 export const OnAirFrame = memo(function OnAirFrame() {
-  const { engineState, interfaceState } = useUISelector(state => ({ engineState: state.engineState, interfaceState: state.interfaceState }))
-  return <OnAirFrameView talkBreak={engineState.talkBreak} bottom={interfaceState.playerHeight || 0} />
+  const { talkBreak, bottom } = useUISelector(state => ({ talkBreak: state.engineState.talkBreak, bottom: state.interfaceState.playerHeight || 0 }))
+  return <OnAirFrameView talkBreak={talkBreak} bottom={bottom} />
 })
 
 const OnAirFrameView = memo(function OnAirFrameView({ talkBreak, bottom }) {
