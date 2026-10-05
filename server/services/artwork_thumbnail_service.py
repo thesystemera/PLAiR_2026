@@ -26,7 +26,7 @@ def _is_fresh(target: Path, source: Path) -> bool:
 
 
 def pack_path(track_id: str, size: int) -> Path:
-    return THUMBNAIL_DIR / "pack" / str(size) / f"{track_id}.jpeg"
+    return THUMBNAIL_DIR / "pack_xy" / str(size) / f"{track_id}.jpeg"
 
 
 def render_pack(color_source: Path, depth_source: Optional[Path], normal_source: Optional[Path], target: Path, size: int, depth_side_by_side: bool) -> None:
@@ -53,7 +53,7 @@ def render_pack(color_source: Path, depth_source: Optional[Path], normal_source:
                 normal = np.asarray(image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS))
         packed = Image.new("RGB", (width * 2, height))
         packed.paste(color, (0, 0))
-        packed.paste(Image.fromarray(np.dstack((normal[..., 1], depth, normal[..., 2]))), (width, 0))
+        packed.paste(Image.fromarray(np.dstack((normal[..., 0], depth, normal[..., 1]))), (width, 0))
         packed.save(temp, "JPEG", quality=PACK_QUALITY, subsampling=0, optimize=True)
         os.replace(temp, target)
     finally:

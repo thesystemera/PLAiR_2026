@@ -2,7 +2,7 @@ import { logger } from './logger'
 import { audioCacheDB, normalizeTrackMetadata } from './offlineStorage'
 import { api } from './api'
 import { canPlayCachedBlob, downloadFormat } from './mediaSupport'
-import { PACK_SIZES, artPackUrl } from './mediaCache'
+import { NORMAL_MAP_VERSION, PACK_SIZES, artPackUrl } from './mediaCache'
 
 const isIOS = typeof navigator !== 'undefined' &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes('Macintosh') && navigator.maxTouchPoints > 1))
@@ -154,6 +154,7 @@ class CacheManager {
         }
 
         this.initialized = true
+        void this.refreshStalePacks()
       } catch (error) {
         logger.error('[CacheManager] Initialization failed:', error)
         this.initialized = true
@@ -393,6 +394,7 @@ class CacheManager {
     const trackData = {
       audioBlob,
       packBlobs,
+      packVersion: NORMAL_MAP_VERSION,
       metadata: fullTrackData,
       audioFeatures,
       lyricTimestamps,
@@ -404,6 +406,23 @@ class CacheManager {
 
     logger.info(`[CacheManager] Cached track ${trackId} at ${bitrate} with complete metadata`)
     return savedTrack
+  }
+
+  async refreshStalePacks() {
+    let refreshed = 0
+    try {
+      const stale = (await audioCacheDB.getAllTracks()).filter(track => track.packBlobs && track.packVersion !== NORMAL_MAP_VERSION)
+      for (const track of stale) {
+        const packBlobs = await this._downloadPacks(track.trackId)
+        if (await audioCacheDB.updatePacks(track.trackId, packBlobs, NORMAL_MAP_VERSION)) refreshed++
+      }
+    } catch (error) {
+      logger.debug('[CacheManager] Cover pack refresh stopped:', error)
+    }
+    if (refreshed) {
+      logger.info(`[CacheManager] Refreshed ${refreshed} downloaded cover packs to format ${NORMAL_MAP_VERSION}`)
+      this._invalidateList()
+    }
   }
 
   async _downloadPacks(trackId, signal = null) {
@@ -603,6 +622,7 @@ class CacheManager {
       const trackData = {
         audioBlob,
         packBlobs,
+        packVersion: NORMAL_MAP_VERSION,
         metadata,
         audioFeatures,
         lyricTimestamps,

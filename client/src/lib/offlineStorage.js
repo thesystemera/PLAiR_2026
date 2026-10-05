@@ -186,6 +186,7 @@ class AudioCacheDB {
       trackId,
       audioBlob: trackData.audioBlob,
       packBlobs: trackData.packBlobs || null,
+      packVersion: trackData.packBlobs ? trackData.packVersion ?? null : null,
       metadata,
       audioFeatures: trackData.audioFeatures || null,
       bitrate: trackData.bitrate || '192k',
@@ -216,6 +217,7 @@ class AudioCacheDB {
       id: trackId,
       audioBlob: track.audioBlob,
       packBlobs: track.packBlobs,
+      packVersion: track.packVersion ?? null,
       audioFeatures: track.audioFeatures,
       bitrate: track.bitrate || '192k',
       _isCached: true,
@@ -233,6 +235,17 @@ class AudioCacheDB {
       const request = transaction.objectStore(TRACK_STORE).put({ ...track, lastAccessed: now })
       request.onerror = (event) => event.preventDefault()
     }).catch(error => logger.warn('[IndexedDB] Failed to update lastAccessed:', error))
+  }
+
+  async updatePacks(trackId, packBlobs, packVersion) {
+    const transaction = await this._transaction([TRACK_STORE], 'readwrite')
+    if (!transaction) return false
+    const store = transaction.objectStore(TRACK_STORE)
+    const track = await this._run(store.get(trackId), `Get track ${trackId}`)
+    if (!track) return false
+    const size = (track.audioBlob?.size || 0) + Object.values(packBlobs).reduce((total, blob) => total + blob.size, 0)
+    await this._run(store.put({ ...track, packBlobs, packVersion, size }), `Update packs ${trackId}`)
+    return true
   }
 
   async deleteTrack(trackId) {

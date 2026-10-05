@@ -15,7 +15,7 @@ export function packSizeFor(px) {
 export function artPackUrl(id, size) {
   return `/api/artwork/${id}/pack/${size}?v=${NORMAL_MAP_VERSION}`
 }
-const NORMAL_MAP_VERSION = 3
+export const NORMAL_MAP_VERSION = 4
 
 const CACHE_CONFIGS = {
   profile_picture: {
@@ -35,7 +35,7 @@ const CACHE_CONFIGS = {
     getUrl: (id) => artPackUrl(id, size),
     logPrefix: `[ArtPack${size}]`,
     memoryOnly: true,
-    offlineBlob: (cached) => cached?.packBlobs?.[size],
+    offlineBlob: (cached) => (cached?.packVersion === NORMAL_MAP_VERSION ? cached.packBlobs?.[size] : undefined),
   }])),
   profile_pack: {
     cacheName: 'profile-pack-cache-v1',

@@ -81,8 +81,8 @@ const LIGHT = {
   SPECULAR:         0.35,
   SHININESS:        24.0,
 
-  // --- Rim: slopes facing a light take on its colour (a tint of the cover's own colour, never a wash to white) ---
-  RIM:              0.9,
+  // --- Rim: edges facing a light pick up its colour ---
+  RIM:              0.35,
   RIM_SOFT:         0.25,   // How far a normal leans (length of normal.xy) before the rim starts.
   RIM_HARD:         0.85,   // Lean where the rim is full.
 
@@ -344,7 +344,7 @@ const SKYLIGHT = `
   SHADE vec3 skylight(SHADE vec3 color, vec2 hitUV, vec2 screenUV) {
 #ifdef PACKED_NORMALS
     SHADE vec2 packedNormal = NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;
-    SHADE vec3 n = normalize(vec3(sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))), packedNormal));
+    SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));
 #else
     SHADE vec3 n = normalize(NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rgb * 2.0 - 1.0);
 #endif
@@ -371,7 +371,7 @@ const SKYLIGHT = `
     SHADE float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
     SHADE float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
     SHADE vec3 lit = color * (1.0 + relief * ${G(LIGHT.RELIEF)} * energy);
-    lit += glint * ${G(LIGHT.SPECULAR)} * energy * (1.0 - lit) + rim * edge * ${G(LIGHT.RIM)} * energy * lit;
+    lit += (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy * (1.0 - lit);
     return clamp(lit, 0.0, 1.0);
   }
 

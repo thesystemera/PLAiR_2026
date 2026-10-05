@@ -99,10 +99,16 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
   top row about -0.8 to -1.3, middle about 0, bottom +1.3 (`SCROLL_TILT` 1.3). Current-track covers
   (`TrackArtCrossfade`: Now Playing, player) take phone motion only. Check: `__plairArt.views()` (px, py).
 - **Lighting colour**: light colours were divided by luma (a saturated blue light came out ~14x too strong); now
-  by the peak channel. The rim light covered ~68% of a cover (normals lean almost everywhere) and screen-blended
-  the light colour, cutting saturation 0.44 -> 0.32 with bluish lights; it now tints the cover's own colour
-  (`RIM` 0.9 keeps today's brightness, saturation 0.446 vs 0.438 unlit). `identity.mjs` prints brightness,
-  saturation and near-white per shot.
+  by the peak channel.
+- **Normal sign bug (the white wash, 6 Oct)**: since the packs (d34e0f2, 5 Oct) the server stored the normal's y
+  and z (channels 1, 2) and the shader rebuilt x as sqrt(1 - y^2 - z^2), so x lost its sign: every slope was lit as
+  facing right (56% face left on a typical cover). With the lights on the right, relief, glints and rim all fired
+  everywhere and covers washed out (saturation 0.44 -> 0.32 lit). Packs now hold x (red), depth, y (blue) as
+  documented and the shader rebuilds z (always positive). Packs moved to `artwork_thumbs/pack_xy` (and
+  `profile_pack_xy.jpg`) so all re-render; client URLs `?v=4`; offline downloads carry `packVersion` and stale
+  ones are re-downloaded at start (`cacheManager.refreshStalePacks`). The old `artwork_thumbs/pack` folder is
+  unused. The owner's rim (screen blend 0.35) is kept: with correct normals it costs 7.5% saturation under
+  strong cyan lights (it should take on the light's colour); a tint variant was tried and dropped.
 - **Lighting cost**: lights off saves 5.3 of 9.0 ms (landscape layout). Working out the per-light screen terms
   once per cover saved nothing, so per-area lighting is not worth building. Next: split the 5.3 ms (normal read
   at the hit point, the 4-light loop, the specular power) with `stages.mjs` edits.
