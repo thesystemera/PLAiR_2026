@@ -214,17 +214,23 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 7. Large jobs
 
-- **Music catalog re-render (running since 3 Oct, 22:31).** `server/utils/process_backlog.py --rerender` on the
-  P6000 (moved off the RTX 6000 on 5 Oct): ~870 Suno songs that never had a master, then ~1,350 masters below chain version 3; ~2.5 min per song
-  (GPU-bound), a few days in all. Progress in `data/logs/backlog.log`; restart the same command if it stops
-  (finished songs are skipped). While a song is re-rendered (~3 min) its old Opus/WebM are gone, so playback may
-  skip it. `utils/relevel_catalog.py` is moving the remaining -14 LUFS masters to -16 by gain (log
-  `data/logs/relevel_run.out`). Chain details: CLAUDE.md section 18.
-- **Music: open ideas, not started.** SonicMaster fp16 on the RTX (`SONIC_MASTER_PRECISION=auto`, 1.7x faster, a
-  slightly different take; the owner kept fp32). Suno's lossless WAV via sunoapi.org `/wav/generate` (~0.4 credits;
-  needs the generation taskId, which the catalog doesn't store). A learned artifact-mask model in the style of
-  Intrect's ArtifactNet (patent-pending), or reviving `D:\Projects_parked\SUNO_UPSCALE`; both need a clean
-  real-music dataset.
+- **Music catalog re-render to chain version 4 (not started; owner's call when).** `server/utils/process_backlog.py
+  --rerender [--gpu 0|1]`: ~2,000 Suno songs, ~5 min per song on the shared P6000, ~3.5 on the RTX 6000 when it is
+  free (DeepPBR's card). Progress in `data/logs/backlog.log`; restart the same command if it stops (finished songs are
+  skipped). Chain details: CLAUDE.md section 18.
+- **Music: open ideas, not started.** Suno's lossless WAV via sunoapi.org `/wav/generate` (~0.4 credits; needs the
+  generation taskId, which the catalog doesn't store). A learned artifact-mask model in the style of Intrect's
+  ArtifactNet, or reviving `D:\Projects_parked\SUNO_UPSCALE`; both need a clean real-music dataset. A time-resolved
+  profile of Suno's swirl (the static comb check found a fixed flange in only 1% of 2,242 songs).
+- **Notch stage: tested and shelved (5 Oct).** The current notch stage almost never fires: it needs a peak >= 6 dB
+  above its neighbours in 90% of the loud frames, and Suno's standing peaks (8-13 dB) are present 36-71% of the time.
+  A time-resolved dynamic tamer (3 s windows, 2.7 Hz bins, cut <= 8 dB while a peak rings > 6 dB) found them in every
+  song, but they sit on the songs' key notes; the owner heard it as cleaner but taking out instrumentation (notes,
+  bass lines). Don't retry it without (1) a real-music control set (MUSDB18-HQ, 150 songs, ~22.7 GB, owner's OK
+  needed to download) so only ringing beyond normal records is touched, and (2) a decay test (a standing wave keeps
+  ringing after the note changes). Scripts: `data/upscale_test_2026-10-02/scripts/notch_hypothesis.py`,
+  `ringing_excerpts.py`; Suno fingerprint (tone, notes vs non-musical peaks, comb): `suno_profile.py` +
+  `suno_profile_report.py`, results in `upscale_ab/suno_profile`.
 - **E: is full** (about 9 GB free of 954 GB). `E:\deepPBR.io` is 859 GB and grows with every reconstruction job
   (`storageolatile
 econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's test renders
