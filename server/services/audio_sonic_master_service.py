@@ -65,6 +65,30 @@ def _clear_cuda_cache():
     gc.collect()
 
 
+def _vae_tiles(frames: int, rate: int):
+    tile = max(1, int(settings.SONIC_MASTER_VAE_TILE_S * rate / VAE_HOP_SAMPLES)) if settings.SONIC_MASTER_VAE_TILE_S > 0 else frames
+    margin = int(settings.SONIC_MASTER_VAE_MARGIN_S * rate / VAE_HOP_SAMPLES)
+    for start in range(0, frames, tile):
+        yield start, tile, max(0, start - margin), start + tile + margin
+
+
+def vae_encode_tiled(vae, audio: torch.Tensor, rate: int) -> torch.Tensor:
+    frames = -(-audio.shape[-1] // VAE_HOP_SAMPLES)
+    parts = []
+    for start, tile, lo, hi in _vae_tiles(frames, rate):
+        z = vae.encode(audio[..., lo * VAE_HOP_SAMPLES:hi * VAE_HOP_SAMPLES]).latent_dist.mode()
+        parts.append(z[..., start - lo:start - lo + tile])
+    return torch.cat(parts, dim=-1)
+
+
+def vae_decode_tiled(vae, latent: torch.Tensor, rate: int) -> torch.Tensor:
+    parts = []
+    for start, tile, lo, hi in _vae_tiles(latent.shape[-1], rate):
+        wav = vae.decode(latent[..., lo:hi]).sample
+        parts.append(wav[..., (start - lo) * VAE_HOP_SAMPLES:(start - lo + tile) * VAE_HOP_SAMPLES])
+    return torch.cat(parts, dim=-1)
+
+
 class SonicMasterService(SingletonService):
 
     def __init__(self):
@@ -130,7 +154,19 @@ class SonicMasterService(SingletonService):
                 return
             async with gpu_lease("SonicMaster load"):
                 await asyncio.to_thread(self._load_sync)
+                await asyncio.to_thread(self._park)
             self._mark_used()
+
+    def _place(self, device: str):
+        if self.model is not None:
+            self.model.to(device)
+        if self.vae is not None:
+            self.vae.to(device)
+
+    def _park(self):
+        if settings.SONIC_MASTER_PARK_ON_CPU and self.device == "cuda":
+            self._place("cpu")
+            _clear_cuda_cache()
 
     def _mark_used(self):
         self._last_used = time.monotonic()
@@ -280,7 +316,7 @@ class SonicMasterService(SingletonService):
                 with torch.no_grad():
                     if self.vae is None:
                         raise RuntimeError("VAE not initialized")
-                    z = self.vae.encode(chunk_gpu).latent_dist.mode()  # type: ignore
+                    z = vae_encode_tiled(self.vae, chunk_gpu, self.fs)
 
                 z_in = z.transpose(1, 2)
 
@@ -302,10 +338,10 @@ class SonicMasterService(SingletonService):
                         solver="Euler",
                     )
 
-                    decoded = self.vae.decode(result_latent.transpose(2, 1)).sample  # type: ignore
+                    decoded = vae_decode_tiled(self.vae, result_latent.transpose(2, 1), self.fs)
                     if settings.SONIC_MASTER_CHUNK_CONDITIONING:
                         tail = decoded[:, :, -conditioning_samples:]
-                        prev_cond_latent = self.vae.encode(tail).latent_dist.mode().transpose(1, 2)  # type: ignore
+                        prev_cond_latent = vae_encode_tiled(self.vae, tail, self.fs).transpose(1, 2)
                     wav = decoded.float().cpu()
                     del decoded
 
@@ -400,9 +436,14 @@ class SonicMasterService(SingletonService):
                         _clear_cuda_cache()
                         raise_if_cuda_oom(e, "SonicMaster load")
                         return False
-                result = await asyncio.to_thread(
-                    self._enhance_audio_sync, input_path, output_path, call_prompt, call_wet_mix
-                )
+                if self.device == "cuda":
+                    await asyncio.to_thread(self._place, "cuda")
+                try:
+                    result = await asyncio.to_thread(
+                        self._enhance_audio_sync, input_path, output_path, call_prompt, call_wet_mix
+                    )
+                finally:
+                    await asyncio.to_thread(self._park)
             self._mark_used()
 
             if result:

@@ -603,7 +603,10 @@ class Settings:
 
     MASTER_CHAIN_VERSION: int = 4
     SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "true").lower() == "true"
-    SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "fp32").lower()
+    SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "auto").lower()
+    SONIC_MASTER_PARK_ON_CPU: bool = os.getenv("SONIC_MASTER_PARK_ON_CPU", "true").lower() == "true"
+    SONIC_MASTER_VAE_TILE_S: float = float(os.getenv("SONIC_MASTER_VAE_TILE_S", "10"))
+    SONIC_MASTER_VAE_MARGIN_S: float = float(os.getenv("SONIC_MASTER_VAE_MARGIN_S", "2"))
     SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
     SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics")
     SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
