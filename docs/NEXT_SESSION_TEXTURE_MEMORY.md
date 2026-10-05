@@ -1,71 +1,73 @@
-# Next session: texture memory on the owner's phone (start here)
+# Next session: finish unifying the covers (start here)
 
-Paste this as the first message of a new session.
+Paste this as the first message of a new session. Read `CLAUDE.md` first.
 
----
+## The owner's design (fixed, do not drift from it)
 
-You're picking up PLAiR performance work on the owner's phone. Read `CLAUDE.md` and the top of
-`docs/HANDOVER_2026-10-04_LIT_ARTWORK.md` first, then `tests/gpu_bench/README.md` (phone section).
+- Every cover and avatar in the app is ONE packed image per cover: colour on the left, and on the right the normal's x
+  in red, depth in green, the normal's y in blue. One download, one decode, drawn by ONE shared renderer
+  (`client/src/lib/depthArtRenderer.js`) through ONE component (`client/src/components/DepthArt.jsx`: `TrackArt`,
+  `ProfileArt`).
+- "3D Lit Artwork" off is only a switch inside that same renderer: it draws the pack's colour half flat. There is no
+  plain-JPEG path, no `<img>` fallback, no "flat image then it turns 3D".
+- Covers never visibly load: they are loaded ahead of the scroll in both directions and appear the moment they are
+  drawn (no fade), like a plain image used to.
+- Picture quality stays exactly as it was (catalog at its tile size, Now Playing at full resolution). The finish line
+  does not move: only changes that keep the picture and measure better.
 
-## The owner's hypothesis (test this first, nothing else)
+## Done and live (5 Oct 2026, commits 5377d71 .. f0d2467)
 
-GPU texture memory is the main problem, mostly from images that are bigger than they are shown. The old
-adaptive quality scaler helped because it shrank images, but it went so low the thumbnails were unusable.
-The goal is resolution matched to display size: catalog tiles are small and can use smaller images than
-Now Playing, with no visible loss. Do not cut or simplify any stylised effect (lit 3D artwork, frosted glass,
-background shader, masks). Only isolated, measured efficiency changes, one at a time: measure before, change
-one thing, measure after, keep it only if it helps, then the next.
+- Idle texture sets 48 -> 8; textures sized to each tile (queue 192 px, player 128, catalog 512). Phone GPU memory with
+  Catalog open 152 -> 95 MB, after 20 s of scrolling 351 -> 174 MB.
+- Packs: `GET /api/artwork/{id}/pack/{size}` and `/api/user/{id}/profile-picture/pack`
+  (`server/services/artwork_thumbnail_service.py` `render_pack` / `ensure_pack`). JPEG q90 4:4:4, ~114 KB vs 128 KB for
+  the old three files; depth error ~1/255. Shader reads depth from green and rebuilds the normal (`PACKED_NORMALS`).
+- Catalog, queue, player thumbnail, profiles, modals, User lists: all `TrackArt` / `ProfileArt`, canvas only.
+  `useArtworkThumb`, the `artwork_thumb` cache, the thumbnail prefetcher and the separate depth/normal thumb routes are
+  deleted. `lib/artworkPrefetcher.js` now loads packs ahead of the virtual scroller and warms the nearest 32 on the GPU
+  (`depthArtRenderer.warm`). Offline downloads save the pack (`packBlob`).
+- Debug: `__plairArt.stats()`, `__plairArt.views()` (state of each on-screen cover), `__plairArt.set({ maxIdle })`.
 
-## What we know (5 Oct 2026, Redmi Note 13 4G, Adreno 610, ~5.7 GB RAM, Chrome 154)
+## Still to do, in this order
 
-- Chrome's GPU process held 371 MB of GL memory (`adb shell dumpsys meminfo --package com.android.chrome`,
-  "GL mtrack" of the privileged process) while scrolling the catalog; the page process was swapping; Chrome's
-  GPU process crashed once (`SystemInfo.getInfo` -> `processCrashCount`), after which Chrome blocked WebGL for
-  the site and everything fell back to flat images.
-- Catalog scroll: 10-18 fps portrait, 8-11 landscape; it gets worse the longer you scroll (memory). 3D Lit
-  Artwork off: 34-37 fps portrait. Tile render resolution (`parallaxDpr`) made no difference, so it is not
-  pixel shading.
-- Per catalog tile today: artwork thumb (`lib/mediaCache.js` `pickThumbSize`: 512 on this phone), depth thumb
-  and normal thumb at the same size, uploaded by `lib/depthArtRenderer.js` (colour RGBA, depth LUMINANCE,
-  normal RGB, plus a max-depth pyramid); its own 2D canvas at device pixels (~520x520); a parallax cache
-  (RGBA8 + RG32F, ~3 MB) once the tile is still. Up to 48 idle tile texture sets are kept
-  (`MAX_IDLE_TEXTURES`). The shared atlas canvas grows to fit every tile drawn in a frame (about
-  4096x3840 = ~63 MB for ~45 tiles) and `transferToImageBitmap` keeps a second buffer. The plain `<img>` under
-  every lit canvas is decoded too (Chrome's image decode cache).
-- Media caches keep up to 300-400 blobs in memory per type (`maxMemoryItems`).
+1. **One shared cover-with-crossfade component** for anything that changes track (Player thumbnail
+   `components/Player.jsx` `TrackArtwork`, Now Playing big cover `components/NowPlaying.jsx`). Two layers; the new
+   track's `TrackArt` draws in the back layer, and only when it reports drawn (`onLoad`) do the layers crossfade
+   (duration-theme), with a time limit so it never hangs. The old A/B code in both files swaps after 50 ms
+   regardless of readiness; delete it.
+2. **Now Playing on the shared renderer.** It uses the same shader (`createDepthArtPrograms`); only its strength
+   differs (intensity 0.05 vs the renderer's 0.1). Add a per-cover intensity to `depthArtRenderer.attach` (the
+   `intensity` uniform is set once at setup today, and `pixelsPerUnit` / zoom use the constant). Full resolution: add
+   pack size 1024 on the server (`THUMBNAIL_SIZES`) and a large pack cache on the client.
+3. **Delete the old Now Playing path**: `components/ParallaxArtwork.jsx`, the enriched-artwork cache and its UIState
+   plumbing (`useEnrichedArtwork`, `preloadEnrichedArtwork`, `getEnrichedArtworkUrl`, the enriched preload in the
+   current/next effect), `normal_full` cache, `cacheManager._downloadEnrichedArtwork` (offline keeps `packBlob`), and
+   the `/api/artwork/{id}/enriched` and `/api/artwork/{id}/normal` routes once nothing calls them. `useArtwork` (the
+   plain full-size artwork) stays only for theme colours and the media session; no cover draws from it.
+4. Run `scripts/check-quality.ps1`, update the file map in `CLAUDE.md`, commit, deploy.
 
-## Suggested order (each one isolated and measured)
+## Pending owner decision
 
-1. Measure the baseline: GPU memory (GL mtrack) after opening Catalog and after 20 s of scrolling, plus scroll
-   fps, plus a profile. Check the phone is cool first (see below).
-2. Catalog thumbnails sized to the tile: today `pickThumbSize` picks one size for every artwork thumb, depth
-   and normal map in the app. Make the size depend on where the image is shown (catalog/queue/player tiles vs
-   Now Playing). Compare 512 vs 384/256 for the catalog by screenshot at 1:1 on the phone and by memory; the
-   server already serves `thumb/256|512|768` (`server/services/artwork_thumbnail_service.py`, check whether
-   other sizes are cheap to add). Depth and normal maps can probably go smaller than the colour image.
-3. The atlas: cap its size and draw in several smaller groups per frame instead of growing to 4096x3840.
-4. Idle texture sets and media-cache memory limits: lower them if memory falls without visible cost.
-5. Only then look at Chrome's raster of the catalog cards (~480 ms/s of GPU-process time while scrolling).
+The backend has not been restarted since the pack fallback change (tracks without depth/normal maps yet get a pack
+with flat maps, and the old depth/normal routes are removed). Another session has uncommitted music-chain edits in
+`server/services/audio_headroom.py`, `audio_master_service.py`, `suno_service_orchestrator.py` (also
+`server/config/settings.py`, `server/utils/reprocess_catalog_audio.py`); a restart puts them live. Ask the owner before
+restarting.
 
-## Tools (all in `tests/gpu_bench/`, phone over USB)
+## Measured facts (so they are not re-measured)
 
-- `adb forward tcp:9222 localabstract:chrome_devtools_remote`; adb is in Google platform-tools (download into
-  your scratchpad; the owner's PC has no system adb). Set `ADB=<path to adb.exe>`.
-- `bash catalog_bench.sh <label>`: reload, open Catalog (works in portrait and landscape; `open_catalog.sh`
-  makes sure it is the track Catalog, not Shoutouts), 3 continuous downward scroll runs, then a JS profile.
-- `node phone.mjs profile <s>`, `trace <s>` (`SCROLL=1` scrolls during it), `eval`, `css`, `reload`, `tap`.
-- For readable profile names, put an unminified build live for the session (`npm run build -- --minify false`)
-  and the normal build back at the end.
-- fps alone is too noisy for small changes: judge by profile cost and GPU memory.
+- Catalog scroll on the owner's phone: lit on ~12-16 fps, lit off ~33-35. Loading and uploading textures costs nothing
+  measurable; the cost is redrawing every visible tile each frame while scrolling (tilt follows scroll position), split
+  across the WebGL render and the copy into each tile's canvas. Filling an extra 300 MB of GPU memory did not change fps
+  or cause stalls. The 3 am build and today's build scroll the same (17-20 vs 18-23 fps in fresh tabs).
+- Old auto quality on this phone was the "low" tier (Adreno 610 on the weak list): its resolutions gave ~+2 fps at most.
 
-## Cautions
+## Working rules learned the hard way this session
 
-- Heat: `adb shell dumpsys thermalservice`. Thermal Status 2+ or skin above ~42 C means throttling, and every
-  number is wrong (on 5 Oct, status 3 after an hour of tests while charging; everything read ~9 fps). Ask the
-  owner to unplug and let it cool; keep test runs short.
-- Chrome on Android holds page frames to 60 Hz unless the screen is touched. The FPS counter's "screen" figure
-  is the throttled page loop.
-- The background scene can run in a Web Worker (`plair_scene_thread=worker`), but stays on the main thread by
-  default: on this phone the worker scene took the GPU from the UI.
-- nginx serves `client/dist` directly, so every `npm run build` is live. Commit and push each verified win.
-- Keep replies short: what you measured, what changed, the number before and after.
+- Answer the owner's design points as design decisions; don't reply with fps numbers to an aesthetics point.
+- Don't switch renderer parts off live on the owner's phone while they use it (it left blank covers); say before any
+  test that changes what they see. Check `document.visibilityState` first.
+- Stage files by name; never `git add -A` on folders other sessions are editing.
+- Phone tools: `tests/gpu_bench/` (`phone.mjs`, `mem_bench.sh`, `cover_state.js`, `lit_toggle.js`); adb from Google
+  platform-tools in the scratchpad; the DevTools forward drops when Chrome restarts (`adb forward tcp:9222
+  localabstract:chrome_devtools_remote`).
