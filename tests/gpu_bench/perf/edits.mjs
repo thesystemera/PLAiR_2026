@@ -21,6 +21,7 @@ export const STAGES = {
   'show edge': { edits: [['return clamp(lit, 0.0, 1.0);', 'return vec3(edge);']] },
   'lights per cover': { edits: [['return skylight(color, hitUV, u_rect.xy + texCoord * u_rect.zw);', 'return skylight(color, hitUV, u_rect.xy + 0.5 * u_rect.zw);']] },
   'bound fixed sizes': { edits: [['vec2 size = vec2(textureSize(u_depth, 0));', 'vec2 size = vec2(1024.0);'], ['ivec2 last = textureSize(u_depth_bound, lod) - 1;', 'ivec2 last = ivec2(1023 >> lod);']] },
+  'depth one channel': { shader: { depthFromBound: true } },
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
 }
@@ -50,7 +51,7 @@ export async function applyStage(p, stage) {
   const result = await p.evaluate(`(() => {
     window.__shaderEdits = ${JSON.stringify(stage.edits || [])}
     window.__shaderEditHits = 0
-    window.__plairArt.set({ shader: { mediumpShading: true }, stepScale: 1, ...${JSON.stringify(stage.art || {})} })
+    window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, ...${JSON.stringify(stage.art || {})} })
     window.__plairLight.debug({ off: false, ...${JSON.stringify(stage.light || {})} })
     return window.__shaderEditHits
   })()`)

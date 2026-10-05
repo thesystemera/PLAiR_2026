@@ -13,6 +13,7 @@ P6000's adapter LUID with `python list_gpus.py` (it changes on reboot) and pass 
 | `togglebench.mjs` | Desktop size: closes and opens a panel (`--panel queue`), records every frame, traces and profiles. `--light 1` forces the light on. |
 | `pagerun.mjs` | Opens one page (e.g. `identity.html`), traces main-thread GPU waits, prints a JS expression. `SWIFTSHADER=1` uses the software GPU. |
 | `identity.html` | Renders real covers with the live shader (full pass, cache + re-light) and the original shader (`/old/depthArtShader.js`, from `git show <rev>:client/src/lib/depthArtShader.js` plus `lightProbe.js` into an `old/` folder here) and counts differing pixels; times the full pass with and without the depth bound. `?ids=a,b,...` |
+| `pack_bench.html` | Current cover packs (`/api/artwork/{id}/pack/{size}?v=4`) drawn with the working-copy shader and a reference copy in `old/`; every pixel compared at 5 tilts, GPU ms per full pass by timer queries. `?ids=a,b&size=1024&out=989&rounds=8&reps=20&options={...}` (`options` go to the working-copy `createDepthArtPrograms`). Desktop timings say little about the phone (the P6000 draws Now Playing in 0.12 ms); use it for pixel identity. |
 | `pyramid.html` | Checks the max-depth pyramid level by level against a CPU reduction. `?id=...` |
 | `serve.mjs` | `node serve.mjs <dir> <port>`: serves a client build or this folder, proxies `/api`, `/ws`, `/track` to the backend, `/src/...` from `client/src`. |
 

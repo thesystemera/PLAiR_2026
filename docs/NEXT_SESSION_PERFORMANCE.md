@@ -114,6 +114,21 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
   at the hit point, the 4-light loop, the specular power) with `stages.mjs` edits.
 - Bound setup with the texture sizes as uniforms: -0.35 ms (4%), not done yet.
 
+## 3d. Ready for a phone A/B (6 Oct, night; built on the desktop, the live app was not touched)
+
+- Texture sizes are uniforms instead of `textureSize` per pixel (on by default; pixel-identical on the P6000
+  bench at 1024 and 768 packs; measured -0.35 ms on the phone as a source edit).
+- `depthFromBound` (off by default): the march, refine, edge and fill read depth from the one-channel max-depth
+  pyramid's level 0 (R8, linear magnification) instead of the RGB map: a quarter of the memory per read.
+  Identical at 1024 and 256 packs, ~8 pixels in 200k differ at 768 (padded pyramid; a 1/255 depth difference
+  flips a hit on a silhouette). The P6000 cannot judge it (0.12 ms per pass, huge caches; it reads ~10% slower
+  there from the extra scale and clamp), so A/B it on the phone first:
+  `node tests/gpu_bench/perf/stages.mjs "as is,depth one channel" 3 6`, and `identity.mjs "as is,as is,depth one
+  channel"` on Playing and Catalog. If it wins, make it the default in `createDepthArtPrograms`. If a device
+  cannot build the pyramid, the renderer recompiles without it (`processUploads`).
+- Then split the lighting cost (section 3c) and look at the scene: with the cover pass at zero the frame under
+  motion is still ~13 ms of scene and compositing.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

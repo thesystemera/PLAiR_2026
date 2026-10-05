@@ -384,6 +384,10 @@ class DepthArtRenderer {
       entry.color = this.createTexture(color, gl.RGBA)
       entry.map = this.createTexture(map, gl.RGB)
       entry.bound = createDepthBound(gl, this.programs, entry.map, map.width, map.height)
+      if (!entry.bound && this.programs.depthFromBound) {
+        this.shaderOptions = { ...this.shaderOptions, depthFromBound: false }
+        this.setupContext(gl)
+      }
       entry.sizes = [color.width, color.height, map.width, map.height]
       entry.state = 'ready'
       color.close()

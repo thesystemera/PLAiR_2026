@@ -1,0 +1,135 @@
+<!doctype html>
+<html><body>
+<script type="importmap">{ "imports": { "/src/lib/logger": "/stub-logger.js" } }</script>
+<script type="module">
+// Renders real cover packs with the working-copy shader (/src) and a reference copy (/old, from `git show`),
+// compares every pixel at several tilts and times the full pass with GPU timer queries.
+// ?ids=a,b&size=1024&out=989&rounds=6&reps=20&options={"depthFromBound":true} (options for the working-copy programs)
+import * as NEW from '/src/lib/depthArtShader.js'
+import * as OLD from '/old/depthArtShader.js'
+
+const params = new URLSearchParams(location.search)
+const ids = (params.get('ids') || '').split(',').filter(Boolean)
+const size = Number(params.get('size') || 1024)
+const out = Number(params.get('out') || 989)
+const rounds = Number(params.get('rounds') || 6)
+const reps = Number(params.get('reps') || 20)
+const DECODE = { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }
+const POSES = [[0, 0], [0.3, 0.2], [-0.6, 0.5], [1.2, -0.8], [-1.5, -1.1]]
+const probe = {
+  active: true, level: 0.9, kick: 0, pulse: 0.3,
+  lights: new Float32Array([0.8, 0.6, 0, 1.2, 0.3, 0.4, 0, 0.8, 0.6, 0.2, 0, 1.0, 0.1, 0.8, 0, 0.6]),
+  lightColors: new Float32Array([1, 0.9, 0.8, 0.3, 0.8, 1, 1, 0.4, 0.3, 0.6, 1, 0.5]),
+}
+const rect = { left: 16, top: 120, width: 343, height: 343 }
+
+const canvas = document.createElement('canvas')
+canvas.width = out
+canvas.height = out
+const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true })
+const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2')
+const versions = { old: { mod: OLD }, new: { mod: NEW } }
+for (const version of Object.values(versions)) {
+  version.set = version.mod.createDepthArtPrograms(gl, { packedNormals: true, ...(version.mod === NEW ? JSON.parse(params.get('options') || '{}') : {}) })
+  for (const entry of [version.set.full, version.set.cache]) {
+    gl.useProgram(entry.program)
+    gl.uniform1f(entry.uniforms.zoom, 1)
+  }
+}
+
+function texture(source, format) {
+  const t = gl.createTexture()
+  gl.bindTexture(gl.TEXTURE_2D, t)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+  gl.texImage2D(gl.TEXTURE_2D, 0, format, format, gl.UNSIGNED_BYTE, source)
+  return t
+}
+
+function draw(version, cover, [px, py], times = 1) {
+  const { mod, set } = version
+  const full = set.full
+  gl.useProgram(full.program)
+  gl.viewport(0, 0, out, out)
+  gl.activeTexture(gl.TEXTURE0)
+  gl.bindTexture(gl.TEXTURE_2D, cover.color)
+  gl.activeTexture(gl.TEXTURE1)
+  gl.bindTexture(gl.TEXTURE_2D, cover.map)
+  gl.activeTexture(gl.TEXTURE2)
+  gl.bindTexture(gl.TEXTURE_2D, cover.map)
+  gl.uniform2f(full.uniforms.gyro, px, py)
+  gl.uniform1f(full.uniforms.intensity, 0.1)
+  const pixelsPerUnit = 0.1 * out * (1 + 0.1 * mod.POM.ZOOM_FACTOR)
+  gl.uniform1f(full.uniforms.steps, mod.parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, 1))
+  mod.bindDepthBound(gl, set, full.uniforms, cover.bounds[version === versions.old ? 'old' : 'new'])
+  mod.setLightUniforms(gl, full.uniforms, probe, true)
+  mod.setLightRect(gl, full.uniforms, rect)
+  for (let i = 0; i < times; i++) gl.drawArrays(gl.TRIANGLES, 0, 6)
+}
+
+function read() {
+  const pixels = new Uint8Array(out * out * 4)
+  gl.readPixels(0, 0, out, out, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+  return pixels
+}
+
+function compare(a, b) {
+  let over0 = 0, over2 = 0, over8 = 0, max = 0, sum = 0
+  for (let i = 0; i < a.length; i += 4) {
+    let d = 0
+    for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(a[i + c] - b[i + c]))
+    sum += d
+    if (d > 0) over0++
+    if (d > 2) over2++
+    if (d > 8) over8++
+    if (d > max) max = d
+  }
+  const n = a.length / 4
+  return { differ: +(over0 / n * 100).toFixed(3), over2: +(over2 / n * 100).toFixed(3), over8: +(over8 / n * 100).toFixed(3), max, mean: +(sum / n).toFixed(4) }
+}
+
+async function timePass(version, cover) {
+  const query = gl.createQuery()
+  gl.beginQuery(timer.TIME_ELAPSED_EXT, query)
+  draw(version, cover, [0.6, 0.4], reps)
+  gl.endQuery(timer.TIME_ELAPSED_EXT)
+  while (!gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) await new Promise(r => setTimeout(r, 2))
+  const ns = gl.getQueryParameter(query, gl.QUERY_RESULT)
+  gl.deleteQuery(query)
+  return ns / 1e6 / reps
+}
+
+const results = { renderer: gl.getParameter(gl.getExtension('WEBGL_debug_renderer_info').UNMASKED_RENDERER_WEBGL), covers: [] }
+const timings = { old: [], new: [] }
+for (const id of ids) {
+  const blob = await (await fetch(`/api/artwork/${id}/pack/${size}?v=4`)).blob()
+  const packed = await createImageBitmap(blob, DECODE)
+  const half = Math.floor(packed.width / 2)
+  const colorBitmap = await createImageBitmap(packed, 0, 0, half, packed.height)
+  const mapBitmap = await createImageBitmap(packed, half, 0, half, packed.height)
+  const cover = { color: texture(colorBitmap, gl.RGBA), map: texture(mapBitmap, gl.RGB), bounds: {} }
+  cover.bounds.old = OLD.createDepthBound(gl, versions.old.set, cover.map, half, packed.height)
+  cover.bounds.new = NEW.createDepthBound(gl, versions.new.set, cover.map, half, packed.height)
+  const poses = []
+  for (const pose of POSES) {
+    draw(versions.old, cover, pose)
+    const a = read()
+    draw(versions.old, cover, pose)
+    const again = read()
+    draw(versions.new, cover, pose)
+    const b = read()
+    poses.push({ pose, newVsOld: compare(a, b), oldVsOld: compare(a, again).differ })
+  }
+  for (let r = 0; r < rounds; r++) {
+    for (const name of r % 2 ? ['new', 'old'] : ['old', 'new']) timings[name].push(await timePass(versions[name], cover))
+  }
+  results.covers.push({ id, size: `${half}x${packed.height}`, bounds: { old: !!cover.bounds.old, new: !!cover.bounds.new }, poses })
+}
+const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
+results.msPerPass = { old: +median(timings.old).toFixed(3), new: +median(timings.new).toFixed(3) }
+results.glError = gl.getError()
+window.results = results
+</script>
+</body></html>
