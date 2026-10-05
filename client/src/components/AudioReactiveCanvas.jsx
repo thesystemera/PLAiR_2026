@@ -30,7 +30,7 @@ function averageLevel(data) {
 }
 
 function sceneWorkerSupported() {
-  if (safeStorage.get('plair_scene_thread') === 'main') return false
+  if (safeStorage.get('plair_scene_thread') !== 'worker') return false
   if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return false
   if (typeof HTMLCanvasElement === 'undefined' || !('transferControlToOffscreen' in HTMLCanvasElement.prototype)) return false
   try {

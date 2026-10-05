@@ -97,6 +97,27 @@ if (cmd === 'busy') {
 } else if (cmd === 'ft') {
   const f = JSON.parse(await evaluate(FPS_EXPR(Number(arg))))
   console.log(`${(arg2 || '').padEnd(18)} frame ${(1000 / f.fps).toFixed(2)} ms  fps ${f.fps}  p50 ${f.p50}  p90 ${f.p90}`)
+} else if (cmd === 'scrollfps') {
+  const [x, y] = arg.split(',').map(Number)
+  const fps = evaluate(FPS_EXPR(4))
+  const end = Date.now() + 4000
+  while (Date.now() < end) {
+    await p.send('Input.synthesizeScrollGesture', { x, y, yDistance: -500, speed: 1000, gestureSourceType: 'touch', repeatCount: 0 })
+  }
+  const f = JSON.parse(await fps)
+  console.log(`${(arg2 || '').padEnd(16)} page fps ${f.fps}  p50 ${f.p50}  p90 ${f.p90}  p99 ${f.p99}  >20ms ${f.over20}`)
+} else if (cmd === 'console') {
+  const out = []
+  p.on(m => {
+    if (m.method === 'Runtime.exceptionThrown') out.push('EXCEPTION ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text).slice(0, 600))
+    if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params.type)) out.push(m.params.type + ' ' + m.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 400))
+    if (m.method === 'Log.entryAdded' && m.params.entry.level === 'error') out.push('log ' + m.params.entry.text.slice(0, 300))
+  })
+  await p.send('Runtime.enable')
+  await p.send('Log.enable')
+  await p.send('Page.reload', { ignoreCache: false })
+  await sleep(Number(arg) * 1000)
+  console.log(out.filter(l => !/AudioContext|autoplay/i.test(l)).slice(0, 25).join(String.fromCharCode(10)))
 } else if (cmd === 'eval') {
   console.log(await evaluate(arg))
 } else if (cmd === 'fps') {
@@ -113,7 +134,12 @@ if (cmd === 'busy') {
   })
   await b.send('Tracing.start', { categories: 'toplevel,viz,gpu,cc,benchmark,disabled-by-default-devtools.timeline', transferMode: 'ReportEvents' })
   const fps = evaluate(FPS_EXPR(Number(arg)))
-  await sleep(Number(arg) * 1000 + 300)
+  if (process.env.SCROLL) {
+    const end = Date.now() + Number(arg) * 1000
+    while (Date.now() < end) await p.send('Input.synthesizeScrollGesture', { x: 187, y: 400, yDistance: -500, speed: 1000, gestureSourceType: 'touch', repeatCount: 0 })
+  } else {
+    await sleep(Number(arg) * 1000 + 300)
+  }
   const complete = new Promise(r => { done = r })
   await b.send('Tracing.end')
   await complete
