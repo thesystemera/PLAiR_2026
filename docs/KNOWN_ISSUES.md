@@ -222,6 +222,11 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   generation taskId, which the catalog doesn't store). A learned artifact-mask model in the style of Intrect's
   ArtifactNet, or reviving `D:\Projects_parked\SUNO_UPSCALE`; both need a clean real-music dataset. A time-resolved
   profile of Suno's swirl (the static comb check found a fixed flange in only 1% of 2,242 songs).
+- **Suno decoder fingerprint (measured 6 Oct).** Every Suno song carries fixed tones at multiples of 50 Hz and highs that move
+  in step with the decoder's 20 ms frames; plain MP3 and real music show neither. `scripts/music_lab/decoder_lock.py` scores any
+  file for it without training (raw Suno 0.14, chance 0.013; SonicMaster 33% halves it). Probably too faint to hear on its own;
+  two attempts to cancel it failed on the numbers. Facts, rejected attempts and next leads:
+  `docs/HANDOVER_2026-10-06_SUNO_ARTIFACTS.md` sections 3-5.
 - **Notch stage: tested and shelved (5 Oct).** The current notch stage almost never fires: it needs a peak >= 6 dB
   above its neighbours in 90% of the loud frames, and Suno's standing peaks (8-13 dB) are present 36-71% of the time.
   A time-resolved dynamic tamer (3 s windows, 2.7 Hz bins, cut <= 8 dB while a peak rings > 6 dB) found them in every

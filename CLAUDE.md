@@ -537,6 +537,7 @@ Details, measurements and everything tried and rejected: `docs/HANDOVER_2026-10-
 - **Background renders:** `process_backlog.py` runs the orchestrator in its own process on the P6000 (`--gpu 0`, the default; the RTX 6000 belongs to the owner's other projects such as DeepPBR, 5 Oct; own log `data/logs/backlog.log`, asset doctor off, intermediates deleted after each song), never inside the live backend. The live backend's catalog watcher (`CATALOG_WATCH_INTERVAL_S`) reloads when masters appear from any process; "Recent" sorts by `catalog_added_at`, then `created_at`.
 - `server/utils/relevel_catalog.py` moves masters above the station level down by gain only and re-encodes their Opus/WebM.
 - A/B work: measure every render (`scripts/music_lab/proof.py`), compare by beep cycles and difference files, loudness-matched, with raw Suno alongside.
+- **Suno decoder fingerprint (measured 6 Oct):** every Suno V5 file carries fixed tones at multiples of 50 Hz and highs that move in step with the decoder's 20 ms frames (960 samples, locked to the file's first sample); plain MP3 and real music show neither. `scripts/music_lab/decoder_lock.py file ...` scores any file or chain stage for it with no training and no reference (raw Suno about 0.14, chance 0.013, after SonicMaster 33% about 0.08). Facts, rejected cancellers and open leads: `docs/HANDOVER_2026-10-06_SUNO_ARTIFACTS.md`.
 
 ### 19. Vector Stores - One Pattern (owner's February TTS design, 4 Oct)
 
