@@ -536,7 +536,7 @@ Details, measurements and everything tried and rejected: `docs/HANDOVER_2026-10-
 - **GPU memory (5 Oct):** the render shares a card with whatever else runs there (the live station holds ~13.6 GB of the P6000). On Windows a card that runs out spills silently to system RAM and slows that step 10-25x (Carbon Copy took 17 min instead of 5). So SonicMaster parks its model in system RAM between runs (`SONIC_MASTER_PARK_ON_CPU`, ~2 s) and encodes/decodes its VAE in 10 s tiles with 2 s margins (`SONIC_MASTER_VAE_TILE_S`; bit-identical output, peak 11.4 -> 7.7 GB). Measured peaks: Apollo +8 GB on a 20 s chunk, Lew +1.8, RoFormer +0.8; the whole render process peaks ~12.6 GB with no spill, ~5 min per song on the P6000.
 - **Background renders:** `process_backlog.py` runs the orchestrator in its own process on the P6000 (`--gpu 0`, the default; the RTX 6000 belongs to the owner's other projects such as DeepPBR, 5 Oct; own log `data/logs/backlog.log`, asset doctor off, intermediates deleted after each song), never inside the live backend. The live backend's catalog watcher (`CATALOG_WATCH_INTERVAL_S`) reloads when masters appear from any process; "Recent" sorts by `catalog_added_at`, then `created_at`.
 - `server/utils/relevel_catalog.py` moves masters above the station level down by gain only and re-encodes their Opus/WebM.
-- A/B work: measure every render (`data/upscale_test_2026-10-02/scripts/proof.py`), compare by beep cycles and difference files, loudness-matched, with raw Suno alongside.
+- A/B work: measure every render (`scripts/music_lab/proof.py`), compare by beep cycles and difference files, loudness-matched, with raw Suno alongside.
 
 ### 19. Vector Stores - One Pattern (owner's February TTS design, 4 Oct)
 

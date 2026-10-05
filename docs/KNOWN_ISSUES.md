@@ -228,7 +228,7 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   song, but they sit on the songs' key notes; the owner heard it as cleaner but taking out instrumentation (notes,
   bass lines). Don't retry it without (1) a real-music control set (MUSDB18-HQ, 150 songs, ~22.7 GB, owner's OK
   needed to download) so only ringing beyond normal records is touched, and (2) a decay test (a standing wave keeps
-  ringing after the note changes). Scripts: `data/upscale_test_2026-10-02/scripts/notch_hypothesis.py`,
+  ringing after the note changes). Scripts: `scripts/music_lab/notch_hypothesis.py`,
   `ringing_excerpts.py`; Suno fingerprint (tone, notes vs non-musical peaks, comb): `suno_profile.py` +
   `suno_profile_report.py`, results in `upscale_ab/suno_profile`.
 - **E: is full** (about 9 GB free of 954 GB). `E:\deepPBR.io` is 859 GB and grows with every reconstruction job

@@ -2,12 +2,12 @@
 
 ## How to work with the owner on this
 
-- **Proof before words:** run `data/upscale_test_2026-10-02/scripts/proof.py ORIGINAL t0 RESULT t0 dur outprefix LABEL` on every render (spectrogram, change map, loudness, band changes level-matched, % of 1/3-octave cells cut, HF flatness) and look at the images before sending.
+- **Proof before words:** run `scripts/music_lab/proof.py ORIGINAL t0 RESULT t0 dur outprefix LABEL` on every render (spectrogram, change map, loudness, band changes level-matched, % of 1/3-octave cells cut, HF flatness) and look at the images before sending.
 - Short answers, results not plans, no running commentary. One task at a time.
 - Send loudness-matched files with short names; FLAC (16-bit) so they fit the 30 MB phone limit. Give a raw Suno version next to every render.
 - Comparisons the owner liked: **beep cycles** (sections switch every 4 s, low/mid/high beep marks A/B/C) and **difference files** (B minus A, boosted, gain in the filename).
 - Render on the **P6000** (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=0`; since 5 Oct the RTX 6000 is the owner's DeepPBR card), one model at a time, full songs. Profile a new model on 5 s first.
-- E: is nearly full: keep renders on D: (`D:\_audio_quality_scratch\`; `data/upscale_test_2026-10-03` is a junction to it).
+- Test environment, open problems and next leads: `docs/HANDOVER_2026-10-06_SUNO_ARTIFACTS.md`.
 
 ## Locked chain (master chain version 4, 5 Oct)
 
@@ -49,9 +49,8 @@ ClearVoice SE (gates), ClearVoice SR/cvsr (cuts 8-16 kHz on singing), the Februa
 
 ## Not done
 
-- Catalog re-render (~2,100 songs) with the locked chain: `server/utils/reprocess_catalog_audio.py --gpu --from source` (refuses non-P6000 GPUs).
+- Catalog re-render (~2,000 songs) to chain version 4: `server/utils/process_backlog.py --rerender` (owner decides when and on which GPU).
 
 ## Files
 
-- A/B sent to the owner: `upscale_ab/` (chain_v8, blend_25_vs_33, stereo_prompts, prompt_test*, hole_remix, ...).
-- Scripts: `data/upscale_test_2026-10-02/scripts/` (`render_final.py` = the locked chain for any track ids, `proof.py`, cycle/prompt/blend tests).
+- Older A/B renders and experiment scripts were cleaned up on 5 Oct; the current test environment is listed in `docs/HANDOVER_2026-10-06_SUNO_ARTIFACTS.md` section 6.
