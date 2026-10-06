@@ -17,6 +17,16 @@ anything else is carried over as written.
   possible loss of the frosted-glass panels; up/down tilt on Now Playing not working on the owner's phone.
   Everything known, the benchmark and the next steps: `docs/HANDOVER_2026-10-04_LIT_ARTWORK.md`.
 
+- **The queue grows without limit and the Queue panel is not virtualised (6 Oct, owner: bug, to come back to).**
+  The owner's station had 503 songs (498 ahead, none marked as station fill). `POST /api/search/semantic`
+  (`routers/search.py`) queues every result (50) with `play_next=True` and plays the first, on every call,
+  including the as-you-type searches the search box fires 300 ms after typing stops; since 4 Oct (a87f5cb) picks
+  are never trimmed, so they pile up (three searches at 15:58 added ~145). The Queue panel renders every row:
+  7,237 of the page's 9,673 elements and 300 cover canvases. Effects measured on the phone: Chrome's synchronous
+  re-layout on rotation takes 0.7-0.9 s before the page gets its resize event (the black veil cannot cover that
+  time), and the cover renderer spends 50-84 ms on some frames. To do: virtualise the Queue panel like the
+  Catalog; decide what a search queues (owner: queue was never meant to get this big); clear the leftover picks.
+
 ## 1. Quick wins
 
 - **Press PLAiR Start, then run the smoke test**, so the 30 Sep / 1 Oct work is live. The studio-message wording
