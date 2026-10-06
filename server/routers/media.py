@@ -13,7 +13,7 @@ from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import PACK_SIZES, ensure_pack, pack_path
 from services.normal_map_service import ensure_track_normal
 from services.device_settings_service import settings_for, valid_kind
-from services import log_service
+from services import log_service, lyric_style_service
 from database import User
 from config import settings
 from service_registry import services
@@ -33,16 +33,27 @@ _json_file_lock = threading.Lock()
 _json_file_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
 
 
-def _render_json_file(path) -> bytes:
+def _file_stamp(path) -> tuple:
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return (0, 0)
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _render_json_file(path, extend=None, extra=()) -> bytes:
     stat = os.stat(path)
-    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    key = (str(path), stat.st_mtime_ns, stat.st_size, *(_file_stamp(other) for other in extra))
     with _json_file_lock:
         body = _json_file_cache.get(key)
         if body is not None:
             _json_file_cache.move_to_end(key)
             return body
     with open(path, 'r', encoding='utf-8') as f:
-        body = JSONResponse(json.load(f)).body
+        data = json.load(f)
+    if extend:
+        extend(data)
+    body = JSONResponse(data).body
     with _json_file_lock:
         _json_file_cache[key] = body
         while len(_json_file_cache) > JSON_FILE_CACHE_MAX:
@@ -50,9 +61,9 @@ def _render_json_file(path) -> bytes:
     return body
 
 
-async def _json_file_response(path, missing_detail: str) -> Response:
+async def _json_file_response(path, missing_detail: str, extend=None, extra=()) -> Response:
     try:
-        body = await asyncio.to_thread(_render_json_file, path)
+        body = await asyncio.to_thread(_render_json_file, path, extend, extra)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=missing_detail)
     return Response(content=body, media_type="application/json")
@@ -265,7 +276,9 @@ async def get_video_clip_file(filename: str):
 async def get_lyric_timestamps(track_id: str):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Lyric timestamps not found")
-    return await _json_file_response(settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found")
+    return await _json_file_response(settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found",
+                                     extend=lambda timing: lyric_style_service.attach_style(track_id, timing),
+                                     extra=(lyric_style_service.style_path(track_id),))
 
 @router.post("/api/lyric-timestamps/{track_id}/generate")
 async def generate_lyric_timestamps(track_id: str, _admin: User = Depends(require_admin)):

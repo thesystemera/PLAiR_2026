@@ -61,14 +61,11 @@ export function TrackDataLoader() {
             }
           }
 
-          if (cached?.lyricTimestamps) {
-            lyrics = cached.lyricTimestamps
-          } else {
-            try {
-              lyrics = await api.getLyricTimestamps(trackId)
-            } catch (err) {
-              logger.warn(`[App] Failed to fetch lyric timestamps for ${trackId}:`, err)
-            }
+          try {
+            lyrics = await api.getLyricTimestamps(trackId)
+          } catch (err) {
+            if (cached?.lyricTimestamps) lyrics = cached.lyricTimestamps
+            else logger.warn(`[App] Failed to fetch lyric timestamps for ${trackId}:`, err)
           }
 
           if (!cancelled) setTrackData(features, lyrics, trackId)

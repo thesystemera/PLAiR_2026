@@ -1832,6 +1832,13 @@ export class AudioEngine {
     return this.currentSlot?.element
   }
 
+  heardPositionMs() {
+    const element = this.currentSlot?.element
+    if (!element || !this.currentTrackId || element.readyState === 0) return null
+    const latency = this.context ? (this.context.outputLatency || this.context.baseLatency || 0) : 0
+    return Math.max(0, (element.currentTime - latency) * 1000)
+  }
+
   destroy() {
     this.removeUnlockGestures()
 

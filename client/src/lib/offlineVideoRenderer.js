@@ -11,6 +11,8 @@ import {
   getLyricAt,
   renderLyricToCanvas,
 } from './sceneEffects'
+import { drawLyricFrame, lyricFrameAt, prepareLyricStyle } from './lyricStyle'
+import { loadLyricFonts } from './lyricFonts'
 
 function seededRandom(seed) {
   let s = seed
@@ -325,6 +327,8 @@ export async function renderVideo({
   const rand = seededRandom(42)
 
   const lyricData = processLyricTimestamps(lyricTimestamps)
+  const styledLyrics = prepareLyricStyle(lyricTimestamps)
+  const lyricsStyled = !!styledLyrics && await loadLyricFonts(styledLyrics.uses, styledLyrics.text)
   let lyricIndex = 0
   let lastLyricText = null
 
@@ -397,9 +401,11 @@ export async function renderVideo({
       resources.clipTextures[currentClipIndex].needsUpdate = true
     }
 
-    const currentLyric = getLyricAt(lyricData, timeMs, lyricIndex)
+    const lyricFrame = lyricsStyled ? lyricFrameAt(styledLyrics, timeMs / 1000) : null
+    const currentLyric = lyricsStyled ? (lyricFrame && `${lyricFrame.index}:${lyricFrame.count}`) : getLyricAt(lyricData, timeMs, lyricIndex)
     if (currentLyric !== lastLyricText || frame === 0) {
-      renderLyricToCanvas(lyricCtx, currentLyric, 1024, 512)
+      if (lyricsStyled) drawLyricFrame(lyricCtx, styledLyrics, lyricFrame, 1024, 512, width / height)
+      else renderLyricToCanvas(lyricCtx, currentLyric, 1024, 512)
 
       lyricCtx.fillStyle = 'rgba(255,255,255,0.6)'
       lyricCtx.font = '600 36px Inter, Arial, sans-serif'

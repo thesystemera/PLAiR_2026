@@ -15,6 +15,9 @@ import {lightProbeWanted, publishBeat, publishLightLevel, publishLightProbe, set
 import {textPixels} from '../lib/backgroundProbe'
 import {addFrameWork, frameStatsActive} from '../lib/frameStats'
 import {renderLyricToCanvas} from '../lib/sceneEffects'
+import {drawLyricFrame, lyricFrameAt, prepareLyricStyle} from '../lib/lyricStyle'
+import {loadLyricFonts} from '../lib/lyricFonts'
+import {usePlaybackActions} from '../contexts/PlaybackContext'
 
 const VOICE_GAIN = 2.2
 const VOICE_STEADY = 0.4
@@ -22,6 +25,7 @@ const LYRIC_WIDTH = 1024
 const LYRIC_HEIGHT = 512
 const LYRIC_PROBE_WIDTH = 64
 const LYRIC_PROBE_HEIGHT = 32
+const LYRIC_LEAD_MS = 16
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
 
 function averageLevel(data) {
@@ -104,6 +108,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const trackId = ui.currentTrackId
   const hasArtwork = !!trackId && ui.currentTrackHasArtwork !== false
   const getUIState = useUIStateGetter()
+  const { audio } = usePlaybackActions()
   const { url: artworkPack } = useDepthMap(packCache(ui.isFullscreen ? FULL_PACK_SIZE : SCENE_PACK_SIZE), trackId, hasArtwork)
   const { interactionEffectsRef, getCategoryMetadata, getAccentRgb } = useDynamicTheme()
   const { sceneDpr, level: visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer } = useQuality()
@@ -117,10 +122,10 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const latestRef = useRef(null)
   const glowRef = useRef(new Float32Array(11))
   const clipsRef = useRef({ videos: [], currentIndex: 0 })
-  const lyricRef = useRef({ canvas: null, words: null, index: -1 })
+  const lyricRef = useRef({ canvas: null, words: null, styled: null, key: null })
   const evalsRef = useRef(new Map())
 
-  latestRef.current = { ui, getUIState, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
+  latestRef.current = { ui, getUIState, audio, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
 
   const send = useCallback((message, transfer) => channelRef.current?.send(message, transfer), [])
 
@@ -248,39 +253,75 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       lyric.canvas.width = LYRIC_WIDTH
       lyric.canvas.height = LYRIC_HEIGHT
     }
-    lyric.index = -1
+    lyric.key = null
     lyric.words = null
+    lyric.styled = null
     send({ type: 'lyric', image: null, empty: true, probe: null })
     const timestamps = ui.lyricTimestamps
-    if (!timestamps || timestamps.instrumental) return
+    if (!timestamps || timestamps.instrumental) return undefined
     const { words, wordData } = new TextRenderer().prepareLyricData(timestamps)
     if (words.length > 0) lyric.words = wordData
+    const styled = prepareLyricStyle(timestamps)
+    if (!styled) return undefined
+    let cancelled = false
+    loadLyricFonts(styled.uses, styled.text).then(ready => {
+      if (cancelled) return
+      if (!ready) {
+        logger.warn('[AudioReactiveCanvas] Lyric fonts did not load; showing plain lyrics')
+        return
+      }
+      lyric.styled = styled
+      lyric.key = null
+    })
+    return () => { cancelled = true }
   }, [send, ui.lyricTimestamps])
 
   const isPlaying = ui.isPlaying
   useEffect(() => {
     if (!ui.isScreenVisible) return undefined
     const lyric = lyricRef.current
+    const clockMs = () => {
+      const latest = latestRef.current
+      const heard = latest.getUIState().engineState?.isActiveDevice ? latest.audio?.heardPositionMs() : null
+      return (heard ?? latest.ui.engineRef?.current?.progress_ms ?? 0) + LYRIC_LEAD_MS
+    }
     const update = () => {
-      const words = lyric.words
-      if (!words || words.length === 0) return
-      const seconds = (latestRef.current.ui.engineRef?.current?.progress_ms || 0) / 1000
-      const index = words.findIndex(word => seconds >= word.start && seconds <= word.end)
-      if (index === lyric.index) return
-      lyric.index = index
-      const text = index >= 0 ? words[index].text : null
-      renderLyricToCanvas(lyric.canvas.getContext('2d'), text, lyric.canvas.width, lyric.canvas.height)
-      if (!text) {
+      const seconds = clockMs() / 1000
+      const aspect = window.innerWidth / Math.max(1, window.innerHeight)
+      let key = null
+      let draw = null
+      if (lyric.styled) {
+        const frame = lyricFrameAt(lyric.styled, seconds)
+        key = frame ? `${frame.index}:${frame.count}:${aspect.toFixed(3)}` : 'none'
+        if (frame) draw = (ctx, width, height) => drawLyricFrame(ctx, lyric.styled, frame, width, height, aspect)
+      } else if (lyric.words) {
+        const index = lyric.words.findIndex(word => seconds >= word.start && seconds <= word.end)
+        const text = index >= 0 ? lyric.words[index].text : null
+        key = `${index}`
+        if (text) draw = (ctx, width, height) => renderLyricToCanvas(ctx, text, width, height)
+      } else {
+        return
+      }
+      if (key === lyric.key) return
+      lyric.key = key
+      if (!draw) {
+        lyric.canvas.getContext('2d').clearRect(0, 0, lyric.canvas.width, lyric.canvas.height)
         send({ type: 'lyric', image: null, empty: true, probe: null })
         return
       }
-      const probe = textPixels((probeCtx, width, height) => renderLyricToCanvas(probeCtx, text, width, height), lyric.canvas.width, lyric.canvas.height, LYRIC_PROBE_WIDTH, LYRIC_PROBE_HEIGHT)
+      draw(lyric.canvas.getContext('2d'), lyric.canvas.width, lyric.canvas.height)
+      const probe = textPixels(draw, lyric.canvas.width, lyric.canvas.height, LYRIC_PROBE_WIDTH, LYRIC_PROBE_HEIGHT)
       createImageBitmap(lyric.canvas).then(image => send({ type: 'lyric', image, empty: false, probe }, [image]))
     }
     update()
     if (!isPlaying) return undefined
-    const interval = setInterval(update, 100)
-    return () => clearInterval(interval)
+    let frame = null
+    const tick = () => {
+      frame = requestAnimationFrame(tick)
+      update()
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
   }, [send, isPlaying, ui.isScreenVisible, ui.lyricTimestamps])
 
   useEffect(() => {

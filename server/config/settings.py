@@ -41,6 +41,7 @@ class Settings:
     ENHANCED_WAV_DIR: Path = CATALOG_DIR / "master_wav"
     AUDIOFEATURES_DIR: Path = CATALOG_DIR / "audiofeatures"
     LYRIC_TIMESTAMPS_DIR: Path = CATALOG_DIR / "lyric_timestamps"
+    LYRIC_STYLES_DIR: Path = CATALOG_DIR / "lyric_styles"
     OPUS_128K_DIR: Path = CATALOG_DIR / "opus_128k"
     OPUS_192K_DIR: Path = CATALOG_DIR / "opus_192k"
     OPUS_256K_DIR: Path = CATALOG_DIR / "opus_256k"
@@ -602,6 +603,9 @@ class Settings:
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
     MASTER_CHAIN_VERSION: int = 4
+    LYRIC_STYLE_VERSION: int = int(os.getenv("LYRIC_STYLE_VERSION", "1"))
+    LYRIC_STYLE_MAX_TOKENS: int = int(os.getenv("LYRIC_STYLE_MAX_TOKENS", "16000"))
+    LYRIC_STYLE_TIMEOUT_S: float = float(os.getenv("LYRIC_STYLE_TIMEOUT_S", "300"))
     SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "true").lower() == "true"
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "auto").lower()
     SONIC_MASTER_PARK_ON_CPU: bool = os.getenv("SONIC_MASTER_PARK_ON_CPU", "true").lower() == "true"
@@ -810,6 +814,7 @@ class Settings:
         cls.ENHANCED_WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.AUDIOFEATURES_DIR.mkdir(parents=True, exist_ok=True)
         cls.LYRIC_TIMESTAMPS_DIR.mkdir(parents=True, exist_ok=True)
+        cls.LYRIC_STYLES_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_128K_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_192K_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_256K_DIR.mkdir(parents=True, exist_ok=True)

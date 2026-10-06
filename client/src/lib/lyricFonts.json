@@ -1,0 +1,720 @@
+{
+  "version": 1,
+  "fonts": [
+    {
+      "id": "anton",
+      "family": "Anton",
+      "kind": "sans",
+      "about": "tall condensed heavy sans; posters, shouting, big blunt statements",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "anton-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "anton-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "bebas",
+      "family": "Bebas Neue",
+      "kind": "sans",
+      "about": "clean condensed capitals only; cinematic titles, cool confidence",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "bebas-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "bebas-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "oswald",
+      "family": "Oswald",
+      "kind": "sans",
+      "about": "condensed grotesque, light to bold; versatile stacked verses, urgency, rock and pop",
+      "weights": [
+        200,
+        700
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "oswald-normal-200-700-latin-ext.woff2",
+          "style": "normal",
+          "weight": "200 700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "oswald-normal-200-700-latin.woff2",
+          "style": "normal",
+          "weight": "200 700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "archivo-black",
+      "family": "Archivo Black",
+      "kind": "sans",
+      "about": "wide, very heavy grotesque; punch, weight, defiance",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "archivo-black-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "archivo-black-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "unbounded",
+      "family": "Unbounded",
+      "kind": "sans",
+      "about": "wide rounded geometric, thin to black; futuristic, electronic, space",
+      "weights": [
+        200,
+        900
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "unbounded-normal-200-900-latin-ext.woff2",
+          "style": "normal",
+          "weight": "200 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "unbounded-normal-200-900-latin.woff2",
+          "style": "normal",
+          "weight": "200 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "syne",
+      "family": "Syne",
+      "kind": "sans",
+      "about": "eccentric art-school sans, gets wider when bolder; experimental, playful, avant-garde",
+      "weights": [
+        400,
+        800
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "syne-normal-400-800-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400 800",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "syne-normal-400-800-latin.woff2",
+          "style": "normal",
+          "weight": "400 800",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "space-grotesk",
+      "family": "Space Grotesk",
+      "kind": "sans",
+      "about": "quirky technical grotesque; modern indie, electronic, matter-of-fact",
+      "weights": [
+        300,
+        700
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "space-grotesk-normal-300-700-latin-ext.woff2",
+          "style": "normal",
+          "weight": "300 700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "space-grotesk-normal-300-700-latin.woff2",
+          "style": "normal",
+          "weight": "300 700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "inter",
+      "family": "Inter",
+      "kind": "sans",
+      "about": "neutral clean sans, thin to black, with italics; plain speech, quiet honest lines, connective words",
+      "weights": [
+        100,
+        900
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "inter-italic-100-900-latin-ext.woff2",
+          "style": "italic",
+          "weight": "100 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "inter-italic-100-900-latin.woff2",
+          "style": "italic",
+          "weight": "100 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "inter-normal-100-900-latin-ext.woff2",
+          "style": "normal",
+          "weight": "100 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "inter-normal-100-900-latin.woff2",
+          "style": "normal",
+          "weight": "100 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "playfair",
+      "family": "Playfair Display",
+      "kind": "serif",
+      "about": "high-contrast display serif with lush italics; romance, drama, elegance, longing",
+      "weights": [
+        400,
+        900
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "playfair-italic-400-900-latin-ext.woff2",
+          "style": "italic",
+          "weight": "400 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "playfair-italic-400-900-latin.woff2",
+          "style": "italic",
+          "weight": "400 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "playfair-normal-400-900-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "playfair-normal-400-900-latin.woff2",
+          "style": "normal",
+          "weight": "400 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "dm-serif",
+      "family": "DM Serif Display",
+      "kind": "serif",
+      "about": "bold soft display serif with italic; warmth, soul, gospel, tenderness",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "dm-serif-italic-400-latin-ext.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "dm-serif-italic-400-latin.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "dm-serif-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "dm-serif-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "abril",
+      "family": "Abril Fatface",
+      "kind": "serif",
+      "about": "fat didone; glamour, divas, retro magazine headlines",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "abril-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "abril-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "cormorant",
+      "family": "Cormorant Garamond",
+      "kind": "serif",
+      "about": "delicate classical garamond, light to bold, with italics; intimacy, whispers, poetry, memory, grief",
+      "weights": [
+        300,
+        700
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "cormorant-italic-300-700-latin-ext.woff2",
+          "style": "italic",
+          "weight": "300 700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "cormorant-italic-300-700-latin.woff2",
+          "style": "italic",
+          "weight": "300 700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "cormorant-normal-300-700-latin-ext.woff2",
+          "style": "normal",
+          "weight": "300 700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "cormorant-normal-300-700-latin.woff2",
+          "style": "normal",
+          "weight": "300 700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "fraunces",
+      "family": "Fraunces",
+      "kind": "serif",
+      "about": "soft quirky old-style serif, thin to black, with italics; folk, vintage warmth, storytelling",
+      "weights": [
+        100,
+        900
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "fraunces-italic-100-900-latin-ext.woff2",
+          "style": "italic",
+          "weight": "100 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "fraunces-italic-100-900-latin.woff2",
+          "style": "italic",
+          "weight": "100 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "fraunces-normal-100-900-latin-ext.woff2",
+          "style": "normal",
+          "weight": "100 900",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "fraunces-normal-100-900-latin.woff2",
+          "style": "normal",
+          "weight": "100 900",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "instrument-serif",
+      "family": "Instrument Serif",
+      "kind": "serif",
+      "about": "narrow modern editorial serif with italic; chic, cool, art-pop, understatement",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "instrument-serif-italic-400-latin-ext.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "instrument-serif-italic-400-latin.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "instrument-serif-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "instrument-serif-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "space-mono",
+      "family": "Space Mono",
+      "kind": "mono",
+      "about": "geometric monospace, regular and bold, with italics; machines, code, lo-fi, detachment",
+      "weights": [
+        400,
+        700
+      ],
+      "italic": true,
+      "files": [
+        {
+          "file": "space-mono-italic-400-latin-ext.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "space-mono-italic-400-latin.woff2",
+          "style": "italic",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "space-mono-italic-700-latin-ext.woff2",
+          "style": "italic",
+          "weight": "700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "space-mono-italic-700-latin.woff2",
+          "style": "italic",
+          "weight": "700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "space-mono-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "space-mono-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        },
+        {
+          "file": "space-mono-normal-700-latin-ext.woff2",
+          "style": "normal",
+          "weight": "700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "space-mono-normal-700-latin.woff2",
+          "style": "normal",
+          "weight": "700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "special-elite",
+      "family": "Special Elite",
+      "kind": "mono",
+      "about": "worn typewriter; letters, diaries, reports, the past, documentary tone",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "special-elite-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "special-elite-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "permanent-marker",
+      "family": "Permanent Marker",
+      "kind": "hand",
+      "about": "thick marker scrawl; raw, punk, graffiti, protest",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "permanent-marker-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "caveat",
+      "family": "Caveat",
+      "kind": "hand",
+      "about": "casual handwriting; personal notes, asides, diary, sweetness",
+      "weights": [
+        400,
+        700
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "caveat-normal-400-700-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400 700",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "caveat-normal-400-700-latin.woff2",
+          "style": "normal",
+          "weight": "400 700",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "pacifico",
+      "family": "Pacifico",
+      "kind": "hand",
+      "about": "retro brush script; summer, surf, fun, nostalgia",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "pacifico-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "pacifico-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "rock-salt",
+      "family": "Rock Salt",
+      "kind": "hand",
+      "about": "rough scratchy handwriting; grunge, dust, desperation, the road",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "rock-salt-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "monoton",
+      "family": "Monoton",
+      "kind": "display",
+      "about": "neon tube capitals; disco, nightlife, glow, retro dancefloor (use big, few words)",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "monoton-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "monoton-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "blackletter",
+      "family": "UnifrakturMaguntia",
+      "kind": "display",
+      "about": "gothic blackletter; darkness, metal, ritual, the sacred or the doomed",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "blackletter-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "bungee",
+      "family": "Bungee",
+      "kind": "display",
+      "about": "chunky signage capitals; street, hip-hop, signs, loud and urban",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "bungee-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "bungee-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "righteous",
+      "family": "Righteous",
+      "kind": "display",
+      "about": "rounded 70s display; groove, funk, soul, good times",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "righteous-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "righteous-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    },
+    {
+      "id": "major-mono",
+      "family": "Major Mono Display",
+      "kind": "display",
+      "about": "thin geometric monospace with odd lowercase; cold, ambient, sci-fi, distance",
+      "weights": [
+        400,
+        400
+      ],
+      "italic": false,
+      "files": [
+        {
+          "file": "major-mono-normal-400-latin-ext.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF"
+        },
+        {
+          "file": "major-mono-normal-400-latin.woff2",
+          "style": "normal",
+          "weight": "400",
+          "range": "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+        }
+      ]
+    }
+  ]
+}

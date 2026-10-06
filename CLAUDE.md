@@ -416,6 +416,8 @@ The live background and the offline share-video renderer share the shaders (`sce
 
 **The scene can render in a Web Worker** (OffscreenCanvas, plain three.js, no React), but runs on the main thread by default (owner, 5 Oct): Chrome on Android holds main-thread frames to 60 Hz unless the screen is touched while a worker canvas runs at the screen's rate (60 vs 120 measured), but on the Adreno 610 the worker scene at ~113 fps took the GPU from the UI (page 60 -> ~52) and felt worse. `localStorage plair_scene_thread=worker` turns the worker on for tests. `SceneRenderer` speaks one message protocol either way (`size`, `state`, `features`, `artwork`, `lyric`, `clips`, `clipFrame`, `click`, `visible`, `bench`, `eval` in; `tick`, `ready`, `renderer`, `context`, `clipIndex`, `clipRate` out); `AudioReactiveCanvas` posts a state snapshot every page frame (panels, radio bubble, playback position, gyro, voice level, quality). Animations that stepped a fixed amount per frame are time-based (`perFrame(rate)` = the 60 fps step), so they look the same at any frame rate. Bench hooks: `__plairScene.set({ skip, force, extra, uniforms, timing })`, `__plairScene.eval(code)` (runs with `scene` = the renderer, in the worker), `__plairScene.thread()`.
 
+**Styled lyrics (6 Oct):** a song can carry a lyric style. One DeepSeek pass (`server/services/lyric_style_service.py`, CLI `server/utils/build_lyric_styles.py --track ID`, about 1 cent a song) groups its timed words into cards that build up word by word as they are sung, each with a layout (stack / flow / cascade / solo), alignment and tilt, and per-word font, size, weight and case from the shared font list `client/src/lib/lyricFonts.json` (25 OFL fonts in `client/public/fonts/lyrics/`, loaded only for a styled song, only the subsets its words need). It is saved in `LYRIC_STYLES_DIR` with a hash of the words, and `/api/lyric-timestamps` attaches it as `style` while the words still match. `lib/lyricStyle.js` lays each card out in the screen's aspect and draws it into the same lyric canvas, so the texture, shader and share video are unchanged; a song without a style keeps the single word. The lyric clock is the playing audio element read every frame (`audioEngine.heardPositionMs()`, less the output latency), not the `timeupdate` progress (~250 ms steps). Online, lyric timing always comes from the server (a downloaded copy is the offline fallback), so re-timings and new styles reach downloaded songs.
+
 **DO:** Modify effect logic in the scene modules only. Use seeded random for offline, `Math.random` for live. Keep shaders identical between live and offline.
 **DO NOT:** Duplicate shaders/effects in offlineVideoRenderer, or read React state from the renderer (everything it needs arrives in the snapshot).
 
@@ -716,6 +718,9 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/lightProbe.js` - Turns the background's 16x16 light grid into tracked lights for depth artwork; says when a probe is worth reading (lit art on screen, light up, no panel resizing).
 - `client/src/lib/backgroundProbe.js` - Computes the 16x16 light probe on the CPU from small copies of the artwork and lyric word plus the background's own transform and colour uniforms (no GPU readback; Chrome's readback stalled the main thread behind every queued frame).
 - `client/src/lib/logger.js` - Logger with levels and a sink hook used by the error reporter.
+- `client/src/lib/lyricFonts.js` - Registers a styled song's lyric fonts as FontFaces (only the subsets its words need) and builds canvas font strings.
+- `client/src/lib/lyricFonts.json` - The lyric font list (id, family, weights, italic, a line on its character for the design prompt, woff2 files), read by client and server.
+- `client/src/lib/lyricStyle.js` - Styled lyrics: builds cards from a song's lyric style, finds the card and sung words at a moment, lays cards out (stack, flow, cascade, solo) in the screen's aspect and draws them.
 - `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for cover packs (tile and full size) and profile pictures; deletes retired caches.
 - `client/src/lib/packImage.js` - Decodes cover packs (colour and map halves) in `packDecodeWorker`, and makes the pack's colour half into a JPEG URL for the lock screen and modal blurs.
 - `client/src/lib/packDecodeWorker.js` - Worker that decodes, cuts and resizes cover packs off the main thread.
@@ -811,6 +816,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/utils/bake_normal_maps.py` - Bakes missing artwork normal maps for every catalog cover on the GPU.
 - `server/utils/batch_music_generate_and_repair.py` - Interactive menu: catalog check and repair, Suno generation, variants, artwork enrichment and upscaling.
 - `server/utils/build_breath_library.py` - Builds the offline breath library from clustered DJ lines, cutting breaths between rendered sentences.
+- `server/utils/build_lyric_styles.py` - Designs lyric styles for the given tracks, one DeepSeek call each, and prints the cards, fonts and cost.
 - `server/utils/catalog_audit.py` - Audits catalog metadata for missing titles, artists, credits and malformed fields.
 - `server/utils/find_dead_functions.py` - Finds Python functions that are never called, aware of routes and node registrations.
 - `server/utils/generate_radio_drops.py` - Makes radio drop candidates: DeepSeek prompts, Stable Audio renders, pick page, install and relevel.
@@ -921,6 +927,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services/llm_router.py` - LLM role chains: Gemini and DeepSeek calls with fallback, circuit breaker, thinking budgets, structured JSON parsing.
 - `server/services/llm_telemetry.py` - LLM price table, token usage and cost estimates, cache savings, errors and fallbacks, periodic aggregate logs.
 - `server/services/log_service.py` - Central logging: categories, file rotation, verbose details, throttled warnings, listener and track labels.
+- `server/services/lyric_style_service.py` - Lyric styles: the DeepSeek design prompt, checking and saving its cards, and attaching a style to the lyric timing response while the words match.
 - `server/services/media_streaming_service.py` - Streams media files with HTTP range parsing and picks the bitrate variant to serve.
 - `server/services/normal_map_service.py` - Bakes normal maps from artwork plus depth for track and profile images used by lit depth art.
 - `server/services/opengraph_service.py` - Renders track share pages with Open Graph and Twitter meta tags injected into the app's HTML.
