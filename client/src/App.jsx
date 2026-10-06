@@ -37,6 +37,7 @@ import {
 import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import {NoticeStack} from './components/NoticeStack'
+import {RotationVeil} from './components/RotationVeil'
 import {OnAirFrame, OnAirNotice} from './components/OnAirBadge'
 import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
@@ -835,6 +836,7 @@ function App() {
 
         <OnAirFrame />
         <NoticeStack />
+        <RotationVeil />
         <AudioUnlockPrompt />
 
         <AnimatePresence>

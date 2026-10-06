@@ -627,6 +627,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/Queue.jsx` - Playback queue list with now-playing highlight, preference badges and seed/list mode buttons.
 - `client/src/components/Radio.jsx` - Radio panel container holding the radio talk button, conversation and timeline.
 - `client/src/components/RadioModeSettings.jsx` - Settings for Radio Mode talk breaks and their segment types.
+- `client/src/components/RotationVeil.jsx` - Black veil that fades in when the screen rotates and fades back once the new layout has settled.
 - `client/src/components/Scroller.jsx` - Custom scroll container with edge fades, scroll label and haptic feedback.
 - `client/src/components/SettingRow.jsx` - Small settings layout pieces: SettingRow and ToggleChip.
 - `client/src/components/Shoutouts.jsx` - Shoutouts panel: category cards and shoutout cards with playback and delete.

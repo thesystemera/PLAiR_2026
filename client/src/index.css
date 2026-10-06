@@ -373,3 +373,8 @@ textarea,
     scale: none !important;
   }
 }
+
+@keyframes rotation-veil-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

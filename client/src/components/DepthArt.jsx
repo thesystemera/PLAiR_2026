@@ -45,6 +45,7 @@ const DepthArt = memo(function DepthArt({
   const canvasRef = useRef(null)
   const callbacksRef = useRef({ onLoad, onError })
   const [drawnFor, setDrawnFor] = useState(null)
+  const [coveredFor, setCoveredFor] = useState(null)
   const key = isLoadedImage(packUrl) ? packUrl : null
   const identityRef = useRef(identity)
 
@@ -92,9 +93,15 @@ const DepthArt = memo(function DepthArt({
 
   const shown = key !== null && drawnFor === identity
 
+  useEffect(() => {
+    if (!shown) return
+    const timer = setTimeout(() => setCoveredFor(identity), DURATION.quick * 1000)
+    return () => clearTimeout(timer)
+  }, [shown, identity])
+
   return (
     <div ref={setHost} data-depth-art className={className}>
-      {!shown && placeholder}
+      {(!shown || coveredFor !== identity) && placeholder}
       <canvas
         ref={setCanvas}
         role="img"

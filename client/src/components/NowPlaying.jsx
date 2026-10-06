@@ -1,5 +1,5 @@
 import {logger} from '../lib/logger'
-import {memo, useCallback, useEffect, useRef, useState} from 'react'
+import {memo, useEffect, useRef, useState} from 'react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import MediaActions from './MediaActions'
@@ -11,7 +11,7 @@ import { TrackArt, TrackArtCrossfade } from './DepthArt'
 import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
-import {artPop, watchOffscreen} from '../lib/microMotion'
+import {watchOffscreen} from '../lib/microMotion'
 import {ExternalLink, MessageSquareText, Music} from 'lucide-react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
@@ -325,7 +325,6 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
 export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
   const [analytics, setAnalytics] = useState(null)
   const artBoxRef = useRef(null)
-  const popArt = useCallback(() => artPop(artBoxRef.current, 'artPopLarge'), [])
 
   const { togglePanel: toggleQueuePanel } = useGenerationQueue()
   const {
@@ -400,7 +399,6 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             hasArtwork={track.has_artwork}
             alt={params.title || 'Track artwork'}
             intensity={NOW_PLAYING_INTENSITY}
-            onShow={popArt}
           />
 
           <div className="absolute top-4 left-4 z-10">
