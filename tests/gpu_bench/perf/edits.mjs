@@ -30,6 +30,12 @@ export const STAGES = {
   'march dynamic light 1': { edits: [["for (int i = 0; i < LINEAR_STEPS; i++) {", "for (int i = 0; i < int(u_steps - skipped); i++) {"], ["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < 1; i++) {"]] },
   'lights dynamic': { edits: [["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < (u_light > 0.0 ? 4 : 0); i++) {"]] },
   'both dynamic': { edits: [["for (int i = 0; i < LINEAR_STEPS; i++) {", "for (int i = 0; i < int(u_steps - skipped); i++) {"], ["for (int i = 0; i < 4; i++) {", "for (int i = 0; i < (u_light > 0.0 ? 4 : 0); i++) {"]] },
+  'bound per draw': { edits: [["float span = max(hi.x - lo.x, hi.y - lo.y);", "float span = max(abs(displacement.x) * size.x, abs(displacement.y) * size.y) + 2.0;"]] },
+  'no loop check': { edits: [["if (testDepth > bound) {", "if (false) {"]] },
+  'no normalize': { edits: [["SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));", "SHADE vec3 n = vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))));"]] },
+  'fill square': { edits: [["pow(1.0 - fd1, 2.0)", "(1.0 - fd1) * (1.0 - fd1)"], ["pow(1.0 - fd2, 2.0)", "(1.0 - fd2) * (1.0 - fd2)"], ["pow(1.0 - fd3, 2.0)", "(1.0 - fd3) * (1.0 - fd3)"], ["pow(1.0 - fd4, 2.0)", "(1.0 - fd4) * (1.0 - fd4)"]] },
+  'all four': { edits: [["float span = max(hi.x - lo.x, hi.y - lo.y);", "float span = max(abs(displacement.x) * size.x, abs(displacement.y) * size.y) + 2.0;"], ["if (testDepth > bound) {", "if (false) {"], ["SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));", "SHADE vec3 n = vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))));"], ["pow(1.0 - fd1, 2.0)", "(1.0 - fd1) * (1.0 - fd1)"], ["pow(1.0 - fd2, 2.0)", "(1.0 - fd2) * (1.0 - fd2)"], ["pow(1.0 - fd3, 2.0)", "(1.0 - fd3) * (1.0 - fd3)"], ["pow(1.0 - fd4, 2.0)", "(1.0 - fd4) * (1.0 - fd4)"]] },
+  'coarse': { art: { coarse: true } },
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
 }
@@ -61,7 +67,7 @@ export async function applyStage(p, stage) {
     const warn = console.warn
     console.warn = (...args) => { warned += args.join(' '); warn(...args) }
     try {
-      window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, ...${JSON.stringify(stage.art || {})} })
+      window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, coarse: false, ...${JSON.stringify(stage.art || {})} })
     } finally {
       console.warn = warn
     }

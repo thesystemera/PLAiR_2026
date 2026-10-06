@@ -1,4 +1,4 @@
-import { POM, bindDepthBound, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
+import { COARSE_UNITS, POM, bindDepthBound, createCoarseTargets, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteCoarseTargets, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
 import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
@@ -70,6 +70,8 @@ class DepthArtRenderer {
     this.shaderOptions = {}
     this.stepScale = 1
     this.tiltOverride = null
+    this.coarse = false
+    this.coarseTargets = null
     this.skipDraw = false
     this.drawDelays = []
     this.uploads = []
@@ -247,6 +249,7 @@ class DepthArtRenderer {
         event.preventDefault()
         logger.warn('[DepthArt] WebGL context lost')
         this.contextLost = true
+        this.coarseTargets = null
         this.textures.clear()
         this.uploads = []
         for (const view of this.views) {
@@ -276,7 +279,7 @@ class DepthArtRenderer {
 
   setupContext(gl) {
     const programs = createDepthArtPrograms(gl, { packedNormals: true, ...this.shaderOptions })
-    for (const entry of [programs.full, programs.cache]) {
+    for (const entry of [programs.full, programs.cache, programs.coarse?.pass, programs.coarse?.compose]) {
       if (!entry) continue
       gl.useProgram(entry.program)
       gl.uniform1f(entry.uniforms.zoom, 1)
@@ -520,10 +523,10 @@ class DepthArtRenderer {
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
       if (!this.bench.forceFull && tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
       const cache = view.cache
-      const cached = !this.bench.forceFull && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
+      const cached = !this.bench.forceFull && !this.coarse && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
         Math.abs(cache.px - px) < epsilon && Math.abs(cache.py - py) < epsilon
       view.stillDraws = tiltStill ? (view.stillDraws || 0) + 1 : 0
-      const build = !this.bench.forceFull && !cached && probe.active && !!this.programs.cache && (this.forceSplit || view.stillDraws >= CACHE_AFTER_STILL_DRAWS)
+      const build = !this.bench.forceFull && !this.coarse && !cached && probe.active && !!this.programs.cache && (this.forceSplit || view.stillDraws >= CACHE_AFTER_STILL_DRAWS)
       batch.push({
         view, entry, rect, width, height, px, py,
         steps: Math.max(1, Math.round(parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) * this.stepScale)),
@@ -579,6 +582,68 @@ class DepthArtRenderer {
     if (group.length) this.drawGroup(group, usedWidth, y + rowHeight, probe)
   }
 
+  drawCoarse(items, width, height, probe) {
+    const gl = this.gl
+    const canvas = this.canvas
+    const { pass, compose } = this.programs.coarse
+    const needWidth = Math.ceil(width / 2)
+    const needHeight = Math.ceil(height / 2)
+    let targets = this.coarseTargets
+    if (!targets || targets.width < needWidth || targets.height < needHeight) {
+      deleteCoarseTargets(gl, targets)
+      targets = this.coarseTargets = createCoarseTargets(gl,
+        Math.max(targets?.width || 0, Math.ceil(needWidth / 128) * 128),
+        Math.max(targets?.height || 0, Math.ceil(needHeight / 128) * 128))
+      if (!targets) {
+        logger.warn('[DepthArt] Coarse targets unavailable, drawing full passes')
+        this.coarse = false
+        return
+      }
+    }
+    for (const item of items) {
+      const left = Math.ceil(item.x / 2)
+      const right = Math.ceil((item.x + item.width) / 2)
+      const top = Math.ceil(item.y / 2)
+      const bottom = Math.ceil((item.y + item.height) / 2)
+      item.coarseRect = [left, targets.height - bottom, right - left, bottom - top]
+    }
+    for (let extra = 0; extra <= this.bench.extraFull; extra++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer)
+      gl.useProgram(pass.program)
+      const lit = setLightUniforms(gl, pass.uniforms, probe, true)
+      for (const item of items) {
+        gl.viewport(...item.coarseRect)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
+        gl.activeTexture(gl.TEXTURE2)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
+        gl.uniform2f(pass.uniforms.gyro, item.px, item.py)
+        gl.uniform1f(pass.uniforms.intensity, item.view.intensity)
+        gl.uniform1f(pass.uniforms.steps, item.steps)
+        bindDepthBound(gl, this.programs, pass.uniforms, item.entry.bound)
+        if (lit) setLightRect(gl, pass.uniforms, item.rect)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.useProgram(compose.program)
+      gl.uniform2f(compose.uniforms.coarse_size, targets.width, targets.height)
+      for (const [name, unit] of Object.entries(COARSE_UNITS)) {
+        gl.activeTexture(gl.TEXTURE0 + unit)
+        gl.bindTexture(gl.TEXTURE_2D, targets[name])
+      }
+      for (const item of items) {
+        gl.viewport(item.x, canvas.height - item.y - item.height, item.width, item.height)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.uniform4f(compose.uniforms.coarse_rect, ...item.coarseRect)
+        gl.uniform1f(compose.uniforms.intensity, item.view.intensity)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+      }
+    }
+  }
+
   drawGroup(group, width, height, probe) {
     const gl = this.gl
     const canvas = this.canvas
@@ -616,7 +681,9 @@ class DepthArtRenderer {
     }
 
     const fulls = group.filter(item => item.mode === 'full')
-    if (fulls.length) {
+    if (fulls.length && this.coarse && this.programs.coarse) {
+      this.drawCoarse(fulls, width, height, probe)
+    } else if (fulls.length) {
       gl.useProgram(full.program)
       const lit = setLightUniforms(gl, full.uniforms, probe, true)
       for (const item of fulls) {
@@ -763,7 +830,8 @@ if (typeof window !== 'undefined') {
       }
       return out
     },
-    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt } = {}) => {
+    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt, coarse } = {}) => {
+      if (coarse !== undefined) depthArtRenderer.coarse = !!coarse
       if (tilt !== undefined) depthArtRenderer.tiltOverride = tilt && { parallaxX: tilt.x, parallaxY: tilt.y }
       if (stepPx !== undefined) depthArtRenderer.configure({ stepPx })
       if (bench !== undefined) Object.assign(depthArtRenderer.bench, bench)

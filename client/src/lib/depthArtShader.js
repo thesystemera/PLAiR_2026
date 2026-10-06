@@ -204,8 +204,11 @@ const PARALLAX = `
   ${MARCH_BOUND}
   ${SAMPLES}
 
-  vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV) {
+  vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV, out float hitDepth, out vec4 fillColor, out float fillMix) {
     float dispLen = length(displacement);
+    hitDepth = 0.0;
+    fillColor = vec4(0.0);
+    fillMix = 0.0;
 
     const int LINEAR_STEPS = ${POM.LINEAR_STEPS};
     float layerStep = 1.0 / u_steps;
@@ -257,7 +260,8 @@ const PARALLAX = `
         aboveDepth = midDepth;
         aboveGap = midDepth - midSample;
       }
-      testUV = uv - (mix(aboveDepth, belowDepth, aboveGap / max(aboveGap - belowGap, 1e-5)) - 0.5) * displacement;
+      hitDepth = mix(aboveDepth, belowDepth, aboveGap / max(aboveGap - belowGap, 1e-5));
+      testUV = uv - (hitDepth - 0.5) * displacement;
     } else {
       testUV = uv + 0.5 * displacement;
     }
@@ -307,20 +311,28 @@ const PARALLAX = `
     SHADE vec4 fc3 = COLOR_AT(clamp(s3 - (fd3 - 0.5) * displacement, 0.001, 0.999)) * w3;
     SHADE vec4 fc4 = COLOR_AT(clamp(s4 - (fd4 - 0.5) * displacement, 0.001, 0.999)) * w4;
 
-    SHADE vec4 fillColor = (fc1 + fc2 + fc3 + fc4) / (w1 + w2 + w3 + w4);
-
-    return mix(pomColor, fillColor, trailMask * ${G(POM.FILL_STRENGTH)});
+    fillColor = (fc1 + fc2 + fc3 + fc4) / (w1 + w2 + w3 + w4);
+    fillMix = trailMask * ${G(POM.FILL_STRENGTH)};
+    return pomColor;
   }
 
 
-  vec4 parallaxAt(vec2 texCoord, out vec2 hitUV) {
+  vec4 parallaxAt(vec2 texCoord, out vec2 hitUV, out float hitDepth, out vec4 fillColor, out float fillMix) {
     vec2 displacement = u_gyro * u_intensity;
 
     float autoZoom = 1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)};
     float finalZoom = u_zoom * autoZoom;
     vec2 uv = (texCoord - 0.5) / finalZoom + 0.5;
 
-    return parallax(uv, displacement, hitUV);
+    return parallax(uv, displacement, hitUV, hitDepth, fillColor, fillMix);
+  }
+
+  vec4 parallaxColorAt(vec2 texCoord, out vec2 hitUV) {
+    float hitDepth;
+    vec4 fillColor;
+    float fillMix;
+    vec4 color = parallaxAt(texCoord, hitUV, hitDepth, fillColor, fillMix);
+    return mix(color, fillColor, fillMix);
   }
 `
 
@@ -339,12 +351,20 @@ function powerFunction(exponent) {
   return `SHADE float shine(SHADE float x) { ${lines.join(' ')} return ${result}; }`
 }
 
+const LIGHT_APPLY = `
+  SHADE vec3 applyLight(SHADE vec3 color, SHADE vec3 reliefTerm, SHADE vec3 extraTerm) {
+    SHADE vec3 lit = color * (1.0 + reliefTerm);
+    lit += extraTerm * (1.0 - lit);
+    return clamp(lit, 0.0, 1.0);
+  }
+`
+
 const SKYLIGHT = `
   #define NORMAL_AT(uv) texture2D(u_normal, uv)
   ${SHADE_PRECISION}
   ${powerFunction(LIGHT.SHININESS)}
 
-  SHADE vec3 skylight(SHADE vec3 color, vec2 hitUV, vec2 screenUV) {
+  void lightTerms(vec2 hitUV, vec2 screenUV, out SHADE vec3 reliefTerm, out SHADE vec3 extraTerm) {
 #ifdef PACKED_NORMALS
     SHADE vec2 packedNormal = NORMAL_AT(clamp(hitUV, 0.0, 1.0)).rb * 2.0 - 1.0;
     SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));
@@ -373,13 +393,21 @@ const SKYLIGHT = `
 
     SHADE float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
     SHADE float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
-    SHADE vec3 lit = color * (1.0 + relief * ${G(LIGHT.RELIEF)} * energy);
-    lit += (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy * (1.0 - lit);
-    return clamp(lit, 0.0, 1.0);
+    reliefTerm = relief * ${G(LIGHT.RELIEF)} * energy;
+    extraTerm = (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy;
   }
 
+  ${LIGHT_APPLY}
+
   vec3 lightAt(vec3 color, vec2 hitUV, vec2 texCoord) {
-    return skylight(color, hitUV, u_rect.xy + texCoord * u_rect.zw);
+    SHADE vec3 reliefTerm;
+    SHADE vec3 extraTerm;
+    lightTerms(hitUV, u_rect.xy + texCoord * u_rect.zw, reliefTerm, extraTerm);
+    return applyLight(color, reliefTerm, extraTerm);
+  }
+
+  void lightTermsAt(vec2 hitUV, vec2 texCoord, out SHADE vec3 reliefTerm, out SHADE vec3 extraTerm) {
+    lightTerms(hitUV, u_rect.xy + texCoord * u_rect.zw, reliefTerm, extraTerm);
   }
 `
 
@@ -392,7 +420,7 @@ const FULL_FRAGMENT = `
   ${SKYLIGHT}
   void main() {
     vec2 hitUV;
-    vec4 color = parallaxAt(v_texCoord, hitUV);
+    vec4 color = parallaxColorAt(v_texCoord, hitUV);
     if (u_light > 0.0) color.rgb = lightAt(color.rgb, hitUV, v_texCoord);
     gl_FragColor = color;
   }
@@ -410,8 +438,73 @@ const FULL_FRAGMENT_300 = `#version 300 es
   ${SKYLIGHT}
   void main() {
     vec2 hitUV;
-    vec4 color = parallaxAt(v_texCoord, hitUV);
+    vec4 color = parallaxColorAt(v_texCoord, hitUV);
     if (u_light > 0.0) color.rgb = lightAt(color.rgb, hitUV, v_texCoord);
+    o_color = color;
+  }
+`
+
+const COARSE_FRAGMENT = `#version 300 es
+  precision highp float;
+  #define texture2D texture
+  #define MARCH_BOUND
+  ${PARALLAX_UNIFORMS}
+  ${LIGHT_UNIFORMS}
+  in vec2 v_texCoord;
+  layout(location = 0) out vec4 o_hit;
+  layout(location = 1) out vec4 o_relief;
+  layout(location = 2) out vec4 o_extra;
+  layout(location = 3) out vec4 o_fill;
+  ${PARALLAX}
+  ${SKYLIGHT}
+  void main() {
+    vec2 hitUV;
+    float hitDepth;
+    vec4 fillColor;
+    float fillMix;
+    parallaxAt(v_texCoord, hitUV, hitDepth, fillColor, fillMix);
+    SHADE vec3 reliefTerm = vec3(0.0);
+    SHADE vec3 extraTerm = vec3(0.0);
+    if (u_light > 0.0) lightTermsAt(hitUV, v_texCoord, reliefTerm, extraTerm);
+    float zoom = u_zoom * (1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)});
+    vec2 uv = (v_texCoord - 0.5) / zoom + 0.5;
+    o_hit = vec4(hitUV - uv, 0.0, 1.0);
+    o_relief = vec4(reliefTerm, fillMix);
+    o_extra = vec4(extraTerm, 1.0);
+    o_fill = fillColor;
+  }
+`
+
+const COMPOSE_FRAGMENT = `#version 300 es
+  precision highp float;
+  uniform sampler2D u_color;
+  uniform highp sampler2D u_coarse_hit;
+  uniform sampler2D u_coarse_relief;
+  uniform sampler2D u_coarse_extra;
+  uniform sampler2D u_coarse_fill;
+  uniform vec4 u_coarse_rect;
+  uniform vec2 u_coarse_size;
+  uniform float u_intensity;
+  uniform float u_zoom;
+  in vec2 v_texCoord;
+  out vec4 o_color;
+  ${SHADE_PRECISION}
+  ${LIGHT_APPLY}
+
+  void main() {
+    vec2 cells = u_coarse_rect.zw;
+    vec2 origin = u_coarse_rect.xy;
+    vec2 pos = vec2(v_texCoord.x, 1.0 - v_texCoord.y) * cells - 0.5;
+    vec2 at = clamp(origin + pos + 0.5, origin + 0.5, origin + cells - 0.5) / u_coarse_size;
+    vec2 uv = (v_texCoord - 0.5) / (u_zoom * (1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)})) + 0.5;
+    vec2 hitUV = uv + texture(u_coarse_hit, at).xy;
+    vec4 relief = texture(u_coarse_relief, at);
+    vec4 extra = texture(u_coarse_extra, at);
+    vec4 fill = relief.a > 0.001 ? texture(u_coarse_fill, at) : vec4(0.0);
+
+    vec4 color = texture(u_color, clamp(hitUV, 0.001, 0.999));
+    color = mix(color, fill, relief.a);
+    color.rgb = applyLight(color.rgb, relief.rgb, extra.rgb);
     o_color = color;
   }
 `
@@ -470,7 +563,7 @@ const cacheFragment = hit => `#version 300 es
   ${PARALLAX}
   void main() {
     vec2 hitUV;
-    o_color = parallaxAt(v_texCoord, hitUV);${hit.write}
+    o_color = parallaxColorAt(v_texCoord, hitUV);${hit.write}
   }
 `
 
@@ -580,14 +673,64 @@ export function createDepthArtPrograms(gl, { packedNormals = false, mediumpShadi
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
       const flat = linkProgram(gl, VERTEX_100, FLAT_FRAGMENT, ['u_color'], { color: 0 })
-      return { full, cache, relight, flat, floatHit, bound: { builder, noBound } }
+      return { full, cache, relight, flat, floatHit, coarse: floatHit ? createCoarsePrograms(gl, defines, fullUniforms, fullSamplers) : null, bound: { builder, noBound } }
     } catch (error) {
       logger.warn('[DepthArt] Parallax cache unavailable:', error)
     }
   }
   const full = linkProgram(gl, VERTEX_100, withDefines(FULL_FRAGMENT, defines), fullUniforms, fullSamplers)
   const flat = linkProgram(gl, VERTEX_100, FLAT_FRAGMENT, ['u_color'], { color: 0 })
-  return { full, cache: null, relight: null, flat, floatHit: false, bound: null }
+  return { full, cache: null, relight: null, flat, floatHit: false, coarse: null, bound: null }
+}
+
+export const COARSE_UNITS = { hit: 4, relief: 5, extra: 6, fill: 7 }
+
+function createCoarsePrograms(gl, defines, fullUniforms, fullSamplers) {
+  try {
+    const pass = linkProgram(gl, VERTEX_300, withDefines(COARSE_FRAGMENT, defines), [...fullUniforms, ...BOUND_UNIFORM_NAMES], { ...fullSamplers, depth_bound: BOUND_UNIT })
+    const compose = linkProgram(gl, VERTEX_300, withDefines(COMPOSE_FRAGMENT, defines.filter(name => name !== 'PACKED_NORMALS')),
+      ['u_color', 'u_coarse_hit', 'u_coarse_relief', 'u_coarse_extra', 'u_coarse_fill', 'u_coarse_rect', 'u_coarse_size', 'u_intensity', 'u_zoom'],
+      { color: 0, coarse_hit: COARSE_UNITS.hit, coarse_relief: COARSE_UNITS.relief, coarse_extra: COARSE_UNITS.extra, coarse_fill: COARSE_UNITS.fill })
+    return { pass, compose }
+  } catch (error) {
+    logger.warn('[DepthArt] Coarse parallax unavailable:', error)
+    return null
+  }
+}
+
+export function createCoarseTargets(gl, width, height) {
+  const formats = [
+    [gl.RG16F, gl.RG, gl.HALF_FLOAT, gl.LINEAR],
+    [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR],
+    [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT, gl.LINEAR],
+    [gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR],
+  ]
+  const textures = formats.map(([internalFormat, format, type, filter]) => {
+    const texture = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter)
+    gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null)
+    return texture
+  })
+  const framebuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
+  textures.forEach((texture, index) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, texture, 0))
+  gl.drawBuffers(textures.map((_, index) => gl.COLOR_ATTACHMENT0 + index))
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  const targets = { width, height, framebuffer, hit: textures[0], relief: textures[1], extra: textures[2], fill: textures[3] }
+  if (complete) return targets
+  deleteCoarseTargets(gl, targets)
+  return null
+}
+
+export function deleteCoarseTargets(gl, targets) {
+  if (!targets || gl.isContextLost()) return
+  gl.deleteFramebuffer(targets.framebuffer)
+  for (const texture of [targets.hit, targets.relief, targets.extra, targets.fill]) gl.deleteTexture(texture)
 }
 
 export function createDepthBound(gl, programs, depthTexture, width, height) {
