@@ -1,3 +1,6 @@
+import { FadeSwap } from './Motion'
+import { PRESETS } from '../lib/motion'
+
 export const SettingRow = ({ icon: Icon, label, color = "text-purple-400", children, headerContent }) => (
   <div className="bg-white/5 p-3 rounded-lg">
     <div className="flex items-center justify-between mb-2">
@@ -18,8 +21,10 @@ export const ToggleChip = ({ on, onClick, disabled = false, activeClassName = 'b
     disabled={disabled}
     aria-pressed={on}
     aria-label={label}
-    className={`ui-press px-3 py-1 rounded text-xs font-medium transition disabled:opacity-50 ${on ? activeClassName : 'bg-dark-hover text-gray-400'}`}
+    className={`ui-press relative overflow-hidden min-w-[3rem] px-3 py-1 rounded text-xs font-medium transition disabled:opacity-50 ${on ? activeClassName : 'bg-dark-hover text-gray-400'}`}
   >
-    {on ? 'ON' : 'OFF'}
+    <FadeSwap swapKey={on ? 'on' : 'off'} preset={PRESETS.badgeSwap} className="block text-center">
+      {on ? 'ON' : 'OFF'}
+    </FadeSwap>
   </button>
 )

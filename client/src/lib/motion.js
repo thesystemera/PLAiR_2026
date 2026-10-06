@@ -112,6 +112,11 @@ export const VARIANTS = {
       transitionEnd: { overflow: 'visible' },
     },
   },
+  stepSwap: {
+    hidden: { opacity: 0, y: 10 },
+    show: { opacity: 1, y: 0, transition: { ...TWEEN.enter, staggerChildren: 0.035, delayChildren: 0.04 } },
+    exit: { opacity: 0, y: -8, transition: TWEEN.exit },
+  },
   expandSideways: {
     collapsed: {
       width: 0,

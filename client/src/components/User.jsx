@@ -1322,7 +1322,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Data Saver Mode"
             color="text-green-400"
             headerContent={
-              <button onClick={() => publishSettings({ dataSaverMode: !dataSaverMode })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${dataSaverMode ? 'bg-green-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{dataSaverMode ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={dataSaverMode} onClick={() => publishSettings({ dataSaverMode: !dataSaverMode })} activeClassName="bg-green-500 text-white" label="Data Saver" />
             }
           />
 
@@ -1331,7 +1331,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="FPS Counter"
             color="text-blue-400"
             headerContent={
-              <button onClick={handleToggleFpsEnabled} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${fpsEnabled ? 'bg-blue-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{fpsEnabled ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={fpsEnabled} onClick={handleToggleFpsEnabled} activeClassName="bg-blue-500 text-white" label="FPS counter" />
             }
           />
 
@@ -1356,7 +1356,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               label="Cost Ticker"
               color="text-violet-400"
               headerContent={
-                <button onClick={() => publishSettings({ costTickerEnabled: !costTickerEnabled })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${costTickerEnabled ? 'bg-violet-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{costTickerEnabled ? 'ON' : 'OFF'}</button>
+                <ToggleChip on={costTickerEnabled} onClick={() => publishSettings({ costTickerEnabled: !costTickerEnabled })} activeClassName="bg-violet-500 text-white" label="Cost ticker" />
               }
             />
           )}
@@ -1406,7 +1406,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Keep It Smooth"
             color="text-emerald-400"
             headerContent={
-              <button onClick={() => publishSettings({ keepSmooth: keepSmooth === false })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${keepSmooth !== false ? 'bg-emerald-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{keepSmooth !== false ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={keepSmooth !== false} onClick={() => publishSettings({ keepSmooth: keepSmooth === false })} activeClassName="bg-emerald-500 text-white" label="Keep It Smooth" />
             }
           >
             <FadeSwap swapKey={keepSmooth !== false ? 'on' : 'off'} preset={PRESETS.fade} mode="wait" className="text-xs text-gray-400">
@@ -1421,7 +1421,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="3D Lit Artwork"
             color="text-sky-400"
             headerContent={
-              <button onClick={handleToggleLitArtwork} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${litArtwork ? 'bg-sky-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{litArtwork ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={litArtwork} onClick={handleToggleLitArtwork} activeClassName="bg-sky-500 text-white" label="3D Lit Artwork" />
             }
           >
             <div className="text-xs text-gray-400">
@@ -1434,7 +1434,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Video Clips"
             color="text-pink-400"
             headerContent={
-              <button onClick={handleToggleVideoClips} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${videoClipsEnabled ? 'bg-pink-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{videoClipsEnabled ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={videoClipsEnabled} onClick={handleToggleVideoClips} activeClassName="bg-pink-500 text-white" label="Video clips" />
             }
           >
             <div className="text-xs text-gray-400">
@@ -1447,7 +1447,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             label="Background Downloads"
             color="text-purple-400"
             headerContent={
-              <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${backgroundDownloads ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{backgroundDownloads ? 'ON' : 'OFF'}</button>
+              <ToggleChip on={backgroundDownloads} onClick={handleToggleBackgroundDownloads} activeClassName="bg-purple-500 text-white" label="Background downloads" />
             }
           >
             <Fade show={!!backgroundDownloads} className="text-xs text-gray-400 space-y-1">

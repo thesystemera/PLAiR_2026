@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
 import { Upload, Loader2, Check, X, FileAudio, FileVideo, Mic2, Wand2, Info } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { PRESETS } from '../../lib/motion'
+import { PRESETS, VARIANTS } from '../../lib/motion'
 import { Fade, FadeSwap, Pop } from '../Motion'
 import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
@@ -16,6 +16,7 @@ import { ToggleChip } from '../SettingRow'
 import { Modal, ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
 import { cleanText, FieldLabel, MetadataField, TagEditor, VisibilityControl, DescriptionField, SettingToggle, ArtistChooser, QualityBadge, ArtworkSection, AudioFeaturesDisplay } from './UploadMusicModalFields'
 
+const STEP_MOTION = { variants: VARIANTS.stepSwap, initial: 'hidden', animate: 'show', exit: 'exit' }
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
 const VIDEO_FORMATS = ['mp4', 'mov', 'm4v', 'mkv', 'avi']
 const SUPPORTED_FORMATS = [...AUDIO_FORMATS, ...VIDEO_FORMATS]
@@ -581,7 +582,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {!isAuthenticated && (
           <motion.div
             key="auth-required"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
             className="py-8"
           >
             <ModalErrorState
@@ -596,7 +597,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {isAuthenticated && isEditing && stage === UploadStage.SELECT && (
           <motion.div
             key="edit-loading"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
             className="py-12 flex items-center justify-center"
           >
             <Loader2 size={28} className="animate-spin" style={{ color: getGrey400() }} />
@@ -606,7 +607,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {isAuthenticated && !isEditing && stage === UploadStage.SELECT && (
           <motion.div
             key="select"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
           >
             <ModalSection title="Select Audio or Video File">
               <div
@@ -730,7 +731,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {isAuthenticated && (stage === UploadStage.UPLOADING || stage === UploadStage.ANALYZING) && (
           <motion.div
             key="uploading"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
             className="py-8"
           >
             <ModalProgress
@@ -753,7 +754,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {isAuthenticated && stage === UploadStage.PREVIEW && metadata && (
           <motion.div
             key="preview"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
           >
             {!isEditing && duplicate && (
               <div className="mb-4 flex items-center gap-2 p-3 rounded-lg bg-white/5 border border-white/10">
@@ -1074,7 +1075,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
         {isAuthenticated && stage === UploadStage.ERROR && (
           <motion.div
             key="error"
-            {...PRESETS.stepSwap}
+            {...STEP_MOTION}
             className="py-8"
           >
             <ModalErrorState
