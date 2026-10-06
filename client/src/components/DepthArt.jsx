@@ -20,7 +20,7 @@ const isLoadedImage = url => typeof url === 'string' && (url.startsWith('blob:')
 
 export function DepthArtBridge() {
   const { gyroscopeRef, mouseRef } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef }))
-  const { parallaxDpr, parallaxStepPx, reduceMotion } = useQuality()
+  const { parallaxDpr, parallaxStepPx, coarseCovers, reduceMotion } = useQuality()
   const litArtwork = useUISelector(state => state.settingsState.litArtwork)
 
   useEffect(() => {
@@ -28,11 +28,12 @@ export function DepthArtBridge() {
       dpr: parallaxDpr,
       stepPx: parallaxStepPx,
       reduceMotion,
+      coarse: coarseCovers,
       lit: litArtwork !== false,
       gyroRef: gyroscopeRef,
       mouseRef,
     })
-  }, [parallaxDpr, parallaxStepPx, reduceMotion, litArtwork, gyroscopeRef, mouseRef])
+  }, [parallaxDpr, parallaxStepPx, coarseCovers, reduceMotion, litArtwork, gyroscopeRef, mouseRef])
 
   return null
 }

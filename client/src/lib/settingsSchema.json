@@ -5,6 +5,7 @@
   "fpsEnabled": { "default": false },
   "videoClipsEnabled": { "default": false },
   "visualQuality": { "default": "high", "options": ["high", "medium", "low", "auto"] },
+  "keepSmooth": { "default": true },
   "litArtwork": { "default": true },
   "dataSaverMode": { "default": false },
   "costTickerEnabled": { "default": false },

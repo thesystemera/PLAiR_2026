@@ -563,7 +563,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const { getPreferences, removePreference, isPending } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor } = useDynamicTheme()
   const { storageInfo, dataUsage, deleteTrack: deleteCachedTrack, clearAllCache, refreshStorageInfo } = useStorage()
-  const { level: qualityLevel } = useQuality()
+  const { level: qualityLevel, smoothLevers } = useQuality()
   const {
     isOnline,
     networkQuality,
@@ -583,6 +583,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     ttsMuted,
     videoClipsEnabled,
     visualQuality,
+    keepSmooth,
     publishSettings,
     toastSuccess,
     toastError,
@@ -615,6 +616,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     ttsMuted: state.settingsState.ttsMuted,
     videoClipsEnabled: state.settingsState.videoClipsEnabled,
     visualQuality: state.settingsState.visualQuality,
+    keepSmooth: state.settingsState.keepSmooth,
     publishSettings: state.publishSettings,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
@@ -1358,6 +1360,21 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               {visualQuality === 'auto'
                 ? `Auto picks the level this device keeps at full frame rate (now ${qualityLevel.toUpperCase()}).`
                 : 'Controls background visual effects intensity. Use LOW for better battery life on mobile devices.'}
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={Gauge}
+            label="Keep It Smooth"
+            color="text-emerald-400"
+            headerContent={
+              <button onClick={() => publishSettings({ keepSmooth: keepSmooth === false })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${keepSmooth !== false ? 'bg-emerald-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{keepSmooth !== false ? 'ON' : 'OFF'}</button>
+            }
+          >
+            <div className="text-xs text-gray-400">
+              {keepSmooth !== false
+                ? `Turns small details down while the screen can't keep up and back up when it can${smoothLevers.length ? ` (now: ${smoothLevers.join(', ')})` : ' (everything is at full detail now)'}.`
+                : 'Every detail stays at full quality, even when frames drop.'}
             </div>
           </SettingRow>
 

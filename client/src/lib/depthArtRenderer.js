@@ -70,12 +70,13 @@ class DepthArtRenderer {
     this.shaderOptions = {}
     this.stepScale = 1
     this.tiltOverride = null
-    this.coarse = true
+    this.coarseOverride = null
+    this.coarseUnavailable = false
     this.coarseTargets = null
     this.skipDraw = false
     this.drawDelays = []
     this.uploads = []
-    this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, gyroRef: null, mouseRef: null }
+    this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, coarse: false, gyroRef: null, mouseRef: null }
     this.canvas = null
     this.gl = null
     this.programs = null
@@ -399,6 +400,10 @@ class DepthArtRenderer {
     if (!this.frame && this.views.size) this.frame = requestAnimationFrame(this.tick)
   }
 
+  get coarse() {
+    return !this.coarseUnavailable && !!this.programs?.coarse && (this.coarseOverride ?? this.settings.coarse)
+  }
+
   baseParallax() {
     if (this.tiltOverride) return this.tiltOverride
     if (this.settings.reduceMotion) return NO_PARALLAX
@@ -446,6 +451,7 @@ class DepthArtRenderer {
     const clipRects = new Map()
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
     const flat = !this.settings.lit
+    const coarse = this.coarse
     const batch = []
     const ahead = []
     let showing = false
@@ -523,10 +529,10 @@ class DepthArtRenderer {
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
       if (!this.bench.forceFull && tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
       const cache = view.cache
-      const cached = !this.bench.forceFull && !this.coarse && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
+      const cached = !this.bench.forceFull && !coarse && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
         Math.abs(cache.px - px) < epsilon && Math.abs(cache.py - py) < epsilon
       view.stillDraws = tiltStill ? (view.stillDraws || 0) + 1 : 0
-      const build = !this.bench.forceFull && !this.coarse && !cached && probe.active && !!this.programs.cache && (this.forceSplit || view.stillDraws >= CACHE_AFTER_STILL_DRAWS)
+      const build = !this.bench.forceFull && !coarse && !cached && probe.active && !!this.programs.cache && (this.forceSplit || view.stillDraws >= CACHE_AFTER_STILL_DRAWS)
       batch.push({
         view, entry, rect, width, height, px, py,
         steps: Math.max(1, Math.round(parallaxSteps(Math.hypot(px, py) * pixelsPerUnit, stepPx) * this.stepScale)),
@@ -596,7 +602,7 @@ class DepthArtRenderer {
         Math.max(targets?.height || 0, Math.ceil(needHeight / 128) * 128))
       if (!targets) {
         logger.warn('[DepthArt] Coarse targets unavailable, drawing full passes')
-        this.coarse = false
+        this.coarseUnavailable = true
         return
       }
     }
@@ -681,7 +687,7 @@ class DepthArtRenderer {
     }
 
     const fulls = group.filter(item => item.mode === 'full')
-    if (fulls.length && this.coarse && this.programs.coarse) {
+    if (fulls.length && this.coarse) {
       this.drawCoarse(fulls, width, height, probe)
     } else if (fulls.length) {
       gl.useProgram(full.program)
@@ -831,7 +837,7 @@ if (typeof window !== 'undefined') {
       return out
     },
     set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt, coarse } = {}) => {
-      if (coarse !== undefined) depthArtRenderer.coarse = !!coarse
+      if (coarse !== undefined) depthArtRenderer.coarseOverride = coarse === null ? null : !!coarse
       if (tilt !== undefined) depthArtRenderer.tiltOverride = tilt && { parallaxX: tilt.x, parallaxY: tilt.y }
       if (stepPx !== undefined) depthArtRenderer.configure({ stepPx })
       if (bench !== undefined) Object.assign(depthArtRenderer.bench, bench)

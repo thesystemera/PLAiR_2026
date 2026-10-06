@@ -15,7 +15,13 @@ const LEVEL_SETTINGS = {
 const TOP_LEVEL = LEVELS.length - 1
 export const REFERENCE_SCENE_DPR = LEVEL_SETTINGS.high.sceneDpr
 
+const SMOOTH_LEVERS = [
+  { name: 'coarse covers', settings: { coarseCovers: true } },
+]
+const FULL_LEVERS = { coarseCovers: false }
+
 const LEARNED_LEVEL_KEY = 'plair_quality_auto_v2'
+const LEARNED_SMOOTH_KEY = 'plair_smooth_step_v1'
 const WINDOW_FRAMES = 90
 const SLOW_FRAME_RATIO = 1.5
 const FAST_FRAME_RATIO = 1.11
@@ -38,6 +44,28 @@ function readLearnedLevel() {
   if (raw === null || raw === '') return null
   const value = Number(raw)
   return Number.isFinite(value) ? clampLevel(value) : null
+}
+
+function clampStep(step) {
+  return Math.max(0, Math.min(SMOOTH_LEVERS.length, Math.round(step)))
+}
+
+function readLearnedStep() {
+  const raw = safeStorage.get(LEARNED_SMOOTH_KEY)
+  if (raw === null || raw === '') return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? clampStep(value) : null
+}
+
+function heuristicStep() {
+  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches
+  return coarse ? SMOOTH_LEVERS.length : 0
+}
+
+function leverSettings(step) {
+  let settings = { ...FULL_LEVERS }
+  for (const lever of SMOOTH_LEVERS.slice(0, step)) settings = { ...settings, ...lever.settings }
+  return settings
 }
 
 function heuristicLevel() {
@@ -81,11 +109,15 @@ function useSaveData() {
 }
 
 export function QualityProvider({ children }) {
-  const { visualQuality: chosenQuality, dataSaverMode, publishSettings } = useUISelector(state => ({
+  const { visualQuality: chosenQuality, keepSmooth: keepSmoothSetting, dataSaverMode, publishSettings } = useUISelector(state => ({
     visualQuality: state.settingsState.visualQuality,
+    keepSmooth: state.settingsState.keepSmooth,
     dataSaverMode: state.settingsState.dataSaverMode,
     publishSettings: state.publishSettings,
   }))
+  const keepSmooth = keepSmoothSetting !== false
+  const [learnedStep, setLearnedStep] = useState(() => readLearnedStep() ?? heuristicStep())
+  const smoothStep = keepSmooth ? learnedStep : 0
   const [benchOverride, setBenchOverride] = useState(null)
   const visualQuality = benchOverride?.level || chosenQuality
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
@@ -105,21 +137,24 @@ export function QualityProvider({ children }) {
     slowWindows: 0,
     fastWindows: 0,
     failures: new Array(LEVELS.length).fill(0),
+    stepFailures: new Array(SMOOTH_LEVERS.length + 1).fill(0),
     rendererChecked: false,
     auto,
     autoIndex,
     ceiling: autoCeiling,
+    keepSmooth,
+    smoothStep,
   })
 
   useEffect(() => {
-    Object.assign(governorRef.current, { auto, autoIndex, ceiling: autoCeiling })
-  }, [auto, autoIndex, autoCeiling])
+    Object.assign(governorRef.current, { auto, autoIndex, ceiling: autoCeiling, keepSmooth, smoothStep })
+  }, [auto, autoIndex, autoCeiling, keepSmooth, smoothStep])
 
   useEffect(() => {
     setMotionPolicy({ tier: levelIndex, reduceMotion })
   }, [levelIndex, reduceMotion])
 
-  useEffect(() => (auto ? watchScreenRefresh() : undefined), [auto])
+  useEffect(() => (auto || keepSmooth ? watchScreenRefresh() : undefined), [auto, keepSmooth])
 
   const changeLevel = useCallback((next, reason) => {
     setAutoLevel(prev => {
@@ -127,6 +162,17 @@ export function QualityProvider({ children }) {
       if (value === prev) return prev
       logger.info(`[Quality] auto ${LEVELS[prev]} -> ${LEVELS[value]} (${reason})`)
       safeStorage.set(LEARNED_LEVEL_KEY, String(value))
+      return value
+    })
+  }, [])
+
+  const changeStep = useCallback((next, reason) => {
+    setLearnedStep(prev => {
+      const value = clampStep(next)
+      if (value === prev) return prev
+      const lever = SMOOTH_LEVERS[Math.max(value, prev) - 1]
+      logger.info(`[Quality] keep it smooth: ${lever.name} ${value > prev ? 'on' : 'off'} (${reason})`)
+      safeStorage.set(LEARNED_SMOOTH_KEY, String(value))
       return value
     })
   }, [])
@@ -142,7 +188,7 @@ export function QualityProvider({ children }) {
 
   const reportFrame = useCallback((deltaSeconds, wantedRender) => {
     const governor = governorRef.current
-    if (!governor.auto) return
+    if (!governor.auto && !governor.keepSmooth) return
     governor.total += Math.min(deltaSeconds, 0.1)
     governor.count++
     if (wantedRender) governor.active++
@@ -161,28 +207,40 @@ export function QualityProvider({ children }) {
     }
 
     const current = governor.autoIndex
+    const step = governor.smoothStep
+    const reason = `avg frame ${(average * 1000).toFixed(1)}ms`
+    const canLower = governor.keepSmooth && step < SMOOTH_LEVERS.length
+    const canDrop = governor.auto && current > 0
     if (average > refresh * SLOW_FRAME_RATIO) {
       governor.fastWindows = 0
       governor.slowWindows++
-      if (governor.slowWindows >= SLOW_WINDOWS_TO_DROP && current > 0) {
+      if (governor.slowWindows >= SLOW_WINDOWS_TO_DROP && (canLower || canDrop)) {
         governor.slowWindows = 0
-        governor.failures[current]++
-        changeLevel(current - 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
+        if (canLower) {
+          governor.stepFailures[step]++
+          changeStep(step + 1, reason)
+        } else {
+          governor.failures[current]++
+          changeLevel(current - 1, reason)
+        }
       }
       return
     }
 
     governor.slowWindows = 0
-    if (average < refresh * FAST_FRAME_RATIO && current < governor.ceiling && governor.failures[current + 1] < FAILURES_TO_LOCK) {
+    const canRaise = governor.auto && current < governor.ceiling && governor.failures[current + 1] < FAILURES_TO_LOCK
+    const canRestore = governor.keepSmooth && step > 0 && governor.stepFailures[step - 1] < FAILURES_TO_LOCK
+    if (average < refresh * FAST_FRAME_RATIO && (canRaise || canRestore)) {
       governor.fastWindows++
       if (governor.fastWindows >= FAST_WINDOWS_TO_RAISE) {
         governor.fastWindows = 0
-        changeLevel(current + 1, `avg frame ${(average * 1000).toFixed(1)}ms`)
+        if (canRaise) changeLevel(current + 1, reason)
+        else changeStep(step - 1, reason)
       }
     } else {
       governor.fastWindows = 0
     }
-  }, [changeLevel])
+  }, [changeLevel, changeStep])
 
   const value = useMemo(() => ({
     level,
@@ -190,19 +248,23 @@ export function QualityProvider({ children }) {
     auto,
     ...LEVEL_SETTINGS[level],
     ...benchOverride,
+    ...leverSettings(smoothStep),
+    smoothStep,
+    smoothLevers: SMOOTH_LEVERS.slice(0, smoothStep).map(lever => lever.name),
+    keepSmooth,
     isHigh: level === 'high',
     reduceMotion,
     reportFrame,
     reportRenderer,
     pauseRendering: pauseSceneRendering,
-  }), [level, levelIndex, auto, reduceMotion, reportFrame, reportRenderer, benchOverride])
+  }), [level, levelIndex, auto, smoothStep, keepSmooth, reduceMotion, reportFrame, reportRenderer, benchOverride])
 
   useEffect(() => {
-    window.__plairQuality = () => ({ level, auto, autoLevel: LEVELS[autoIndex], ceiling: LEVELS[autoCeiling], reduceMotion, saveData, override: benchOverride })
+    window.__plairQuality = () => ({ level, auto, autoLevel: LEVELS[autoIndex], ceiling: LEVELS[autoCeiling], keepSmooth, smoothStep, levers: SMOOTH_LEVERS.slice(0, smoothStep).map(lever => lever.name), reduceMotion, saveData, override: benchOverride })
     window.__plairQuality.override = setBenchOverride
     window.__plairQuality.publishSettings = publishSettings
     return () => { delete window.__plairQuality }
-  }, [level, auto, autoIndex, autoCeiling, reduceMotion, saveData, benchOverride, publishSettings])
+  }, [level, auto, autoIndex, autoCeiling, keepSmooth, smoothStep, reduceMotion, saveData, benchOverride, publishSettings])
 
   return (
     <QualityContext.Provider value={value}>
