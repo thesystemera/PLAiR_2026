@@ -159,6 +159,18 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
+- **Reference EQ target may be wrong in the highs (7 Oct, owner: "something is amiss"):** chain v5 masters lose
+  treble the owner hears. Measured on 4 super-likes (`upscale_ab/treble_stages`): SonicMaster 50% with the Feb
+  prompt costs ~1-1.5 dB at 4-16 kHz after compensation (compensation only adds, +3 dB); the reference EQ cuts
+  4-6 dB at 8-16 kHz on bright songs (Fractured Memory, Concrete Veins sit +7-10 dB over the curve at
+  10-12.5 kHz). On 40 random raw Suno songs the median is +2.8 dB at 10 kHz and about half get trimmed.
+  Doubts: `MODERN_MASTER_DB` has no recorded derivation (Pestana 2013 is paywalled, so it is unknown whether its
+  numbers are per-Hz density or band energy, a ~3 dB/octave difference); the Elowsson curve used before was 6-7 dB
+  darker at 8-12 kHz, so published curves disagree by as much as we cut; Elowsson & Friberg found LTAS depends on
+  percussion prominence (more drums = more bass and highs), which one pop average ignores. Owner does not want to
+  supply reference WAVs: find published numeric LTAS data online (open papers, tables, open datasets of pro
+  masters) and check the curve's units and shape, then consider a percussion-aware target. No change made yet.
+
 - **Finish splitting the big files (started 4 Oct):** rule: a split file keeps the original name as its prefix
   (`dj_tools.py` + `dj_tools_registry.py`, `api.js` + `apiMusic.js`), the unsuffixed file is the core, and every
   new file gets a line in the CLAUDE.md File Map. Done: the DJ tools, command executor and prompt service,
