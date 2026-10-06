@@ -5,6 +5,7 @@ const FALLBACK_TOP = [0.231, 0.509, 0.964]
 const FALLBACK_BOTTOM = [0.545, 0.360, 0.964]
 
 const pixelCache = new WeakMap()
+const textContexts = new Map()
 const color = new Float32Array(4)
 const blended = new Float32Array(4)
 const output = new Uint8Array(PROBE_GRID * PROBE_GRID * 4)
@@ -33,7 +34,14 @@ export function artworkPixels(image) {
 }
 
 export function textPixels(draw, sourceWidth, sourceHeight, width, height) {
-  const ctx = makeCanvas(width, height).getContext('2d', { willReadFrequently: true })
+  const key = `${width}x${height}`
+  let ctx = textContexts.get(key)
+  if (!ctx) {
+    ctx = makeCanvas(width, height).getContext('2d', { willReadFrequently: true })
+    textContexts.set(key, ctx)
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, width, height)
   ctx.setTransform(width / sourceWidth, 0, 0, height / sourceHeight, 0, 0)
   draw(ctx, sourceWidth, sourceHeight)
   return { data: ctx.getImageData(0, 0, width, height).data, width, height }

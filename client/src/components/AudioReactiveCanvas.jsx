@@ -122,6 +122,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const glowRef = useRef(new Float32Array(11))
   const clipsRef = useRef({ videos: [], currentIndex: 0 })
   const lyricRef = useRef({ canvas: null, words: null, styled: null, key: null })
+  const aspectRef = useRef(LYRIC_WIDTH / LYRIC_HEIGHT)
   const evalsRef = useRef(new Map())
 
   latestRef.current = { ui, getUIState, audio, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
@@ -223,6 +224,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     if (!canvas) return undefined
     const report = () => {
       const rect = canvas.getBoundingClientRect()
+      aspectRef.current = rect.width / Math.max(1, rect.height)
       const latest = latestRef.current
       send({ type: 'size', width: rect.width, height: rect.height, dpr: latest.canvasDpr, referenceDpr: latest.referenceDpr })
     }
@@ -286,7 +288,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     }
     const update = () => {
       const seconds = clockMs() / 1000
-      const aspect = window.innerWidth / Math.max(1, window.innerHeight)
+      const aspect = aspectRef.current
       let key = null
       let draw = null
       let size = { width: LYRIC_WIDTH, height: LYRIC_HEIGHT }
