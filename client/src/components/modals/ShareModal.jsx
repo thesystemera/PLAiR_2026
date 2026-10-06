@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Modal, ModalProgress, ModalErrorState } from './Modal'
-import { FadeSwap } from '../Motion'
+import { Fade, FadeSwap } from '../Motion'
 import { PRESETS } from '../../lib/motion'
 import { useUISelector } from '../../contexts/UIStateContext'
 import { triggerHaptic } from '../../lib/haptics'
@@ -322,13 +322,15 @@ export function ShareModal({ isOpen, onClose, track }) {
               onClick={handleCopyLink}
               title="Copy track link"
               aria-label="Copy track link"
-              className="ui-press px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+              className="ui-press relative px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
             >
-              {linkCopied ? (
-                <Check className="w-4 h-4 text-green-400" />
-              ) : (
-                <Copy className="w-4 h-4 text-white" />
-              )}
+              <FadeSwap swapKey={linkCopied ? 'copied' : 'copy'} preset={PRESETS.iconSwap}>
+                {linkCopied ? (
+                  <Check className="w-4 h-4 text-green-400" />
+                ) : (
+                  <Copy className="w-4 h-4 text-white" />
+                )}
+              </FadeSwap>
             </button>
             {navigator.share && (
               <button
@@ -397,21 +399,23 @@ export function ShareModal({ isOpen, onClose, track }) {
                       onClick={handleCopyVideoLink}
                       title="Copy hosted video link"
                       aria-label="Copy hosted video link"
-                      className="ui-press px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                      className="ui-press relative px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
                     >
-                      {videoLinkCopied ? (
-                        <Check className="w-4 h-4 text-green-400" />
-                      ) : (
-                        <Copy className="w-4 h-4 text-white" />
-                      )}
+                      <FadeSwap swapKey={videoLinkCopied ? 'copied' : 'copy'} preset={PRESETS.iconSwap}>
+                        {videoLinkCopied ? (
+                          <Check className="w-4 h-4 text-green-400" />
+                        ) : (
+                          <Copy className="w-4 h-4 text-white" />
+                        )}
+                      </FadeSwap>
                     </button>
                   </div>
                 )}
-                {error && (
+                <Fade show={!!error}>
                   <div className="text-amber-400 text-sm bg-amber-500/10 rounded-lg px-3 py-2">
                     {error}
                   </div>
-                )}
+                </Fade>
                 <div className="flex gap-2">
                   <button
                     onClick={handleDownload}

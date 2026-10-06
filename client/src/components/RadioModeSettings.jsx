@@ -3,7 +3,7 @@ import { RadioTower, Radio, Newspaper, CloudSun, Ticket, Users, Sparkles, Timer,
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { safeStorage } from '../lib/safeStorage'
-import { ExpandSection, Expandable } from './Motion'
+import { ExpandSection, Expandable, Fade, Pop } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
 import { InlineNote } from './Notice'
 
@@ -77,9 +77,11 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
       icon={RadioTower}
       iconClassName="text-red-400"
       title="Radio Mode"
-      meta={radioMode.enabled ? (
-        <span className="text-[10px] font-bold tracking-wider text-red-300 bg-red-500/20 border border-red-500/40 px-1.5 py-0.5 rounded">ON</span>
-      ) : null}
+      meta={
+        <Pop show={!!radioMode.enabled} className="flex">
+          <span className="text-[10px] font-bold tracking-wider text-red-300 bg-red-500/20 border border-red-500/40 px-1.5 py-0.5 rounded">ON</span>
+        </Pop>
+      }
       contentClassName="space-y-3 pl-2"
     >
       <SettingRow
@@ -91,12 +93,12 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
         <div className="text-xs text-gray-400">
           News on the hour, a city update at half past and short features between songs, like real radio. A song always finishes before the hosts take over.
         </div>
-        {djMuted && radioMode.enabled && (
-          <InlineNote tone="warning" className="mt-1">DJ voice is muted, so breaks are paused.</InlineNote>
-        )}
-        {offlineMode && (
-          <InlineNote tone="warning" className="mt-1">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</InlineNote>
-        )}
+        <Fade show={djMuted && !!radioMode.enabled} className="mt-1">
+          <InlineNote tone="warning">DJ voice is muted, so breaks are paused.</InlineNote>
+        </Fade>
+        <Fade show={!!offlineMode} className="mt-1">
+          <InlineNote tone="warning">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</InlineNote>
+        </Fade>
       </SettingRow>
 
       <Expandable open={radioMode.enabled} innerClassName="space-y-3">

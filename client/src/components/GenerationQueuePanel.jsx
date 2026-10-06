@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
 import { GLASS } from '../lib/themeManager'
 import { MOTION, PRESETS } from '../lib/motion'
-import { Expandable } from './Motion'
+import { Expandable, Fade, FadeSwap, Pop } from './Motion'
 import { InlineNote } from './Notice'
 
 function getJobTypeIcon(type) {
@@ -43,6 +43,8 @@ function JobItem({ job, onCancel, onRemove }) {
   const progress = job.progress_percent !== undefined
     ? job.progress_percent
     : (job.total_tracks > 0 ? (job.completed_tracks / job.total_tracks) * 100 : 0)
+  const statusIcon = isActive ? 'active' : isCompleted ? 'completed' : isFailed ? 'failed' : null
+  const action = isActive ? 'cancel' : (isCompleted || isFailed) ? 'remove' : null
 
   return (
     <motion.div
@@ -68,9 +70,17 @@ function JobItem({ job, onCancel, onRemove }) {
           </div>
 
           <div className="flex items-center gap-2 text-xs text-white/60">
-            {isActive && <Loader2 size={12} className="animate-spin flex-shrink-0" />}
-            {isCompleted && <CheckCircle2 size={12} className="text-green-400 flex-shrink-0" />}
-            {isFailed && <XCircle size={12} className="text-red-400 flex-shrink-0" />}
+            <Pop show={!!statusIcon} className="flex flex-shrink-0">
+              <FadeSwap swapKey={statusIcon} preset={PRESETS.iconSwap} mode="wait" className="flex">
+                {statusIcon === 'active' ? (
+                  <Loader2 size={12} className="animate-spin flex-shrink-0" />
+                ) : statusIcon === 'completed' ? (
+                  <CheckCircle2 size={12} className="text-green-400 flex-shrink-0" />
+                ) : (
+                  <XCircle size={12} className="text-red-400 flex-shrink-0" />
+                )}
+              </FadeSwap>
+            </Pop>
 
             <span className="truncate">{formatStage(job)}</span>
 
@@ -82,25 +92,27 @@ function JobItem({ job, onCancel, onRemove }) {
           </div>
         </div>
 
-        {isActive && (
-          <button
-            onClick={() => onCancel(job.id)}
-            className="ui-press p-1.5 hover:bg-red-500/20 rounded transition"
-            title="Cancel generation"
-          >
-            <X size={16} className="text-red-400" />
-          </button>
-        )}
-
-        {(isCompleted || isFailed) && (
-          <button
-            onClick={() => onRemove(job.id)}
-            className="ui-press p-1.5 hover:bg-white/10 rounded transition"
-            title="Remove from list"
-          >
-            <X size={16} className="text-gray-400" />
-          </button>
-        )}
+        <Pop show={!!action} className="flex">
+          <FadeSwap swapKey={action} preset={PRESETS.iconSwap} mode="wait" className="flex">
+            {action === 'cancel' ? (
+              <button
+                onClick={() => onCancel(job.id)}
+                className="ui-press p-1.5 hover:bg-red-500/20 rounded transition"
+                title="Cancel generation"
+              >
+                <X size={16} className="text-red-400" />
+              </button>
+            ) : (
+              <button
+                onClick={() => onRemove(job.id)}
+                className="ui-press p-1.5 hover:bg-white/10 rounded transition"
+                title="Remove from list"
+              >
+                <X size={16} className="text-gray-400" />
+              </button>
+            )}
+          </FadeSwap>
+        </Pop>
       </div>
 
       {job.total_tracks > 0 && (
@@ -118,9 +130,9 @@ function JobItem({ job, onCancel, onRemove }) {
         </div>
       )}
 
-      {isFailed && job.error && (
+      <Fade show={isFailed && !!job.error}>
         <InlineNote tone="error">{job.error}</InlineNote>
-      )}
+      </Fade>
     </motion.div>
   )
 }
@@ -136,7 +148,7 @@ export function GenerationQueuePanel() {
           <div className={GLASS.expandPanelHeader}>
             <h3 className="m-0 text-lg font-semibold text-white">Generation Queue</h3>
             <div className="flex items-center gap-2">
-              {completedJobs.length > 0 && (
+              <Pop show={completedJobs.length > 0} className="flex">
                 <button
                   onClick={clearCompleted}
                   className="ui-press flex items-center gap-2 px-3 py-1.5 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition"
@@ -145,7 +157,7 @@ export function GenerationQueuePanel() {
                   <Trash2 size={14} />
                   Clear Completed
                 </button>
-              )}
+              </Pop>
               <button
                 onClick={() => setIsOpen(false)}
                 className="ui-press bg-transparent border-none text-white/60 text-xl cursor-pointer p-1 leading-none transition-colors hover:text-white"
@@ -155,24 +167,26 @@ export function GenerationQueuePanel() {
             </div>
           </div>
 
-          {jobs.length === 0 ? (
-            <div className="p-8 text-center text-white/50 text-sm">
-              No generation jobs
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 pb-2">
-              <AnimatePresence>
-                {jobs.map(job => (
-                  <JobItem
-                    key={job.id}
-                    job={job}
-                    onCancel={cancelJob}
-                    onRemove={removeJob}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-          )}
+          <FadeSwap swapKey={jobs.length === 0 ? 'empty' : 'jobs'} preset={PRESETS.fade} mode="wait">
+            {jobs.length === 0 ? (
+              <div className="p-8 text-center text-white/50 text-sm">
+                No generation jobs
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 pb-2">
+                <AnimatePresence>
+                  {jobs.map(job => (
+                    <JobItem
+                      key={job.id}
+                      job={job}
+                      onCancel={cancelJob}
+                      onRemove={removeJob}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </FadeSwap>
         </div>
     </Expandable>
   )

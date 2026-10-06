@@ -7,7 +7,7 @@ import { logger } from '../lib/logger'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { Expandable, ExpandChevron, FadeSwap } from './Motion'
+import { Expandable, ExpandChevron, Fade, FadeSwap } from './Motion'
 import { MediaEmptyState, MediaOfflineState } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 
@@ -91,9 +91,11 @@ const TimelineRow = memo(function TimelineRow({ entry, entering, open, detail, o
         </div>
         {expandable && (
           <Expandable open={open}>
-            <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap break-words">
-              {detail === null ? 'Loading…' : (detail || 'Nothing more was kept for this one.')}
-            </p>
+            <FadeSwap swapKey={detail === null ? 'loading' : 'detail'} preset={PRESETS.fade} mode="wait">
+              <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap break-words">
+                {detail === null ? 'Loading…' : (detail || 'Nothing more was kept for this one.')}
+              </p>
+            </FadeSwap>
           </Expandable>
         )}
       </div>
@@ -191,9 +193,9 @@ export function ListenerTimeline({ kind = 'all', scrollRef }) {
               scrollContainerRef={scrollRef}
             />
           </div>
-          {data.not_shown > 0 && (
-            <p className="pt-2 text-center text-xs text-gray-500">{data.not_shown} older entries not shown.</p>
-          )}
+          <Fade as="p" show={data.not_shown > 0} className="pt-2 text-center text-xs text-gray-500">
+            {data.not_shown} older entries not shown.
+          </Fade>
         </div>
       )}
     </FadeSwap>

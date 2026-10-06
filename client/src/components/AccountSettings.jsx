@@ -10,7 +10,8 @@ import { profilePackCache, profilePictureCache } from '../lib/mediaCache'
 import { addPasskey, passkeyCancelled, passkeysSupported } from '../lib/passkeys'
 import { safeStorage } from '../lib/safeStorage'
 import { formatTimeAgo } from '../lib/utils'
-import { ExpandSection } from './Motion'
+import { PRESETS } from '../lib/motion'
+import { ExpandSection, Fade, FadeSwap, Pop } from './Motion'
 import { SettingRow } from './SettingRow'
 
 const INPUT_CLASS = 'flex-1 min-w-0 px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition'
@@ -188,32 +189,36 @@ export function AccountSettings({ onLogout }) {
     >
       <SettingRow icon={Fingerprint} label="Passkeys" color="text-amber-400">
         <p className="text-xs text-gray-400 mb-2">Sign in with Windows Hello, Face ID or your fingerprint. No password needed.</p>
-        {passkeys === null ? (
-          <Loader2 size={16} className="animate-spin text-gray-400" />
-        ) : (
-          <div className="space-y-1">
-            {passkeys.map(passkey => (
-              <div key={passkey.id} className="flex items-center gap-2 py-1">
-                <Fingerprint size={16} className="text-gray-500 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm truncate">{passkey.name}</div>
-                  <div className="text-xs text-gray-500 truncate">{passkeyDetail(passkey)}</div>
+        <FadeSwap swapKey={passkeys === null ? 'loading' : 'list'} preset={PRESETS.fade} mode="wait">
+          {passkeys === null ? (
+            <Loader2 size={16} className="animate-spin text-gray-400" />
+          ) : (
+            <div className="space-y-1">
+              {passkeys.map(passkey => (
+                <div key={passkey.id} className="flex items-center gap-2 py-1">
+                  <Fingerprint size={16} className="text-gray-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{passkey.name}</div>
+                    <div className="text-xs text-gray-500 truncate">{passkeyDetail(passkey)}</div>
+                  </div>
+                  <button
+                    onClick={() => handleRemovePasskey(passkey)}
+                    disabled={busy === `passkey-${passkey.id}`}
+                    className="ui-tap p-2 rounded-full text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition"
+                    aria-label={`Remove ${passkey.name} passkey`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleRemovePasskey(passkey)}
-                  disabled={busy === `passkey-${passkey.id}`}
-                  className="ui-tap p-2 rounded-full text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition"
-                  aria-label={`Remove ${passkey.name} passkey`}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </FadeSwap>
         {canPasskey && (
           <button onClick={handleAddPasskey} disabled={!!busy} className={`${SMALL_BUTTON} mt-2 bg-amber-500/20 text-amber-300 hover:bg-amber-500/30`}>
-            {busy === 'add-passkey' ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            <FadeSwap swapKey={busy === 'add-passkey' ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+              {busy === 'add-passkey' ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+            </FadeSwap>
             Add a passkey on this device
           </button>
         )}
@@ -236,7 +241,9 @@ export function AccountSettings({ onLogout }) {
             onKeyDown={(e) => { if (e.key === 'Enter') void handleLinkDevice() }}
           />
           <button onClick={handleLinkDevice} disabled={!!busy || !linkCode.trim()} className={`${SMALL_BUTTON} bg-sky-600 hover:bg-sky-700 text-white`}>
-            {busy === 'link' && <Loader2 size={14} className="animate-spin" />}
+            <Pop show={busy === 'link'} className="flex">
+              <Loader2 size={14} className="animate-spin" />
+            </Pop>
             Sign in
           </button>
         </div>
@@ -246,36 +253,42 @@ export function AccountSettings({ onLogout }) {
         icon={KeyRound}
         label="Password"
         color="text-gray-400"
-        headerContent={!editingPassword && (
-          <button onClick={() => setEditingPassword(true)} className="ui-press text-xs text-purple-400 hover:text-purple-300">
-            {user?.has_password ? 'Change' : 'Set one'}
-          </button>
-        )}
-      >
-        {editingPassword ? (
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="New password"
-              aria-label="New password"
-              autoComplete="new-password"
-              autoFocus
-              className={INPUT_CLASS}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleSavePassword()
-                if (e.key === 'Escape') setEditingPassword(false)
-              }}
-            />
-            <button onClick={handleSavePassword} disabled={!!busy} className={`${SMALL_BUTTON} bg-green-500/20 text-green-400 hover:bg-green-500/30`}>
-              {busy === 'password' && <Loader2 size={14} className="animate-spin" />}
-              Save
+        headerContent={
+          <Pop show={!editingPassword} className="flex">
+            <button onClick={() => setEditingPassword(true)} className="ui-press text-xs text-purple-400 hover:text-purple-300">
+              {user?.has_password ? 'Change' : 'Set one'}
             </button>
-          </div>
-        ) : (
-          <p className="text-xs text-gray-400">{user?.has_password ? 'You can also sign in with your username and password.' : 'Optional. Your passkeys work without one.'}</p>
-        )}
+          </Pop>
+        }
+      >
+        <FadeSwap swapKey={editingPassword ? 'edit' : 'info'} preset={PRESETS.fade}>
+          {editingPassword ? (
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="New password"
+                aria-label="New password"
+                autoComplete="new-password"
+                autoFocus
+                className={INPUT_CLASS}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleSavePassword()
+                  if (e.key === 'Escape') setEditingPassword(false)
+                }}
+              />
+              <button onClick={handleSavePassword} disabled={!!busy} className={`${SMALL_BUTTON} bg-green-500/20 text-green-400 hover:bg-green-500/30`}>
+                <Pop show={busy === 'password'} className="flex">
+                  <Loader2 size={14} className="animate-spin" />
+                </Pop>
+                Save
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400">{user?.has_password ? 'You can also sign in with your username and password.' : 'Optional. Your passkeys work without one.'}</p>
+          )}
+        </FadeSwap>
       </SettingRow>
 
       <button onClick={handleDeleteConversationHistory} disabled={!!busy} className={`${ROW_BUTTON} hover:bg-red-500/20 hover:text-red-400`}>
@@ -284,13 +297,16 @@ export function AccountSettings({ onLogout }) {
       <button onClick={handleResetPersona} disabled={!!busy} className={`${ROW_BUTTON} hover:bg-yellow-500/20 hover:text-yellow-400`}>
         <RotateCcw size={16} /> Reset persona & profile
       </button>
-      {user?.profile_picture && (
+      <Fade show={!!user?.profile_picture}>
         <button onClick={handleRemovePhoto} disabled={!!busy} className={`${ROW_BUTTON} hover:bg-white/10 hover:text-white`}>
           <ImageOff size={16} /> Remove profile photo
         </button>
-      )}
+      </Fade>
       <button onClick={handleDeleteAccount} disabled={!!busy} className="ui-press-soft w-full px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition text-sm bg-red-500/10 text-red-400 hover:bg-red-500/25">
-        {busy === 'account' ? <Loader2 size={16} className="animate-spin" /> : <UserX size={16} />} Delete account and all data
+        <FadeSwap swapKey={busy === 'account' ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+          {busy === 'account' ? <Loader2 size={16} className="animate-spin" /> : <UserX size={16} />}
+        </FadeSwap>
+        Delete account and all data
       </button>
     </ExpandSection>
   )

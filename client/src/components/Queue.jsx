@@ -16,6 +16,7 @@ import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen
 import { TrackArt } from './DepthArt'
 import { MediaEmptyState } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
+import { Fade, Pop } from './Motion'
 
 const QUEUE_ART_PROPS = { 'data-queue-art': true }
 
@@ -124,10 +125,8 @@ const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
   const [animate, setAnimate] = useState(false)
   if (shown !== preference) {
     setShown(preference)
-    setAnimate(!!preference)
+    setAnimate(!!preference && !!shown)
   }
-
-  if (!preference) return null
 
   const badges = {
     like: { icon: Heart, getBg: getLikeBadgeBg, fill: true },
@@ -135,15 +134,17 @@ const PreferenceBadge = memo(function PreferenceBadge({ preference }) {
     ban: { icon: Ban, getBg: getBanBadgeBg, fill: false }
   }
 
-  const badge = badges[preference]
-  if (!badge) return null
-
-  const Icon = badge.icon
+  const badge = preference ? badges[preference] : null
+  const Icon = badge?.icon
 
   return (
-    <div key={preference} style={{ background: badge.getBg(), color: getPrimaryText() }} className={`rounded-full p-1.5 ${animate ? 'ui-pop' : ''}`} title={preference.replace('_', ' ')}>
-      <Icon size={12} fill={badge.fill ? 'currentColor' : 'none'} />
-    </div>
+    <Pop show={!!badge} className="flex">
+      {badge && (
+        <div key={preference} style={{ background: badge.getBg(), color: getPrimaryText() }} className={`rounded-full p-1.5 ${animate ? 'ui-pop' : ''}`} title={preference.replace('_', ' ')}>
+          <Icon size={12} fill={badge.fill ? 'currentColor' : 'none'} />
+        </div>
+      )}
+    </Pop>
   )
 })
 
@@ -599,32 +600,30 @@ function QueueComponent({ onSeedRadio, onList }) {
   return (
     <div className="flex flex-col h-full relative">
         <PanelHeader title="Queue">
-          {hasQueue && (
-            <div className="flex items-center gap-2">
-              <QueueModeButton
-                icon={Library}
-                label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
-                active={activeCamp === 'mine'}
-                color={seedMeta?.color}
-                disabled={!isAuthenticated}
-                onOpen={() => onList('mine')}
-              />
-              <QueueModeButton
-                icon={Sprout}
-                label={campLabel('seed', 'Seed radio')}
-                active={activeCamp === 'seed'}
-                color={seedMeta?.color}
-                onOpen={onSeedRadio}
-              />
-              <QueueModeButton
-                icon={TrendingUp}
-                label={campLabel('charts', 'Charts')}
-                active={activeCamp === 'charts'}
-                color={seedMeta?.color}
-                onOpen={() => onList('charts')}
-              />
-            </div>
-          )}
+          <Fade show={hasQueue} className="flex items-center gap-2">
+            <QueueModeButton
+              icon={Library}
+              label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
+              active={activeCamp === 'mine'}
+              color={seedMeta?.color}
+              disabled={!isAuthenticated}
+              onOpen={() => onList('mine')}
+            />
+            <QueueModeButton
+              icon={Sprout}
+              label={campLabel('seed', 'Seed radio')}
+              active={activeCamp === 'seed'}
+              color={seedMeta?.color}
+              onOpen={onSeedRadio}
+            />
+            <QueueModeButton
+              icon={TrendingUp}
+              label={campLabel('charts', 'Charts')}
+              active={activeCamp === 'charts'}
+              color={seedMeta?.color}
+              onOpen={() => onList('charts')}
+            />
+          </Fade>
         </PanelHeader>
 
       <AnimatePresence>

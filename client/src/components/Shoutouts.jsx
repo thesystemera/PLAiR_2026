@@ -18,7 +18,7 @@ import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { formatDateShort } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
-import { FadeSwap } from './Motion'
+import { FadeSwap, Pop } from './Motion'
 import { PRESETS } from '../lib/motion'
 import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata, useMediaGridColumns } from './MediaShared'
 import { ProfileArt } from './DepthArt'
@@ -174,12 +174,12 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
         <MediaCardDurationBar duration={duration} />
 
         <div className="absolute bottom-2 right-2 z-30 flex items-end gap-2">
-          {shoutout.reply_count > 0 && !shoutout.is_reply && (
+          <Pop show={shoutout.reply_count > 0 && !shoutout.is_reply} className="flex">
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-black/60 backdrop-blur-sm">
               <MessageCircle size={10} className="text-purple-300" />
               <span className="text-xs text-purple-300 font-medium">{shoutout.reply_count}</span>
             </div>
-          )}
+          </Pop>
           <MediaCardCategoryBadge category={metadata.category} position="bottom-right" />
           <MediaStatusSlot status={isPlaying ? 'playing' : null} />
         </div>

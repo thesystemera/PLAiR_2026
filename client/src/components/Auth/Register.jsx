@@ -6,7 +6,7 @@ import { motion } from 'framer-motion'
 import { GLASS } from '../../lib/themeManager'
 import { PRESETS } from '../../lib/motion'
 import { passkeyCancelled, passkeysSupported } from '../../lib/passkeys'
-import { Expandable } from '../Motion'
+import { Expandable, Fade, FadeSwap, Pop } from '../Motion'
 import './auth-background.css'
 import { InlineNote } from '../Notice'
 
@@ -105,6 +105,8 @@ export default function Register({ onClose, onSwitchToLogin }) {
     }
   }
 
+  const submitLabel = loading ? 'Creating account...' : usePassword ? 'Create account' : 'Create with passkey'
+
   return (
     <motion.div {...PRESETS.modalBackdrop} className={`${GLASS.overlay} auth-backdrop flex items-center justify-center z-[60] p-3`} style={AUTH_OVERLAY_SAFE_STYLE}>
       <motion.div {...PRESETS.modalDialog} className={`${GLASS.dialog} auth-dialog rounded-lg p-6 sm:p-8 w-full max-w-md max-h-full overflow-y-auto overscroll-contain relative`}>
@@ -133,9 +135,9 @@ export default function Register({ onClose, onSwitchToLogin }) {
               maxLength={50}
               autoComplete="username"
             />
-            {username && username.length < 3 && (
-              <InlineNote tone="warning" className="mt-1">Username must be at least 3 characters</InlineNote>
-            )}
+            <Fade show={!!username && username.length < 3} className="mt-1">
+              <InlineNote tone="warning">Username must be at least 3 characters</InlineNote>
+            </Fade>
           </div>
 
           <Expandable open={usePassword}>
@@ -158,25 +160,25 @@ export default function Register({ onClose, onSwitchToLogin }) {
                     className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    <FadeSwap swapKey={showPassword ? 'hide' : 'show'} preset={PRESETS.iconSwap} mode="wait">
+                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </FadeSwap>
                   </button>
                 </div>
-                {password && (
-                  <div className="mt-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="flex-1 h-1 bg-zinc-700 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full w-full origin-left transition-[transform,background-color] duration-base ${passwordStrength.color}`}
-                          style={{ transform: `scaleX(${passwordStrength.score / 5})` }}
-                        />
-                      </div>
-                      <span className="text-xs text-zinc-400">{passwordStrength.label}</span>
+                <Fade show={!!password} className="mt-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="flex-1 h-1 bg-zinc-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full w-full origin-left transition-[transform,background-color] duration-base ${passwordStrength.color}`}
+                        style={{ transform: `scaleX(${passwordStrength.score / 5})` }}
+                      />
                     </div>
-                    <p className="text-xs text-zinc-500">
-                      Use 8+ characters with uppercase, lowercase, numbers & symbols
-                    </p>
+                    <span className="text-xs text-zinc-400">{passwordStrength.label}</span>
                   </div>
-                )}
+                  <p className="text-xs text-zinc-500">
+                    Use 8+ characters with uppercase, lowercase, numbers & symbols
+                  </p>
+                </Fade>
               </div>
 
               <div>
@@ -196,27 +198,33 @@ export default function Register({ onClose, onSwitchToLogin }) {
                     className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
                     aria-label={showConfirmPassword ? "Hide password" : "Show password"}
                   >
-                    {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    <FadeSwap swapKey={showConfirmPassword ? 'hide' : 'show'} preset={PRESETS.iconSwap} mode="wait">
+                      {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </FadeSwap>
                   </button>
                 </div>
-                {confirmPassword && password !== confirmPassword && (
-                  <InlineNote tone="error" className="mt-1">Passwords do not match</InlineNote>
-                )}
+                <Fade show={!!confirmPassword && password !== confirmPassword} className="mt-1">
+                  <InlineNote tone="error">Passwords do not match</InlineNote>
+                </Fade>
               </div>
             </div>
           </Expandable>
 
-          {error && (
-            <div className="text-red-500 text-sm">{error}</div>
-          )}
+          <Fade show={!!error} className="text-red-500 text-sm">{error}</Fade>
 
           <button
             type="submit"
             disabled={loading}
             className="ui-press-soft w-full py-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {usePassword ? null : loading ? <Loader2 size={20} className="animate-spin" /> : <Fingerprint size={20} />}
-            {loading ? 'Creating account...' : usePassword ? 'Create account' : 'Create with passkey'}
+            <Pop show={!usePassword} className="flex">
+              <FadeSwap swapKey={loading ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                {loading ? <Loader2 size={20} className="animate-spin" /> : <Fingerprint size={20} />}
+              </FadeSwap>
+            </Pop>
+            <FadeSwap swapKey={submitLabel} preset={PRESETS.fade} mode="wait">
+              {submitLabel}
+            </FadeSwap>
           </button>
           {canPasskey && (
             <button
@@ -224,10 +232,12 @@ export default function Register({ onClose, onSwitchToLogin }) {
               onClick={() => { setUsePassword(!usePassword); setError('') }}
               className="ui-press w-full flex items-center justify-center gap-2 text-sm text-zinc-400 hover:text-white"
             >
-              {usePassword ? <><Fingerprint size={14} /> Use a passkey instead</> : <><KeyRound size={14} /> Use a password instead</>}
+              <FadeSwap swapKey={usePassword ? 'passkey' : 'password'} preset={PRESETS.fade} mode="wait" className="flex items-center gap-2">
+                {usePassword ? <><Fingerprint size={14} /> Use a passkey instead</> : <><KeyRound size={14} /> Use a password instead</>}
+              </FadeSwap>
             </button>
           )}
-          {!usePassword && <p className="text-xs text-zinc-500 text-center">No password to remember: Windows Hello, Face ID or your fingerprint signs you in.</p>}
+          <Fade as="p" show={!usePassword} className="text-xs text-zinc-500 text-center">No password to remember: Windows Hello, Face ID or your fingerprint signs you in.</Fade>
         </form>
 
         <p className="mt-4 text-sm text-zinc-400 text-center">

@@ -12,6 +12,7 @@ import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
 import { MODAL_CLOSE_PAUSE_MS, MODAL_OPEN_PAUSE_MS } from '../../lib/renderPause'
 import { TrackArtCrossfade } from '../DepthArt'
+import { Pop } from '../Motion'
 
 const MODAL_BACKDROP_SAFE_STYLE = {
   backgroundColor: 'rgba(0,0,0,0.75)',
@@ -822,7 +823,7 @@ export const ModalProgress = memo(function ModalProgress({
         {percentage}%
       </p>
 
-      {showCancel && onCancel && (
+      <Pop show={showCancel && !!onCancel} className="mt-4">
         <motion.button
           whileHover={PRESETS.softPress.whileHover}
           whileTap={PRESETS.softPress.whileTap}
@@ -830,13 +831,13 @@ export const ModalProgress = memo(function ModalProgress({
             triggerHaptic('light')
             onCancel()
           }}
-          className="mt-4 flex items-center gap-2 px-4 py-2 rounded-lg transition-colors"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors"
           style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: getGrey400() }}
         >
           <X size={16} />
           Cancel
         </motion.button>
-      )}
+      </Pop>
     </div>
   )
 })

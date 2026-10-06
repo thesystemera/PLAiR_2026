@@ -13,9 +13,11 @@ import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
-import { FadeSwap } from './Motion'
+import { FadeSwap, Pop } from './Motion'
 import { ON_AIR_LAMP } from '../lib/themeManager'
 import { TrackArtCrossfade } from './DepthArt'
+
+const SOUND_ICONS = { volume: Volume2, bell: Bell, bellOff: BellOff, muted: VolumeX }
 
 const PLAYED_WINDOW_STYLE = {
   transition: CSS_TRANSITION.progress
@@ -404,6 +406,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     if (mode.id === 'ping') return { icon: 'bell', title, color: 'warning' }
     return { icon: 'muted', title, color: 'error' }
   }, [ttsMuted, notificationsMuted])
+  const SoundIcon = SOUND_ICONS[soundState.icon]
 
   const handleMouseEnterButton = useCallback((e) => {
     e.currentTarget.style.backgroundColor = getGrey800()
@@ -507,14 +510,10 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         title={soundState.title}
         aria-label={soundState.title}
       >
-        {soundState.icon === 'volume' && <Volume2 size={16} className={compact ? undefined : 'md:hidden'} />}
-        {soundState.icon === 'bell' && <Bell size={16} className={compact ? undefined : 'md:hidden'} />}
-        {soundState.icon === 'bellOff' && <BellOff size={16} className={compact ? undefined : 'md:hidden'} />}
-        {soundState.icon === 'muted' && <VolumeX size={16} className={compact ? undefined : 'md:hidden'} />}
-        {!compact && soundState.icon === 'volume' && <Volume2 size={20} className="hidden md:block" />}
-        {!compact && soundState.icon === 'bell' && <Bell size={20} className="hidden md:block" />}
-        {!compact && soundState.icon === 'bellOff' && <BellOff size={20} className="hidden md:block" />}
-        {!compact && soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
+        <FadeSwap swapKey={soundState.icon} preset={PRESETS.iconSwap} mode="wait" className="flex items-center justify-center">
+          <SoundIcon size={16} className={compact ? undefined : 'md:hidden'} />
+          {!compact && <SoundIcon size={20} className="hidden md:block" />}
+        </FadeSwap>
       </button>
       <FadeSwap swapKey={currentTrack.id} preset={PRESETS.trackSwap} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
         <div
@@ -660,7 +659,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           </div>
         </div>
       ) : (
-        <div className={`flex-1 flex items-center ${compact ? 'h-7' : 'h-8'}`}>
+        <div className={`ui-track-in flex-1 flex items-center ${compact ? 'h-7' : 'h-8'}`}>
         <div
           className="flex-1 h-1 rounded-full cursor-pointer group relative overflow-hidden"
           onClick={handleSeek}
@@ -713,11 +712,13 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           onMouseLeave={handleMouseLeaveButton}
           title={isMuted ? 'Unmute' : 'Mute'}
         >
-          {isMuted || volume === 0 ? (
-            <VolumeX size={20} />
-          ) : (
-            <Volume2 size={20} />
-          )}
+          <FadeSwap swapKey={isMuted || volume === 0 ? 'muted' : 'volume'} preset={PRESETS.iconSwap} mode="wait">
+            {isMuted || volume === 0 ? (
+              <VolumeX size={20} />
+            ) : (
+              <Volume2 size={20} />
+            )}
+          </FadeSwap>
         </PlayerIconButton>
 
         <div
@@ -757,16 +758,16 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           isOpen={bitratePicker.isOpen}
           setIsOpen={bitratePicker.setIsOpen}
         />
-        {isCached && (
-          <div
-            className="absolute -top-1 -right-1 cursor-help z-10 pointer-events-none"
-            title="Playing from local cache"
-          >
-            <div className="w-4 h-4 rounded-full flex items-center justify-center bg-green-500/90 shadow-lg">
-              <HardDrive size={10} className="text-white" />
-            </div>
+        <Pop
+          show={!!isCached}
+          as="div"
+          className="absolute -top-1 -right-1 cursor-help z-10 pointer-events-none"
+          title="Playing from local cache"
+        >
+          <div className="w-4 h-4 rounded-full flex items-center justify-center bg-green-500/90 shadow-lg">
+            <HardDrive size={10} className="text-white" />
           </div>
-        )}
+        </Pop>
       </div>
 
       {devicePicker.isAuthenticated && (

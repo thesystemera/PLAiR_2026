@@ -20,12 +20,12 @@ import { PanelHeader } from './Panel'
 import { ProfileArt, TrackArt } from './DepthArt'
 import { Scroller } from './Scroller'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
-import { ExpandSection, Expandable, ExpandChevron } from './Motion'
+import { ExpandSection, Expandable, ExpandChevron, Fade, FadeSwap, Pop } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
 import { AccountSettings } from './AccountSettings'
 import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
-import { CSS_TRANSITION } from '../lib/motion'
+import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
 import { InlineNote } from './Notice'
 
@@ -156,7 +156,9 @@ const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
         }`}
       >
         {type === 'mic' ? <Mic2 size={12} /> : <Volume2 size={12} />}
-        {isTesting ? 'Testing...' : 'Test'}
+        <FadeSwap swapKey={isTesting ? 'testing' : 'idle'} preset={PRESETS.fade} mode="wait">
+          {isTesting ? 'Testing...' : 'Test'}
+        </FadeSwap>
       </button>
     </div>
   )
@@ -205,6 +207,7 @@ const MediaRow = memo(function MediaRow({
   const playInteraction = usePointerInteraction()
   const removeInteraction = usePointerInteraction()
   const hoverBg = useMemo(() => getButtonHoverBg(), [getButtonHoverBg])
+  const hasArt = art?.kind === 'track' ? art.hasArtwork !== false : !!image
 
   const handlePlay = () => {
     if (!playInteraction.shouldTrigger()) return
@@ -229,25 +232,27 @@ const MediaRow = memo(function MediaRow({
         onPointerUp={handlePlay}
         className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
       >
-        {(art?.kind === 'track' ? art.hasArtwork !== false : image) ? (
-          <div className="relative">
-            <ArtFor
-              art={art}
-              image={image}
-              alt={title}
-              className={`relative w-12 h-12 rounded overflow-hidden flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`}
-            />
-            {isPlaying && (
-              <div className="absolute inset-0 flex items-center justify-center">
+        <FadeSwap swapKey={hasArt ? 'art' : 'fallback'} preset={PRESETS.fade} mode="wait" className="flex-shrink-0">
+          {hasArt ? (
+            <div className="relative">
+              <ArtFor
+                art={art}
+                image={image}
+                alt={title}
+                className={`relative w-12 h-12 rounded overflow-hidden flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`}
+              />
+              <Pop show={!!isPlaying} className="absolute inset-0 flex items-center justify-center">
                 <Loader2 size={20} className="animate-spin text-white" />
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="w-12 h-12 rounded bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center flex-shrink-0 text-white">
-            {isPlaying ? <Loader2 size={20} className="animate-spin" /> : fallbackIcon}
-          </div>
-        )}
+              </Pop>
+            </div>
+          ) : (
+            <div className="w-12 h-12 rounded bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center flex-shrink-0 text-white">
+              <FadeSwap swapKey={isPlaying ? 'playing' : 'idle'} preset={PRESETS.iconSwap} mode="wait" className="flex">
+                {isPlaying ? <Loader2 size={20} className="animate-spin" /> : fallbackIcon}
+              </FadeSwap>
+            </div>
+          )}
+        </FadeSwap>
         <div className="flex-1 min-w-0">
           <div className={`font-medium truncate ${isPlaying ? 'text-purple-300' : ''}`}>{title}</div>
           <div className="text-sm text-gray-400 truncate">{subtitle}</div>
@@ -263,7 +268,9 @@ const MediaRow = memo(function MediaRow({
         aria-label={removeTitle}
         disabled={isLoading}
       >
-        {isLoading ? <Loader2 size={16} className="animate-spin text-gray-400" /> : <RemoveIcon size={16} className="text-gray-400 hover:text-red-500" />}
+        <FadeSwap swapKey={isLoading ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+          {isLoading ? <Loader2 size={16} className="animate-spin text-gray-400" /> : <RemoveIcon size={16} className="text-gray-400 hover:text-red-500" />}
+        </FadeSwap>
       </button>
     </div>
   )
@@ -287,33 +294,38 @@ const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, 
           <h3 className="font-semibold">{title}</h3>
           <span className="text-sm text-gray-400">({items.length})</span>
         </div>
-        {items.length > 5 && (
+        <Pop show={items.length > 5} className="flex">
           <button
             onClick={() => onToggleExpand(!expanded)}
             aria-expanded={expanded}
             className="ui-press text-xs text-purple-400 hover:text-purple-300 transition flex items-center gap-1"
           >
-            {expanded ? 'Show Less' : 'Show All'} <ExpandChevron open={expanded} size={14} />
+            <FadeSwap swapKey={expanded ? 'less' : 'all'} preset={PRESETS.fade} mode="wait">
+              {expanded ? 'Show Less' : 'Show All'}
+            </FadeSwap>
+            <ExpandChevron open={expanded} size={14} />
           </button>
-        )}
+        </Pop>
       </div>
-      {items.length === 0 ? (
-        <p className="text-sm text-gray-400 pl-7">{emptyMessage}</p>
-      ) : (
-        <div className="space-y-1">
-          {previewItems.map(item => renderItem(item))}
-          <Expandable open={expanded && overflowItems.length > 0} innerClassName="pt-1">
-            <VirtualScroller
-              items={overflowItems}
-              itemKey={itemIdKey}
-              estimatedItemHeight={ESTIMATED_LIST_ROW_HEIGHT}
-              itemClassName="pb-1"
-              renderItem={renderItem}
-              scrollContainerRef={scrollRef}
-            />
-          </Expandable>
-        </div>
-      )}
+      <FadeSwap swapKey={items.length === 0 ? 'empty' : 'list'} preset={PRESETS.fade} mode="wait">
+        {items.length === 0 ? (
+          <p className="text-sm text-gray-400 pl-7">{emptyMessage}</p>
+        ) : (
+          <div className="space-y-1">
+            {previewItems.map(item => renderItem(item))}
+            <Expandable open={expanded && overflowItems.length > 0} innerClassName="pt-1">
+              <VirtualScroller
+                items={overflowItems}
+                itemKey={itemIdKey}
+                estimatedItemHeight={ESTIMATED_LIST_ROW_HEIGHT}
+                itemClassName="pb-1"
+                renderItem={renderItem}
+                scrollContainerRef={scrollRef}
+              />
+            </Expandable>
+          </div>
+        )}
+      </FadeSwap>
     </div>
   )
 })
@@ -375,11 +387,13 @@ const UploadedTrackItem = memo(function UploadedTrackItem({ track, onPlayTrack, 
         className="ui-press p-2 rounded-full hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition"
         title="Delete track"
       >
-        {isDeleting ? (
-          <Loader2 size={16} className="animate-spin" />
-        ) : (
-          <Trash2 size={16} />
-        )}
+        <FadeSwap swapKey={isDeleting ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+          {isDeleting ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <Trash2 size={16} />
+          )}
+        </FadeSwap>
       </button>
     </div>
   )
@@ -428,70 +442,76 @@ const ArtistProfileItem = memo(function ArtistProfileItem({ artist, onSave, onDe
     if (ok) setEditing(false)
   }
 
-  if (editing) {
-    return (
-      <div className="bg-white/5 p-3 rounded-lg space-y-2">
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Band or artist name"
-          maxLength={80}
-          aria-label="Name"
-          className={ARTIST_INPUT_CLASS}
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void save()
-            if (e.key === 'Escape') cancel()
-          }}
-        />
-        <textarea
-          value={bio}
-          onChange={(e) => setBio(e.target.value)}
-          placeholder="Bio (optional)"
-          aria-label="Bio"
-          rows={3}
-          className={`${ARTIST_INPUT_CLASS} resize-y`}
-        />
-        <textarea
-          value={links}
-          onChange={(e) => setLinks(e.target.value)}
-          placeholder="Links, one per line (optional)"
-          aria-label="Links"
-          rows={2}
-          className={`${ARTIST_INPUT_CLASS} resize-y`}
-        />
-        <div className="flex gap-2">
-          <button onClick={save} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 flex items-center gap-1.5 disabled:opacity-60">
-            {saving && <Loader2 size={12} className="animate-spin" />}
-            Save
-          </button>
-          <button onClick={cancel} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 disabled:opacity-60">
-            Cancel
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
-      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-600 to-purple-600 flex items-center justify-center flex-shrink-0">
-        <Mic2 size={18} className="text-white/80" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="font-medium truncate">{artist.name}</div>
-        <div className="text-xs text-gray-400 truncate">
-          {[`${count} track${count === 1 ? '' : 's'}`, artistLinks.length ? `${artistLinks.length} link${artistLinks.length === 1 ? '' : 's'}` : null].filter(Boolean).join(' • ')}
-        </div>
-        {artist.bio && <div className="text-xs text-gray-500 truncate">{artist.bio}</div>}
-      </div>
-      <button onClick={startEdit} className="ui-tap p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition" title="Edit artist" aria-label={`Edit ${artist.name}`}>
-        <Edit2 size={16} />
-      </button>
-      <button onClick={() => onDelete(artist)} disabled={isDeleting} className="ui-tap p-2 rounded-full text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition" title="Delete artist" aria-label={`Delete ${artist.name}`}>
-        {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
-      </button>
+    <div>
+      <FadeSwap swapKey={editing ? 'edit' : 'view'} preset={PRESETS.fade}>
+        {editing ? (
+          <div className="bg-white/5 p-3 rounded-lg space-y-2">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Band or artist name"
+              maxLength={80}
+              aria-label="Name"
+              className={ARTIST_INPUT_CLASS}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') cancel()
+              }}
+            />
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              placeholder="Bio (optional)"
+              aria-label="Bio"
+              rows={3}
+              className={`${ARTIST_INPUT_CLASS} resize-y`}
+            />
+            <textarea
+              value={links}
+              onChange={(e) => setLinks(e.target.value)}
+              placeholder="Links, one per line (optional)"
+              aria-label="Links"
+              rows={2}
+              className={`${ARTIST_INPUT_CLASS} resize-y`}
+            />
+            <div className="flex gap-2">
+              <button onClick={save} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 flex items-center gap-1.5 disabled:opacity-60">
+                <Pop show={saving} className="flex">
+                  <Loader2 size={12} className="animate-spin" />
+                </Pop>
+                Save
+              </button>
+              <button onClick={cancel} disabled={saving} className="ui-press px-3 py-1.5 rounded text-xs font-medium bg-gray-500/20 text-gray-400 hover:bg-gray-500/30 disabled:opacity-60">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 p-3 rounded-lg bg-white/5">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-600 to-purple-600 flex items-center justify-center flex-shrink-0">
+              <Mic2 size={18} className="text-white/80" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">{artist.name}</div>
+              <div className="text-xs text-gray-400 truncate">
+                {[`${count} track${count === 1 ? '' : 's'}`, artistLinks.length ? `${artistLinks.length} link${artistLinks.length === 1 ? '' : 's'}` : null].filter(Boolean).join(' • ')}
+              </div>
+              {artist.bio && <div className="text-xs text-gray-500 truncate">{artist.bio}</div>}
+            </div>
+            <button onClick={startEdit} className="ui-tap p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition" title="Edit artist" aria-label={`Edit ${artist.name}`}>
+              <Edit2 size={16} />
+            </button>
+            <button onClick={() => onDelete(artist)} disabled={isDeleting} className="ui-tap p-2 rounded-full text-gray-400 hover:text-red-400 hover:bg-red-500/20 transition" title="Delete artist" aria-label={`Delete ${artist.name}`}>
+              <FadeSwap swapKey={isDeleting ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              </FadeSwap>
+            </button>
+          </div>
+        )}
+      </FadeSwap>
     </div>
   )
 })
@@ -1100,34 +1120,42 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               className="ui-tap relative flex-shrink-0 rounded-full"
               aria-label={profilePictureUrl ? 'Change profile photo' : 'Add a profile photo'}
             >
-              {profilePictureUrl ? (
-                <ProfileArt userId={user?.id} alt={user?.username} className="relative w-10 h-10 rounded-full overflow-hidden" />
-              ) : (
-                <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: getUserAvatarGradient(), color: 'white' }}>
-                  <UserIcon size={20} />
-                </div>
-              )}
+              <FadeSwap swapKey={profilePictureUrl ? 'photo' : 'initial'} preset={PRESETS.fade}>
+                {profilePictureUrl ? (
+                  <ProfileArt userId={user?.id} alt={user?.username} className="relative w-10 h-10 rounded-full overflow-hidden" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: getUserAvatarGradient(), color: 'white' }}>
+                    <UserIcon size={20} />
+                  </div>
+                )}
+              </FadeSwap>
               <span className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-zinc-900 border border-white/20 flex items-center justify-center text-white">
-                {uploadingProfilePicture ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
+                <FadeSwap swapKey={uploadingProfilePicture ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                  {uploadingProfilePicture ? <Loader2 size={11} className="animate-spin" /> : <Camera size={11} />}
+                </FadeSwap>
               </span>
               <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/webp,image/gif" onChange={handleProfilePictureUpload} className="hidden" />
             </button>
             <div className="flex-1 min-w-0">
-              {isEditingUsername ? (
-                <div className="flex items-center gap-2">
-                  <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="flex-1 px-2 py-1 bg-dark-hover border border-purple-500 rounded text-sm focus:outline-none" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') void handleUsernameSave(); if (e.key === 'Escape') setIsEditingUsername(false); }} />
-                  <button onClick={handleUsernameSave} className="ui-press text-green-400 p-1"><X size={16} className="rotate-45" /></button>
-                  <button onClick={() => setIsEditingUsername(false)} className="ui-press text-gray-400 p-1"><X size={16} /></button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <h2 className="text-lg md:text-xl font-bold truncate">{user?.username}</h2>
-                  <button onClick={handleUsernameEdit} className="ui-press text-gray-400 hover:text-white transition p-1"><Edit2 size={14} /></button>
-                </div>
-              )}
+              <FadeSwap swapKey={isEditingUsername ? 'edit' : 'name'} preset={PRESETS.fade}>
+                {isEditingUsername ? (
+                  <div className="flex items-center gap-2">
+                    <input type="text" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="flex-1 px-2 py-1 bg-dark-hover border border-purple-500 rounded text-sm focus:outline-none" autoFocus onKeyDown={(e) => { if (e.key === 'Enter') void handleUsernameSave(); if (e.key === 'Escape') setIsEditingUsername(false); }} />
+                    <button onClick={handleUsernameSave} className="ui-press text-green-400 p-1"><X size={16} className="rotate-45" /></button>
+                    <button onClick={() => setIsEditingUsername(false)} className="ui-press text-gray-400 p-1"><X size={16} /></button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg md:text-xl font-bold truncate">{user?.username}</h2>
+                    <button onClick={handleUsernameEdit} className="ui-press text-gray-400 hover:text-white transition p-1"><Edit2 size={14} /></button>
+                  </div>
+                )}
+              </FadeSwap>
               <div className="flex items-center gap-2">
                 <p className="text-xs text-gray-400">{user?.tier === 'premium' ? 'Premium Account' : 'Free Account'}</p>
-                {user?.tier === 'premium' && <span className="text-xs bg-gradient-to-r from-yellow-500 to-orange-500 text-white px-2 py-0.5 rounded-full font-semibold">PRO</span>}
+                <Pop show={user?.tier === 'premium'} className="flex">
+                  <span className="text-xs bg-gradient-to-r from-yellow-500 to-orange-500 text-white px-2 py-0.5 rounded-full font-semibold">PRO</span>
+                </Pop>
               </div>
             </div>
           </div>
@@ -1135,7 +1163,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       />
 
       <Scroller ref={panelScrollRef} className="flex-1">
-        {(user?.persona || user?.profile || user?.shoutout_interests) && (
+        <Fade show={!!(user?.persona || user?.profile || user?.shoutout_interests)}>
           <ExpandSection
             className="p-4 md:p-6 border-b border-gray-800"
             open={profilePersonaExpanded}
@@ -1145,35 +1173,29 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             title="Profile & Persona"
             contentClassName="space-y-3 pl-2"
           >
-            {user?.persona && (
-              <div className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 p-3 rounded-lg border border-purple-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <UserIcon size={14} className="text-purple-400" />
-                  <label className="text-xs font-semibold text-purple-300">AI Persona</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.persona}</p>
+            <Fade show={!!user?.persona} className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 p-3 rounded-lg border border-purple-500/20">
+              <div className="flex items-center gap-2 mb-2">
+                <UserIcon size={14} className="text-purple-400" />
+                <label className="text-xs font-semibold text-purple-300">AI Persona</label>
               </div>
-            )}
-            {user?.profile && (
-              <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 p-3 rounded-lg border border-blue-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Star size={14} className="text-blue-400" />
-                  <label className="text-xs font-semibold text-blue-300">Listener Profile</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.profile}</p>
+              <p className="text-sm text-gray-300 leading-relaxed">{user?.persona}</p>
+            </Fade>
+            <Fade show={!!user?.profile} className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 p-3 rounded-lg border border-blue-500/20">
+              <div className="flex items-center gap-2 mb-2">
+                <Star size={14} className="text-blue-400" />
+                <label className="text-xs font-semibold text-blue-300">Listener Profile</label>
               </div>
-            )}
-            {user?.shoutout_interests && (
-              <div className="bg-gradient-to-br from-cyan-500/10 to-teal-500/10 p-3 rounded-lg border border-cyan-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Mic2 size={14} className="text-cyan-400" />
-                  <label className="text-xs font-semibold text-cyan-300">Shoutout Interests</label>
-                </div>
-                <p className="text-sm text-gray-300 leading-relaxed">{user.shoutout_interests}</p>
+              <p className="text-sm text-gray-300 leading-relaxed">{user?.profile}</p>
+            </Fade>
+            <Fade show={!!user?.shoutout_interests} className="bg-gradient-to-br from-cyan-500/10 to-teal-500/10 p-3 rounded-lg border border-cyan-500/20">
+              <div className="flex items-center gap-2 mb-2">
+                <Mic2 size={14} className="text-cyan-400" />
+                <label className="text-xs font-semibold text-cyan-300">Shoutout Interests</label>
               </div>
-            )}
+              <p className="text-sm text-gray-300 leading-relaxed">{user?.shoutout_interests}</p>
+            </Fade>
           </ExpandSection>
-        )}
+        </Fade>
 
         <ExpandSection
           className="p-4 md:p-6 border-b border-gray-800"
@@ -1189,11 +1211,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <option value="">Default Microphone</option>
               {devices.microphones.map(mic => <option key={mic.id} value={mic.id}>{mic.label}</option>)}
             </select>
-            {devices.microphones.length === 0 && (
+            <Fade show={devices.microphones.length === 0}>
               <button onClick={requestPermissions} className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1">
                 Grant microphone access
               </button>
-            )}
+            </Fade>
             <DeviceTester deviceId={selectedMicrophone} type="mic" />
           </SettingRow>
 
@@ -1261,7 +1283,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
         <RadioModeSettings className="p-4 md:p-6 border-b border-gray-800" />
 
-        {(user?.location || user?.timezone || user?.weather_description) && (
+        <Fade show={!!(user?.location || user?.timezone || user?.weather_description)}>
           <ExpandSection
             className="p-4 md:p-6 border-b border-gray-800"
             open={locationExpanded}
@@ -1271,11 +1293,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             title="Location & Environment"
             contentClassName="space-y-3 pl-2"
           >
-            {user?.location && <div className="flex items-center gap-2 text-sm"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user.location}</span></div>}
-            {user?.timezone && <div className="flex items-center gap-2 text-sm"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user.timezone}</span></div>}
-            {user?.weather_description && <div className="flex items-center gap-2 text-sm"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user.weather_description}</span></div>}
+            <Fade show={!!user?.location} className="flex items-center gap-2 text-sm"><MapPin size={14} className="text-blue-400" /><span className="text-gray-300">{user?.location}</span></Fade>
+            <Fade show={!!user?.timezone} className="flex items-center gap-2 text-sm"><Clock size={14} className="text-purple-400" /><span className="text-gray-300">{user?.timezone}</span></Fade>
+            <Fade show={!!user?.weather_description} className="flex items-center gap-2 text-sm"><Cloud size={14} className="text-cyan-400" /><span className="text-gray-300">{user?.weather_description}</span></Fade>
           </ExpandSection>
-        )}
+        </Fade>
 
         <ExpandSection
           className="p-4 md:p-6 border-b border-gray-800"
@@ -1372,11 +1394,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               </div>
             }
           >
-            <div className="text-xs text-gray-400">
+            <FadeSwap swapKey={visualQuality === 'auto' ? 'auto' : 'fixed'} preset={PRESETS.fade} mode="wait" className="text-xs text-gray-400">
               {visualQuality === 'auto'
                 ? `Auto picks the level this device keeps at full frame rate (now ${qualityLevel.toUpperCase()}).`
                 : 'Controls background visual effects intensity. Use LOW for better battery life on mobile devices.'}
-            </div>
+            </FadeSwap>
           </SettingRow>
 
           <SettingRow
@@ -1387,11 +1409,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <button onClick={() => publishSettings({ keepSmooth: keepSmooth === false })} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${keepSmooth !== false ? 'bg-emerald-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{keepSmooth !== false ? 'ON' : 'OFF'}</button>
             }
           >
-            <div className="text-xs text-gray-400">
+            <FadeSwap swapKey={keepSmooth !== false ? 'on' : 'off'} preset={PRESETS.fade} mode="wait" className="text-xs text-gray-400">
               {keepSmooth !== false
                 ? `Turns small details down while the screen can't keep up and back up when it can${smoothLevers.length ? ` (now: ${smoothLevers.join(', ')})` : ' (everything is at full detail now)'}.`
                 : 'Every detail stays at full quality, even when frames drop.'}
-            </div>
+            </FadeSwap>
           </SettingRow>
 
           <SettingRow
@@ -1403,7 +1425,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             }
           >
             <div className="text-xs text-gray-400">
-              Artwork moves in 3D as you tilt or move, lit by the visuals behind it.{tiltNeedsPermission ? ' Your phone will ask for motion access.' : ''}
+              Artwork moves in 3D as you tilt or move, lit by the visuals behind it.<Fade as="span" show={!!tiltNeedsPermission}> Your phone will ask for motion access.</Fade>
             </div>
           </SettingRow>
 
@@ -1428,20 +1450,16 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <button onClick={handleToggleBackgroundDownloads} className={`ui-press px-3 py-1 rounded text-xs font-medium transition ${backgroundDownloads ? 'bg-purple-500 text-white' : 'bg-dark-hover text-gray-400'}`}>{backgroundDownloads ? 'ON' : 'OFF'}</button>
             }
           >
-            {backgroundDownloads && (
-              <div className="text-xs text-gray-400 space-y-1">
-                {isDownloading && (
-                  <div className="flex items-center gap-2">
-                    <Loader2 size={12} className="animate-spin text-purple-400" />
-                    <span>Downloading: {currentTrackTitle}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span>Today: {formatBytes(dailyDownloadedBytes)} / {formatBytes(dailyLimit)}</span>
-                  {downloadedCount > 0 && <span>{downloadedCount} tracks downloaded</span>}
-                </div>
+            <Fade show={!!backgroundDownloads} className="text-xs text-gray-400 space-y-1">
+              <Fade show={!!isDownloading} className="flex items-center gap-2">
+                <Loader2 size={12} className="animate-spin text-purple-400" />
+                <span>Downloading: {currentTrackTitle}</span>
+              </Fade>
+              <div className="flex items-center justify-between">
+                <span>Today: {formatBytes(dailyDownloadedBytes)} / {formatBytes(dailyLimit)}</span>
+                <Fade as="span" show={downloadedCount > 0}>{downloadedCount} tracks downloaded</Fade>
               </div>
-            )}
+            </Fade>
           </SettingRow>
 
           <div className="bg-white/5 p-3 rounded-lg">
@@ -1454,7 +1472,13 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             </div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-400">{storageInfo.trackCount} tracks cached</span>
-              {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
+              <Pop show={storageInfo.trackCount > 0} className="flex">
+                <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">
+                  <FadeSwap swapKey={showCachedTracks ? 'hide' : 'show'} preset={PRESETS.fade} mode="wait">
+                    {showCachedTracks ? 'Hide' : 'Show'}
+                  </FadeSwap>
+                </button>
+              </Pop>
             </div>
             <Expandable open={showCachedTracks && storageInfo.trackCount > 0} innerClassName="pt-3">
               <div ref={cachedListRef} className="max-h-60 overflow-y-auto">
@@ -1476,7 +1500,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                 />
               </div>
             </Expandable>
-            {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
+            <Fade show={storageInfo.trackCount > 0}>
+              <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>
+            </Fade>
           </div>
 
           <div className="bg-white/5 p-3 rounded-lg">
@@ -1550,9 +1576,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             icon={Mic2}
             iconClassName="text-fuchsia-400"
             title="Artists & Bands"
-            meta={myArtists.length > 0 && (
-              <span className="text-xs text-gray-400">({myArtists.length})</span>
-            )}
+            meta={
+              <Pop show={myArtists.length > 0} className="flex">
+                <span className="text-xs text-gray-400">({myArtists.length})</span>
+              </Pop>
+            }
             contentClassName="space-y-3 pl-2"
           >
             <p className="text-xs text-gray-400">Your uploads are credited to these names. Pick one when you upload.</p>
@@ -1573,7 +1601,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                 disabled={addingArtist || !newArtistName.trim()}
                 className="ui-press px-3 py-2 rounded-lg text-sm font-medium bg-fuchsia-600 hover:bg-fuchsia-700 text-white flex items-center gap-1.5 disabled:opacity-50 transition"
               >
-                {addingArtist ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                <FadeSwap swapKey={addingArtist ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                  {addingArtist ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                </FadeSwap>
                 Add
               </button>
             </div>
@@ -1607,9 +1637,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           icon={Upload}
           iconClassName="text-emerald-400"
           title="My Uploads"
-          meta={userUploads.length > 0 && (
-            <span className="text-xs text-gray-400">({userUploads.length})</span>
-          )}
+          meta={
+            <Pop show={userUploads.length > 0} className="flex">
+              <span className="text-xs text-gray-400">({userUploads.length})</span>
+            </Pop>
+          }
           contentClassName="space-y-4 pl-2"
         >
           <button
@@ -1658,20 +1690,19 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           <div className="p-4 md:p-6 border-b border-gray-800">
             <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
               <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">PLAiR Premium</h3></div>
-              {generationUsage && (
-                <p className="text-sm text-gray-300 mb-1">{generationUsage.remaining} of {generationUsage.limit} AI generations left this {generationUsage.period}</p>
-              )}
-              {periodEnd && !Number.isNaN(periodEnd.getTime()) && (
-                <p className="text-xs text-gray-400 mb-1">Current period ends {periodEnd.toLocaleDateString()}</p>
-              )}
-              {billingStatus?.status === 'past_due' && (
-                <InlineNote tone="error" className="mb-1">Your last payment failed. Update your payment method to keep Premium.</InlineNote>
-              )}
-              {billingStatus?.has_billing_account && (
+              <Fade as="p" show={!!generationUsage} className="text-sm text-gray-300 mb-1">{generationUsage?.remaining} of {generationUsage?.limit} AI generations left this {generationUsage?.period}</Fade>
+              <Fade as="p" show={!!periodEnd && !Number.isNaN(periodEnd.getTime())} className="text-xs text-gray-400 mb-1">Current period ends {periodEnd?.toLocaleDateString()}</Fade>
+              <Fade show={billingStatus?.status === 'past_due'} className="mb-1">
+                <InlineNote tone="error">Your last payment failed. Update your payment method to keep Premium.</InlineNote>
+              </Fade>
+              <Fade show={!!billingStatus?.has_billing_account}>
                 <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-3 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">
-                  {billingBusy ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />} Manage subscription
+                  <FadeSwap swapKey={billingBusy ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                    {billingBusy ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />}
+                  </FadeSwap>
+                  Manage subscription
                 </button>
-              )}
+              </Fade>
             </div>
           </div>
         ) : (
@@ -1680,7 +1711,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">Upgrade to Premium</h3></div>
               <p className="text-sm text-gray-300 mb-3">Get ~100 AI tracks per month and support development!</p>
               <button onClick={handleUpgradeToPremium} disabled={billingBusy} className="ui-press-soft w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2 disabled:opacity-60" style={{ background: getPremiumGradient() }}>
-                {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <span>🚀</span>} Upgrade to Premium - {priceLabel}
+                <FadeSwap swapKey={billingBusy ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait" className="flex">
+                  {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <span>🚀</span>}
+                </FadeSwap>
+                Upgrade to Premium - {priceLabel}
               </button>
             </div>
           </div>

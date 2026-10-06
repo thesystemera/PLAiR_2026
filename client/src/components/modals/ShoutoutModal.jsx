@@ -16,6 +16,7 @@ import MediaActions from '../MediaActions'
 import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection, ModalMetadataField, ModalCard } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
+import { Fade, FadeSwap, Pop } from '../Motion'
 
 const NO_TRANSITION = {}
 const FFT_FADE_TRANSITION = CSS_TRANSITION.fadeOpacity
@@ -275,17 +276,21 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop, on
       className="flex items-start gap-3 p-3 rounded-lg transition-colors"
       style={{ backgroundColor: isPlaying ? getBorder(0.15) : getBorder(0.05) }}
     >
-      {profilePictureUrl ? (
-        <ProfileArt
-          userId={reply.user_id}
-          alt={reply.username || 'User'}
-          className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-          {getUserInitial()}
-        </div>
-      )}
+      <div className="relative w-10 h-10 flex-shrink-0">
+        <FadeSwap swapKey={profilePictureUrl ? 'picture' : 'initial'} preset={PRESETS.fade} className="absolute inset-0">
+          {profilePictureUrl ? (
+            <ProfileArt
+              userId={reply.user_id}
+              alt={reply.username || 'User'}
+              className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+              {getUserInitial()}
+            </div>
+          )}
+        </FadeSwap>
+      </div>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
@@ -319,15 +324,17 @@ const ReplyCard = memo(function ReplyCard({ reply, isPlaying, onPlay, onStop, on
           whileHover={PRESETS.hoverPressLarge.whileHover}
           whileTap={PRESETS.hoverPressLarge.whileTap}
           onClick={() => isPlaying ? onStop() : onPlay(reply)}
-          className="p-2 rounded-full flex-shrink-0"
+          className="relative p-2 rounded-full flex-shrink-0"
           style={{ backgroundColor: isPlaying ? 'rgba(139, 92, 246, 0.3)' : getBorder(0.1) }}
           aria-label={isPlaying ? 'Stop reply' : 'Play reply'}
         >
-          {isPlaying ? (
-            <Pause size={16} style={{ color: getWhite() }} />
-          ) : (
-            <Play size={16} style={{ color: getWhite() }} />
-          )}
+          <FadeSwap swapKey={isPlaying ? 'pause' : 'play'} preset={PRESETS.iconSwap}>
+            {isPlaying ? (
+              <Pause size={16} style={{ color: getWhite() }} />
+            ) : (
+              <Play size={16} style={{ color: getWhite() }} />
+            )}
+          </FadeSwap>
         </motion.button>
       )}
 
@@ -661,17 +668,21 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
         <div className="relative pb-6">
           <div className="relative pb-6 border-b mb-6" style={{ borderColor: getBorder(0.1) }}>
             <div className="flex items-start gap-4">
-              {profilePictureUrl ? (
-                <ProfileArt
-                  userId={shoutout.user_id}
-                  alt={shoutout.username || 'User'}
-                  className="relative w-16 h-16 rounded-full overflow-hidden shadow-lg flex-shrink-0"
-                />
-              ) : (
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg flex-shrink-0">
-                  {getUserInitial()}
-                </div>
-              )}
+              <div className="relative w-16 h-16 flex-shrink-0">
+                <FadeSwap swapKey={profilePictureUrl ? 'picture' : 'initial'} preset={PRESETS.fade} className="absolute inset-0">
+                  {profilePictureUrl ? (
+                    <ProfileArt
+                      userId={shoutout.user_id}
+                      alt={shoutout.username || 'User'}
+                      className="relative w-16 h-16 rounded-full overflow-hidden shadow-lg flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg flex-shrink-0">
+                      {getUserInitial()}
+                    </div>
+                  )}
+                </FadeSwap>
+              </div>
 
               <div className="flex-1 min-w-0">
                 <h2
@@ -868,76 +879,79 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   <div className="flex items-center gap-2">
                     <MessageCircle size={14} />
                     Replies
-                    {(shoutout.reply_count > 0 || replies.length > 0) && (
+                    <Pop show={shoutout.reply_count > 0 || replies.length > 0} className="flex">
                       <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300">
                         {replies.length || shoutout.reply_count || 0}
                       </span>
-                    )}
+                    </Pop>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {replies.length > 1 && (
+                  <div className="relative flex items-center gap-2">
+                    <Pop show={replies.length > 1} className="flex">
                       <button
                         onClick={() => setReplySortBy(prev => prev === 'popularity' ? 'recent' : 'popularity')}
-                        className="ui-press text-xs px-2 py-1 rounded transition-colors"
+                        className="ui-press relative text-xs px-2 py-1 rounded transition-colors"
                         style={{ backgroundColor: getBorder(0.1), color: getGrey400() }}
                       >
-                        {replySortBy === 'popularity' ? '🔥 Top' : '🕐 Recent'}
+                        <FadeSwap swapKey={replySortBy} preset={PRESETS.fade}>
+                          {replySortBy === 'popularity' ? '🔥 Top' : '🕐 Recent'}
+                        </FadeSwap>
                       </button>
-                    )}
-                    {user && !isSubmittingReply && (
-                      isRecording ? (
-                        <div className="flex items-center gap-2">
+                    </Pop>
+                    {(user || isSubmittingReply) && (
+                      <FadeSwap swapKey={isSubmittingReply ? 'submitting' : isRecording ? 'recording' : 'idle'} preset={PRESETS.pop} className="flex">
+                        {isSubmittingReply ? (
+                          <div className="flex items-center gap-1.5 text-xs px-3 py-1.5">
+                            <Loader size={12} className="animate-spin" style={{ color: getGrey400() }} />
+                            <span style={{ color: getGrey400() }}>Submitting...</span>
+                          </div>
+                        ) : isRecording ? (
+                          <div className="flex items-center gap-2">
+                            <motion.button
+                              whileHover={PRESETS.hoverPress.whileHover}
+                              whileTap={PRESETS.hoverPress.whileTap}
+                              onClick={handleCancelRecording}
+                              className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-full font-medium"
+                              style={{ backgroundColor: getBorder(0.2), color: getGrey400() }}
+                            >
+                              <X size={12} />
+                            </motion.button>
+                            <motion.button
+                              whileHover={PRESETS.hoverPress.whileHover}
+                              whileTap={PRESETS.hoverPress.whileTap}
+                              onClick={handleStopRecording}
+                              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
+                              style={{
+                                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.5) 0%, rgba(239, 68, 68, 0.3) 100%)',
+                                color: getWhite()
+                              }}
+                              animate={{ scale: [1, 1.05, 1] }}
+                              transition={MOTION.beat}
+                            >
+                              <Square size={12} fill="currentColor" />
+                              Stop
+                            </motion.button>
+                          </div>
+                        ) : (
                           <motion.button
                             whileHover={PRESETS.hoverPress.whileHover}
                             whileTap={PRESETS.hoverPress.whileTap}
-                            onClick={handleCancelRecording}
-                            className="flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-full font-medium"
-                            style={{ backgroundColor: getBorder(0.2), color: getGrey400() }}
-                          >
-                            <X size={12} />
-                          </motion.button>
-                          <motion.button
-                            whileHover={PRESETS.hoverPress.whileHover}
-                            whileTap={PRESETS.hoverPress.whileTap}
-                            onClick={handleStopRecording}
+                            onClick={handleStartRecording}
                             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
                             style={{
-                              background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.5) 0%, rgba(239, 68, 68, 0.3) 100%)',
+                              background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(236, 72, 153, 0.3) 100%)',
                               color: getWhite()
                             }}
-                            animate={{ scale: [1, 1.05, 1] }}
-                            transition={MOTION.beat}
                           >
-                            <Square size={12} fill="currentColor" />
-                            Stop
+                            <Mic size={12} />
+                            Reply
                           </motion.button>
-                        </div>
-                      ) : (
-                        <motion.button
-                          whileHover={PRESETS.hoverPress.whileHover}
-                          whileTap={PRESETS.hoverPress.whileTap}
-                          onClick={handleStartRecording}
-                          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium"
-                          style={{
-                            background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(236, 72, 153, 0.3) 100%)',
-                            color: getWhite()
-                          }}
-                        >
-                          <Mic size={12} />
-                          Reply
-                        </motion.button>
-                      )
-                    )}
-                    {isSubmittingReply && (
-                      <div className="flex items-center gap-1.5 text-xs px-3 py-1.5">
-                        <Loader size={12} className="animate-spin" style={{ color: getGrey400() }} />
-                        <span style={{ color: getGrey400() }}>Submitting...</span>
-                      </div>
+                        )}
+                      </FadeSwap>
                     )}
                   </div>
                 </div>
               }>
-                {user && !isRecording && (
+                <Fade show={!!user && !isRecording}>
                   <form onSubmit={handleSendTypedReply} className="flex items-center gap-2 mb-3">
                     <input
                       type="text"
@@ -960,39 +974,45 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                       <Send size={16} />
                     </button>
                   </form>
-                )}
-                {repliesLoading ? (
-                  <div className="flex items-center justify-center py-6">
-                    <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
-                  </div>
-                ) : replies.length === 0 ? (
-                  <div className="text-center py-6">
-                    <MessageCircle size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />
-                    <p className="text-sm" style={{ color: getGrey400() }}>
-                      No replies yet
-                    </p>
-                    {user && (
-                      <p className="text-xs mt-1" style={{ color: getGrey400() }}>
-                        Be the first to reply!
+                </Fade>
+                <FadeSwap
+                  swapKey={repliesLoading ? 'loading' : replies.length === 0 ? 'empty' : 'list'}
+                  mode="wait"
+                  preset={PRESETS.fade}
+                >
+                  {repliesLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
+                    </div>
+                  ) : replies.length === 0 ? (
+                    <div className="text-center py-6">
+                      <MessageCircle size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />
+                      <p className="text-sm" style={{ color: getGrey400() }}>
+                        No replies yet
                       </p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    <AnimatePresence>
-                      {replies.map((reply) => (
-                        <ReplyCard
-                          key={reply.id}
-                          reply={reply}
-                          isPlaying={playingShoutout?.id === reply.id}
-                          onPlay={(r) => playShoutout(r, { showModal: false })}
-                          onStop={stopShoutout}
-                          onDelete={handleDeleteReply}
-                        />
-                      ))}
-                    </AnimatePresence>
-                  </div>
-                )}
+                      {user && (
+                        <p className="text-xs mt-1" style={{ color: getGrey400() }}>
+                          Be the first to reply!
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      <AnimatePresence>
+                        {replies.map((reply) => (
+                          <ReplyCard
+                            key={reply.id}
+                            reply={reply}
+                            isPlaying={playingShoutout?.id === reply.id}
+                            onPlay={(r) => playShoutout(r, { showModal: false })}
+                            onStop={stopShoutout}
+                            onDelete={handleDeleteReply}
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </FadeSwap>
               </ModalSection>
             )}
 
@@ -1007,7 +1027,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   type="button"
                   onClick={handleOpenParent}
                   disabled={isOpeningParent}
-                  className="ui-press w-full text-left p-3 rounded-lg flex items-start gap-2 disabled:opacity-60"
+                  className="ui-press relative w-full text-left p-3 rounded-lg flex items-start gap-2 disabled:opacity-60"
                   style={{ backgroundColor: getBorder(0.05) }}
                 >
                   <div className="flex-1 min-w-0">
@@ -1020,11 +1040,13 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                         : 'Tap to open the original shoutout'}
                     </p>
                   </div>
-                  {isOpeningParent ? (
-                    <Loader size={14} className="animate-spin flex-shrink-0 mt-1" style={{ color: getGrey400() }} />
-                  ) : (
-                    <ChevronRight size={14} className="flex-shrink-0 mt-1" style={{ color: getGrey400() }} />
-                  )}
+                  <FadeSwap swapKey={isOpeningParent ? 'opening' : 'idle'} preset={PRESETS.iconSwap} className="flex-shrink-0 pt-1">
+                    {isOpeningParent ? (
+                      <Loader size={14} className="animate-spin" style={{ color: getGrey400() }} />
+                    ) : (
+                      <ChevronRight size={14} style={{ color: getGrey400() }} />
+                    )}
+                  </FadeSwap>
                 </button>
               </ModalSection>
             )}

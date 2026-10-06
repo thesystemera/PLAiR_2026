@@ -8,6 +8,8 @@ import { ToggleChip } from '../SettingRow'
 import { ModalTagList } from './Modal'
 import { TrackArt } from '../DepthArt'
 import { PACK_SIZES, packCache } from '../../lib/mediaCache'
+import { Fade, FadeSwap, Pop } from '../Motion'
+import { PRESETS } from '../../lib/motion'
 
 const DESCRIPTION_MAX = 2000
 
@@ -57,7 +59,9 @@ const EditActions = memo(function EditActions({ onSave, onCancel, saving }) {
   return (
     <div className="flex gap-2">
       <button type="button" onClick={onSave} disabled={saving} className="ui-press px-3 py-1.5 bg-green-500/20 text-green-400 rounded text-xs hover:bg-green-500/30 flex items-center gap-1.5 disabled:opacity-60">
-        {saving && <Loader2 size={12} className="animate-spin" />}
+        <Pop show={saving} className="flex">
+          <Loader2 size={12} className="animate-spin" />
+        </Pop>
         Save
       </button>
       <button type="button" onClick={onCancel} disabled={saving} className="ui-press px-3 py-1.5 bg-gray-500/20 text-gray-400 rounded text-xs hover:bg-gray-500/30 disabled:opacity-60">Cancel</button>
@@ -106,58 +110,58 @@ export const MetadataField = memo(function MetadataField({
     if (ok) setEditing(false)
   }
 
-  if (editing) {
-    return (
-      <div className="space-y-2">
-        <FieldLabel>{label}</FieldLabel>
-        {multiline ? (
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-            maxLength={maxLength}
-            className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500 resize-y"
-            style={{ borderColor: getBorder(0.3), color: getWhite() }}
-            rows={rows}
-            autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') cancel()
-            }}
-          />
-        ) : (
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
-            maxLength={maxLength}
-            className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
-            style={{ borderColor: getBorder(0.3), color: getWhite() }}
-            autoFocus
-            enterKeyHint="done"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void save()
-              if (e.key === 'Escape') cancel()
-            }}
-          />
-        )}
-        <EditActions onSave={save} onCancel={cancel} saving={saving} />
-      </div>
-    )
-  }
-
   return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <FieldLabel>{label}</FieldLabel>
-        {onSave && <EditButton label={label} onClick={startEdit} />}
-      </div>
-      <div className="mt-1">
-        {value
-          ? (renderValue ? renderValue(value) : <p className="text-sm break-words" style={{ color: getWhite() }}>{value}</p>)
-          : <p className="text-sm" style={{ color: getGrey400() }}>{emptyText}</p>}
-      </div>
-    </div>
+    <FadeSwap swapKey={editing ? 'edit' : 'view'} mode="wait" preset={PRESETS.fade}>
+      {editing ? (
+        <div className="space-y-2">
+          <FieldLabel>{label}</FieldLabel>
+          {multiline ? (
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={placeholder}
+              maxLength={maxLength}
+              className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500 resize-y"
+              style={{ borderColor: getBorder(0.3), color: getWhite() }}
+              rows={rows}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') cancel()
+              }}
+            />
+          ) : (
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={placeholder}
+              maxLength={maxLength}
+              className="w-full px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
+              style={{ borderColor: getBorder(0.3), color: getWhite() }}
+              autoFocus
+              enterKeyHint="done"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') cancel()
+              }}
+            />
+          )}
+          <EditActions onSave={save} onCancel={cancel} saving={saving} />
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <FieldLabel>{label}</FieldLabel>
+            {onSave && <EditButton label={label} onClick={startEdit} />}
+          </div>
+          <div className="mt-1">
+            {value
+              ? (renderValue ? renderValue(value) : <p className="text-sm break-words" style={{ color: getWhite() }}>{value}</p>)
+              : <p className="text-sm" style={{ color: getGrey400() }}>{emptyText}</p>}
+          </div>
+        </div>
+      )}
+    </FadeSwap>
   )
 })
 
@@ -198,78 +202,78 @@ export const TagEditor = memo(function TagEditor({ label, tags, color, onSave, p
     if (ok) setEditing(false)
   }
 
-  if (editing) {
-    return (
-      <div className="space-y-2">
-        <FieldLabel>{label}</FieldLabel>
-        {draftTags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {draftTags.map((tag, i) => (
-              <span
-                key={`${tag}-${i}`}
-                className="pl-2 pr-1 py-0.5 rounded-full text-xs flex items-center gap-1"
-                style={{ backgroundColor: `${color}20`, color }}
-              >
-                {tag}
-                <button
-                  type="button"
-                  onClick={() => setDraftTags(prev => prev.filter((_, j) => j !== i))}
-                  aria-label={`Remove ${tag}`}
-                  className="ui-tap p-0.5 rounded-full hover:bg-white/10"
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={placeholder}
-            className="flex-1 min-w-0 px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
-            style={{ borderColor: getBorder(0.3), color: getWhite() }}
-            autoFocus
-            enterKeyHint="enter"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ',') {
-                e.preventDefault()
-                addInput()
-              } else if (e.key === 'Backspace' && !input && draftTags.length) {
-                setDraftTags(prev => prev.slice(0, -1))
-              } else if (e.key === 'Escape') {
-                cancel()
-              }
-            }}
-          />
-          <button
-            type="button"
-            onClick={addInput}
-            disabled={!input.trim()}
-            aria-label={`Add to ${label}`}
-            className="ui-tap px-2.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-40 transition"
-            style={{ color: getWhite() }}
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        <EditActions onSave={save} onCancel={cancel} saving={saving} />
-      </div>
-    )
-  }
-
   return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <FieldLabel>{label}</FieldLabel>
-        <EditButton label={label} onClick={startEdit} />
-      </div>
-      <div className="mt-1">
-        <ModalTagList tags={current} color={color} />
-      </div>
-    </div>
+    <FadeSwap swapKey={editing ? 'edit' : 'view'} mode="wait" preset={PRESETS.fade}>
+      {editing ? (
+        <div className="space-y-2">
+          <FieldLabel>{label}</FieldLabel>
+          <Fade show={draftTags.length > 0}>
+            <div className="flex flex-wrap gap-1.5">
+              {draftTags.map((tag, i) => (
+                <span
+                  key={`${tag}-${i}`}
+                  className="pl-2 pr-1 py-0.5 rounded-full text-xs flex items-center gap-1"
+                  style={{ backgroundColor: `${color}20`, color }}
+                >
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => setDraftTags(prev => prev.filter((_, j) => j !== i))}
+                    aria-label={`Remove ${tag}`}
+                    className="ui-tap p-0.5 rounded-full hover:bg-white/10"
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </Fade>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={placeholder}
+              className="flex-1 min-w-0 px-3 py-2 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
+              style={{ borderColor: getBorder(0.3), color: getWhite() }}
+              autoFocus
+              enterKeyHint="enter"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ',') {
+                  e.preventDefault()
+                  addInput()
+                } else if (e.key === 'Backspace' && !input && draftTags.length) {
+                  setDraftTags(prev => prev.slice(0, -1))
+                } else if (e.key === 'Escape') {
+                  cancel()
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={addInput}
+              disabled={!input.trim()}
+              aria-label={`Add to ${label}`}
+              className="ui-tap px-2.5 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-40 transition"
+              style={{ color: getWhite() }}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+          <EditActions onSave={save} onCancel={cancel} saving={saving} />
+        </div>
+      ) : (
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <FieldLabel>{label}</FieldLabel>
+            <EditButton label={label} onClick={startEdit} />
+          </div>
+          <div className="mt-1">
+            <ModalTagList tags={current} color={color} />
+          </div>
+        </div>
+      )}
+    </FadeSwap>
   )
 })
 
@@ -278,7 +282,7 @@ export const VisibilityControl = memo(function VisibilityControl({ value, onChan
   const current = VISIBILITY_OPTIONS.find(opt => opt.value === value) || VISIBILITY_OPTIONS[0]
 
   return (
-    <div>
+    <div className="relative">
       <div role="radiogroup" aria-label="Visibility" className="grid grid-cols-3 gap-1 p-1 rounded-lg bg-white/5">
         {VISIBILITY_OPTIONS.map(({ value: optValue, label, icon: Icon }) => {
           const active = optValue === current.value
@@ -297,7 +301,9 @@ export const VisibilityControl = memo(function VisibilityControl({ value, onChan
           )
         })}
       </div>
-      <p className="mt-1.5 text-xs" style={{ color: getGrey400() }}>{current.hint}</p>
+      <FadeSwap swapKey={current.value} preset={PRESETS.fade} className="pt-1.5">
+        <p className="text-xs" style={{ color: getGrey400() }}>{current.hint}</p>
+      </FadeSwap>
     </div>
   )
 })
@@ -305,31 +311,33 @@ export const VisibilityControl = memo(function VisibilityControl({ value, onChan
 export const DescriptionField = memo(function DescriptionField({ value, onSave }) {
   const [open, setOpen] = useState(false)
 
-  if (!value && !open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="ui-press text-xs text-purple-400 hover:text-purple-300"
-      >
-        + Add description
-      </button>
-    )
-  }
+  const adding = !value && !open
 
   return (
-    <MetadataField
-      label="Description"
-      value={value}
-      onSave={onSave}
-      multiline
-      rows={3}
-      maxLength={DESCRIPTION_MAX}
-      placeholder="A line or two about this track"
-      emptyText="No description"
-      startEditing={!value}
-      onCancel={() => setOpen(false)}
-    />
+    <FadeSwap swapKey={adding ? 'add' : 'field'} mode="wait" preset={PRESETS.fade}>
+      {adding ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="ui-press text-xs text-purple-400 hover:text-purple-300"
+        >
+          + Add description
+        </button>
+      ) : (
+        <MetadataField
+          label="Description"
+          value={value}
+          onSave={onSave}
+          multiline
+          rows={3}
+          maxLength={DESCRIPTION_MAX}
+          placeholder="A line or two about this track"
+          emptyText="No description"
+          startEditing={!value}
+          onCancel={() => setOpen(false)}
+        />
+      )}
+    </FadeSwap>
   )
 })
 
@@ -370,77 +378,79 @@ export const ArtistChooser = memo(function ArtistChooser({ artists, value, onCha
     onChange(artist.id, artist)
   }
 
-  if (adding) {
-    return (
-      <div className="flex items-center gap-1.5 flex-1 min-w-0">
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Band or artist name"
-          maxLength={80}
-          className="flex-1 min-w-0 px-2.5 py-1.5 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
-          style={{ borderColor: getBorder(0.3), color: getWhite() }}
-          autoFocus
-          enterKeyHint="done"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void create()
-            if (e.key === 'Escape') cancelAdd()
-          }}
-        />
-        <button
-          type="button"
-          onClick={create}
-          disabled={creating || !name.trim()}
-          className="ui-press px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-50 flex items-center gap-1"
-        >
-          {creating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-          Add
-        </button>
-        <button type="button" onClick={cancelAdd} aria-label="Cancel" className="ui-tap p-1.5 rounded-lg text-gray-400 hover:bg-white/10">
-          <X size={14} />
-        </button>
-      </div>
-    )
-  }
-
-  if (artists.length === 0) {
-    return (
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className="text-sm truncate" style={{ color: getWhite() }}>{fallbackLabel}</span>
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          disabled={disabled}
-          className="ui-press text-xs text-purple-400 hover:text-purple-300 whitespace-nowrap disabled:opacity-50"
-        >
-          + Add band/artist
-        </button>
-      </div>
-    )
-  }
+  const view = adding ? 'add' : artists.length === 0 ? 'none' : 'select'
 
   return (
-    <select
-      value={selected ? String(selected.id) : ''}
-      disabled={disabled}
-      aria-label="Artist"
-      onChange={(e) => {
-        if (e.target.value === ADD_ARTIST) setAdding(true)
-        else if (e.target.value) {
-          const id = Number(e.target.value)
-          onChange(id, artists.find(a => a.id === id))
-        }
-      }}
-      className="flex-1 min-w-0 px-2.5 py-1.5 bg-dark-hover border rounded-lg text-sm focus:outline-none focus:border-purple-500 transition disabled:opacity-60"
-      style={{ borderColor: getBorder(0.3), color: getWhite() }}
-    >
-      {!selected && <option value="">{fallbackLabel}</option>}
-      {artists.map(artist => (
-        <option key={artist.id} value={String(artist.id)}>{artist.name}</option>
-      ))}
-      <option value={ADD_ARTIST}>+ Add band/artist</option>
-    </select>
+    <FadeSwap swapKey={view} mode="wait" preset={PRESETS.fade} className="flex flex-1 min-w-0">
+      {view === 'add' && (
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Band or artist name"
+            maxLength={80}
+            className="flex-1 min-w-0 px-2.5 py-1.5 bg-white/5 border rounded-lg text-sm focus:outline-none focus:border-purple-500"
+            style={{ borderColor: getBorder(0.3), color: getWhite() }}
+            autoFocus
+            enterKeyHint="done"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void create()
+              if (e.key === 'Escape') cancelAdd()
+            }}
+          />
+          <button
+            type="button"
+            onClick={create}
+            disabled={creating || !name.trim()}
+            className="ui-press relative px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-500/20 text-green-400 hover:bg-green-500/30 disabled:opacity-50 flex items-center gap-1"
+          >
+            <FadeSwap swapKey={creating ? 'creating' : 'idle'} preset={PRESETS.iconSwap}>
+              {creating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            </FadeSwap>
+            Add
+          </button>
+          <button type="button" onClick={cancelAdd} aria-label="Cancel" className="ui-tap p-1.5 rounded-lg text-gray-400 hover:bg-white/10">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {view === 'none' && (
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-sm truncate" style={{ color: getWhite() }}>{fallbackLabel}</span>
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            disabled={disabled}
+            className="ui-press text-xs text-purple-400 hover:text-purple-300 whitespace-nowrap disabled:opacity-50"
+          >
+            + Add band/artist
+          </button>
+        </div>
+      )}
+      {view === 'select' && (
+        <select
+          value={selected ? String(selected.id) : ''}
+          disabled={disabled}
+          aria-label="Artist"
+          onChange={(e) => {
+            if (e.target.value === ADD_ARTIST) setAdding(true)
+            else if (e.target.value) {
+              const id = Number(e.target.value)
+              onChange(id, artists.find(a => a.id === id))
+            }
+          }}
+          className="flex-1 min-w-0 px-2.5 py-1.5 bg-dark-hover border rounded-lg text-sm focus:outline-none focus:border-purple-500 transition disabled:opacity-60"
+          style={{ borderColor: getBorder(0.3), color: getWhite() }}
+        >
+          {!selected && <option value="">{fallbackLabel}</option>}
+          {artists.map(artist => (
+            <option key={artist.id} value={String(artist.id)}>{artist.name}</option>
+          ))}
+          <option value={ADD_ARTIST}>+ Add band/artist</option>
+        </select>
+      )}
+    </FadeSwap>
   )
 })
 
@@ -527,30 +537,32 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
         className="relative w-24 h-24 rounded-lg overflow-hidden flex-shrink-0 border"
         style={{ borderColor: getBorder(0.3), backgroundColor: 'rgba(0,0,0,0.3)' }}
       >
-        {artwork.shown ? (
-          <TrackArt key={artwork.version} trackId={trackId} alt="Track artwork" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <Image size={32} className="text-gray-500" />
-          </div>
-        )}
-        {uploading && (
-          <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-            <Loader2 size={24} className="animate-spin text-white" />
-          </div>
-        )}
+        <FadeSwap swapKey={artwork.shown ? `art-${artwork.version}` : 'none'} preset={PRESETS.trackSwap} className="absolute inset-0">
+          {artwork.shown ? (
+            <TrackArt key={artwork.version} trackId={trackId} alt="Track artwork" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center">
+              <Image size={32} className="text-gray-500" />
+            </div>
+          )}
+        </FadeSwap>
+        <Fade show={uploading} className="absolute inset-0 bg-black/60 flex items-center justify-center">
+          <Loader2 size={24} className="animate-spin text-white" />
+        </Fade>
       </div>
 
-      <div className="flex-1">
-        <p className="text-sm font-medium mb-1 flex items-center gap-2" style={{ color: getWhite() }}>
-          {getArtworkLabel()}
-          {artworkGenerated && <Sparkles size={12} className="text-purple-400" />}
-        </p>
-        <p className="text-xs mb-3" style={{ color: getGrey400() }}>
-          {artwork.shown
-            ? 'Upload your own image to replace'
-            : 'No artwork available'}
-        </p>
+      <div className="relative flex-1">
+        <FadeSwap swapKey={getArtworkLabel()} preset={PRESETS.fade}>
+          <p className="text-sm font-medium mb-1 flex items-center gap-2" style={{ color: getWhite() }}>
+            {getArtworkLabel()}
+            {artworkGenerated && <Sparkles size={12} className="text-purple-400" />}
+          </p>
+          <p className="text-xs mb-3" style={{ color: getGrey400() }}>
+            {artwork.shown
+              ? 'Upload your own image to replace'
+              : 'No artwork available'}
+          </p>
+        </FadeSwap>
         <input
           ref={fileInputRef}
           type="file"
@@ -561,7 +573,7 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="ui-press px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
+          className="ui-press relative px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5"
           style={{
             backgroundColor: 'rgba(255,255,255,0.1)',
             color: getWhite(),
@@ -570,7 +582,9 @@ export const ArtworkSection = memo(function ArtworkSection({ trackId, hasArtwork
           }}
         >
           <Upload size={14} />
-          {uploading ? 'Uploading...' : artwork.shown ? 'Replace Artwork' : 'Upload Artwork'}
+          <FadeSwap swapKey={uploading ? 'uploading' : artwork.shown ? 'replace' : 'upload'} preset={PRESETS.fade}>
+            {uploading ? 'Uploading...' : artwork.shown ? 'Replace Artwork' : 'Upload Artwork'}
+          </FadeSwap>
         </button>
       </div>
     </div>

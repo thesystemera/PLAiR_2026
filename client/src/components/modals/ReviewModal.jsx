@@ -16,6 +16,7 @@ import MediaActions from '../MediaActions'
 import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection } from './Modal'
 import { MOTION, PRESETS } from '../../lib/motion'
+import { FadeSwap, Pop } from '../Motion'
 
 const REVIEW_MIN_CHARS = 2
 const REVIEW_MAX_CHARS = 600
@@ -40,17 +41,21 @@ const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop,
       className="flex items-start gap-3 p-3 rounded-lg transition-colors"
       style={{ backgroundColor: isPlaying ? getBorder(0.15) : getBorder(0.05) }}
     >
-      {profilePictureUrl ? (
-        <ProfileArt
-          userId={review.user_id}
-          alt={review.username || 'User'}
-          className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-          {review.username?.charAt(0).toUpperCase() || 'U'}
-        </div>
-      )}
+      <div className="relative w-10 h-10 flex-shrink-0">
+        <FadeSwap swapKey={profilePictureUrl ? 'picture' : 'initial'} preset={PRESETS.fade} className="absolute inset-0">
+          {profilePictureUrl ? (
+            <ProfileArt
+              userId={review.user_id}
+              alt={review.username || 'User'}
+              className="relative w-10 h-10 rounded-full overflow-hidden flex-shrink-0"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+              {review.username?.charAt(0).toUpperCase() || 'U'}
+            </div>
+          )}
+        </FadeSwap>
+      </div>
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -88,15 +93,17 @@ const ReviewCard = memo(function ReviewCard({ review, isPlaying, onPlay, onStop,
           whileHover={PRESETS.hoverPressLarge.whileHover}
           whileTap={PRESETS.hoverPressLarge.whileTap}
           onClick={() => isPlaying ? onStop() : onPlay(review)}
-          className="p-2 rounded-full flex-shrink-0"
+          className="relative p-2 rounded-full flex-shrink-0"
           style={{ backgroundColor: isPlaying ? 'rgba(139, 92, 246, 0.3)' : getBorder(0.1) }}
           aria-label={isPlaying ? 'Stop review' : 'Play review'}
         >
-          {isPlaying ? (
-            <Pause size={16} style={{ color: getWhite() }} />
-          ) : (
-            <Play size={16} style={{ color: getWhite() }} />
-          )}
+          <FadeSwap swapKey={isPlaying ? 'pause' : 'play'} preset={PRESETS.iconSwap}>
+            {isPlaying ? (
+              <Pause size={16} style={{ color: getWhite() }} />
+            ) : (
+              <Play size={16} style={{ color: getWhite() }} />
+            )}
+          </FadeSwap>
         </motion.button>
       )}
 
@@ -284,7 +291,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
         <ModalSection title="Your review">
           {user ? (
             <div className="space-y-2">
-              <form onSubmit={handleSendText} className="flex items-center gap-2">
+              <form onSubmit={handleSendText} className="relative flex items-center gap-2">
                 <input
                   type="text"
                   value={text}
@@ -305,57 +312,61 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
                 >
                   <Send size={16} />
                 </button>
-                {isRecording ? (
-                  <>
+                <FadeSwap swapKey={isRecording ? 'recording' : 'idle'} preset={PRESETS.pop} className="flex items-center gap-2 flex-shrink-0">
+                  {isRecording ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleCancelRecording}
+                        className="ui-tap p-2.5 rounded-xl flex-shrink-0"
+                        style={{ backgroundColor: getBorder(0.2), color: getGrey400() }}
+                        aria-label="Cancel recording"
+                      >
+                        <X size={16} />
+                      </button>
+                      <motion.button
+                        type="button"
+                        onClick={handleStopRecording}
+                        className="flex items-center gap-1.5 text-xs px-3 py-2.5 rounded-xl font-medium flex-shrink-0"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.5) 0%, rgba(239, 68, 68, 0.3) 100%)',
+                          color: getWhite()
+                        }}
+                        animate={{ scale: [1, 1.05, 1] }}
+                        transition={MOTION.beat}
+                      >
+                        <Square size={12} fill="currentColor" />
+                        Stop
+                      </motion.button>
+                    </>
+                  ) : (
                     <button
                       type="button"
-                      onClick={handleCancelRecording}
-                      className="ui-tap p-2.5 rounded-xl flex-shrink-0"
-                      style={{ backgroundColor: getBorder(0.2), color: getGrey400() }}
-                      aria-label="Cancel recording"
+                      onClick={handleStartRecording}
+                      disabled={isSubmitting}
+                      className="ui-tap p-2.5 rounded-xl flex-shrink-0 disabled:opacity-40"
+                      style={{ backgroundColor: getBorder(0.15), color: getWhite() }}
+                      aria-label="Record a voice review"
+                      title="Record a voice review"
                     >
-                      <X size={16} />
+                      <Mic size={16} />
                     </button>
-                    <motion.button
-                      type="button"
-                      onClick={handleStopRecording}
-                      className="flex items-center gap-1.5 text-xs px-3 py-2.5 rounded-xl font-medium flex-shrink-0"
-                      style={{
-                        background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.5) 0%, rgba(239, 68, 68, 0.3) 100%)',
-                        color: getWhite()
-                      }}
-                      animate={{ scale: [1, 1.05, 1] }}
-                      transition={MOTION.beat}
-                    >
-                      <Square size={12} fill="currentColor" />
-                      Stop
-                    </motion.button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleStartRecording}
-                    disabled={isSubmitting}
-                    className="ui-tap p-2.5 rounded-xl flex-shrink-0 disabled:opacity-40"
-                    style={{ backgroundColor: getBorder(0.15), color: getWhite() }}
-                    aria-label="Record a voice review"
-                    title="Record a voice review"
-                  >
-                    <Mic size={16} />
-                  </button>
-                )}
+                  )}
+                </FadeSwap>
               </form>
-              <div className="flex items-center gap-1.5 text-xs" style={{ color: getGrey400() }}>
-                {isSubmitting ? (
-                  <>
-                    <Loader size={12} className="animate-spin" />
-                    Posting...
-                  </>
-                ) : isRecording ? (
-                  'Recording... tap Stop when you are done'
-                ) : (
-                  'Type it, or tap the mic and say it. Spoken reviews can play over the song on air.'
-                )}
+              <div className="relative text-xs" style={{ color: getGrey400() }}>
+                <FadeSwap swapKey={isSubmitting ? 'posting' : isRecording ? 'recording' : 'idle'} preset={PRESETS.fade} className="flex items-center gap-1.5">
+                  {isSubmitting ? (
+                    <>
+                      <Loader size={12} className="animate-spin" />
+                      Posting...
+                    </>
+                  ) : isRecording ? (
+                    'Recording... tap Stop when you are done'
+                  ) : (
+                    'Type it, or tap the mic and say it. Spoken reviews can play over the song on air.'
+                  )}
+                </FadeSwap>
               </div>
             </div>
           ) : (
@@ -383,45 +394,51 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
           <div className="flex items-center gap-2">
             <MessageSquareText size={14} />
             What listeners said
-            {shownReviews.length > 0 && (
+            <Pop show={shownReviews.length > 0} className="flex">
               <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300">
                 {shownReviews.length}
               </span>
-            )}
+            </Pop>
           </div>
         }>
-          {loading && shownReviews.length === 0 ? (
-            <div className="flex items-center justify-center py-6">
-              <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
-            </div>
-          ) : shownReviews.length === 0 ? (
-            <div className="text-center py-6">
-              <MessageSquareText size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />
-              <p className="text-sm" style={{ color: getGrey400() }}>
-                No reviews yet
-              </p>
-              {user && (
-                <p className="text-xs mt-1" style={{ color: getGrey400() }}>
-                  Be the first to say what you think!
+          <FadeSwap
+            swapKey={loading && shownReviews.length === 0 ? 'loading' : shownReviews.length === 0 ? 'empty' : 'list'}
+            mode="wait"
+            preset={PRESETS.fade}
+          >
+            {loading && shownReviews.length === 0 ? (
+              <div className="flex items-center justify-center py-6">
+                <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
+              </div>
+            ) : shownReviews.length === 0 ? (
+              <div className="text-center py-6">
+                <MessageSquareText size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />
+                <p className="text-sm" style={{ color: getGrey400() }}>
+                  No reviews yet
                 </p>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <AnimatePresence>
-                {shownReviews.map((review) => (
-                  <ReviewCard
-                    key={review.id}
-                    review={review}
-                    isPlaying={playingShoutout?.id === review.id}
-                    onPlay={(r) => playShoutout(r, { showModal: false })}
-                    onStop={stopShoutout}
-                    onDelete={handleDelete}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-          )}
+                {user && (
+                  <p className="text-xs mt-1" style={{ color: getGrey400() }}>
+                    Be the first to say what you think!
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <AnimatePresence>
+                  {shownReviews.map((review) => (
+                    <ReviewCard
+                      key={review.id}
+                      review={review}
+                      isPlaying={playingShoutout?.id === review.id}
+                      onPlay={(r) => playShoutout(r, { showModal: false })}
+                      onStop={stopShoutout}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+          </FadeSwap>
         </ModalSection>
       </div>
     </Modal>

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, memo } from 'react'
 import { Upload, Loader2, Check, X, FileAudio, FileVideo, Mic2, Wand2, Info } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PRESETS } from '../../lib/motion'
+import { Fade, FadeSwap, Pop } from '../Motion'
 import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
 import { triggerHaptic } from '../../lib/haptics'
@@ -638,42 +639,46 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                   className="sr-only"
                 />
 
-                {file ? (
-                  <div className="flex items-center justify-center gap-3">
-                    <div className="p-2 rounded-lg bg-green-500/20">
-                      {isSelectedVideo ? (
-                        <FileVideo size={24} className="text-green-400" />
-                      ) : (
-                        <FileAudio size={24} className="text-green-400" />
-                      )}
+                <FadeSwap swapKey={file ? 'file' : 'empty'} mode="wait" preset={PRESETS.fade}>
+                  {file ? (
+                    <div className="flex items-center justify-center gap-3">
+                      <div className="p-2 rounded-lg bg-green-500/20">
+                        {isSelectedVideo ? (
+                          <FileVideo size={24} className="text-green-400" />
+                        ) : (
+                          <FileAudio size={24} className="text-green-400" />
+                        )}
+                      </div>
+                      <div className="text-left flex-1 min-w-0">
+                        <p className="font-medium truncate" style={{ color: getWhite() }}>{file.name}</p>
+                        <p className="text-sm" style={{ color: getGrey400() }}>{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleClearFile() }}
+                        className="ui-press p-2 rounded-lg hover:bg-red-500/20 transition"
+                      >
+                        <X size={18} className="text-gray-400 hover:text-red-400" />
+                      </button>
                     </div>
-                    <div className="text-left flex-1 min-w-0">
-                      <p className="font-medium truncate" style={{ color: getWhite() }}>{file.name}</p>
-                      <p className="text-sm" style={{ color: getGrey400() }}>{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleClearFile() }}
-                      className="ui-press p-2 rounded-lg hover:bg-red-500/20 transition"
-                    >
-                      <X size={18} className="text-gray-400 hover:text-red-400" />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="p-3 rounded-full bg-white/5 inline-block mb-3">
-                      <Upload size={28} className={isDragging ? 'text-purple-400' : 'text-gray-400'} />
-                    </div>
-                    <p style={{ color: getWhite() }}>
-                      {isDragging ? 'Drop your media file here' : 'Drag & drop or click to select'}
-                    </p>
-                    <p className="mt-2 text-xs" style={{ color: getGrey400() }}>
-                      Audio preferred: {AUDIO_FORMATS.join(', ').toUpperCase()}
-                    </p>
-                    <p className="mt-1 text-xs" style={{ color: getGrey400() }}>
-                      Video accepted: {VIDEO_FORMATS.join(', ').toUpperCase()} | Audio max 100MB | Video max 10GB
-                    </p>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <div className="p-3 rounded-full bg-white/5 inline-block mb-3">
+                        <Upload size={28} className={isDragging ? 'text-purple-400' : 'text-gray-400'} />
+                      </div>
+                      <FadeSwap swapKey={isDragging ? 'drop' : 'pick'} preset={PRESETS.fade}>
+                        <p style={{ color: getWhite() }}>
+                          {isDragging ? 'Drop your media file here' : 'Drag & drop or click to select'}
+                        </p>
+                      </FadeSwap>
+                      <p className="mt-2 text-xs" style={{ color: getGrey400() }}>
+                        Audio preferred: {AUDIO_FORMATS.join(', ').toUpperCase()}
+                      </p>
+                      <p className="mt-1 text-xs" style={{ color: getGrey400() }}>
+                        Video accepted: {VIDEO_FORMATS.join(', ').toUpperCase()} | Audio max 100MB | Video max 10GB
+                      </p>
+                    </>
+                  )}
+                </FadeSwap>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -694,7 +699,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 </div>
               </div>
               <p className="mt-1.5 text-xs text-right" style={{ color: getGrey400() }}>{ENHANCE_HINT}</p>
-              {rightsConfirmed === false && (
+              <Fade show={rightsConfirmed === false}>
                 <label className="mt-2 flex items-center gap-2 py-1 cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -704,7 +709,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                   />
                   <span className="text-xs" style={{ color: getWhite() }}>{RIGHTS_LABEL}</span>
                 </label>
-              )}
+              </Fade>
             </ModalSection>
 
             {file && (
@@ -739,9 +744,9 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             {jobName && (
               <p className="mt-4 text-xs text-center truncate" style={{ color: getGrey400() }}>{jobName}</p>
             )}
-            {stage === UploadStage.ANALYZING && !cancelling && (
+            <Fade show={stage === UploadStage.ANALYZING && !cancelling}>
               <p className="mt-2 text-xs text-center" style={{ color: getGrey400() }}>{ANALYZING_HINT}</p>
-            )}
+            </Fade>
           </motion.div>
         )}
 
@@ -938,7 +943,9 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 <ModalCard>
                   <div className="flex items-center justify-between gap-2">
                     <FieldLabel>Artist</FieldLabel>
-                    {savingArtist && <Loader2 size={14} className="animate-spin" style={{ color: getGrey400() }} />}
+                    <Pop show={savingArtist} className="flex">
+                      <Loader2 size={14} className="animate-spin" style={{ color: getGrey400() }} />
+                    </Pop>
                   </div>
                   <div className="mt-1 flex items-center">
                     <ArtistChooser

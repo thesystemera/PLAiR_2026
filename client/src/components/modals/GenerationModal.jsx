@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { triggerHaptic } from '../../lib/haptics'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { Modal, ModalSection, ModalButton, ModalOptionButton, ModalTitle, ModalFooter } from './Modal'
+import { FadeSwap, Pop } from '../Motion'
+import { PRESETS } from '../../lib/motion'
 
 const ARTIST_COLORS = [
   { bg: '#8b5cf620', border: '#8b5cf6', text: '#a78bfa' },
@@ -138,15 +140,17 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
       )}
 
       <ModalFooter>
-        <div className="text-sm" style={{ color: getGrey400() }}>
-          {totalSelected > 0 ? `${totalSelected} job${totalSelected > 1 ? 's' : ''} selected` : 'Select at least one option'}
+        <div className="relative text-sm" style={{ color: getGrey400() }}>
+          <FadeSwap swapKey={totalSelected > 0 ? 'selected' : 'none'} preset={PRESETS.fade}>
+            {totalSelected > 0 ? `${totalSelected} job${totalSelected > 1 ? 's' : ''} selected` : 'Select at least one option'}
+          </FadeSwap>
         </div>
         <ModalButton
           onClick={handleGenerate}
           disabled={totalSelected === 0}
           variant="primary"
         >
-          Generate {totalSelected > 0 && `(${totalSelected})`}
+          Generate <Pop show={totalSelected > 0} className="inline-block">{`(${totalSelected})`}</Pop>
         </ModalButton>
       </ModalFooter>
     </Modal>

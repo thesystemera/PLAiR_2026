@@ -6,6 +6,7 @@ import { formatDuration } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
 import { MOTION, PRESETS, staggerDelay } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
+import { FadeSwap } from './Motion'
 
 export function useMediaGridColumns() {
   const { isMobile, isLandscape } = useViewport()
@@ -292,11 +293,13 @@ export const MediaCardPlayOverlay = memo(function MediaCardPlayOverlay({
         }}
         className={`ui-tap ui-hover ${BUTTON.card.play}`}
       >
-        {isPlaying ? (
-          <Pause fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
-        ) : (
-          <Play fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
-        )}
+        <FadeSwap swapKey={isPlaying ? 'pause' : 'play'} preset={PRESETS.iconSwap} mode="wait">
+          {isPlaying ? (
+            <Pause fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
+          ) : (
+            <Play fill="currentColor" className="w-5 h-5 md:w-6 md:h-6" />
+          )}
+        </FadeSwap>
       </button>
     </div>
   )

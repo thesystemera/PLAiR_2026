@@ -77,3 +77,20 @@ export function FadeSwap({ swapKey, children, className = '', mode = 'popLayout'
     </AnimatePresence>
   )
 }
+
+export function Fade({ show, children, as = 'div', preset = PRESETS.fade, layoutMode = 'sync', ...props }) {
+  const Element = motion[as]
+  return (
+    <AnimatePresence initial={false} mode={layoutMode}>
+      {show && (
+        <Element key="fade" {...preset} {...props}>
+          {children}
+        </Element>
+      )}
+    </AnimatePresence>
+  )
+}
+
+export function Pop(props) {
+  return <Fade as="span" preset={PRESETS.pop} {...props} />
+}

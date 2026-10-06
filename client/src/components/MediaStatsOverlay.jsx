@@ -3,6 +3,8 @@ import { motion } from 'framer-motion'
 import { Music, List, Clock } from 'lucide-react'
 import { useDynamicTheme, CATALOG_HEADER, TRANSITIONS, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
+import { Fade, FadeSwap } from './Motion'
+import { PRESETS } from '../lib/motion'
 
 export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = null, onBackToGenres = null, contentType = 'catalog' }) {
   const { getGrey400 } = useDynamicTheme()
@@ -64,7 +66,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                 <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.music}`}>
                   <Music className={CATALOG_HEADER.statIcon.size} />
                 </div>
-                <div>
+                <FadeSwap swapKey={stats.showing_genres ? 'genres' : stats.is_search_mode ? 'search' : 'total'} preset={PRESETS.fade}>
                   {stats.showing_genres ? (
                     <>
                       <div className={CATALOG_HEADER.statText.value}>
@@ -93,109 +95,103 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                       </div>
                     </>
                   )}
-                </div>
+                </FadeSwap>
               </div>
 
-              {stats.showing_genres && contentType === 'catalog' && stats.total_subgenre_count > 0 ? (
-                <div className="flex items-center gap-1.5 md:gap-2">
-                  <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.clock}`}>
-                    <List className={CATALOG_HEADER.statIcon.size} />
+              <Fade
+                show={!!stats.showing_genres && contentType === 'catalog' && stats.total_subgenre_count > 0}
+                layoutMode="popLayout"
+                className="flex items-center gap-1.5 md:gap-2"
+              >
+                <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.clock}`}>
+                  <List className={CATALOG_HEADER.statIcon.size} />
+                </div>
+                <div>
+                  <div className={CATALOG_HEADER.statText.value}>
+                    {stats.total_subgenre_count?.toLocaleString() || 0}
                   </div>
-                  <div>
-                    <div className={CATALOG_HEADER.statText.value}>
-                      {stats.total_subgenre_count?.toLocaleString() || 0}
-                    </div>
-                    <div className={CATALOG_HEADER.statText.label}>
-                      SubGenres
-                    </div>
+                  <div className={CATALOG_HEADER.statText.label}>
+                    SubGenres
                   </div>
                 </div>
-              ) : !stats.showing_genres && (
-                <div className="flex items-center gap-1.5 md:gap-2">
-                  <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.clock}`}>
-                    <Clock className={CATALOG_HEADER.statIcon.size} />
+              </Fade>
+              <Fade show={!stats.showing_genres} layoutMode="popLayout" className="flex items-center gap-1.5 md:gap-2">
+                <div className={`${CATALOG_HEADER.statIcon.base} ${CATALOG_HEADER.statIcon.clock}`}>
+                  <Clock className={CATALOG_HEADER.statIcon.size} />
+                </div>
+                <div>
+                  <div className={CATALOG_HEADER.statText.value}>
+                    {stats.total_duration_formatted || '0m'}
                   </div>
-                  <div>
-                    <div className={CATALOG_HEADER.statText.value}>
-                      {stats.total_duration_formatted || '0m'}
-                    </div>
-                    <div className={CATALOG_HEADER.statText.label}>
-                      Duration
-                    </div>
+                  <div className={CATALOG_HEADER.statText.label}>
+                    Duration
                   </div>
                 </div>
-              )}
+              </Fade>
             </div>
 
-            {!stats.is_search_mode && (
-              <div className="flex items-center gap-1.5 md:gap-2 ml-auto pointer-events-auto">
-                {selectedGenre && onBackToGenres ? (
+            <Fade show={!stats.is_search_mode} className="flex items-center gap-1.5 md:gap-2 ml-auto pointer-events-auto">
+              {selectedGenre && onBackToGenres ? (
+                <button
+                  onClick={onBackToGenres}
+                  className="ui-press flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors"
+                  title="Back to genres"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  <span>Back</span>
+                </button>
+              ) : (
+                <>
                   <button
-                    onClick={onBackToGenres}
-                    className="ui-press flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors"
-                    title="Back to genres"
+                    onClick={() => onSortChange('recent')}
+                    className={`ui-press p-2 rounded transition-colors ${sortMode === 'recent' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                    style={sortMode !== 'recent' ? { color: getGrey400() } : {}}
+                    title="Recent"
                   >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                    <span>Back</span>
+                    <RecentIcon className="w-5 h-5" />
                   </button>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => onSortChange('recent')}
-                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'recent' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
-                      style={sortMode !== 'recent' ? { color: getGrey400() } : {}}
-                      title="Recent"
-                    >
-                      <RecentIcon className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => onSortChange('alphabetical')}
-                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'alphabetical' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
-                      style={sortMode !== 'alphabetical' ? { color: getGrey400() } : {}}
-                      title="A-Z"
-                    >
-                      <AlphabeticalIcon className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => onSortChange('genre')}
-                      className={`ui-press p-2 rounded transition-colors ${sortMode === 'genre' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
-                      style={sortMode !== 'genre' ? { color: getGrey400() } : {}}
-                      title="Genre"
-                    >
-                      <GenreIcon className="w-5 h-5" />
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+                  <button
+                    onClick={() => onSortChange('alphabetical')}
+                    className={`ui-press p-2 rounded transition-colors ${sortMode === 'alphabetical' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                    style={sortMode !== 'alphabetical' ? { color: getGrey400() } : {}}
+                    title="A-Z"
+                  >
+                    <AlphabeticalIcon className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => onSortChange('genre')}
+                    className={`ui-press p-2 rounded transition-colors ${sortMode === 'genre' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                    style={sortMode !== 'genre' ? { color: getGrey400() } : {}}
+                    title="Genre"
+                  >
+                    <GenreIcon className="w-5 h-5" />
+                  </button>
+                </>
+              )}
+            </Fade>
           </div>
 
-          {stats.track_range && !stats.showing_genres && !stats.selected_genre && (
-            <div className={`${CATALOG_HEADER.statText.range} text-center`}>
-              {stats.track_range}
-            </div>
-          )}
+          <Fade
+            show={!!stats.track_range && !stats.showing_genres && !stats.selected_genre}
+            className={`${CATALOG_HEADER.statText.range} text-center`}
+          >
+            {stats.track_range}
+          </Fade>
 
-          {stats.selected_genre && (
-            <div className="text-center">
-              <div className={`${CATALOG_HEADER.statText.range} font-semibold`}>
-                {stats.selected_genre}
-              </div>
-              {stats.sub_genres && stats.sub_genres.length > 0 && (
-                <div className={`${CATALOG_HEADER.statText.detail} mt-0.5`}>
-                  {stats.sub_genres.join(' • ')}
-                </div>
-              )}
+          <Fade show={!!stats.selected_genre} className="text-center">
+            <div className={`${CATALOG_HEADER.statText.range} font-semibold`}>
+              {stats.selected_genre}
             </div>
-          )}
+            <Fade show={stats.sub_genres?.length > 0} className={`${CATALOG_HEADER.statText.detail} mt-0.5`}>
+              {stats.sub_genres?.join(' • ')}
+            </Fade>
+          </Fade>
 
-          {stats.is_search_mode && !stats.showing_genres && (
-            <div className={`${CATALOG_HEADER.statText.detail} text-center`}>
-              of {(contentType === 'shoutouts' ? stats.total_shoutouts : stats.total_tracks)?.toLocaleString() || 0} total {contentType === 'shoutouts' ? 'shouts' : 'tracks'}
-            </div>
-          )}
+          <Fade show={!!stats.is_search_mode && !stats.showing_genres} className={`${CATALOG_HEADER.statText.detail} text-center`}>
+            of {(contentType === 'shoutouts' ? stats.total_shoutouts : stats.total_tracks)?.toLocaleString() || 0} total {contentType === 'shoutouts' ? 'shouts' : 'tracks'}
+          </Fade>
         </div>
       </div>
     </motion.div>

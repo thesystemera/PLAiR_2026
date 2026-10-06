@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "check:ui-state": "node scripts/check-ui-state.mjs",
+    "check:motion": "node scripts/check-motion.mjs",
     "dead-code": "knip --no-progress",
-    "quality": "npm run lint && npm run check:ui-state && npm run dead-code && npm run build"
+    "quality": "npm run lint && npm run check:ui-state && npm run check:motion && npm run dead-code && npm run build"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^14.0.0",

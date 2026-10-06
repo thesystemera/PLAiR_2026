@@ -6,8 +6,8 @@ import { useNetwork, BITRATE_OPTIONS } from '../contexts/NetworkContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { X, Loader2, Activity } from 'lucide-react'
 import { GLASS } from '../lib/themeManager'
-import { CSS_TRANSITION } from '../lib/motion'
-import { Expandable } from './Motion'
+import { CSS_TRANSITION, PRESETS } from '../lib/motion'
+import { Expandable, Fade, FadeSwap, Pop } from './Motion'
 
 export function useBitratePicker(onReloadTrackQuality) {
   const { isAuthenticated } = useAuth()
@@ -180,7 +180,9 @@ export const BitratePickerButton = memo(function BitratePickerButton({
       }}
       title={dataSaverMode ? "Data Saver Mode - 128k" : "Click to change audio quality"}
     >
-      {displayLabel}
+      <FadeSwap swapKey={displayLabel} preset={PRESETS.fade} mode="wait">
+        {displayLabel}
+      </FadeSwap>
     </button>
   )
 })
@@ -218,25 +220,23 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
               </button>
             </div>
 
-            {dataSaverMode && (
-              <div className="mb-3 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-200/90">
-                <span className="font-medium">🌿 Data Saver Mode:</span> Streaming locked to 128k, preferring cached tracks. Turn off in Settings to change quality.
-              </div>
-            )}
+            <Fade show={!!dataSaverMode} className="mb-3 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-200/90">
+              <span className="font-medium">🌿 Data Saver Mode:</span> Streaming locked to 128k, preferring cached tracks. Turn off in Settings to change quality.
+            </Fade>
 
-            {currentBitrate === 'auto' && !dataSaverMode && (
-              <div className="mb-3 p-3 rounded-lg bg-white/5 border border-white/10">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Activity size={16} className={isOnline ? "text-blue-400" : "text-red-400"} />
-                    <span className="text-sm font-medium text-white">Network Status</span>
-                  </div>
-                  {isOnline && (
-                    <button
-                      onClick={detectQuality}
-                      disabled={detecting}
-                      className="ui-press text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition disabled:opacity-50"
-                    >
+            <Fade show={currentBitrate === 'auto' && !dataSaverMode} className="mb-3 p-3 rounded-lg bg-white/5 border border-white/10">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Activity size={16} className={isOnline ? "text-blue-400" : "text-red-400"} />
+                  <span className="text-sm font-medium text-white">Network Status</span>
+                </div>
+                <Pop show={!!isOnline} className="flex">
+                  <button
+                    onClick={detectQuality}
+                    disabled={detecting}
+                    className="ui-press text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition disabled:opacity-50"
+                  >
+                    <FadeSwap swapKey={detecting ? 'detecting' : 'idle'} preset={PRESETS.fade} mode="wait">
                       {detecting ? (
                         <span className="flex items-center gap-1">
                           <Loader2 size={12} className="animate-spin" />
@@ -245,9 +245,11 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                       ) : (
                         'Re-detect'
                       )}
-                    </button>
-                  )}
-                </div>
+                    </FadeSwap>
+                  </button>
+                </Pop>
+              </div>
+              <FadeSwap swapKey={!isOnline ? 'offline' : networkQuality ? 'quality' : 'detecting'} preset={PRESETS.fade}>
                 {!isOnline ? (
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-white/60">
@@ -268,8 +270,8 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                 ) : (
                   <div className="text-xs text-white/40">Detecting network quality...</div>
                 )}
-              </div>
-            )}
+              </FadeSwap>
+            </Fade>
 
             {!isAuthenticated && (
               <div className="mb-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-200/90">
@@ -283,6 +285,7 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                 const isEffective = bitrate === effectiveBitrate && currentBitrate === 'auto'
                 const isLocked = !isAuthenticated && bitrate === '256k'
                 const isGuestDisabled = !isAuthenticated && bitrate !== currentBitrate
+                const badge = isSelected ? 'selected' : isEffective ? 'inuse' : null
 
                 return (
                   <div
@@ -306,16 +309,19 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
                       <div className="text-2xl w-8 h-8 flex items-center justify-center flex-shrink-0">
                         {isLocked ? '🔒' : getBitrateIcon(bitrate)}
                       </div>
-                      {isSelected && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500 text-white font-medium whitespace-nowrap">
-                          Selected
-                        </span>
-                      )}
-                      {isEffective && !isSelected && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/50 text-white font-medium whitespace-nowrap">
-                          In use
-                        </span>
-                      )}
+                      <Pop show={!!badge} className="flex">
+                        <FadeSwap swapKey={badge} preset={PRESETS.badgeSwap} mode="wait" className="flex">
+                          {badge === 'selected' ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500 text-white font-medium whitespace-nowrap">
+                              Selected
+                            </span>
+                          ) : (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/50 text-white font-medium whitespace-nowrap">
+                              In use
+                            </span>
+                          )}
+                        </FadeSwap>
+                      </Pop>
                     </div>
                     <div className="flex-1">
                       <div className="text-sm font-medium text-white mb-1">
@@ -331,12 +337,10 @@ export const BitratePickerPanel = memo(function BitratePickerPanel({
               })}
             </div>
 
-            {actionLoading && (
-              <div className="mt-3 p-2 bg-white/5 rounded-lg flex items-center justify-center gap-2 text-sm text-white/70">
-                <Loader2 size={16} className="animate-spin" />
-                Applying settings...
-              </div>
-            )}
+            <Fade show={!!actionLoading} className="mt-3 p-2 bg-white/5 rounded-lg flex items-center justify-center gap-2 text-sm text-white/70">
+              <Loader2 size={16} className="animate-spin" />
+              Applying settings...
+            </Fade>
           </div>
     </Expandable>
   )

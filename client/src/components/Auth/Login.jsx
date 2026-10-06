@@ -6,7 +6,7 @@ import { motion } from 'framer-motion'
 import { GLASS } from '../../lib/themeManager'
 import { PRESETS } from '../../lib/motion'
 import { passkeyCancelled, passkeysSupported, prefetchPasskeyLogin } from '../../lib/passkeys'
-import { Expandable } from '../Motion'
+import { Expandable, Fade, FadeSwap } from '../Motion'
 import DeviceLinkQR from './DeviceLinkQR'
 import './auth-background.css'
 
@@ -85,76 +85,84 @@ export default function Login({ onClose, onSwitchToRegister }) {
           <h2 className="text-2xl font-bold">Sign in</h2>
         </div>
 
-        {mode === 'qr' ? (
-          <div className="space-y-4">
-            <DeviceLinkQR onApproved={handleLinked} />
-            <button type="button" onClick={() => setMode('choose')} className="ui-press w-full text-sm text-zinc-400 hover:text-white">Back</button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {canPasskey && (
-              <>
-                <button
-                  type="button"
-                  onClick={handlePasskey}
-                  disabled={loading}
-                  className="ui-press-soft w-full py-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {loading && mode !== 'password' ? <Loader2 size={20} className="animate-spin" /> : <Fingerprint size={20} />}
-                  Sign in with passkey
-                </button>
-                <p className="text-xs text-zinc-500 text-center -mt-1">Windows Hello, Face ID, fingerprint or your phone</p>
-                <button type="button" onClick={() => setMode('qr')} className={SECONDARY_BUTTON}>
-                  <QrCode size={20} /> Scan from a signed-in phone
-                </button>
-                {mode !== 'password' && (
-                  <button type="button" onClick={() => setMode('password')} className="ui-press w-full flex items-center justify-center gap-2 text-sm text-zinc-400 hover:text-white pt-1">
-                    <KeyRound size={14} /> Use a password
+        <FadeSwap swapKey={mode === 'qr' ? 'qr' : 'sign-in'} preset={PRESETS.fade} mode="wait">
+          {mode === 'qr' ? (
+            <div className="space-y-4">
+              <DeviceLinkQR onApproved={handleLinked} />
+              <button type="button" onClick={() => setMode('choose')} className="ui-press w-full text-sm text-zinc-400 hover:text-white">Back</button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {canPasskey && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handlePasskey}
+                    disabled={loading}
+                    className="ui-press-soft w-full py-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <FadeSwap swapKey={loading && mode !== 'password' ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait">
+                      {loading && mode !== 'password' ? <Loader2 size={20} className="animate-spin" /> : <Fingerprint size={20} />}
+                    </FadeSwap>
+                    Sign in with passkey
                   </button>
-                )}
-              </>
-            )}
-
-            <Expandable open={mode === 'password'} innerClassName={canPasskey ? 'pt-3' : ''}>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm mb-2">Username</label>
-                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className={INPUT_CLASS} required autoComplete="username" />
-                </div>
-                <div>
-                  <label className="block text-sm mb-2">Password</label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className={`${INPUT_CLASS} pr-12`}
-                      required
-                      autoComplete="current-password"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  <p className="text-xs text-zinc-500 text-center -mt-1">Windows Hello, Face ID, fingerprint or your phone</p>
+                  <button type="button" onClick={() => setMode('qr')} className={SECONDARY_BUTTON}>
+                    <QrCode size={20} /> Scan from a signed-in phone
+                  </button>
+                  <Fade show={mode !== 'password'}>
+                    <button type="button" onClick={() => setMode('password')} className="ui-press w-full flex items-center justify-center gap-2 text-sm text-zinc-400 hover:text-white pt-1">
+                      <KeyRound size={14} /> Use a password
                     </button>
-                  </div>
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className={canPasskey ? `${SECONDARY_BUTTON} disabled:opacity-50` : 'ui-press-soft w-full py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg disabled:opacity-50'}
-                >
-                  {loading ? 'Signing in...' : 'Sign in'}
-                </button>
-              </form>
-            </Expandable>
+                  </Fade>
+                </>
+              )}
 
-            {error && <div className="text-red-500 text-sm">{error}</div>}
-          </div>
-        )}
+              <Expandable open={mode === 'password'} innerClassName={canPasskey ? 'pt-3' : ''}>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm mb-2">Username</label>
+                    <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className={INPUT_CLASS} required autoComplete="username" />
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-2">Password</label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className={`${INPUT_CLASS} pr-12`}
+                        required
+                        autoComplete="current-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="ui-press absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white transition-colors"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        <FadeSwap swapKey={showPassword ? 'hide' : 'show'} preset={PRESETS.iconSwap} mode="wait">
+                          {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                        </FadeSwap>
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className={canPasskey ? `${SECONDARY_BUTTON} disabled:opacity-50` : 'ui-press-soft w-full py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg disabled:opacity-50'}
+                  >
+                    <FadeSwap swapKey={loading ? 'busy' : 'idle'} preset={PRESETS.fade} mode="wait">
+                      {loading ? 'Signing in...' : 'Sign in'}
+                    </FadeSwap>
+                  </button>
+                </form>
+              </Expandable>
+
+              <Fade show={!!error} className="text-red-500 text-sm">{error}</Fade>
+            </div>
+          )}
+        </FadeSwap>
 
         <p className="mt-6 text-sm text-zinc-400 text-center">
           New to PLAiR?{' '}

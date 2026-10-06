@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw, ArrowUpDown } from 'lucide-react'
 import { Modal, ModalSection, ModalCard, ModalErrorState } from './Modal'
-import { Expandable } from '../Motion'
+import { Expandable, Fade, FadeSwap } from '../Motion'
+import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
 import { formatUsd, formatCount, formatDuration } from '../../lib/usageFormat'
 import { InlineNote } from '../Notice'
@@ -96,13 +97,19 @@ const SubjectDetail = memo(function SubjectDetail({ subjectKey, period }) {
     return () => { cancelled = true }
   }, [subjectKey, period])
 
-  if (error) return <InlineNote tone="error" className="py-2">{error}</InlineNote>
-  if (!detail) return <div className="py-3 flex justify-center"><Loader2 size={16} className="animate-spin text-gray-400" /></div>
   return (
-    <div className="py-2 space-y-2">
-      <DailyChart data={detail.daily} height={56} />
-      <BreakdownTable rows={detail.features} nameKey="feature" limit={8} />
-    </div>
+    <FadeSwap swapKey={error ? 'error' : detail ? 'detail' : 'loading'} mode="wait" preset={PRESETS.fade}>
+      {error ? (
+        <InlineNote tone="error" className="py-2">{error}</InlineNote>
+      ) : !detail ? (
+        <div className="py-3 flex justify-center"><Loader2 size={16} className="animate-spin text-gray-400" /></div>
+      ) : (
+        <div className="py-2 space-y-2">
+          <DailyChart data={detail.daily} height={56} />
+          <BreakdownTable rows={detail.features} nameKey="feature" limit={8} />
+        </div>
+      )}
+    </FadeSwap>
   )
 })
 
@@ -343,14 +350,20 @@ export function UsageStatsModal({ isOpen, onClose, isAdmin }) {
               </button>
             ))}
           </div>
-          <button onClick={() => setReloadKey(k => k + 1)} className="ui-press p-1.5 rounded bg-white/5 text-gray-400" aria-label="Refresh">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          <button onClick={() => setReloadKey(k => k + 1)} className="ui-press relative p-1.5 rounded bg-white/5 text-gray-400" aria-label="Refresh">
+            <FadeSwap swapKey={loading ? 'loading' : 'idle'} preset={PRESETS.iconSwap}>
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            </FadeSwap>
           </button>
         </div>
       </ModalSection>
 
-      {error && !data && <ModalErrorState title="Could not load usage" message={error} onRetry={() => setReloadKey(k => k + 1)} />}
-      {!data && !error && <div className="py-10 flex justify-center"><Loader2 size={24} className="animate-spin text-gray-400" /></div>}
+      <Fade show={!!error && !data} layoutMode="popLayout">
+        <ModalErrorState title="Could not load usage" message={error} onRetry={() => setReloadKey(k => k + 1)} />
+      </Fade>
+      <Fade show={!data && !error} layoutMode="popLayout" className="py-10 flex justify-center">
+        <Loader2 size={24} className="animate-spin text-gray-400" />
+      </Fade>
       {data && isAdmin && data.summary && data.users && (
         <>
           <AdminView summary={data.summary} users={data.users} period={period} />

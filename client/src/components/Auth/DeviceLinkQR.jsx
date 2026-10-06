@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
+import { PRESETS } from '../../lib/motion'
+import { Fade, FadeSwap } from '../Motion'
 
 const POLL_MS = 2000
 
@@ -62,34 +64,36 @@ export default function DeviceLinkQR({ onApproved }) {
     }
   }, [link, expired])
 
-  if (error) {
-    return (
-      <div className="text-center space-y-3 py-4">
-        <p className="text-sm text-red-400">{error}</p>
-        <button type="button" onClick={start} className="ui-press text-sm text-amber-400 hover:underline">Try again</button>
-      </div>
-    )
-  }
-
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className="relative w-52 h-52 rounded-xl bg-white p-2 flex items-center justify-center">
-        {qr ? (
-          <img src={qr} alt="Sign-in QR code" className={`w-full h-full ${expired ? 'opacity-15' : ''}`} />
-        ) : (
-          <Loader2 size={28} className="animate-spin text-zinc-400" />
-        )}
-        {expired && (
-          <button type="button" onClick={start} className="ui-press absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-900 font-semibold">
-            <RefreshCw size={24} />
-            New code
-          </button>
-        )}
-      </div>
-      {link && !expired && <div className="font-mono text-xl tracking-[0.3em] text-zinc-100">{formatCode(link.code)}</div>}
-      <p className="text-sm text-zinc-400 text-center max-w-xs">
-        Scan with your phone&apos;s camera where you&apos;re already signed in to PLAiR, or enter the code in Account → Sign in another device.
-      </p>
-    </div>
+    <FadeSwap swapKey={error ? 'error' : 'code'} preset={PRESETS.fade} mode="wait">
+      {error ? (
+        <div className="text-center space-y-3 py-4">
+          <p className="text-sm text-red-400">{error}</p>
+          <button type="button" onClick={start} className="ui-press text-sm text-amber-400 hover:underline">Try again</button>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-3">
+          <div className="relative w-52 h-52 rounded-xl bg-white p-2 flex items-center justify-center">
+            <FadeSwap swapKey={qr ? 'qr' : 'loading'} preset={PRESETS.fade} className="w-full h-full flex items-center justify-center">
+              {qr ? (
+                <img src={qr} alt="Sign-in QR code" className={`w-full h-full ${expired ? 'opacity-15' : ''}`} />
+              ) : (
+                <Loader2 size={28} className="animate-spin text-zinc-400" />
+              )}
+            </FadeSwap>
+            <Fade show={expired} className="absolute inset-0 flex">
+              <button type="button" onClick={start} className="ui-press flex-1 flex flex-col items-center justify-center gap-2 text-zinc-900 font-semibold">
+                <RefreshCw size={24} />
+                New code
+              </button>
+            </Fade>
+          </div>
+          <Fade show={!!link && !expired} className="font-mono text-xl tracking-[0.3em] text-zinc-100">{formatCode(link?.code)}</Fade>
+          <p className="text-sm text-zinc-400 text-center max-w-xs">
+            Scan with your phone&apos;s camera where you&apos;re already signed in to PLAiR, or enter the code in Account → Sign in another device.
+          </p>
+        </div>
+      )}
+    </FadeSwap>
   )
 }

@@ -9,7 +9,8 @@ import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from 
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
-import { MOTION, PRESETS, VARIANTS } from '../lib/motion'
+import { Pop } from './Motion'
+import { MOTION, VARIANTS } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
 
 export const MediaSearch = memo(function MediaSearch({
@@ -213,22 +214,18 @@ export const MediaSearch = memo(function MediaSearch({
               )(intentMeta.icon)}
             </AnimatePresence>
 
-            <AnimatePresence initial={false}>
-              {(searching || query) && !isGenerating && (
-                <motion.button
-                  key="clear"
-                  {...PRESETS.fade}
-                  type="button"
-                  onMouseDown={keepSearchFocus}
-                  onClick={handleClear}
-                  aria-label="Close search"
-                  title="Close search"
-                  className="ui-press text-gray-400 hover:text-white transition-colors"
-                >
-                  <X size={16} />
-                </motion.button>
-              )}
-            </AnimatePresence>
+            <Pop show={(searching || !!query) && !isGenerating} className="flex">
+              <button
+                type="button"
+                onMouseDown={keepSearchFocus}
+                onClick={handleClear}
+                aria-label="Close search"
+                title="Close search"
+                className="ui-press text-gray-400 hover:text-white transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </Pop>
           </div>
         </div>
 
