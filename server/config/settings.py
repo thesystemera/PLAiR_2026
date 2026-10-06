@@ -602,7 +602,7 @@ class Settings:
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
-    MASTER_CHAIN_VERSION: int = 4
+    MASTER_CHAIN_VERSION: int = 5
     LYRIC_STYLE_VERSION: int = int(os.getenv("LYRIC_STYLE_VERSION", "1"))
     LYRIC_STYLE_MAX_TOKENS: int = int(os.getenv("LYRIC_STYLE_MAX_TOKENS", "16000"))
     LYRIC_STYLE_TIMEOUT_S: float = float(os.getenv("LYRIC_STYLE_TIMEOUT_S", "300"))
@@ -613,8 +613,8 @@ class Settings:
     SONIC_MASTER_PARK_ON_CPU: bool = os.getenv("SONIC_MASTER_PARK_ON_CPU", "true").lower() == "true"
     SONIC_MASTER_VAE_TILE_S: float = float(os.getenv("SONIC_MASTER_VAE_TILE_S", "10"))
     SONIC_MASTER_VAE_MARGIN_S: float = float(os.getenv("SONIC_MASTER_VAE_MARGIN_S", "2"))
-    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "20"))
-    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, with depth and separation between left and right, and let the audio breathe more and improve the dynamics")
+    SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "40"))
+    SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, clean and dynamic with rich full harmonics")
     SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
     SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "false").lower() == "true"
     SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "true").lower() == "true"

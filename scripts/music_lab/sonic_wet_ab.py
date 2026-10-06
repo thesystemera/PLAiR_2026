@@ -10,7 +10,7 @@ from config import settings  # noqa: E402
 from services.audio_headroom import spectrally_balanced_blend, write_float_wav  # noqa: E402
 import decoder_lock  # noqa: E402
 
-OUT = Path(r"E:\AI_RADIO\upscale_ab\sonic_wet"); OUT.mkdir(parents=True, exist_ok=True)
+OUT = Path(os.environ.get("SONIC_AB_OUT", r"E:\AI_RADIO\upscale_ab\sonic_wet")); OUT.mkdir(parents=True, exist_ok=True)
 BANDS = ((60, 250), (250, 1000), (1000, 4000), (4000, 8000), (8000, 12000), (12000, 16000))
 
 
@@ -39,11 +39,11 @@ def quiet_db(x, r):
     return float(np.percentile(db[db > -70], 10))
 
 
-async def main(ids, prompt, wets, tag):
+async def main(ids, prompt, wets, tag, steps, order):
     from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
     from services.audio_master_service import AudioMasterService
     sonic = SonicMasterService()
-    sonic.configure(**{**SUNO_SONIC_SETTINGS, "wet_mix": 1.0, **({"prompt": prompt} if prompt else {})})
+    sonic.configure(**{**SUNO_SONIC_SETTINGS, "wet_mix": 1.0, **({"prompt": prompt} if prompt else {}), **({"num_inference_steps": steps} if steps else {})})
     await sonic.initialize()
     master = AudioMasterService()
     rows = []
@@ -62,14 +62,14 @@ async def main(ids, prompt, wets, tag):
         wet, dry = wet[:n].T, dry[:n].T
         suno_wav = OUT / f"_{tid}_suno.wav"
         os.system(f'ffmpeg -loglevel error -y -i "{settings.CATALOG_DIR / "mp3" / (tid + ".mp3")}" -ar 44100 -c:a pcm_f32le "{suno_wav}"')
-        files = [(f"{name}_0_Suno_raw.flac", suno_wav)]
+        files = [(f"{name}_0_Suno_raw.flac", suno_wav)] if not order or order == 1 else []
         for i, w in enumerate(wets, 1):
             blended, _ = spectrally_balanced_blend(wet, dry, w, r, max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0)
             mix = OUT / f"_{tid}_{int(w * 100)}.wav"
             write_float_wav(mix, blended, r)
             done = OUT / f"_{tid}_{int(w * 100)}_master.wav"
             await master.master_audio_with_report(mix, done, target_lufs=-16.0, correct=False, tone=True, hiss=True)
-            label = f"{i}_{tag}_SonicMaster_{int(w * 100)}"
+            label = f"{order or i}_{tag}" if order else f"{i}_{tag}_SonicMaster_{int(w * 100)}"
             files.append((f"{name}_{label}.flac", done))
             mix.unlink()
         for fname, src in files:
@@ -79,12 +79,15 @@ async def main(ids, prompt, wets, tag):
             rows.append((fname, band_db(y, rr), quiet_db(y, rr), decoder_lock.score(OUT / fname)))
         for _, src in files:
             Path(src).unlink(missing_ok=True)
+        suno_wav.unlink(missing_ok=True)
     ref = {}
     print("%-50s" % "file (bands dB vs Suno raw)" + "".join("%9s" % f"{lo // 1000 if lo >= 1000 else lo}-{hi // 1000}k" for lo, hi in BANDS) + "  quiet10%  lock   12-17k ripple")
     for fname, bands, quiet, lk in rows:
         song = fname.split("_0_")[0] if "_0_" in fname else None
         if song:
             ref = {"bands": bands, "quiet": quiet}
+        elif not ref:
+            ref = {"bands": [0.0] * len(bands), "quiet": 0.0}
         print("%-50s" % fname[:50] + "".join("%9.1f" % (b - a) for a, b in zip(ref["bands"], bands)) +
               "%9.1f" % (quiet - ref["quiet"]) + "  %.3f" % lk.get("lock", float("nan")) + "  %5.1f%%" % lk.get("ripple_12_17", float("nan")))
 
@@ -93,5 +96,7 @@ parser.add_argument("ids", nargs="+")
 parser.add_argument("--prompt", default=None, help="SonicMaster prompt (default: the production prompt)")
 parser.add_argument("--wets", default="0.33,0.5,1.0")
 parser.add_argument("--tag", default="current")
+parser.add_argument("--steps", type=int, default=0, help="SonicMaster steps (default: the production setting)")
+parser.add_argument("--order", type=int, default=0, help="File number for a single-level run (1 also writes raw Suno)")
 a = parser.parse_args()
-asyncio.run(main(a.ids, a.prompt, [float(w) for w in a.wets.split(",")], a.tag))
+asyncio.run(main(a.ids, a.prompt, [float(w) for w in a.wets.split(",")], a.tag, a.steps, a.order))
