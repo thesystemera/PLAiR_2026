@@ -20,7 +20,7 @@ import { formatDateShort } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
 import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
-import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
 import { ProfileArt } from './DepthArt'
 
 const hideBrokenImage = (e) => { e.target.style.display = 'none' }
@@ -125,7 +125,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
       <div className="aspect-square bg-gradient-to-br from-purple-500/20 to-blue-500/20 rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-purple-600/30 to-blue-600/30" />
 
-        {isPlaying && <MediaPlayingOverlay />}
+        <MediaPlayingOverlay active={isPlaying} />
 
         <div className="absolute inset-0 w-full h-full bg-purple-600 flex items-center justify-center text-white text-5xl md:text-6xl font-bold">
           {getUserInitial()}
@@ -175,7 +175,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
             </div>
           )}
           <MediaCardCategoryBadge category={metadata.category} position="bottom-right" />
-          {isPlaying && <MediaStatusBadge variant="playing" />}
+          <MediaStatusSlot status={isPlaying ? 'playing' : null} />
         </div>
       </div>
 

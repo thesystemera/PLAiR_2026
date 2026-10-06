@@ -100,13 +100,41 @@ export const MediaOfflineState = memo(function MediaOfflineState({ icon, title, 
   )
 })
 
-export const MediaPlayingOverlay = memo(function MediaPlayingOverlay() {
+export const MediaPlayingOverlay = memo(function MediaPlayingOverlay({ active }) {
   return (
-    <motion.div
-      className="absolute inset-0 bg-gradient-to-br from-purple-600/50 to-blue-600/50 z-10"
-      animate={{ opacity: [0.3, 0.5, 0.3] }}
-      transition={MOTION.shimmer}
-    />
+    <AnimatePresence initial={false}>
+      {active && (
+        <motion.div key="playing" className="absolute inset-0 z-10 pointer-events-none" {...PRESETS.fadeSlow}>
+          <motion.div
+            className="absolute inset-0 bg-gradient-to-br from-purple-600/50 to-blue-600/50"
+            animate={{ opacity: [0.3, 0.5, 0.3] }}
+            transition={MOTION.shimmer}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+})
+
+export const MediaStatusSlot = memo(function MediaStatusSlot({ status, className = '' }) {
+  return (
+    <AnimatePresence initial={false}>
+      {status && (
+        <motion.div key={status} className={className} {...PRESETS.fade}>
+          {status === 'loading' ? (
+            <div className="px-2 py-1">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={MOTION.spin}
+                className="w-4 h-4 md:w-5 md:h-5 border-2 border-purple-500 border-t-transparent rounded-full"
+              />
+            </div>
+          ) : (
+            <MediaStatusBadge variant={status} />
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 })
 

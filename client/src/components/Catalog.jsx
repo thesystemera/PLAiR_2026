@@ -1,5 +1,4 @@
 import { ListPlus } from 'lucide-react'
-import { motion } from 'framer-motion'
 import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { formatDateShort } from '../lib/utils'
 import { FALLBACK_GRADIENTS, CARD_TRANSITION } from '../lib/themeManager'
@@ -19,10 +18,9 @@ import { logger } from '../lib/logger'
 import { retryableAPICall } from '../lib/retryUtils'
 import { useVirtualWindow } from '../hooks/useVirtualWindow'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
-import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata, useMediaGridColumns, isCardEntering } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaPlayingOverlay, MediaStatusBadge, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, MediaCardDurationBar, MediaCardActionButton, MediaCardTags, MediaCardMetadata, useMediaGridColumns, isCardEntering } from './MediaShared'
 import { useArtPop } from '../hooks/useArtPop'
 import { useViewport } from '../contexts/ViewportContext'
-import { MOTION } from '../lib/motion'
 import { FadeSwap } from './Motion'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
 import { TrackArt } from './DepthArt'
@@ -154,7 +152,7 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
           alt={params.title || 'Track artwork'}
           onLoad={onArtLoad}
         />
-        {isPlaying && <MediaPlayingOverlay />}
+        <MediaPlayingOverlay active={isPlaying} />
 
         <div className="absolute left-2 z-20 top-2">
           <MediaActions type="track" itemId={track.id} compact />
@@ -178,25 +176,10 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
 
         <MediaCardDurationBar duration={trackInfo.duration || 0} />
 
-        {isLoading && !isPlaying && (
-          <div className="absolute bottom-2 right-2 px-2 py-1 z-40">
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={MOTION.spin}
-              className="w-4 h-4 md:w-5 md:h-5 border-2 border-purple-500 border-t-transparent rounded-full"
-            />
-          </div>
-        )}
-        {isPlaying && (
-          <div className="absolute bottom-2 right-2 z-30">
-            <MediaStatusBadge variant="playing" />
-          </div>
-        )}
-        {!isPlaying && isQueued && (
-          <div className="absolute bottom-2 right-2 z-30">
-            <MediaStatusBadge variant="queued" />
-          </div>
-        )}
+        <MediaStatusSlot
+          className="absolute bottom-2 right-2 z-30"
+          status={isPlaying ? 'playing' : isLoading ? 'loading' : isQueued ? 'queued' : null}
+        />
       </div>
 
       <MediaSearchMatchBadge

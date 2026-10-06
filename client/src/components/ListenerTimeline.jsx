@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { History, LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { PRESETS } from '../lib/motion'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { Expandable, ExpandChevron } from './Motion'
+import { Expandable, ExpandChevron, FadeSwap } from './Motion'
 import { MediaEmptyState, MediaOfflineState } from './MediaShared'
 
 const TIMELINE_HOURS = 24
@@ -75,7 +77,9 @@ const TimelineRow = memo(function TimelineRow({ entry }) {
   }, [expandable, detail, entry.id])
 
   return (
-    <li
+    <motion.li
+      layout="position"
+      {...PRESETS.fade}
       className={`flex gap-3 py-2 border-b border-white/5 ${expandable ? 'cursor-pointer' : ''}`}
       onClick={toggle}
       role={expandable ? 'button' : undefined}
@@ -101,7 +105,7 @@ const TimelineRow = memo(function TimelineRow({ entry }) {
           </Expandable>
         )}
       </div>
-    </li>
+    </motion.li>
   )
 })
 
@@ -136,27 +140,27 @@ export function ListenerTimeline({ kind = 'all' }) {
     if (!offlineMode) load()
   }, [load, offlineMode]))
 
-  if (offlineMode) {
-    return <MediaOfflineState icon={History} title="The timeline needs a connection" compact />
-  }
-  if (!data) {
-    return failed
-      ? <MediaEmptyState icon={History} title="Couldn't load the timeline" subtitle="It'll try again in a moment." compact />
-      : <MediaEmptyState icon={History} title="Loading the timeline" subtitle="" compact />
-  }
-  if (!data.entries?.length) {
-    const what = kind === 'all' ? 'Nothing has' : `No ${KIND_META[kind]?.plural || 'entries'} have`
-    return <MediaEmptyState icon={History} title={`${what} aired for you yet`} subtitle={`The timeline covers the last ${TIMELINE_HOURS} hours.`} compact />
-  }
+  const state = offlineMode ? 'offline' : !data ? (failed ? 'failed' : 'loading') : data.entries?.length ? 'entries' : 'empty'
+  const what = kind === 'all' ? 'Nothing has' : `No ${KIND_META[kind]?.plural || 'entries'} have`
   return (
-    <div className="pb-4">
-      <p className="pb-1 text-xs text-gray-500">Everything that aired for you in the last {data.hours} hours, newest first.</p>
-      <ul>
-        {data.entries.map(entry => <TimelineRow key={entry.id} entry={entry} />)}
-      </ul>
-      {data.not_shown > 0 && (
-        <p className="pt-2 text-center text-xs text-gray-500">{data.not_shown} older entries not shown.</p>
+    <FadeSwap swapKey={state} preset={PRESETS.fade}>
+      {state === 'offline' && <MediaOfflineState icon={History} title="The timeline needs a connection" compact />}
+      {state === 'failed' && <MediaEmptyState icon={History} title="Couldn't load the timeline" subtitle="It'll try again in a moment." compact />}
+      {state === 'loading' && <MediaEmptyState icon={History} title="Loading the timeline" subtitle="" compact />}
+      {state === 'empty' && <MediaEmptyState icon={History} title={`${what} aired for you yet`} subtitle={`The timeline covers the last ${TIMELINE_HOURS} hours.`} compact />}
+      {state === 'entries' && (
+        <div className="pb-4">
+          <p className="pb-1 text-xs text-gray-500">Everything that aired for you in the last {data.hours} hours, newest first.</p>
+          <ul>
+            <AnimatePresence initial={false}>
+              {data.entries.map(entry => <TimelineRow key={entry.id} entry={entry} />)}
+            </AnimatePresence>
+          </ul>
+          {data.not_shown > 0 && (
+            <p className="pt-2 text-center text-xs text-gray-500">{data.not_shown} older entries not shown.</p>
+          )}
+        </div>
       )}
-    </div>
+    </FadeSwap>
   )
 }

@@ -11,7 +11,7 @@ import { DURATION, MOTION, PRESETS, SPRING, TWEEN } from '../../lib/motion'
 import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
 import { MODAL_CLOSE_PAUSE_MS, MODAL_OPEN_PAUSE_MS } from '../../lib/renderPause'
-import { TrackArt } from '../DepthArt'
+import { TrackArtCrossfade } from '../DepthArt'
 
 const MODAL_BACKDROP_SAFE_STYLE = {
   backgroundColor: 'rgba(0,0,0,0.75)',
@@ -229,7 +229,7 @@ const BlurredArtworkBackground = memo(function BlurredArtworkBackground({ trackI
         transition={MOTION.settle}
         className="absolute inset-0 overflow-hidden"
       >
-        <TrackArt trackId={trackId} alt="" className="absolute inset-0" />
+        <TrackArtCrossfade trackId={trackId} alt="" />
         <div className="absolute inset-0" style={ARTWORK_DIM_OVERLAY} />
       </motion.div>
 
@@ -434,6 +434,7 @@ export function Modal({
                 >
                   {blurs?.heavy && (
                     <div
+                      key={blurs.heavy}
                       className="ui-layer-in absolute inset-0 pointer-events-none"
                       style={{
                         backgroundImage: `url(${blurs.heavy})`,
@@ -491,6 +492,7 @@ export function Modal({
                 >
                   {blurs?.light && (
                     <div
+                      key={blurs.light}
                       className="ui-layer-in absolute inset-0 pointer-events-none"
                       style={{
                         backgroundImage: `url(${blurs.light})`,
@@ -670,6 +672,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
     >
       {blurs?.medium && (
         <div
+          key={blurs.medium}
           className="ui-layer-in absolute inset-0 pointer-events-none"
           style={{
             backgroundImage: `url(${blurs.medium})`,

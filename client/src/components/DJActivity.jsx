@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Ban, BookOpen, Brain, Check, CircleSlash, ClipboardCheck, CloudSun, Cpu, Disc3, FileText, Heart, History, Loader2, MapPin, Megaphone, MonitorSmartphone, Music,
   Newspaper, Radio, Save, Search, SlidersHorizontal, SkipForward, Ticket, TrendingUp, User, Wrench, X
@@ -7,7 +7,7 @@ import {
 import { useUISelector } from '../contexts/UIStateContext'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
-import { TWEEN } from '../lib/motion'
+import { PRESETS, TWEEN } from '../lib/motion'
 import { Expandable } from './Motion'
 
 const LINGER_MS = 2600
@@ -114,8 +114,9 @@ export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = fal
       whileHover={full ? undefined : { opacity: 1 }}
       className={`border ${source.bubble} max-w-[80%] w-fit overflow-hidden ${running ? '' : 'cursor-pointer'} ${full ? 'p-3 rounded-lg' : 'px-3 py-1 rounded-full'}`}
     >
+      <AnimatePresence initial={false} mode="popLayout">
       {full ? (
-        <motion.div layout="position" className="flex items-start gap-2">
+        <motion.div key="full" layout="position" {...PRESETS.fade} className="flex items-start gap-2">
           <div className="flex items-center gap-1.5 mt-0.5">
             <SourceIcon className="w-4 h-4" aria-hidden="true" />
             <Icon className={`w-4 h-4 ${running ? 'animate-pulse' : ''}`} aria-hidden="true" />
@@ -140,13 +141,14 @@ export const ActivityCard = memo(function ActivityCard({ call, defaultOpen = fal
           </div>
         </motion.div>
       ) : (
-        <motion.span layout="position" className="flex items-center gap-2 min-w-0 text-xs">
+        <motion.span key="compact" layout="position" {...PRESETS.fade} className="flex items-center gap-2 min-w-0 text-xs">
           <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
           <span className="font-medium truncate">{sentenceCase(call.label || call.tool)}</span>
           {call.summary && <span className={`truncate ${state.text}`}>· {call.summary}</span>}
           <StateIcon className={`w-3.5 h-3.5 shrink-0 ${state.text}`} aria-hidden="true" />
         </motion.span>
       )}
+      </AnimatePresence>
     </motion.div>
   )
 })

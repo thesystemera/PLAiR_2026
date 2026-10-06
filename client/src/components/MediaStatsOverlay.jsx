@@ -49,6 +49,7 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
     <motion.div
       ref={overlayRef}
       className="sticky top-0 z-40 pointer-events-none"
+      initial={{ opacity: 0 }}
       animate={{
         opacity: visible ? 1 : 0
       }}

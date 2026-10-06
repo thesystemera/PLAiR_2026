@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 
 import { LayoutGrid, MessageCircle, Radio as RadioIcon, Globe, Heart, AlertTriangle, History } from 'lucide-react'
 import { useRadioButton, uiState, useUISelector } from '../contexts/UIStateContext'
@@ -17,6 +18,8 @@ import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { registerKeyboardRecordingCallback } from './KeyboardControls'
 import { PanelHeader, TextRadioIcon } from './Panel'
 import { Scroller } from './Scroller'
+import { FadeSwap } from './Motion'
+import { PRESETS } from '../lib/motion'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
 
@@ -158,8 +161,8 @@ export function Radio() {
 
       <PanelHeader title={<h2 className="text-lg md:text-xl font-bold">Radio</h2>}>
         <div className="flex flex-wrap justify-end gap-1 min-w-0 ml-3">
-           {showTimeline && <TimelineFilters value={timelineFilter} onChange={setTimelineFilter} />}
-           {!showTimeline && ['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
+          <FadeSwap swapKey={showTimeline ? 'timeline' : 'conversation'} preset={PRESETS.fade} className="flex flex-wrap justify-end gap-1">
+            {showTimeline ? <TimelineFilters value={timelineFilter} onChange={setTimelineFilter} /> : ['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
              const hasConversations = filterCounts[filter] > 0
              const isDisabled = !hasConversations
              return (
@@ -185,6 +188,7 @@ export function Radio() {
                </button>
              )
            })}
+          </FadeSwap>
           <button
             onClick={() => setShowTimeline(value => !value)}
             aria-pressed={showTimeline}
@@ -226,8 +230,12 @@ export function Radio() {
             className={besideButton ? 'w-full px-4 pt-2' : 'w-full max-w-3xl mx-auto px-4 pt-2'}
             style={besideButton ? { paddingRight: `calc(${RADIO_SIDE_WIDTH} + 0.5rem)` } : undefined}
           >
-            {showTimeline && <ListenerTimeline key={timelineFilter} kind={timelineFilter} />}
-            <div className={showTimeline ? 'hidden' : undefined}>
+            {showTimeline && (
+              <div key={timelineFilter} className="ui-fade-in">
+                <ListenerTimeline kind={timelineFilter} />
+              </div>
+            )}
+            <div className={showTimeline ? 'hidden' : 'ui-fade-in'}>
               <Conversation
                 isOpen={true}
                 messageFilter={messageFilter}
@@ -239,11 +247,13 @@ export function Radio() {
         </Scroller>
       </div>
 
-      {isTextInput && (
-        <div className="w-full max-w-3xl mx-auto">
-          <DJTextComposer onSend={sendTextToDJ} />
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {isTextInput && (
+          <motion.div key="composer" className="w-full max-w-3xl mx-auto" {...PRESETS.fade}>
+            <DJTextComposer onSend={sendTextToDJ} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {createPortal(
         <div

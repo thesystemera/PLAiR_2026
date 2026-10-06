@@ -38,6 +38,7 @@ import Login from './components/Auth/Login'
 import Register from './components/Auth/Register'
 import {NoticeStack} from './components/NoticeStack'
 import {RotationVeil} from './components/RotationVeil'
+import {FadeSwap} from './components/Motion'
 import {OnAirFrame, OnAirNotice} from './components/OnAirBadge'
 import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
@@ -972,23 +973,26 @@ function App() {
                       )}
                       {id === PANEL_IDS.USER && isAuthenticated ? (
                         <>
-                          {userProfilePicture ? (
-                            <ProfileArt
-                              userId={user?.id}
-                              colorUrl={userProfilePicture}
-                              alt={user?.username || 'User'}
-                              className={`relative ${navIconClass} rounded-full overflow-hidden`}
-                              imgClassName="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className={`${navIconClass} rounded-full bg-purple-600 flex items-center justify-center text-white text-xs font-bold`}>
-                              {user?.username?.charAt(0).toUpperCase() || 'U'}
-                            </div>
-                          )}
+                          <div className={`relative ${navIconClass} rounded-full overflow-hidden bg-purple-600 flex items-center justify-center text-white text-xs font-bold`}>
+                            {user?.username?.charAt(0).toUpperCase() || 'U'}
+                            {userProfilePicture && (
+                              <ProfileArt
+                                userId={user?.id}
+                                colorUrl={userProfilePicture}
+                                alt={user?.username || 'User'}
+                                className="absolute inset-0"
+                                imgClassName="w-full h-full object-cover"
+                              />
+                            )}
+                          </div>
                           <span className={`truncate max-w-[60px] ${isPhoneLandscape ? 'text-[10px]' : 'text-xs'}`}>{user?.username || 'User'}</span>
                         </>
                       ) : (
-                        <>
+                        <FadeSwap
+                          swapKey={id === PANEL_IDS.CATALOG ? catalogView : id === PANEL_IDS.RADIO ? radioInput : id}
+                          preset={PRESETS.fade}
+                          className="flex flex-col items-center justify-center"
+                        >
                           {id === PANEL_IDS.CATALOG && catalogView === 'shoutouts'
                             ? PANEL_CONFIG[PANEL_IDS.SHOUTOUTS].mobileIcon(navIconClass)
                             : id === PANEL_IDS.RADIO && radioInput === 'text'
@@ -1003,7 +1007,7 @@ function App() {
                                 : config.mobileLabel
                             }
                           </span>
-                        </>
+                        </FadeSwap>
                       )}
                     </button>
                   )

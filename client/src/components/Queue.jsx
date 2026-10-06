@@ -1,4 +1,4 @@
-import { X, Heart, Star, Ban, TrendingUp, Library, Sprout } from 'lucide-react'
+import { X, Heart, Star, Ban, TrendingUp, Library, Sprout, ListMusic } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { flushSync } from 'react-dom'
 import { forwardRef, useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
@@ -15,6 +15,7 @@ import { Scroller } from './Scroller'
 import { MOTION, PRESETS, TWEEN } from '../lib/motion'
 import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
 import { TrackArt } from './DepthArt'
+import { MediaEmptyState } from './MediaShared'
 
 const QUEUE_ART_PROPS = { 'data-queue-art': true }
 
@@ -80,10 +81,24 @@ const Equalizer = memo(function Equalizer({ playing }) {
 
 const BADGE_EXIT = { opacity: 0, transition: TWEEN.exit }
 
-const PlayingBadge = memo(function PlayingBadge({ active, playing, background, color }) {
+const QueueStatus = memo(function QueueStatus({ loading, active, playing, background, spinnerColor, color }) {
+  const status = active ? 'playing' : loading ? 'loading' : null
   return (
-    <AnimatePresence initial={false}>
-      {active && (
+    <AnimatePresence initial={false} mode="popLayout">
+      {status === 'loading' && (
+        <motion.div key="loading" className="w-5 h-5" {...PRESETS.fade}>
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={MOTION.spin}
+            className="w-5 h-5 rounded-full"
+            style={{
+              border: `2px solid ${spinnerColor}`,
+              borderTopColor: 'transparent'
+            }}
+          />
+        </motion.div>
+      )}
+      {status === 'playing' && (
         <motion.div
           key="playing"
           initial={false}
@@ -211,23 +226,12 @@ const QueueRow = memo(forwardRef(function QueueRow({
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          {isLoading && (
-            <div className="ui-pop w-5 h-5">
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={MOTION.spin}
-                className="w-5 h-5 rounded-full"
-                style={{
-                  border: `2px solid ${colors.loadingSpinner}`,
-                  borderTopColor: 'transparent'
-                }}
-              />
-            </div>
-          )}
-          <PlayingBadge
+          <QueueStatus
+            loading={isLoading}
             active={isPlaying}
             playing={playing}
             background={colors.loadingSpinner}
+            spinnerColor={colors.loadingSpinner}
             color={colors.white}
           />
 
@@ -582,10 +586,9 @@ function QueueComponent({ onSeedRadio, onList }) {
 
       <AnimatePresence>
         {!hasQueue && (
-          <motion.div key="queue-empty" {...PRESETS.emptyState} className="absolute inset-x-0 top-0 p-6 text-center transition-colors duration-theme" style={{ color: getGrey400() }}>
-            <p>Queue is empty</p>
-            <p className="text-sm mt-2" style={{ color: getGrey300() }}>Click tracks to play or add them to your queue</p>
-          </motion.div>
+          <div key="queue-empty" className="absolute inset-x-0 top-0">
+            <MediaEmptyState icon={ListMusic} title="Queue is empty" subtitle="Click tracks to play or add them to your queue" compact />
+          </div>
         )}
       </AnimatePresence>
 

@@ -6,9 +6,10 @@ import { useAuth } from '../contexts/AuthContext'
 import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackShoutout } from '../contexts/PlaybackShoutoutContext'
 import { api } from '../lib/api'
-import { messageMotion, TWEEN } from '../lib/motion'
+import { messageMotion, PRESETS, TWEEN } from '../lib/motion'
 import { Expandable, ExpandChevron, FadeSwap } from './Motion'
 import { ActivityCard } from './DJActivity'
+import { MediaEmptyState } from './MediaShared'
 
 const USER_MESSAGE_MOTION = messageMotion(true)
 const DJ_MESSAGE_MOTION = messageMotion(false)
@@ -688,7 +689,9 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
                 </span>
                 <span className="text-xs opacity-50">{formatTimestamp(conv.timestamp)}</span>
               </div>
-              <p className="text-sm whitespace-pre-wrap break-words text-right">{parseShoutoutLinks(conv.content)}</p>
+              <FadeSwap swapKey={conv.content} mode="wait" preset={PRESETS.fade}>
+                <p className="text-sm whitespace-pre-wrap break-words text-right">{parseShoutoutLinks(conv.content)}</p>
+              </FadeSwap>
             </div>
           </div>
         </div>
@@ -877,27 +880,17 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     <div className="w-full relative pb-3">
       <FadeSwap swapKey={contentState} className="space-y-3">
         {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-gray-400">Loading conversation...</div>
-          </div>
+          <MediaEmptyState title="Loading conversation..." subtitle={null} compact />
         ) : filteredConversations.length === 0 ? (
           <div className={radioInput === 'text'
             ? 'w-full min-h-[55vh] flex items-center justify-center'
             : 'w-full flex justify-center pt-16'}>
-            <div className="text-center text-gray-400 max-w-xs mx-auto px-4">
-              <MessageCircle className="w-8 h-8 sm:w-10 sm:h-10 mx-auto mb-2 opacity-30" />
-              {conversations.length === 0 ? (
-                <>
-                  <p className="text-xs sm:text-sm font-medium">No conversations yet</p>
-                  <p className="text-[10px] sm:text-xs mt-1 opacity-70">Start talking with the DJs!</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-xs sm:text-sm font-medium">No {messageFilter} messages</p>
-                  <p className="text-[10px] sm:text-xs mt-1 opacity-70">Try selecting a different filter</p>
-                </>
-              )}
-            </div>
+            <MediaEmptyState
+              icon={MessageCircle}
+              title={conversations.length === 0 ? 'No conversations yet' : `No ${messageFilter} messages`}
+              subtitle={conversations.length === 0 ? 'Start talking with the DJs!' : 'Try selecting a different filter'}
+              compact
+            />
           </div>
         ) : (
           <AnimatePresence initial={false}>
