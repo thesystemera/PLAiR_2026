@@ -1,6 +1,6 @@
 import { logger } from '../lib/logger'
-import { memo, useState, useEffect, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { memo, useState, useEffect, useRef, useMemo } from 'react'
+import { motion } from 'framer-motion'
 import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useUISelector } from '../contexts/UIStateContext'
@@ -10,6 +10,7 @@ import { messageMotion, PRESETS, TWEEN } from '../lib/motion'
 import { Expandable, ExpandChevron, FadeSwap } from './Motion'
 import { ActivityCard } from './DJActivity'
 import { MediaEmptyState } from './MediaShared'
+import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 
 const USER_MESSAGE_MOTION = messageMotion(true)
 const DJ_MESSAGE_MOTION = messageMotion(false)
@@ -254,7 +255,26 @@ const getCategoryIcon = (messageType) => {
   return <MessageCircle className="w-4 h-4" />
 }
 
-export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, shouldAutoScroll = false }) {
+const EXTERNAL_TYPES = ['biography', 'lyrics', 'weather', 'news', 'events', 'location_search']
+const NO_KEYS = new Set()
+const ESTIMATED_MESSAGE_HEIGHT = 96
+const rowKey = (row) => row.key
+
+function filterCategory(conv) {
+  if (conv.type === 'info' || conv.type === 'warning' || conv.type === 'error') return 'system'
+  const messageType = conv.messageType
+  if (!messageType) return 'interactive'
+  if (EXTERNAL_TYPES.includes(messageType)) return 'external'
+  return messageType
+}
+
+function matchesFilter(conv, filter) {
+  if (filter === 'all') return true
+  const category = filterCategory(conv)
+  return filter === 'interactive' ? category === 'interactive' || category === 'onboarding' : category === filter
+}
+
+export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, shouldAutoScroll = false, scrollRef }) {
   const [conversations, setConversations] = useState([])
   const [loading, setLoading] = useState(false)
   const chatEndRef = useRef(null)
@@ -783,33 +803,23 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     }
   }
 
-  const getFilterCategory = (conv) => {
-    if (conv.type === 'info' || conv.type === 'warning' || conv.type === 'error') {
-      return 'system'
-    }
-
-    const messageType = conv.messageType
-    if (!messageType) return 'interactive'
-
-    const externalTypes = ['biography', 'lyrics', 'weather', 'news', 'events', 'location_search']
-    if (externalTypes.includes(messageType)) return 'external'
-
-    return messageType
-  }
-
-  const filterConversations = (convs) => {
-    if (messageFilter === 'all') return convs
-
-    return convs.filter(conv => {
-      const category = getFilterCategory(conv)
-      if (messageFilter === 'interactive') {
-        return category === 'interactive' || category === 'onboarding'
-      }
-      return category === messageFilter
+  const rows = useMemo(() => {
+    const out = []
+    conversations.forEach((conv, index) => {
+      if (matchesFilter(conv, messageFilter)) out.push({ conv, key: `m${index}` })
     })
-  }
+    return out
+  }, [conversations, messageFilter])
 
-  const filteredConversations = filterConversations(conversations)
+  const [arrivals, setArrivals] = useState({ rows, filter: messageFilter, added: NO_KEYS })
+  if (arrivals.rows !== rows) {
+    const added = new Set()
+    if (arrivals.filter === messageFilter && arrivals.rows.length) {
+      const previous = new Set(arrivals.rows.map(row => row.key))
+      for (const row of rows) if (!previous.has(row.key)) added.add(row.key)
+    }
+    setArrivals({ rows, filter: messageFilter, added })
+  }
 
   useEffect(() => {
     if (!onFilterCounts) return
@@ -824,7 +834,7 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     }
 
     conversations.forEach(conv => {
-      const category = getFilterCategory(conv)
+      const category = filterCategory(conv)
       if (category === 'interactive' || category === 'onboarding') {
         counts.interactive++
       } else if (category === 'announcer') {
@@ -872,16 +882,25 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
     }
   }, [])
 
+  const renderRow = ({ conv, key }, index) => {
+    const motionProps = conv.type === 'user' ? USER_MESSAGE_MOTION : DJ_MESSAGE_MOTION
+    return (
+      <motion.div className="pb-3" {...motionProps} initial={arrivals.added.has(key) ? motionProps.initial : false}>
+        {renderMessage(conv, index)}
+      </motion.div>
+    )
+  }
+
   if (!isOpen) return null
 
-  const contentState = loading ? 'loading' : filteredConversations.length === 0 ? 'empty' : `messages-${messageFilter}`
+  const contentState = loading ? 'loading' : rows.length === 0 ? 'empty' : `messages-${messageFilter}`
 
   return (
     <div className="w-full relative pb-3">
-      <FadeSwap swapKey={contentState} className="space-y-3">
+      <FadeSwap swapKey={contentState}>
         {loading ? (
           <MediaEmptyState title="Loading conversation..." subtitle={null} compact />
-        ) : filteredConversations.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className={radioInput === 'text'
             ? 'w-full min-h-[55vh] flex items-center justify-center'
             : 'w-full flex justify-center pt-16'}>
@@ -893,17 +912,17 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
             />
           </div>
         ) : (
-          <AnimatePresence initial={false}>
-            {filteredConversations.map((conv, idx) => (
-              <motion.div
-                key={conv.id || idx}
-                {...(conv.type === 'user' ? USER_MESSAGE_MOTION : DJ_MESSAGE_MOTION)}
-              >
-                {renderMessage(conv, idx)}
-              </motion.div>
-            ))}
+          <>
+            <VirtualScroller
+              items={rows}
+              itemKey={rowKey}
+              estimatedItemHeight={ESTIMATED_MESSAGE_HEIGHT}
+              stickToEnd
+              renderItem={renderRow}
+              scrollContainerRef={scrollRef}
+            />
             <div ref={chatEndRef} />
-          </AnimatePresence>
+          </>
         )}
       </FadeSwap>
     </div>

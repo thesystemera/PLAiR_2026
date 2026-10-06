@@ -20,8 +20,10 @@ import { formatDateShort } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
 import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
-import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata, useMediaGridColumns } from './MediaShared'
 import { ProfileArt } from './DepthArt'
+import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
+import { useEntranceWindow } from '../hooks/useEntranceWindow'
 
 const hideBrokenImage = (e) => { e.target.style.display = 'none' }
 
@@ -72,7 +74,10 @@ const CategoryCard = memo(function CategoryCard({ category, count, onSelectCateg
   )
 })
 
-const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPause, onDelete, index }) {
+const ESTIMATED_SHOUTOUT_ROW_HEIGHT = 320
+const shoutoutKey = (shoutout) => String(shoutout.id)
+
+const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPause, onDelete, index, shouldAnimate }) {
   const { getWhite } = useDynamicTheme()
   const { user } = useAuth()
   const deleteInteraction = usePointerInteraction()
@@ -117,6 +122,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
   return (
     <MediaCardAnimation
       index={index}
+      shouldAnimate={shouldAnimate}
       onClick={hasAudio ? undefined : (e) => onPlayPause(e, shoutout)}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card ${
         isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
@@ -221,6 +227,8 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
   return (
     prev.shoutout.id === next.shoutout.id &&
     prev.isPlaying === next.isPlaying &&
+    prev.shouldAnimate === next.shouldAnimate &&
+    prev.index === next.index &&
     prev.shoutout.reply_count === next.shoutout.reply_count
   )
 })
@@ -453,7 +461,20 @@ export function Shoutouts() {
     return filtered
   }, [shoutouts, searchResults, isSearchMode, sortMode, selectedCategory])
 
-  const visibleShoutouts = displayShoutouts.filter(s => !removingIds.has(s.id))
+  const visibleShoutouts = useMemo(() => displayShoutouts.filter(s => !removingIds.has(s.id)), [displayShoutouts, removingIds])
+  const { itemsPerRow, rowClassName } = useMediaGridColumns()
+  const cardsEntering = useEntranceWindow(displayShoutouts)
+  const renderShoutout = useCallback((shoutout, index) => (
+    <ShoutoutCard
+      key={shoutout.id}
+      shoutout={shoutout}
+      isPlaying={playingShoutout?.id === shoutout.id}
+      onPlayPause={handlePlayPause}
+      onDelete={handleDelete}
+      index={index}
+      shouldAnimate={cardsEntering}
+    />
+  ), [playingShoutout?.id, handlePlayPause, handleDelete, cardsEntering])
 
   const adaptiveStats = useMemo(() => {
     let trackRange = null
@@ -560,18 +581,17 @@ export function Shoutouts() {
                 onBackToGenres={handleBackToCategories}
                 contentType="shoutouts"
               />
-              <MediaGrid withAnimation>
-                {visibleShoutouts.map((shoutout, index) => (
-                  <ShoutoutCard
-                    key={shoutout.id}
-                    shoutout={shoutout}
-                    isPlaying={playingShoutout?.id === shoutout.id}
-                    onPlayPause={handlePlayPause}
-                    onDelete={handleDelete}
-                    index={index}
-                  />
-                ))}
-              </MediaGrid>
+              <div className="pb-3 md:pb-6">
+                <VirtualScroller
+                  items={visibleShoutouts}
+                  itemsPerRow={itemsPerRow}
+                  itemKey={shoutoutKey}
+                  estimatedItemHeight={ESTIMATED_SHOUTOUT_ROW_HEIGHT}
+                  itemClassName={rowClassName}
+                  renderItem={renderShoutout}
+                  scrollContainerRef={scrollContainerRef}
+                />
+              </div>
             </>
           )}
         </FadeSwap>

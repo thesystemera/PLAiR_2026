@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, memo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { flushSync } from 'react-dom'
 import { prefetchCovers } from '../lib/artworkPrefetcher'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
@@ -16,8 +16,56 @@ const PREFETCH_MAX_AHEAD_ITEMS = 96
 const PREFETCH_BEHIND_ITEMS = 8
 const PREFETCH_IDLE_BEHIND_ITEMS = 16
 const INITIAL_ROWS = 8
+const MEASURE_EPSILON_PX = 0.5
+const END_SLACK_PX = 4
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+const pinToEnd = (element) => { element.scrollTop = element.scrollHeight }
+const shiftScroll = (element, delta) => { element.scrollTop += delta }
+
+function fixedLayout(rows, rowHeight) {
+  return {
+    rows,
+    rowHeight,
+    total: rows * rowHeight,
+    offset: row => row * rowHeight,
+    rowAt: y => clamp(Math.floor(y / rowHeight), 0, rows),
+  }
+}
+
+const rowKeyOf = (items, row, perRow, itemKey) => (
+  perRow === 1 ? itemKey(items[row]) : `${perRow}:${itemKey(items[row * perRow])}`
+)
+
+function measuredLayout(items, perRow, itemKey, heights, estimate) {
+  const rows = Math.ceil(items.length / perRow)
+  const offsets = new Float64Array(rows + 1)
+  const indexOf = new Map()
+  for (let i = 0; i < rows; i++) {
+    const key = rowKeyOf(items, i, perRow, itemKey)
+    indexOf.set(key, i)
+    offsets[i + 1] = offsets[i] + (heights.get(key) ?? estimate)
+  }
+  const rowAt = (y) => {
+    if (y <= 0) return 0
+    let low = 0
+    let high = rows
+    while (low < high) {
+      const mid = (low + high + 1) >> 1
+      if (offsets[mid] <= y) low = mid
+      else high = mid - 1
+    }
+    return clamp(low, 0, rows)
+  }
+  return {
+    rows,
+    rowHeight: rows ? offsets[rows] / rows : estimate,
+    total: offsets[rows],
+    offset: row => offsets[clamp(row, 0, rows)],
+    rowAt,
+    indexOf,
+  }
+}
 
 function defaultPlaceholder(index, itemHeight) {
   return (
@@ -37,15 +85,21 @@ function VirtualScroller({
   windowStart = 0,
   itemHeight = 100,
   itemsPerRow = 1,
+  itemKey = null,
+  estimatedItemHeight = 100,
+  stickToEnd = false,
   renderItem,
   renderPlaceholder = null,
   onRangeChange = null,
   getPrefetchId = null,
   scrollContainerRef,
   wrapItems = null,
+  itemClassName = undefined,
   className = ''
 }) {
+  const measured = typeof itemKey === 'function'
   const listRef = useRef(null)
+  const windowRef = useRef(null)
   const [range, setRange] = useState({ start: 0, end: INITIAL_ROWS })
   const rangeRef = useRef(range)
   const motionRef = useRef({ top: 0, time: 0, velocity: 0, direction: 1, listTop: 0, scrolling: false, samples: [] })
@@ -54,9 +108,20 @@ function VirtualScroller({
   const itemsVersionRef = useRef(0)
   const rafRef = useRef(0)
   const settleTimerRef = useRef(null)
+  const [heights, setHeights] = useState(() => new Map())
+  const heightsRef = useRef(heights)
+  const atEndRef = useRef(false)
+  const observedRef = useRef(null)
 
-  const catalogSize = totalCount || items.length
-  const totalRows = Math.ceil(catalogSize / itemsPerRow)
+  const perRow = Math.max(1, itemsPerRow)
+  const catalogSize = measured ? items.length : (totalCount || items.length)
+  const totalRows = Math.ceil(catalogSize / perRow)
+
+  const layout = useMemo(() => (
+    measured
+      ? measuredLayout(items, perRow, itemKey, heights, estimatedItemHeight)
+      : fixedLayout(totalRows, itemHeight)
+  ), [measured, items, perRow, itemKey, estimatedItemHeight, totalRows, itemHeight, heights])
 
   useEffect(() => {
     window.registerRAFSource?.('VirtualScroller')
@@ -82,12 +147,13 @@ function VirtualScroller({
   const updateDemand = useCallback((firstRow, lastRow, down, speed, idle, jumped) => {
     const latest = latestRef.current
     if (!latest) return
-    const { itemHeight: rowHeight, itemsPerRow: perRow, totalRows: rows, items: list, windowStart: offset, onRangeChange: onRange, getPrefetchId: getId } = latest
-    const rowsPerSecond = speed * 1000 / rowHeight
-    const minAhead = Math.ceil(PREFETCH_MIN_AHEAD_ITEMS / perRow)
-    const maxAhead = Math.ceil(PREFETCH_MAX_AHEAD_ITEMS / perRow)
+    const { layout: current, perRow: rowItems, items: list, windowStart: offset, onRangeChange: onRange, getPrefetchId: getId } = latest
+    const rows = current.rows
+    const rowsPerSecond = speed * 1000 / current.rowHeight
+    const minAhead = Math.ceil(PREFETCH_MIN_AHEAD_ITEMS / rowItems)
+    const maxAhead = Math.ceil(PREFETCH_MAX_AHEAD_ITEMS / rowItems)
     const aheadRows = idle ? minAhead : clamp(Math.ceil(rowsPerSecond * PREFETCH_SECONDS), minAhead, maxAhead)
-    const behindRows = Math.ceil((idle ? PREFETCH_IDLE_BEHIND_ITEMS : PREFETCH_BEHIND_ITEMS) / perRow)
+    const behindRows = Math.ceil((idle ? PREFETCH_IDLE_BEHIND_ITEMS : PREFETCH_BEHIND_ITEMS) / rowItems)
     const fetchStart = clamp(firstRow - (down ? behindRows : aheadRows), 0, rows)
     const fetchEnd = clamp(lastRow + (down ? aheadRows : behindRows), 0, rows)
 
@@ -95,8 +161,8 @@ function VirtualScroller({
     if (key === demandKeyRef.current) return
     demandKeyRef.current = key
 
-    const focusIndex = (down ? firstRow : Math.max(firstRow, lastRow - 1)) * perRow
-    onRange?.(fetchStart * perRow, fetchEnd * perRow, focusIndex)
+    const focusIndex = (down ? firstRow : Math.max(firstRow, lastRow - 1)) * rowItems
+    onRange?.(fetchStart * rowItems, fetchEnd * rowItems, focusIndex)
 
     if (!getId) return
     const size = coverSize()
@@ -106,8 +172,8 @@ function VirtualScroller({
     }
     const ids = []
     const pushRow = (row) => {
-      const base = row * perRow
-      for (let i = base; i < base + perRow; i++) {
+      const base = row * rowItems
+      for (let i = base; i < base + rowItems; i++) {
         const item = list[i - offset]
         if (item) {
           const id = getId(item)
@@ -130,8 +196,9 @@ function VirtualScroller({
   const compute = useCallback((settled, fromScroll = false) => {
     const container = scrollContainerRef?.current
     const latest = latestRef.current
-    if (!container || !latest || !latest.itemHeight) return
-    const { itemHeight: rowHeight, totalRows: rows } = latest
+    if (!container || !latest || !latest.layout.rowHeight) return
+    const { layout: current } = latest
+    const rows = current.rows
     const motion = motionRef.current
     const now = performance.now()
     const scrollTop = container.scrollTop
@@ -158,10 +225,11 @@ function VirtualScroller({
     }
     motion.top = scrollTop
     motion.time = now
+    atEndRef.current = scrollTop + viewHeight >= container.scrollHeight - END_SLACK_PX
 
     const relativeTop = scrollTop - motion.listTop
-    const firstRow = clamp(Math.floor(relativeTop / rowHeight), 0, rows)
-    const lastRow = clamp(Math.ceil((relativeTop + viewHeight) / rowHeight), 0, rows)
+    const firstRow = current.rowAt(relativeTop)
+    const lastRow = clamp(current.rowAt(relativeTop + viewHeight) + 1, 0, rows)
     const speed = Math.abs(motion.velocity)
     const idle = speed < IDLE_SPEED
     const down = motion.direction >= 0
@@ -170,9 +238,9 @@ function VirtualScroller({
     const start = clamp(firstRow - (down ? behind : ahead), 0, rows)
     const end = clamp(lastRow + (down ? ahead : behind), 0, rows)
 
-    const current = rangeRef.current
-    const disjoint = start >= current.end || end <= current.start
-    if (start !== current.start || end !== current.end) {
+    const previous = rangeRef.current
+    const disjoint = start >= previous.end || end <= previous.start
+    if (start !== previous.start || end !== previous.end) {
       const next = { start, end }
       rangeRef.current = next
       if (disjoint && fromScroll) {
@@ -190,12 +258,72 @@ function VirtualScroller({
     if (!previous || previous.items !== items || previous.windowStart !== windowStart) {
       itemsVersionRef.current++
     }
-    latestRef.current = { items, windowStart, itemHeight, itemsPerRow, totalRows, onRangeChange, getPrefetchId }
-    if (!previous || previous.itemHeight !== itemHeight || previous.itemsPerRow !== itemsPerRow) {
+    latestRef.current = { items, windowStart, layout, perRow, onRangeChange, getPrefetchId }
+    if (!previous || previous.layout.rowHeight !== layout.rowHeight || previous.perRow !== perRow) {
       measure()
     }
+    const container = scrollContainerRef?.current
+    if (measured && stickToEnd && container && atEndRef.current) pinToEnd(container)
     compute(!motionRef.current.scrolling)
-  }, [items, windowStart, itemHeight, itemsPerRow, totalRows, onRangeChange, getPrefetchId, measure, compute])
+  }, [items, windowStart, layout, perRow, onRangeChange, getPrefetchId, measure, compute, measured, stickToEnd, scrollContainerRef])
+
+  useEffect(() => {
+    if (!measured || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const latest = latestRef.current
+      const container = scrollContainerRef?.current
+      if (!latest || !container) return
+      const { layout: current } = latest
+      const firstVisible = current.rowAt(container.scrollTop - motionRef.current.listTop)
+      const known = heightsRef.current
+      const next = new Map(known)
+      let shiftAbove = 0
+      let changed = false
+      for (const entry of entries) {
+        const key = entry.target.dataset.vsKey
+        if (key === undefined) continue
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.target.offsetHeight
+        if (!height) continue
+        const index = current.indexOf.get(key)
+        const before = known.get(key) ?? (index === undefined ? height : current.offset(index + 1) - current.offset(index))
+        if (Math.abs(height - before) < MEASURE_EPSILON_PX) {
+          if (!next.has(key)) next.set(key, height)
+          continue
+        }
+        next.set(key, height)
+        changed = true
+        if (index !== undefined && index < firstVisible) shiftAbove += height - before
+      }
+      heightsRef.current = next
+      if (!changed) return
+      if (shiftAbove && !atEndRef.current) shiftScroll(container, shiftAbove)
+      setHeights(next)
+    })
+    observedRef.current = { observer, elements: new Set() }
+    return () => {
+      observer.disconnect()
+      observedRef.current = null
+    }
+  }, [measured, scrollContainerRef])
+
+  useLayoutEffect(() => {
+    const observed = observedRef.current
+    const windowEl = windowRef.current
+    if (!measured || !observed || !windowEl) return
+    const present = new Set(windowEl.querySelectorAll('[data-vs-key]'))
+    for (const element of observed.elements) {
+      if (!present.has(element)) {
+        observed.observer.unobserve(element)
+        observed.elements.delete(element)
+      }
+    }
+    for (const element of present) {
+      if (!observed.elements.has(element)) {
+        observed.observer.observe(element)
+        observed.elements.add(element)
+      }
+    }
+  })
 
   useEffect(() => {
     const container = scrollContainerRef?.current
@@ -261,11 +389,29 @@ function VirtualScroller({
 
   const startRow = Math.min(range.start, totalRows)
   const endRow = Math.min(range.end, totalRows)
-  const startIndex = startRow * itemsPerRow
-  const endIndex = Math.min(catalogSize, endRow * itemsPerRow)
+  const startIndex = startRow * perRow
+  const endIndex = Math.min(catalogSize, endRow * perRow)
 
   const visibleItems = []
-  for (let i = startIndex; i < endIndex; i++) {
+  if (measured) {
+    for (let row = startRow; row < endRow; row++) {
+      const key = rowKeyOf(items, row, perRow, itemKey)
+      const first = row * perRow
+      let cells = null
+      if (perRow === 1) {
+        cells = renderItem(items[first], first)
+      } else {
+        cells = []
+        for (let i = first; i < Math.min(items.length, first + perRow); i++) cells.push(renderItem(items[i], i))
+      }
+      visibleItems.push(
+        <div key={key} data-vs-key={key} className={itemClassName}>
+          {cells}
+        </div>
+      )
+    }
+  }
+  for (let i = startIndex; i < endIndex && !measured; i++) {
     const item = items[i - windowStart]
     if (item) {
       visibleItems.push(renderItem(item, i))
@@ -277,15 +423,16 @@ function VirtualScroller({
   }
 
   return (
-    <div ref={listRef} style={{ height: `${totalRows * itemHeight}px`, position: 'relative' }}>
+    <div ref={listRef} style={{ height: `${layout.total}px`, position: 'relative' }}>
       <div
+        ref={windowRef}
         data-virtual-window
         style={{
           position: 'absolute',
           top: 0,
           left: 0,
           right: 0,
-          transform: `translateY(${startRow * itemHeight}px)`,
+          transform: `translateY(${layout.offset(startRow)}px)`,
           willChange: 'transform'
         }}
       >
@@ -304,7 +451,11 @@ export const MemoizedVirtualScroller = memo(VirtualScroller, (prevProps, nextPro
     prevProps.windowStart === nextProps.windowStart &&
     prevProps.itemHeight === nextProps.itemHeight &&
     prevProps.itemsPerRow === nextProps.itemsPerRow &&
+    prevProps.itemKey === nextProps.itemKey &&
+    prevProps.estimatedItemHeight === nextProps.estimatedItemHeight &&
+    prevProps.stickToEnd === nextProps.stickToEnd &&
     prevProps.className === nextProps.className &&
+    prevProps.itemClassName === nextProps.itemClassName &&
     prevProps.renderItem === nextProps.renderItem &&
     prevProps.renderPlaceholder === nextProps.renderPlaceholder &&
     prevProps.onRangeChange === nextProps.onRangeChange &&

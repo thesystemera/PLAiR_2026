@@ -19,6 +19,7 @@ import { safeStorage } from '../lib/safeStorage'
 import { PanelHeader } from './Panel'
 import { ProfileArt, TrackArt } from './DepthArt'
 import { Scroller } from './Scroller'
+import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { ExpandSection, Expandable, ExpandChevron } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
@@ -268,7 +269,13 @@ const MediaRow = memo(function MediaRow({
   )
 })
 
-const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, iconColor, expanded, onToggleExpand, emptyMessage, renderItem }) {
+const ESTIMATED_LIST_ROW_HEIGHT = 60
+const ESTIMATED_CACHED_ROW_HEIGHT = 52
+const ESTIMATED_UPLOAD_ROW_HEIGHT = 80
+const itemIdKey = (item) => String(item.id)
+const cachedTrackKey = (track) => String(track.trackId)
+
+const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, iconColor, expanded, onToggleExpand, emptyMessage, renderItem, scrollRef }) {
   const previewItems = items.slice(0, 5)
   const overflowItems = items.slice(5)
 
@@ -295,8 +302,15 @@ const PreferenceList = memo(function PreferenceList({ title, items, icon: Icon, 
       ) : (
         <div className="space-y-1">
           {previewItems.map(item => renderItem(item))}
-          <Expandable open={expanded && overflowItems.length > 0} innerClassName="space-y-1 pt-1">
-            {overflowItems.map(item => renderItem(item))}
+          <Expandable open={expanded && overflowItems.length > 0} innerClassName="pt-1">
+            <VirtualScroller
+              items={overflowItems}
+              itemKey={itemIdKey}
+              estimatedItemHeight={ESTIMATED_LIST_ROW_HEIGHT}
+              itemClassName="pb-1"
+              renderItem={renderItem}
+              scrollContainerRef={scrollRef}
+            />
           </Expandable>
         </div>
       )}
@@ -559,6 +573,8 @@ const OwnPostItem = memo(function OwnPostItem({ post, icon, iconColor, onPlay, o
 })
 
 export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTrack, onReloadTrackQuality }) {
+  const panelScrollRef = useRef(null)
+  const cachedListRef = useRef(null)
   const { isAuthenticated, user, refreshUser } = useAuth()
   const { getPreferences, removePreference, isPending } = usePreferences()
   const { getUserAvatarGradient, getPremiumGradient, getNetworkExcellent, getNetworkGood, getNetworkFair, getNetworkPoor } = useDynamicTheme()
@@ -1118,7 +1134,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
         }
       />
 
-      <Scroller className="flex-1">
+      <Scroller ref={panelScrollRef} className="flex-1">
         {(user?.persona || user?.profile || user?.shoutout_interests) && (
           <ExpandSection
             className="p-4 md:p-6 border-b border-gray-800"
@@ -1441,16 +1457,23 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               {storageInfo.trackCount > 0 && <button onClick={() => setShowCachedTracks(!showCachedTracks)} aria-expanded={showCachedTracks} className="ui-press text-purple-400 hover:text-purple-300 transition">{showCachedTracks ? 'Hide' : 'Show'}</button>}
             </div>
             <Expandable open={showCachedTracks && storageInfo.trackCount > 0} innerClassName="pt-3">
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {storageInfo.tracks.map(track => (
-                  <div key={track.trackId} className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
+              <div ref={cachedListRef} className="max-h-60 overflow-y-auto">
+                <VirtualScroller
+                  items={storageInfo.tracks}
+                  itemKey={cachedTrackKey}
+                  estimatedItemHeight={ESTIMATED_CACHED_ROW_HEIGHT}
+                  itemClassName="pb-2"
+                  scrollContainerRef={cachedListRef}
+                  renderItem={track => (
+                  <div className="flex items-center justify-between p-2 bg-dark-hover rounded hover:bg-gray-700 transition group">
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onPlayTrack(track.trackId)}>
                       <div className="text-xs font-medium truncate">{track.metadata?.generation_params?.title || track.metadata?.title || 'Untitled'}</div>
                       <div className="text-xs text-gray-500 truncate">{formatBytes(track.size)} • {track.bitrate}</div>
                     </div>
                     <button onClick={() => handleDeleteCachedTrack(track.trackId)} className="ui-press transition p-1 hover:bg-red-500/20 rounded"><Trash2 size={12} className="text-gray-400 hover:text-red-500" /></button>
                   </div>
-                ))}
+                  )}
+                />
               </div>
             </Expandable>
             {storageInfo.trackCount > 0 && <button onClick={handleClearAllCache} className="ui-press-soft w-full mt-3 px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded text-xs font-medium transition flex items-center justify-center gap-2"><Trash2 size={12} /> Clear All Cache</button>}
@@ -1480,22 +1503,22 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             }
             contentClassName="space-y-6 pl-2"
           >
-            <PreferenceList title="Liked Tracks" items={filteredLikedTracks} icon={Heart} iconColor="text-pink-500" expanded={expandedLiked} onToggleExpand={setExpandedLiked} emptyMessage="No liked tracks yet"
+            <PreferenceList title="Liked Tracks" items={filteredLikedTracks} icon={Heart} iconColor="text-pink-500" expanded={expandedLiked} onToggleExpand={setExpandedLiked} scrollRef={panelScrollRef} emptyMessage="No liked tracks yet"
               renderItem={(track) => <TrackItem key={track.id} track={track} icon={Heart} iconColor="text-pink-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
 
-            <PreferenceList title="Super Liked Tracks" items={filteredSuperLikedTracks} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLiked} onToggleExpand={setExpandedSuperLiked} emptyMessage="No super liked tracks yet"
+            <PreferenceList title="Super Liked Tracks" items={filteredSuperLikedTracks} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLiked} onToggleExpand={setExpandedSuperLiked} scrollRef={panelScrollRef} emptyMessage="No super liked tracks yet"
               renderItem={(track) => <TrackItem key={track.id} track={track} icon={Star} iconColor="text-yellow-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
 
-            <PreferenceList title="Banned Tracks" items={filteredBannedTracks} icon={Ban} iconColor="text-red-500" expanded={expandedBanned} onToggleExpand={setExpandedBanned} emptyMessage="No banned tracks"
+            <PreferenceList title="Banned Tracks" items={filteredBannedTracks} icon={Ban} iconColor="text-red-500" expanded={expandedBanned} onToggleExpand={setExpandedBanned} scrollRef={panelScrollRef} emptyMessage="No banned tracks"
               renderItem={(track) => <TrackItem key={track.id} track={track} icon={Ban} iconColor="text-red-500" onPlayTrack={onPlayTrack} onRemovePreference={(id) => handleRemovePreference('track', id)} isLoading={isPending('track', track.id)} />} />
 
-            <PreferenceList title="Liked Shoutouts" items={filteredLikedShoutouts} icon={Heart} iconColor="text-pink-500" expanded={expandedLikedShoutouts} onToggleExpand={setExpandedLikedShoutouts} emptyMessage="No liked shoutouts yet"
+            <PreferenceList title="Liked Shoutouts" items={filteredLikedShoutouts} icon={Heart} iconColor="text-pink-500" expanded={expandedLikedShoutouts} onToggleExpand={setExpandedLikedShoutouts} scrollRef={panelScrollRef} emptyMessage="No liked shoutouts yet"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Heart} iconColor="text-pink-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
 
-            <PreferenceList title="Super Liked Shoutouts" items={filteredSuperLikedShoutouts} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLikedShoutouts} onToggleExpand={setExpandedSuperLikedShoutouts} emptyMessage="No super liked shoutouts yet"
+            <PreferenceList title="Super Liked Shoutouts" items={filteredSuperLikedShoutouts} icon={Star} iconColor="text-yellow-500" expanded={expandedSuperLikedShoutouts} onToggleExpand={setExpandedSuperLikedShoutouts} scrollRef={panelScrollRef} emptyMessage="No super liked shoutouts yet"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Star} iconColor="text-yellow-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
 
-            <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} emptyMessage="No banned shoutouts"
+            <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} scrollRef={panelScrollRef} emptyMessage="No banned shoutouts"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Ban} iconColor="text-red-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
           </ExpandSection>
         )}
@@ -1511,10 +1534,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             meta={<span className="text-xs text-gray-400">({myPosts.shoutouts.length + myPosts.reviews.length})</span>}
             contentClassName="space-y-6 pl-2"
           >
-            <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} emptyMessage="You haven't posted a shoutout yet"
+            <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} scrollRef={panelScrollRef} emptyMessage="You haven't posted a shoutout yet"
               renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
 
-            <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} emptyMessage="You haven't reviewed a song yet"
+            <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} scrollRef={panelScrollRef} emptyMessage="You haven't reviewed a song yet"
               renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
           </ExpandSection>
         )}
@@ -1608,17 +1631,23 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <p className="text-xs text-gray-500 mt-1">Upload your music and we&apos;ll analyze it with AI</p>
             </div>
           ) : (
-            <div className="ui-fade-in space-y-2">
-              {userUploads.map(track => (
-                <UploadedTrackItem
-                  key={track.id}
-                  track={track}
-                  onPlayTrack={onPlayTrack}
-                  onEditUpload={openEditTrack}
-                  onDeleteUpload={handleDeleteUpload}
-                  isDeleting={deletingUploadId === track.id}
-                />
-              ))}
+            <div className="ui-fade-in">
+              <VirtualScroller
+                items={userUploads}
+                itemKey={itemIdKey}
+                estimatedItemHeight={ESTIMATED_UPLOAD_ROW_HEIGHT}
+                itemClassName="pb-2"
+                scrollContainerRef={panelScrollRef}
+                renderItem={track => (
+                  <UploadedTrackItem
+                    track={track}
+                    onPlayTrack={onPlayTrack}
+                    onEditUpload={openEditTrack}
+                    onDeleteUpload={handleDeleteUpload}
+                    isDeleting={deletingUploadId === track.id}
+                  />
+                )}
+              />
             </div>
           )}
         </ExpandSection>

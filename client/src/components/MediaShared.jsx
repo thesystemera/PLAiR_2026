@@ -10,9 +10,11 @@ import { useViewport } from '../contexts/ViewportContext'
 export function useMediaGridColumns() {
   const { isMobile, isLandscape } = useViewport()
   const itemsPerRow = isMobile && isLandscape ? 4 : 2
+  const columns = itemsPerRow === 4 ? 'grid-cols-4' : 'grid-cols-2'
   return {
     itemsPerRow,
-    gridClassName: `grid ${itemsPerRow === 4 ? 'grid-cols-4' : 'grid-cols-2'} gap-3 md:gap-4 px-3 md:px-6`
+    gridClassName: `grid ${columns} gap-3 md:gap-4 px-3 md:px-6`,
+    rowClassName: `grid ${columns} gap-x-3 md:gap-x-4 px-3 md:px-6 pb-3 md:pb-4`,
   }
 }
 

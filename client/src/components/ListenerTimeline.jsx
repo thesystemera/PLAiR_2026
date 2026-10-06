@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { History, LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { PRESETS } from '../lib/motion'
 import { api } from '../lib/api'
 import { logger } from '../lib/logger'
@@ -9,10 +9,16 @@ import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { Expandable, ExpandChevron, FadeSwap } from './Motion'
 import { MediaEmptyState, MediaOfflineState } from './MediaShared'
+import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 
 const TIMELINE_HOURS = 24
 const REFRESH_MS = 30000
 const DETAIL_PREFIX = 'aired:'
+const ESTIMATED_ENTRY_HEIGHT = 41
+const NO_IDS = new Set()
+const NO_DETAILS = new Map()
+const NO_ENTRIES = []
+const entryKey = (entry) => `${entry.id}|${entry.at}`
 
 const KIND_META = {
   track: { icon: Music, name: 'Song', plural: 'songs', color: 'text-emerald-400' },
@@ -57,32 +63,18 @@ function clockOf(iso) {
   return Number.isNaN(at.getTime()) ? '' : at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-const TimelineRow = memo(function TimelineRow({ entry }) {
+const TimelineRow = memo(function TimelineRow({ entry, entering, open, detail, onToggle }) {
   const meta = KIND_META[entry.kind] || KIND_META.talk
   const Icon = meta.icon
   const expandable = entry.id.startsWith(DETAIL_PREFIX)
-  const [open, setOpen] = useState(false)
-  const [detail, setDetail] = useState(null)
-
-  const toggle = useCallback(() => {
-    if (!expandable) return
-    setOpen(value => !value)
-    if (detail) return
-    api.getTimelineEntry(entry.id)
-      .then(result => setDetail(result?.said || ''))
-      .catch(error => {
-        logger.warn('[Timeline] Could not load entry:', error)
-        setDetail('')
-      })
-  }, [expandable, detail, entry.id])
 
   return (
-    <motion.li
-      layout="position"
+    <motion.div
       {...PRESETS.fade}
+      initial={entering ? PRESETS.fade.initial : false}
       className={`flex gap-3 py-2 border-b border-white/5 ${expandable ? 'cursor-pointer' : ''}`}
-      onClick={toggle}
-      role={expandable ? 'button' : undefined}
+      onClick={expandable ? () => onToggle(entry.id) : undefined}
+      role={expandable ? 'button' : 'listitem'}
       aria-expanded={expandable ? open : undefined}
     >
       <span className="w-14 shrink-0 pt-0.5 text-xs tabular-nums text-gray-500 text-right">{clockOf(entry.at)}</span>
@@ -105,16 +97,55 @@ const TimelineRow = memo(function TimelineRow({ entry }) {
           </Expandable>
         )}
       </div>
-    </motion.li>
+    </motion.div>
   )
 })
 
-export function ListenerTimeline({ kind = 'all' }) {
+export function ListenerTimeline({ kind = 'all', scrollRef }) {
   const { currentTrackId, offlineMode } = useUISelector(state => ({
     currentTrackId: state.engineState.currentTrack?.id ?? null,
     offlineMode: state.audioState.offlineMode,
   }))
   const [data, setData] = useState(null)
+  const [openIds, setOpenIds] = useState(NO_IDS)
+  const [details, setDetails] = useState(NO_DETAILS)
+  const entries = data?.entries || NO_ENTRIES
+  const [arrivals, setArrivals] = useState({ entries, added: NO_IDS })
+  if (arrivals.entries !== entries) {
+    const added = new Set()
+    if (arrivals.entries.length) {
+      const previous = new Set(arrivals.entries.map(entryKey))
+      for (const entry of entries) if (!previous.has(entryKey(entry))) added.add(entryKey(entry))
+    }
+    setArrivals({ entries, added })
+  }
+
+  const toggle = useCallback((id) => {
+    setOpenIds(previous => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+    if (details.has(id)) return
+    setDetails(previous => new Map(previous).set(id, null))
+    api.getTimelineEntry(id)
+      .then(result => setDetails(current => new Map(current).set(id, result?.said || '')))
+      .catch(error => {
+        logger.warn('[Timeline] Could not load entry:', error)
+        setDetails(current => new Map(current).set(id, ''))
+      })
+  }, [details])
+
+  const renderEntry = useCallback((entry) => (
+    <TimelineRow
+      entry={entry}
+      entering={arrivals.added.has(entryKey(entry))}
+      open={openIds.has(entry.id)}
+      detail={details.get(entry.id) ?? null}
+      onToggle={toggle}
+    />
+  ), [arrivals.added, openIds, details, toggle])
   const [failed, setFailed] = useState(false)
 
   const load = useCallback(() => {
@@ -151,11 +182,15 @@ export function ListenerTimeline({ kind = 'all' }) {
       {state === 'entries' && (
         <div className="pb-4">
           <p className="pb-1 text-xs text-gray-500">Everything that aired for you in the last {data.hours} hours, newest first.</p>
-          <ul>
-            <AnimatePresence initial={false}>
-              {data.entries.map(entry => <TimelineRow key={entry.id} entry={entry} />)}
-            </AnimatePresence>
-          </ul>
+          <div role="list">
+            <VirtualScroller
+              items={entries}
+              itemKey={entryKey}
+              estimatedItemHeight={ESTIMATED_ENTRY_HEIGHT}
+              renderItem={renderEntry}
+              scrollContainerRef={scrollRef}
+            />
+          </div>
           {data.not_shown > 0 && (
             <p className="pt-2 text-center text-xs text-gray-500">{data.not_shown} older entries not shown.</p>
           )}

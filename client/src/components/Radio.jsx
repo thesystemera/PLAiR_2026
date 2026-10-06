@@ -232,7 +232,7 @@ export function Radio() {
           >
             {showTimeline && (
               <div key={timelineFilter} className="ui-fade-in">
-                <ListenerTimeline kind={timelineFilter} />
+                <ListenerTimeline kind={timelineFilter} scrollRef={conversationScrollRef} />
               </div>
             )}
             <div className={showTimeline ? 'hidden' : 'ui-fade-in'}>
@@ -241,6 +241,7 @@ export function Radio() {
                 messageFilter={messageFilter}
                 onFilterCounts={handleFilterCounts}
                 shouldAutoScroll={isPanelActive && !showTimeline}
+                scrollRef={conversationScrollRef}
               />
             </div>
           </div>

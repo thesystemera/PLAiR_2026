@@ -40,7 +40,7 @@ export const MediaSearch = memo(function MediaSearch({
     toggleCatalogView: state.toggleCatalogView,
     offlineMode: state.audioState.offlineMode,
   }))
-  const { isLG, isDesktop } = useViewport()
+  const { isLG } = useViewport()
   const compact = isLG
   const currentView = catalogView
   const showError = toastError
@@ -62,7 +62,7 @@ export const MediaSearch = memo(function MediaSearch({
     icon: intentMetadata.icon
   } : null
 
-  const searching = !isDesktop && query.trim().length > 0
+  const searching = isFocused
 
   const badgeOpacity = query.length <= 20 ? 1 : Math.max(0, 1 - (query.length - 20) / 20)
 
@@ -218,13 +218,6 @@ export const MediaSearch = memo(function MediaSearch({
           </div>
         </div>
 
-        <InteractiveEngagementButton
-          buttonType="search"
-          onRecordingComplete={handleRecordingComplete}
-          uiSound={uiSound}
-          title={isTranscribing ? 'Transcribing...' : 'Hold to record voice'}
-        />
-
         <AnimatePresence initial={false} mode="popLayout">
           {type === 'track' && !searching && (
             <motion.button
@@ -241,30 +234,28 @@ export const MediaSearch = memo(function MediaSearch({
               <Upload className="w-4 h-4" />
             </motion.button>
           )}
-        </AnimatePresence>
-
-        {type === 'track' && onGenerate && onToggleQueue && (
-          <button
-            type="button"
-            onClick={isGenerating ? onToggleQueue : handleGenerate}
-            disabled={!isGenerating && !query.trim()}
-            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
-            title={isGenerating ? 'View generation queue' : 'Generate tracks'}
-          >
-            {isGenerating ? (
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={MOTION.spin}
-              >
-                <Loader className="w-4 h-4" />
-              </motion.div>
-            ) : (
-              <Sparkles className="w-4 h-4" />
-            )}
-          </button>
-        )}
-
-        <AnimatePresence initial={false} mode="popLayout">
+          {type === 'track' && onGenerate && onToggleQueue && !searching && (
+            <motion.button
+              key="generate"
+              {...PRESETS.fade}
+              type="button"
+              onClick={isGenerating ? onToggleQueue : handleGenerate}
+              disabled={!isGenerating && !query.trim()}
+              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
+              title={isGenerating ? 'View generation queue' : 'Generate tracks'}
+            >
+              {isGenerating ? (
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={MOTION.spin}
+                >
+                  <Loader className="w-4 h-4" />
+                </motion.div>
+              ) : (
+                <Sparkles className="w-4 h-4" />
+              )}
+            </motion.button>
+          )}
           {!searching && (
             <motion.button
               key="view"
@@ -282,6 +273,13 @@ export const MediaSearch = memo(function MediaSearch({
             </motion.button>
           )}
         </AnimatePresence>
+
+        <InteractiveEngagementButton
+          buttonType="search"
+          onRecordingComplete={handleRecordingComplete}
+          uiSound={uiSound}
+          title={isTranscribing ? 'Transcribing...' : 'Hold to record voice'}
+        />
       </form>
     </motion.div>
   )
