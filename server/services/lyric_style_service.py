@@ -60,7 +60,8 @@ HOW TO DESIGN
 - Identity: pick 2-4 home fonts that fit the genre, sound and mood; they carry most cards. Beyond them, use other
   fonts across the song for single words whose meaning calls for them (a whisper in a delicate italic serif, a
   scream in a heavy condensed sans, a memory on a typewriter, a name in handwriting). A font change should mean
-  something, and it should happen: a song set in one font throughout is a missed chance.
+  something, and it should happen: a song set in one font throughout is a missed chance. Over a whole song, expect
+  to use somewhere between 6 and 12 fonts.
 - Cards follow the phrasing: most cards have 2-6 words, at most {max_words} for a fast run. Start a new card where
   the singer breathes or the thought turns. A held word or the hook can be a solo card.
 - Lines: a card of 4 or more words has 2-4 lines. Break where a typographer would, so the key word gets its own line
@@ -69,7 +70,8 @@ HOW TO DESIGN
   Enlarging every other word is noise, not emphasis.
 - Rhythm: consecutive cards should not look alike. Within a verse, move between layouts and alignments (a left
   flow, then a stack, then a right cascade) and let the weight and case shift with the voice. Use all four layouts
-  across the song.
+  across the song. Flow is the calm layout: keep it to about half the cards, and reach for stack, cascade or solo
+  whenever a line has punch.
 - Motifs: a line that comes back (the chorus, a refrain, the title) keeps the same design every time it returns.
 - Case: upper for shouts and the hook, lower for intimacy, title for names and beginnings.
 - Tilt a card (-{tilt} to {tilt} degrees) now and then, for motion or unease. Most cards stay level.
@@ -79,15 +81,16 @@ Lyrics: [42.0s] 100:I 101:keep 102:on 103:falling 104:down 105:into 106:the 107:
         [61.3s] (gap 9.1s) 108:we 109:are 110:never 111:going 112:home
         [88.0s] 113:hold 114:me 115:like 116:you 117:used 118:to
 Cards:
- {{"start": 100, "layout": "cascade", "align": "left", "font": "oswald", "weight": "light", "case": "lower",
-   "size": 2, "breaks": [103, 104], "words": {{"103": {{"size": 5, "weight": "bold"}}}}}}
- {{"start": 105, "layout": "flow", "align": "center", "font": "playfair", "weight": "regular", "case": "lower",
-   "size": 2, "italic": true, "breaks": [107], "words": {{"107": {{"size": 6, "weight": "black", "italic": false}}}}}}
- {{"start": 108, "layout": "stack", "align": "center", "font": "anton", "case": "upper", "size": 3,
-   "breaks": [110, 112]}}
- {{"start": 113, "layout": "flow", "align": "left", "font": "cormorant", "weight": "light", "case": "lower",
-   "size": 3, "italic": true, "tilt": -3, "breaks": [115], "words": {{"113": {{"size": 5}},
-   "116": {{"font": "caveat", "size": 4, "italic": false}}}}}}
+ {{"start": 100, "lines": ["I keep on", "falling", "down"], "layout": "cascade", "align": "left", "font": "oswald",
+   "weight": "light", "case": "lower", "size": 2, "words": {{"falling": {{"size": 5, "weight": "bold"}}}}}}
+ {{"start": 105, "lines": ["into the", "blue"], "layout": "flow", "align": "center", "font": "playfair",
+   "weight": "regular", "case": "lower", "size": 2, "italic": true,
+   "words": {{"blue": {{"size": 6, "weight": "black", "italic": false}}}}}}
+ {{"start": 108, "lines": ["we are", "never going", "home"], "layout": "stack", "align": "center", "font": "anton",
+   "case": "upper", "size": 3}}
+ {{"start": 113, "lines": ["hold me", "like you used to"], "layout": "flow", "align": "left", "font": "cormorant",
+   "weight": "light", "case": "lower", "size": 3, "italic": true, "tilt": -3,
+   "words": {{"hold": {{"size": 5}}, "you": {{"font": "caveat", "size": 4, "italic": false}}}}}}
 
 LYRICS
 Every word carries its number: 12:night is word 12. Numbers start at 0. Each line starts with its time; (1.2s)
@@ -97,14 +100,14 @@ after a word means it is held that long, and (gap 6.0s) marks a pause before a l
 Reply with JSON only:
 {{"look": "<two or three sentences: the song's visual language and how verses, chorus and bridge differ>",
  "home_fonts": ["<font id>", ...],
- "cards": [{{"start": <number of the card's first word>, "layout": "stack|flow|cascade|solo",
-            "align": "left|center|right", "font": "<font id>", "weight": "<weight>", "case": "upper|lower|title",
-            "size": <1-6>, "italic": false, "tilt": 0,
-            "breaks": [<numbers of the words that begin a new line>],
-            "words": {{"<word number>": {{"font": "<font id>", "size": 4, "weight": "black", "case": "upper",
-                                         "italic": true}}}}}}]}}
+ "cards": [{{"start": <number of the card's first word>, "lines": ["<the card's words, line by line, as written>"],
+            "layout": "stack|flow|cascade|solo", "align": "left|center|right", "font": "<font id>",
+            "weight": "<weight>", "case": "upper|lower|title", "size": <1-6>, "italic": false, "tilt": 0,
+            "words": {{"<a word of the card, as written>": {{"font": "<font id>", "size": 4, "weight": "black",
+                                                          "case": "upper", "italic": true}}}}}}]}}
 The first card starts at word 0 and each card runs until the next card's start; the last card ends with word {last}.
-"words" lists only the words that differ from their card, with only the fields that differ."""
+"lines" holds every word of the card exactly once, in order. "words" names only the words that differ from their
+card, with only the fields that differ; when a word appears twice in a card, the second is "word#2"."""
 
 
 def _plain(text: str) -> str:
@@ -244,11 +247,50 @@ def _treatment(raw: dict, base: dict, notes: list, where: str) -> dict:
     return {"font": font_id, "size": size, "weight": weight, "case": case, "italic": italic}
 
 
-def validate(reply: dict, word_count: int) -> tuple[list[dict], list[str], list[str]]:
+def _line_breaks(lines: list, tokens: list[str], start: int, notes: list, where: str) -> list[int]:
+    """Line breaks from the card's lines as written: each line after the first begins at its first word, looked for
+    where the previous line ended (or the nearest place it occurs, when a line dropped or repeated a word)."""
+    breaks, position = [], 0
+    for number, line in enumerate(lines):
+        line_tokens = [token for token in (_plain(part) for part in str(line).split()) if token]
+        if not line_tokens:
+            continue
+        if number and position:
+            hits = [index for index in range(1, len(tokens)) if tokens[index] == line_tokens[0]]
+            if not hits:
+                notes.append(f"{where}: line {line!r} is not in the card")
+                break
+            found = min(hits, key=lambda index: abs(index - position))
+            if found != position:
+                notes.append(f"{where}: line {line!r} does not follow the line before it")
+            if found not in (index - start for index in breaks):
+                breaks.append(start + found)
+            position = found
+        position += len(line_tokens)
+    return sorted(index for index in breaks if index > start)
+
+
+def _word_indexes(key: str, tokens: list[str], start: int) -> list[int]:
+    """The card words a treatment names: a word as written ("archive", "archive#2" for its second time in the
+    card), a phrase ("archive now"), or, failing those, a word number."""
+    text, _, nth = str(key).partition("#")
+    phrase = [token for token in (_plain(part) for part in text.split()) if token]
+    occurrence = int(nth) if nth.isdigit() else 1
+    if phrase:
+        hits = [index for index in range(len(tokens) - len(phrase) + 1) if tokens[index:index + len(phrase)] == phrase]
+        if len(hits) >= occurrence:
+            return [start + hits[occurrence - 1] + offset for offset in range(len(phrase))]
+    if text.strip().isdigit() and start <= int(text) < start + len(tokens):
+        return [int(text)]
+    return []
+
+
+def validate(reply: dict, words: list[dict]) -> tuple[list[dict], list[str], list[str]]:
     """Cards that tile every word in order are required (errors, worth a retry); a slip inside a card falls
     back to the card's own treatment and is only noted."""
     errors: list[str] = []
     notes: list[str] = []
+    word_count = len(words)
     raw_cards = reply.get("cards") if isinstance(reply, dict) else None
     if not isinstance(raw_cards, list) or not raw_cards:
         return [], ["the reply has no cards"], notes
@@ -283,31 +325,19 @@ def validate(reply: dict, word_count: int) -> tuple[list[dict], list[str], list[
             tilt = float(card.get("tilt") or 0)
         except (TypeError, ValueError):
             tilt = 0.0
-        breaks = []
-        for value in card.get("breaks") or []:
-            try:
-                index = int(value)
-            except (TypeError, ValueError):
-                notes.append(f"{where}: break {value!r} is not a word number")
-                continue
-            if not start < index <= end:
-                notes.append(f"{where}: break {index} is not inside the card (a break is a word after the first)")
-                continue
-            breaks.append(index)
+        tokens = [_plain(word["shown"]) for word in words[start:end + 1]]
+        breaks = _line_breaks(card.get("lines") or [], tokens, start, notes, where)
         overrides = {}
         for key, raw in (card.get("words") or {}).items():
-            try:
-                index = int(key)
-            except (TypeError, ValueError):
-                notes.append(f"{where}: word key {key!r} is not a word number")
+            indexes = _word_indexes(key, tokens, start) if isinstance(raw, dict) else []
+            if not indexes:
+                notes.append(f"{where}: {key!r} is not a word of this card")
                 continue
-            if not start <= index <= end or not isinstance(raw, dict):
-                notes.append(f"{where}: word {index} is not in this card")
-                continue
-            treatment = _treatment(raw, base, notes, f"{where} word {index}")
+            treatment = _treatment(raw, base, notes, f"{where} {key!r}")
             changed = {k: v for k, v in treatment.items() if v != base[k]}
-            if changed:
-                overrides[str(index)] = changed
+            for index in indexes:
+                if changed:
+                    overrides[str(index)] = changed
         cards.append({"start": start, "end": end, "layout": layout, "align": align, **base,
                       "tilt": max(-MAX_TILT, min(MAX_TILT, round(tilt, 1))), "breaks": sorted(set(breaks)),
                       "words": overrides})
@@ -335,7 +365,7 @@ async def build_style(track_id: str, metadata: dict, timing: dict, *, model: Opt
         if result.get("finish_reason") == "length":
             raise RuntimeError(f"{track_id}: the style ran past {settings.LYRIC_STYLE_MAX_TOKENS} tokens")
         reply = llm_router.parse_llm_json(result["text"], {})
-        cards, errors, notes = validate(reply, len(words))
+        cards, errors, notes = validate(reply, words)
         if cards and not errors:
             break
         problems.append(errors)

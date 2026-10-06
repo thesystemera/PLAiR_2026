@@ -601,7 +601,7 @@
       "id": "monoton",
       "family": "Monoton",
       "kind": "display",
-      "about": "neon tube capitals; disco, nightlife, glow, retro dancefloor (use big, few words)",
+      "about": "neon tube letters; disco, nightlife, glow, retro dancefloor (use big and for few words)",
       "weights": [
         400,
         400
@@ -626,7 +626,7 @@
       "id": "blackletter",
       "family": "UnifrakturMaguntia",
       "kind": "display",
-      "about": "gothic blackletter; darkness, metal, ritual, the sacred or the doomed",
+      "about": "gothic blackletter; darkness, metal, ritual, the sacred or the doomed (lower or title case only: its capitals are unreadable)",
       "weights": [
         400,
         400
