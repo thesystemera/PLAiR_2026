@@ -70,7 +70,7 @@ class DepthArtRenderer {
     this.shaderOptions = {}
     this.stepScale = 1
     this.tiltOverride = null
-    this.coarse = false
+    this.coarse = true
     this.coarseTargets = null
     this.skipDraw = false
     this.drawDelays = []

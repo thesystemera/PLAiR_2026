@@ -35,7 +35,7 @@ export const STAGES = {
   'no normalize': { edits: [["SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));", "SHADE vec3 n = vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))));"]] },
   'fill square': { edits: [["pow(1.0 - fd1, 2.0)", "(1.0 - fd1) * (1.0 - fd1)"], ["pow(1.0 - fd2, 2.0)", "(1.0 - fd2) * (1.0 - fd2)"], ["pow(1.0 - fd3, 2.0)", "(1.0 - fd3) * (1.0 - fd3)"], ["pow(1.0 - fd4, 2.0)", "(1.0 - fd4) * (1.0 - fd4)"]] },
   'all four': { edits: [["float span = max(hi.x - lo.x, hi.y - lo.y);", "float span = max(abs(displacement.x) * size.x, abs(displacement.y) * size.y) + 2.0;"], ["if (testDepth > bound) {", "if (false) {"], ["SHADE vec3 n = normalize(vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal)))));", "SHADE vec3 n = vec3(packedNormal, sqrt(max(0.0, 1.0 - dot(packedNormal, packedNormal))));"], ["pow(1.0 - fd1, 2.0)", "(1.0 - fd1) * (1.0 - fd1)"], ["pow(1.0 - fd2, 2.0)", "(1.0 - fd2) * (1.0 - fd2)"], ["pow(1.0 - fd3, 2.0)", "(1.0 - fd3) * (1.0 - fd3)"], ["pow(1.0 - fd4, 2.0)", "(1.0 - fd4) * (1.0 - fd4)"]] },
-  'coarse': { art: { coarse: true } },
+  'full res': { art: { coarse: false } },
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
 }
@@ -67,7 +67,7 @@ export async function applyStage(p, stage) {
     const warn = console.warn
     console.warn = (...args) => { warned += args.join(' '); warn(...args) }
     try {
-      window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, coarse: false, ...${JSON.stringify(stage.art || {})} })
+      window.__plairArt.set({ shader: { mediumpShading: true, ...${JSON.stringify(stage.shader || {})} }, stepScale: 1, coarse: true, ...${JSON.stringify(stage.art || {})} })
     } finally {
       console.warn = warn
     }
