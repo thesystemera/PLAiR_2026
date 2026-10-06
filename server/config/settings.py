@@ -606,6 +606,8 @@ class Settings:
     LYRIC_STYLE_VERSION: int = int(os.getenv("LYRIC_STYLE_VERSION", "1"))
     LYRIC_STYLE_MAX_TOKENS: int = int(os.getenv("LYRIC_STYLE_MAX_TOKENS", "16000"))
     LYRIC_STYLE_TIMEOUT_S: float = float(os.getenv("LYRIC_STYLE_TIMEOUT_S", "300"))
+    LYRIC_STYLE_AUTO: bool = os.getenv("LYRIC_STYLE_AUTO", "true").lower() == "true"
+    LYRIC_STYLE_CONCURRENCY: int = int(os.getenv("LYRIC_STYLE_CONCURRENCY", "2"))
     SONIC_MASTER_ENABLED: bool = os.getenv("SONIC_MASTER_ENABLED", "true").lower() == "true"
     SONIC_MASTER_PRECISION: str = os.getenv("SONIC_MASTER_PRECISION", "auto").lower()
     SONIC_MASTER_PARK_ON_CPU: bool = os.getenv("SONIC_MASTER_PARK_ON_CPU", "true").lower() == "true"

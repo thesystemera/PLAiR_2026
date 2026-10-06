@@ -14,7 +14,7 @@ import soundfile as sf
 import torch
 
 from services import log_service
-from services import track_asset_stages
+from services import lyric_style_service, track_asset_stages
 from services.base_service import SingletonService
 from config import settings
 from models_global import gpu_lease, raise_if_cuda_oom
@@ -681,6 +681,7 @@ class LyricalTimestampService(SingletonService):
 
         if save:
             await self._save_timestamps(result, track_id)
+            lyric_style_service.schedule_refresh(track_id, metadata, result)
 
         log_service.upscaling(
             f"Whisper complete: {result['line_count']} lines, {result['word_count']} words, "

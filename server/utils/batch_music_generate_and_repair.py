@@ -21,7 +21,7 @@ from services.catalog_vector_search_service import CatalogVectorSearchService
 from services.suno_service_orchestrator import SunoServiceOrchestrator
 from services.suno_generation_queue_service import SunoGenerationQueueService
 from services.suno_enriched_metadata_service import EnrichedMetadataService
-from services import log_service
+from services import log_service, lyric_style_service
 from config import settings
 from database import init_db
 import models_global
@@ -741,6 +741,27 @@ async def batch_upscale_suno_artwork() -> None:
         await enrichment.initialize()
         await batch_enrich_artwork(enrichment)
 
+async def batch_lyric_styles() -> None:
+    track_ids = lyric_style_service.missing_styles()
+    print(f"\n{len(track_ids)} song(s) with timed lyrics and no style (about 1 cent each on DeepSeek, "
+          f"{settings.LYRIC_STYLE_CONCURRENCY} at a time)")
+    if not track_ids:
+        return
+    count = input(f"How many, liked songs first (Enter = all {len(track_ids)}): ").strip()
+    if count:
+        track_ids = track_ids[:int(count)]
+    if input(f"Design {len(track_ids)} song(s), about ${len(track_ids) * 0.01:.2f}? (y/n): ").lower().strip() != 'y':
+        return
+    done = [0]
+
+    def on_done(track_id: str, result) -> None:
+        done[0] += 1
+        log_service.info(f"[LyricStyle] {done[0]}/{len(track_ids)} {track_id[:8]} {'styled' if result else 'failed'}")
+
+    counts = await lyric_style_service.backfill(track_ids, on_done)
+    log_service.success(f"Lyric styles: {counts}")
+
+
 async def show_main_menu() -> None:
     print("\n" + "=" * 80)
     print("AI RADIO - BATCH MUSIC GENERATOR")
@@ -755,6 +776,7 @@ async def show_main_menu() -> None:
     print("[7] Batch Enrich Artwork (generate depth maps for 3D parallax)")
     print("[8] Catalog Polish (fix missing features/lyrics/artwork for existing DB tracks)")
     print("[9] Upscale Suno Artwork (SDXL img2img 320px -> 1024px)")
+    print("[10] Lyric Styles (DeepSeek kinetic lyrics for songs without one, liked songs first)")
     print("[0] Exit")
     print("")
     print("=" * 80)
@@ -1085,6 +1107,10 @@ No additional commentary.{exclusion_prompt}
         elif choice == "9":
             await batch_upscale_suno_artwork()
 
+        elif choice == "10":
+            await batch_lyric_styles()
+
+    await lyric_style_service.wait_for_refreshes()
     await stop_worker()
 
 if __name__ == "__main__":

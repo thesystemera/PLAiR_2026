@@ -37,7 +37,7 @@ import psycopg2  # noqa: E402
 from config import settings  # noqa: E402
 from services import log_service  # noqa: E402
 from services.log_service import start_log_worker, stop_worker  # noqa: E402
-from services import track_asset_stages as stages  # noqa: E402
+from services import lyric_style_service, track_asset_stages as stages  # noqa: E402
 
 
 def backlog():
@@ -138,6 +138,7 @@ async def main():
                 log_service.suno(f"[Backlog] {job.track_id[:8]} {'ready' if ok else 'FAILED'} in {time.time() - t0:.0f} s | "
                                  f"{done} ready, {failed} failed, {left} left, ~{rate * left / 3600:.1f} h to go")
 
+    await lyric_style_service.wait_for_refreshes()
     await orchestrator.catalog.reload_catalog()
     log_service.suno(f"[Backlog] Finished: {done} ready, {failed} failed")
     await stop_worker()

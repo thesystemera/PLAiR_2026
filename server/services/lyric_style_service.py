@@ -5,7 +5,13 @@ on screen as they are sung, then give way to the next card) and gives each card 
 case and tilt from the shared font list (`client/src/lib/lyricFonts.json`). Saved per track in `LYRIC_STYLES_DIR`
 with a hash of the words it was made for, and served inside the lyric timing response as `style` while the words
 still match.
+
+Every new lyric timing schedules one (`schedule_refresh`, called when the timing service saves a file): new songs,
+uploads, remasters and re-alignments get a style in the background, and a re-timing that keeps the same words keeps
+its style. Songs timed before this existed are styled on demand with `backfill` (`utils/build_lyric_styles.py
+--missing`, or the batch tool's menu), liked songs first.
 """
+import asyncio
 import hashlib
 import json
 import re
@@ -14,7 +20,9 @@ from typing import Any, Optional
 
 from config import settings
 from config.settings import BASE_DIR
-from services import llm_router, log_service
+import psycopg2
+
+from services import llm_router, log_service, task_utils
 from services.track_asset_stages import track_lyrics_text
 
 FONTS = json.loads((BASE_DIR / "client" / "src" / "lib" / "lyricFonts.json").read_text(encoding="utf-8"))["fonts"]
@@ -385,3 +393,85 @@ async def build_style(track_id: str, metadata: dict, timing: dict, *, model: Opt
     log_service.info(f"[LyricStyle] {track_id}: {len(cards)} cards for {len(words)} words, "
                      f"home fonts {', '.join(home) or '-'}, {len(notes)} note(s) ({model})")
     return {"style": style, "usage": usage, "problems": problems, "notes": notes}
+
+
+_slots = asyncio.Semaphore(settings.LYRIC_STYLE_CONCURRENCY)
+_refreshing: set = set()
+
+
+def needs_style(track_id: str, timing: dict) -> bool:
+    return not timing.get("instrumental") and bool(timed_words(timing)) and load_style(track_id, timing) is None
+
+
+async def refresh_style(track_id: str, metadata: dict, timing: dict) -> Optional[dict]:
+    """A style for the song unless it has a current one; a failure is logged and the song keeps plain lyrics."""
+    if not needs_style(track_id, timing):
+        return None
+    async with _slots:
+        try:
+            return await build_style(track_id, metadata, timing)
+        except llm_router.LLM_ERRORS as e:
+            log_service.warning(f"[LyricStyle] {track_id}: no style ({type(e).__name__}: {e})")
+            return None
+
+
+def schedule_refresh(track_id: str, metadata: dict, timing: dict) -> None:
+    if not settings.LYRIC_STYLE_AUTO or not needs_style(track_id, timing):
+        return
+    task = task_utils.spawn(refresh_style(track_id, metadata, timing), name=f"lyric_style:{track_id[:8]}")
+    _refreshing.add(task)
+    task.add_done_callback(_refreshing.discard)
+
+
+async def wait_for_refreshes() -> None:
+    while _refreshing:
+        await asyncio.gather(*list(_refreshing), return_exceptions=True)
+
+
+def _likes_rank() -> dict:
+    with psycopg2.connect(settings.DATABASE_URL.replace("+asyncpg", "")) as conn, conn.cursor() as cur:
+        cur.execute("select track_id, preference_type::text from track_preferences "
+                    "where preference_type::text in ('SUPER_LIKE', 'LIKE')")
+        rank: dict = {}
+        for track_id, kind in cur.fetchall():
+            rank[track_id] = min(rank.get(track_id, 2), 0 if kind == "SUPER_LIKE" else 1)
+    return rank
+
+
+def missing_styles() -> list[str]:
+    """Songs with sung, timed lyrics and no current style, super-liked first, then liked, then the rest."""
+    missing = []
+    for path in settings.LYRIC_TIMESTAMPS_DIR.glob("*.json"):
+        if not (settings.METADATA_DIR / path.name).is_file():
+            continue
+        try:
+            timing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if needs_style(path.stem, timing):
+            missing.append(path.stem)
+    rank = _likes_rank()
+    return sorted(missing, key=lambda track_id: (rank.get(track_id, 2), track_id))
+
+
+async def backfill(track_ids: list[str], on_done=None) -> dict:
+    """Styles for the given songs, LYRIC_STYLE_CONCURRENCY at a time; on_done(track_id, result) after each."""
+    counts = {"styled": 0, "skipped": 0, "failed": 0}
+
+    async def one(track_id: str):
+        try:
+            metadata = json.loads((settings.METADATA_DIR / f"{track_id}.json").read_text(encoding="utf-8"))
+            timing = json.loads((settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            counts["failed"] += 1
+            return
+        if not needs_style(track_id, timing):
+            counts["skipped"] += 1
+            return
+        result = await refresh_style(track_id, metadata, timing)
+        counts["styled" if result else "failed"] += 1
+        if on_done:
+            on_done(track_id, result)
+
+    await asyncio.gather(*(one(track_id) for track_id in track_ids))
+    return counts
