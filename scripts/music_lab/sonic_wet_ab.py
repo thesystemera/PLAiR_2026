@@ -1,4 +1,4 @@
-import asyncio, json, os, sys
+import argparse, asyncio, json, os, sys
 from pathlib import Path
 
 os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
@@ -11,7 +11,6 @@ from services.audio_headroom import spectrally_balanced_blend, write_float_wav  
 import decoder_lock  # noqa: E402
 
 OUT = Path(r"E:\AI_RADIO\upscale_ab\sonic_wet"); OUT.mkdir(parents=True, exist_ok=True)
-WETS = (0.33, 0.5, 1.0)
 BANDS = ((60, 250), (250, 1000), (1000, 4000), (4000, 8000), (8000, 12000), (12000, 16000))
 
 
@@ -40,11 +39,11 @@ def quiet_db(x, r):
     return float(np.percentile(db[db > -70], 10))
 
 
-async def main(ids):
+async def main(ids, prompt, wets, tag):
     from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
     from services.audio_master_service import AudioMasterService
     sonic = SonicMasterService()
-    sonic.configure(**{**SUNO_SONIC_SETTINGS, "wet_mix": 1.0})
+    sonic.configure(**{**SUNO_SONIC_SETTINGS, "wet_mix": 1.0, **({"prompt": prompt} if prompt else {})})
     await sonic.initialize()
     master = AudioMasterService()
     rows = []
@@ -52,7 +51,7 @@ async def main(ids):
         meta = json.loads((settings.CATALOG_DIR / "metadata" / f"{tid}.json").read_text(encoding="utf-8"))
         name = "".join(c if c.isalnum() else "_" for c in (meta.get("generation_params") or {}).get("title", tid)).strip("_")[:28]
         premaster = settings.PREMASTER_WAV_DIR / f"{tid}.wav"
-        pure = OUT / f"_{tid}_pure.wav"
+        pure = OUT / f"_{tid}_{tag}_pure.wav"
         if not pure.exists():
             ok = await sonic.enhance_audio(premaster, pure, wet_mix=1.0)
             if not ok:
@@ -64,13 +63,13 @@ async def main(ids):
         suno_wav = OUT / f"_{tid}_suno.wav"
         os.system(f'ffmpeg -loglevel error -y -i "{settings.CATALOG_DIR / "mp3" / (tid + ".mp3")}" -ar 44100 -c:a pcm_f32le "{suno_wav}"')
         files = [(f"{name}_0_Suno_raw.flac", suno_wav)]
-        for w in WETS:
+        for i, w in enumerate(wets, 1):
             blended, _ = spectrally_balanced_blend(wet, dry, w, r, max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0)
             mix = OUT / f"_{tid}_{int(w * 100)}.wav"
             write_float_wav(mix, blended, r)
             done = OUT / f"_{tid}_{int(w * 100)}_master.wav"
             await master.master_audio_with_report(mix, done, target_lufs=-16.0, correct=False, tone=True, hiss=True)
-            label = {0.33: "1_current_SonicMaster_33", 0.5: "2_February_SonicMaster_50", 1.0: "3_SonicMaster_100"}[w]
+            label = f"{i}_{tag}_SonicMaster_{int(w * 100)}"
             files.append((f"{name}_{label}.flac", done))
             mix.unlink()
         for fname, src in files:
@@ -89,4 +88,10 @@ async def main(ids):
         print("%-50s" % fname[:50] + "".join("%9.1f" % (b - a) for a, b in zip(ref["bands"], bands)) +
               "%9.1f" % (quiet - ref["quiet"]) + "  %.3f" % lk.get("lock", float("nan")) + "  %5.1f%%" % lk.get("ripple_12_17", float("nan")))
 
-asyncio.run(main(sys.argv[1:]))
+parser = argparse.ArgumentParser()
+parser.add_argument("ids", nargs="+")
+parser.add_argument("--prompt", default=None, help="SonicMaster prompt (default: the production prompt)")
+parser.add_argument("--wets", default="0.33,0.5,1.0")
+parser.add_argument("--tag", default="current")
+a = parser.parse_args()
+asyncio.run(main(a.ids, a.prompt, [float(w) for w in a.wets.split(",")], a.tag))
