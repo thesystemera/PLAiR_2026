@@ -60,6 +60,8 @@ const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
 const CLICK_DECAY_MS = 500
 const ARTWORK_SWAP_FRAMES = 2
+const ARTWORK_FADE_S = 0.7
+const ARTWORK_FADE_MAX_STEP_S = 1 / 30
 const PANEL_CORNER_RADIUS = 0.015
 const OPAQUE_PANEL_OPACITY = 0.9995
 const MAX_SPLIT_RECTS = 7
@@ -1017,7 +1019,7 @@ export class SceneRenderer {
     const pX = hasGyro ? gyro.parallaxX * 40 : mouse.parallaxX * 40
     const pY = hasGyro ? gyro.parallaxY * 40 : mouse.parallaxY * 40
 
-    if (this.transitionProgress < 1) this.transitionProgress = Math.min(1, this.transitionProgress + delta / 0.7)
+    if (this.transitionProgress < 1) this.transitionProgress = Math.min(1, this.transitionProgress + Math.min(delta, ARTWORK_FADE_MAX_STEP_S) / ARTWORK_FADE_S)
 
     bgUniforms.u_time.value = (bgUniforms.u_time.value + delta) % 1000.0
     bgUniforms.u_transition.value = this.transitionProgress

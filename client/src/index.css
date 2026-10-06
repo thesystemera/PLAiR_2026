@@ -374,7 +374,3 @@ textarea,
   }
 }
 
-@keyframes rotation-veil-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
