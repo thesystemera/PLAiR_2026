@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiofiles
+import numpy as np
+import soundfile as sf
 import torch
 
 from services import log_service
@@ -30,6 +32,16 @@ MAX_LINE_WORDS = 14
 MAX_LINE_DURATION_S = 8.0
 MAX_WORD_GAP_S = 1.5
 LANGUAGE_DETECTION_SEGMENTS = 4
+SYNC_VERSION = "1.1"
+VOICE_HOP_S = 0.01
+VOICE_REFERENCE_PERCENTILE = 95
+VOICE_AUDIBLE_DB = -80.0
+VOICE_SILENT_DB = -40.0
+VOICE_PRESENT_DB = -30.0
+VOICE_PROBE_S = 0.06
+VOICE_PREROLL_S = 0.02
+VOICE_PHRASE_GAP_S = 0.6
+MIN_WORD_S = 0.08
 ENGLISH_RATIO_THRESHOLD = 0.12
 
 ENGLISH_MARKERS = frozenset(
@@ -71,6 +83,61 @@ def normalize_language_code(value: Any) -> Optional[str]:
     if len(base) == 2 and base.isalpha():
         return base
     return None
+
+
+def timing_is_current(path: Path) -> bool:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("sync_version") == SYNC_VERSION
+    except (OSError, ValueError):
+        return False
+
+
+def voice_levels(path: Path) -> np.ndarray:
+    """The vocal stem's level every VOICE_HOP_S, in dB against its own loud singing."""
+    audio, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    mono = audio.mean(axis=1)
+    hop = max(1, int(rate * VOICE_HOP_S))
+    frames = len(mono) // hop
+    rms = np.sqrt(np.mean(mono[:frames * hop].reshape(frames, hop) ** 2, axis=1) + 1e-12)
+    levels = 20 * np.log10(rms)
+    audible = levels[levels > VOICE_AUDIBLE_DB]
+    return levels - (np.percentile(audible, VOICE_REFERENCE_PERCENTILE) if audible.size else 0.0)
+
+
+def snap_to_voice(words: List[Dict[str, Any]], levels: np.ndarray) -> int:
+    """Whisper starts a word that follows a pause where the pause began. A word whose start falls in silence on the
+    vocal stem starts where the voice comes in instead (by the end of the next word: one Whisper heard in silence
+    lands with the next sung word), and ends no sooner than MIN_WORD_S after it."""
+    moved = 0
+    for index, word in enumerate(words):
+        first = round(word["start"] / VOICE_HOP_S)
+        probe = levels[first:first + round(VOICE_PROBE_S / VOICE_HOP_S)]
+        if probe.size == 0 or float(np.median(probe)) >= VOICE_SILENT_DB:
+            continue
+        limit = max(word["end"], words[index + 1]["end"]) if index + 1 < len(words) else word["end"]
+        voiced = np.nonzero(levels[first:round(limit / VOICE_HOP_S)] >= VOICE_PRESENT_DB)[0]
+        if voiced.size == 0:
+            continue
+        start = round(max(word["start"], (first + int(voiced[0])) * VOICE_HOP_S - VOICE_PREROLL_S), 3)
+        if start > word["start"]:
+            word["start"] = start
+            word["end"] = round(max(word["end"], start + MIN_WORD_S), 3)
+            word["snapped"] = True
+            moved += 1
+    return moved
+
+
+def voiced_frames(levels: np.ndarray, low: float, high: float, after: bool, before: bool) -> Optional[np.ndarray]:
+    """Where words Whisper missed were sung: the sung frames between the matched words around them. With a matched
+    word only after them, the phrase that ends nearest it; only before them, the phrase that starts nearest it."""
+    first = max(0, round(low / VOICE_HOP_S))
+    frames = np.nonzero(levels[first:max(first, round(high / VOICE_HOP_S))] >= VOICE_PRESENT_DB)[0] + first
+    if frames.size == 0:
+        return None
+    if before and after:
+        return frames
+    phrases = np.split(frames, np.nonzero(np.diff(frames) * VOICE_HOP_S > VOICE_PHRASE_GAP_S)[0] + 1)
+    return phrases[-1] if after else phrases[0]
 
 
 def detect_lyrics_language(metadata: Dict[str, Any], lyrics: str) -> Optional[str]:
@@ -287,7 +354,7 @@ class LyricalTimestampService(SingletonService):
 
     @staticmethod
     def _interpolate_gaps(words: List[Optional[Dict[str, Any]]], ref_tokens: List[str],
-                          duration: Optional[float]) -> List[Dict[str, Any]]:
+                          duration: Optional[float], levels: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
         total = len(words)
         index = 0
         while index < total:
@@ -303,6 +370,23 @@ class LyricalTimestampService(SingletonService):
 
             if previous_end is None and next_start is None:
                 return []
+            voiced = None
+            if levels is not None:
+                voiced = voiced_frames(levels, previous_end or 0.0,
+                                       next_start if next_start is not None else len(levels) * VOICE_HOP_S,
+                                       after=next_start is not None, before=previous_end is not None)
+            if voiced is not None:
+                for offset in range(count):
+                    low, high = offset * len(voiced) // count, (offset + 1) * len(voiced) // count
+                    words[index + offset] = {
+                        "word": ref_tokens[index + offset],
+                        "start": round(voiced[low] * VOICE_HOP_S, 3),
+                        "end": round((voiced[max(low, high - 1)] + 1) * VOICE_HOP_S, 3),
+                        "confidence": 0.3,
+                        "aligned": True
+                    }
+                index = run_end
+                continue
             if previous_end is None:
                 span_end = next_start
                 span_start = max(0.0, next_start - count * INTERPOLATED_WORD_S)
@@ -359,7 +443,8 @@ class LyricalTimestampService(SingletonService):
         self,
         whisper_words: List[Dict[str, Any]],
         ground_truth_lyrics: str,
-        duration: Optional[float] = None
+        duration: Optional[float] = None,
+        levels: Optional[np.ndarray] = None
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
         lines = self._lyric_lines(ground_truth_lyrics)
         hyp_tokens = self._whisper_tokens(whisper_words)
@@ -387,9 +472,11 @@ class LyricalTimestampService(SingletonService):
                 word["aligned"] = True
             words[ref_index] = word
 
-        aligned_words = self._interpolate_gaps(words, ref_tokens, duration)
+        aligned_words = self._interpolate_gaps(words, ref_tokens, duration, levels)
         if not aligned_words:
             return [], [], 0
+        if levels is not None:
+            snap_to_voice(aligned_words, levels)
 
         grouped: List[Dict[str, Any]] = []
         offset = 0
@@ -401,11 +488,14 @@ class LyricalTimestampService(SingletonService):
         exact = sum(1 for hyp_index, sim in mapping if hyp_index is not None and sim == 1.0)
         return aligned_words, grouped, exact
 
-    def _whisper_only_lines(self, whisper_words: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def _whisper_only_lines(self, whisper_words: List[Dict[str, Any]],
+                            levels: Optional[np.ndarray] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         words = [
             {"word": t["text"], "start": round(t["start"], 3), "end": round(t["end"], 3), "confidence": round(t["confidence"], 3)}
             for t in self._whisper_tokens(whisper_words)
         ]
+        if levels is not None:
+            snap_to_voice(words, levels)
         return words, self._lines_from_chunks(self._split_words(words))
 
     def _create_placeholder_timestamps(
@@ -417,7 +507,7 @@ class LyricalTimestampService(SingletonService):
         return {
             "id": track_id,
             "duration": 0.0,
-            "sync_version": "1.0",
+            "sync_version": SYNC_VERSION,
             "model": self.model_name,
             "confidence": 0.0,
             "alignment_score": 0.0,
@@ -486,13 +576,14 @@ class LyricalTimestampService(SingletonService):
         duration: float,
         model_name: str,
         language: Optional[str],
-        audio_source: str
+        audio_source: str,
+        levels: Optional[np.ndarray] = None
     ) -> Dict[str, Any]:
-        aligned_words, lines, exact = self._align_lyrics(whisper_words, ground_truth_lyrics, duration)
+        aligned_words, lines, exact = self._align_lyrics(whisper_words, ground_truth_lyrics, duration, levels)
         alignment = "lyrics"
         if not aligned_words:
             log_service.warning(f"Whisper: Lyrics did not align for {track_id[:8]}, using transcription")
-            aligned_words, lines = self._whisper_only_lines(whisper_words)
+            aligned_words, lines = self._whisper_only_lines(whisper_words, levels)
             alignment = "whisper_only"
             exact = 0
 
@@ -502,7 +593,7 @@ class LyricalTimestampService(SingletonService):
         return {
             "id": track_id,
             "duration": round(duration, 3),
-            "sync_version": "1.0",
+            "sync_version": SYNC_VERSION,
             "model": model_name,
             "confidence": round(avg_confidence, 3),
             "alignment_score": round(alignment_score, 3),
@@ -513,6 +604,7 @@ class LyricalTimestampService(SingletonService):
             "sections": sections,
             "language": language,
             "audio_source": audio_source,
+            "voice_snapped": sum(1 for word in aligned_words if word.get("snapped")),
             "alignment": alignment
         }
 
@@ -579,10 +671,12 @@ class LyricalTimestampService(SingletonService):
                 log_service.upscaling(f"Whisper: No words detected for {track_id[:8]}")
                 return None
 
+            levels = await asyncio.to_thread(voice_levels, source) if source_kind == "vocal_stem" else None
+
             detected_language = transcribe_language or getattr(info, "language", None)
             result = await asyncio.to_thread(
                 self._build_result, track_id, whisper_words, ground_truth_lyrics, sections,
-                float(getattr(info, "duration", 0.0) or 0.0), model_name, detected_language, source_kind
+                float(getattr(info, "duration", 0.0) or 0.0), model_name, detected_language, source_kind, levels
             )
 
         if save:
@@ -590,7 +684,8 @@ class LyricalTimestampService(SingletonService):
 
         log_service.upscaling(
             f"Whisper complete: {result['line_count']} lines, {result['word_count']} words, "
-            f"confidence: {result['confidence']:.0%}, alignment: {result['alignment_score']:.0%} ({result['alignment']})"
+            f"confidence: {result['confidence']:.0%}, alignment: {result['alignment_score']:.0%} ({result['alignment']}), "
+            f"{result['audio_source']}, {result['voice_snapped']} start(s) moved to the voice"
         )
         return result
 

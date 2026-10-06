@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from services import log_service
+from services.audio_stage_registry import stems_dir_for
 from config import settings
 from models_global import GPUOutOfMemoryError
 
@@ -79,14 +80,14 @@ def webm_path(track_id: str, bitrate: str = "192k") -> Path:
 
 
 def demucs_vocal_stem(track_id: str) -> Optional[Path]:
-    stems_dir = settings.DEMUCS_STEMS_DIR / track_id
-    for name in ("vocals_enhanced.wav", "vocals.wav"):
-        candidate = stems_dir / name
-        try:
-            if candidate.is_file() and candidate.stat().st_size > 4096:
-                return candidate
-        except OSError:
-            continue
+    for stems_dir in dict.fromkeys((stems_dir_for(track_id), settings.DEMUCS_STEMS_DIR / track_id)):
+        for name in ("vocals_enhanced.wav", "vocals.wav"):
+            candidate = stems_dir / name
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 4096:
+                    return candidate
+            except OSError:
+                continue
     return None
 
 

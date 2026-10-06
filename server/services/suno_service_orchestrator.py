@@ -42,7 +42,7 @@ from services.audio_master_service import AudioMasterService, MASTER_TARGET_LUFS
 from services.audio_headroom import mix_stems_to_file
 from services.audio_stage_registry import quality_scorer, resolve_bandwidth_stage, resolve_separation_model, stems_dir_for
 from services.audio_features_service import AudioFeaturesService
-from services.audio_lyrical_timestamp_service import LyricalTimestampService
+from services.audio_lyrical_timestamp_service import LyricalTimestampService, timing_is_current
 from services.audio_transcoding_service import AudioTranscodingService
 from services.suno_service import SunoService
 from services.catalog_database_service import CatalogDatabaseService
@@ -749,7 +749,7 @@ class SunoServiceOrchestrator(SingletonService):
                     job.lyrics_complete = True
                     lane5_queue.task_done()
                     continue
-                if (settings.LYRIC_TIMESTAMPS_DIR / f"{job.track_id}.json").exists():
+                if timing_is_current(settings.LYRIC_TIMESTAMPS_DIR / f"{job.track_id}.json"):
                     job.lyrics_complete = True
                     self._notify_asset_doctor(job)
                     lane5_queue.task_done()
