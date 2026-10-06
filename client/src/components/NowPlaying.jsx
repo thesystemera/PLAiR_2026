@@ -15,8 +15,10 @@ import {watchOffscreen} from '../lib/microMotion'
 import {ExternalLink, MessageSquareText, Music} from 'lucide-react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
+import {FadeSwap} from './Motion'
 
 const NO_LYRICS = []
+const ARRIVE = { initial: PRESETS.fade.initial, animate: PRESETS.fade.animate }
 const NOW_PLAYING_INTENSITY = 0.05
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
 const LYRIC_STATE_CLASSES = [
@@ -98,7 +100,7 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
   }
 
   return (
-    <div className="bg-white/5 p-4 rounded-lg mb-6" ref={setContainer}>
+    <motion.div className="bg-white/5 p-4 rounded-lg mb-6" ref={setContainer} {...ARRIVE}>
       <div className="text-xs text-gray-400 mb-2">Lyrics</div>
       <div className="space-y-1">
         {lyrics.map((line, lineIndex) => (
@@ -124,7 +126,7 @@ const SyncedLyrics = memo(function SyncedLyrics({ lyricTimestamps }) {
           </div>
         ))}
       </div>
-    </div>
+    </motion.div>
   )
 })
 
@@ -163,7 +165,7 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
   ]
 
   return (
-    <div className="bg-white/5 p-4 rounded-lg mb-6">
+    <motion.div className="bg-white/5 p-4 rounded-lg mb-6" {...ARRIVE}>
       <div className="text-xs text-gray-400 mb-3">Audio Features</div>
       <div className="space-y-3">
         {features.map((feature) => (
@@ -183,7 +185,7 @@ const TrackAudioFeatures = memo(function TrackAudioFeatures({ audioFeatures }) {
           </div>
         ))}
       </div>
-    </div>
+    </motion.div>
   )
 })
 
@@ -236,7 +238,7 @@ const ArtistInfo = memo(function ArtistInfo({ artistId, currentTrackId }) {
   if (!shown.bio && links.length === 0 && others.length === 0) return null
 
   return (
-    <div className="bg-white/5 p-4 rounded-lg mb-6">
+    <motion.div className="bg-white/5 p-4 rounded-lg mb-6" {...ARRIVE}>
       <div className="text-xs text-gray-400 mb-2">About {shown.name}</div>
       {shown.bio && <p className="text-sm text-gray-200 whitespace-pre-line break-words mb-3">{shown.bio}</p>}
       {links.length > 0 && (
@@ -263,7 +265,7 @@ const ArtistInfo = memo(function ArtistInfo({ artistId, currentTrackId }) {
           </div>
         </>
       )}
-    </div>
+    </motion.div>
   )
 })
 
@@ -323,13 +325,14 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
 })
 
 export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
-  const [analytics, setAnalytics] = useState(null)
+  const [analyticsState, setAnalyticsState] = useState(null)
   const artBoxRef = useRef(null)
 
   const { togglePanel: toggleQueuePanel } = useGenerationQueue()
   const {
     audioFeatures,
     lyricTimestamps,
+    trackDataFor,
     hasActiveJobs,
     playerHeight,
     isFullscreen,
@@ -337,6 +340,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
+    trackDataFor: state.trackDataFor,
     hasActiveJobs: state.queueState.hasActiveJobs,
     playerHeight: state.interfaceState.playerHeight,
     isFullscreen: state.interfaceState.isFullscreenVisuals,
@@ -352,11 +356,12 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
     if (!track?.id) return
 
     let cancelled = false
+    const trackId = track.id
     const fetchAnalytics = async () => {
       try {
-        const data = await api.getTrackAnalytics(track.id)
+        const data = await api.getTrackAnalytics(trackId)
         if (data && !cancelled) {
-          setAnalytics(data)
+          setAnalyticsState({ trackId, data })
         }
       } catch (error) {
         logger.error('Failed to fetch analytics:', error)
@@ -379,6 +384,8 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   }
 
   const params = track.generation_params || {}
+  const dataReady = trackDataFor === track.id
+  const analytics = analyticsState?.trackId === track.id ? analyticsState.data : null
 
   return (
     <div className="flex flex-col h-full relative">
@@ -481,6 +488,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
         </div>
         <div className={isSplit ? 'flex-1 min-w-0' : undefined}>
+        <FadeSwap swapKey={track.id} preset={PRESETS.fade}>
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
           {params.artist_name && (
@@ -492,7 +500,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         {track.artist_profile_id && <ArtistInfo artistId={track.artist_profile_id} currentTrackId={track.id} />}
 
         {analytics && analytics.total_plays > 0 && (
-          <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4 rounded-lg mb-6">
+          <motion.div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4 rounded-lg mb-6" {...ARRIVE}>
             <div className="text-xs text-purple-300 mb-3 font-semibold">TRACK ANALYTICS</div>
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-black/20 p-3 rounded-lg">
@@ -562,10 +570,10 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
                 </div>
               )}
             </div>
-          </div>
+          </motion.div>
         )}
 
-        <TrackAudioFeatures audioFeatures={audioFeatures} />
+        <TrackAudioFeatures audioFeatures={dataReady ? audioFeatures : null} />
 
         {track.derived_tags && (
           <>
@@ -671,8 +679,9 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         })()}
 
         {!params.instrumental && (
-          <SyncedLyrics lyricTimestamps={lyricTimestamps} />
+          <SyncedLyrics lyricTimestamps={dataReady ? lyricTimestamps : null} />
         )}
+        </FadeSwap>
         </div>
         </div>
       </Scroller>

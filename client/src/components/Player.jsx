@@ -13,6 +13,7 @@ import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../lib/motion'
 import { artPop, nudge } from '../lib/microMotion'
+import { FadeSwap } from './Motion'
 import { ON_AIR_LAMP } from '../lib/themeManager'
 import { TrackArtCrossfade } from './DepthArt'
 
@@ -180,10 +181,11 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playback = usePlaybackActions()
   const { togglePlay, next, previous, audio, talkBreakProgress } = playback
   const {
-    audioFeatures, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess,
+    audioFeatures: latestFeatures, trackDataFor, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess,
     isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
+    trackDataFor: state.trackDataFor,
     isCached: state.audioState.isCached,
     engineRef: state.engineRef,
     notificationsMuted: state.settingsState.notificationsMuted,
@@ -198,6 +200,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     talkBreak: state.engineState.talkBreak,
   }))
   const onAir = !!talkBreak
+  const audioFeatures = currentTrack && trackDataFor === currentTrack.id ? latestFeatures : null
   const { isPhoneLandscape } = useViewport()
   const compact = isPhoneLandscape
   const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
@@ -513,7 +516,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         {!compact && soundState.icon === 'bellOff' && <BellOff size={20} className="hidden md:block" />}
         {!compact && soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
       </button>
-      <div className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
+      <FadeSwap swapKey={currentTrack.id} preset={PRESETS.fade} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
         <div
           className={`font-semibold truncate transition-colors duration-theme ${compact ? 'text-sm' : 'text-base'}`}
           style={{ color: getWhite() }}
@@ -526,7 +529,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         >
           {currentTrack.generation_params?.style_canonical || currentTrack.generation_params?.style || currentTrack.style || ''}
         </div>
-      </div>
+      </FadeSwap>
     </>
   ) : null
 
@@ -606,7 +609,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       </span>
       {onAir ? (
         <div
-          className={`flex-1 relative overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          className={`ui-layer-in flex-1 relative overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           title={talkBreak.title || talkBreak.label}
         >
           <div
@@ -630,7 +633,8 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         </div>
       ) : audioFeatures ? (
         <div
-          className={`flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          key={currentTrack?.id}
+          className={`ui-layer-in flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           onClick={handleSeek}
         >
           <div
@@ -656,6 +660,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           </div>
         </div>
       ) : (
+        <div className={`flex-1 flex items-center ${compact ? 'h-7' : 'h-8'}`}>
         <div
           className="flex-1 h-1 rounded-full cursor-pointer group relative overflow-hidden"
           onClick={handleSeek}
@@ -687,6 +692,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
               }}
             />
           </div>
+        </div>
         </div>
       )}
       <span

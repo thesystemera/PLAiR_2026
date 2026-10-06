@@ -274,6 +274,7 @@ export function UIStateProvider({ children }) {
   const pinnedArtworkIdsRef = useRef(new Set())
   const [audioFeatures, setAudioFeatures] = useState(null)
   const [lyricTimestamps, setLyricTimestamps] = useState(null)
+  const [trackDataFor, setTrackDataFor] = useState(null)
 
   const videoClipsMapRef = useRef(new Map())
   const [videoClipsByTrack, setVideoClipsByTrack] = useState({})
@@ -960,9 +961,10 @@ export function UIStateProvider({ children }) {
     logger.info(`[UIState] 🎬 Video clips setting: ${settingsState.videoClipsEnabled ? 'ENABLED' : 'DISABLED'}`)
   }, [settingsState.videoClipsEnabled])
 
-  const setTrackData = useCallback((features, lyrics) => {
+  const setTrackData = useCallback((features, lyrics, trackId = null) => {
     setAudioFeatures(features)
     setLyricTimestamps(lyrics)
+    setTrackDataFor(trackId)
   }, [])
 
   const updateShaderRegions = useCallback((regions, opacities) => {
@@ -1101,6 +1103,7 @@ export function UIStateProvider({ children }) {
     fetchVideoClips,
     audioFeatures,
     lyricTimestamps,
+    trackDataFor,
     setTrackData,
 
     shoutoutModalState,
@@ -1138,7 +1141,7 @@ export function UIStateProvider({ children }) {
     notices, showNotice, hideNotice, publishToast, removeToast, toastSuccess, toastError, toastInfo, toastWarning,
     updateRadioButtonInteraction, updateRadioButtonOpacity, updateRadioButtonForegroundOpacity,
     reportInterfaceState, interfaceState, toggleCatalogView, toggleRadioInput, setMobilePanel, updateShaderRegions, updateShaderRadioButtonPos,
-    videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, setTrackData,
+    videoClipsByTrack, fetchVideoClips, audioFeatures, lyricTimestamps, trackDataFor, setTrackData,
     shoutoutModalState, openShoutoutModal, closeShoutoutModal,
     reviewModalState, openReviewModal, closeReviewModal,
     uploadModalOpen, uploadEditTrackId, uploadWatchId, openUploadModal, openEditTrack, closeUploadModal,

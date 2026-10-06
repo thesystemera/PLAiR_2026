@@ -71,7 +71,7 @@ export function TrackDataLoader() {
             }
           }
 
-          if (!cancelled) setTrackData(features, lyrics)
+          if (!cancelled) setTrackData(features, lyrics, trackId)
 
         } catch (err) {
           logger.warn(`[App] Cache lookup failed for ${trackId}:`, err)
