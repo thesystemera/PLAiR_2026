@@ -590,6 +590,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 
 - `client/public/sw.js` - Service worker: precaches the build's asset manifest, caches static/dynamic files, never intercepts /api, serves ranges.
 - `client/vite.config.js` - Vite config: React plugin, offline asset-manifest plugin, dev server on 3000 proxying /api, /ws, /track.
+- `client/lyric-sheet.html` - Dev page (Vite dev server only, never built): every card of a song's lyric style at its final state; `?track=ID` (default The Archive of Cool) and `?aspect=0.46` for a phone held upright.
 
 #### client/src
 

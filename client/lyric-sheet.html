@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyric sheet</title>
+<style>
+  body { background: #111; color: #bbb; font: 12px system-ui, sans-serif; margin: 16px; }
+  #info { margin-bottom: 12px; max-width: 1200px; }
+  .grid { display: grid; grid-template-columns: repeat(var(--cols, 4), 1fr); gap: 10px; }
+  figure { margin: 0; background: linear-gradient(135deg, #2a3140, #4a2f38); }
+  canvas { width: 100%; display: block; }
+  figcaption { padding: 4px 6px; background: #000; }
+</style>
+</head>
+<body>
+<div id="info">loading…</div>
+<div class="grid" id="grid"></div>
+<script type="module">
+import { prepareLyricStyle, drawLyricFrame, lyricCanvasSize } from '/src/lib/lyricStyle.js'
+import { loadLyricFonts } from '/src/lib/lyricFonts.js'
+
+const params = new URLSearchParams(location.search)
+const id = params.get('track') || '33af379cdcee7b06e47e2e9b4f1b614c'
+const aspect = Number(params.get('aspect') || 16 / 9)
+document.body.style.setProperty('--cols', aspect < 1 ? 6 : 4)
+const timing = await (await fetch(`/api/lyric-timestamps/${id}`)).json()
+const styled = prepareLyricStyle(timing)
+const ready = await loadLyricFonts(styled.uses, styled.text)
+document.getElementById('info').textContent = `${styled.cards.length} cards, fonts ready: ${ready}. ${timing.style.look}`
+styled.cards.forEach((card, index) => {
+  const canvas = document.createElement('canvas')
+  const size = lyricCanvasSize(aspect)
+  canvas.width = size.width
+  canvas.height = size.height
+  canvas.style.aspectRatio = aspect
+  drawLyricFrame(canvas.getContext('2d'), styled, { index, count: card.words.length }, size.width, size.height, aspect)
+  const figure = document.createElement('figure')
+  const caption = document.createElement('figcaption')
+  caption.textContent = `${index} · ${card.layout} ${card.align}${card.tilt ? ` tilt ${card.tilt}` : ''} · ${card.start.toFixed(1)}s`
+  figure.append(canvas, caption)
+  document.getElementById('grid').append(figure)
+})
+</script>
+</body>
+</html>
