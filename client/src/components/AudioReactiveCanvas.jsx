@@ -282,7 +282,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     const lyric = lyricRef.current
     const clockMs = () => {
       const latest = latestRef.current
-      const heard = latest.getUIState().engineState?.isActiveDevice ? latest.audio?.heardPositionMs() : null
+      const heard = latest.getUIState().engineState?.isActiveDevice ? latest.audio?.getEngine()?.heardPositionMs() : null
       return (heard ?? latest.ui.engineRef?.current?.progress_ms ?? 0) + LYRIC_LEAD_MS
     }
     const update = () => {
