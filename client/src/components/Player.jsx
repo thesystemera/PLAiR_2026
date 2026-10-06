@@ -516,7 +516,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         {!compact && soundState.icon === 'bellOff' && <BellOff size={20} className="hidden md:block" />}
         {!compact && soundState.icon === 'muted' && <VolumeX size={20} className="hidden md:block" />}
       </button>
-      <FadeSwap swapKey={currentTrack.id} preset={PRESETS.fade} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
+      <FadeSwap swapKey={currentTrack.id} preset={PRESETS.trackSwap} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
         <div
           className={`font-semibold truncate transition-colors duration-theme ${compact ? 'text-sm' : 'text-base'}`}
           style={{ color: getWhite() }}
@@ -609,7 +609,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       </span>
       {onAir ? (
         <div
-          className={`ui-layer-in flex-1 relative overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          className={`ui-track-in flex-1 relative overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           title={talkBreak.title || talkBreak.label}
         >
           <div
@@ -634,7 +634,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       ) : audioFeatures ? (
         <div
           key={currentTrack?.id}
-          className={`ui-layer-in flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
+          className={`ui-track-in flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           onClick={handleSeek}
         >
           <div

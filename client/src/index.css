@@ -124,6 +124,9 @@ textarea,
     animation: ui-layer-in var(--dur-theme) var(--ease-decelerate) backwards;
   }
 
+  .ui-track-in {
+    animation: ui-layer-in var(--dur-theme) var(--ease-emphasized) backwards;
+  }
   .ui-pop {
     animation: ui-pop var(--dur-pop) var(--ease-decelerate) backwards;
   }
@@ -356,6 +359,7 @@ textarea,
   .animate-ping,
   .ui-fade-in,
   .ui-layer-in,
+  .ui-track-in,
   .ui-pop-in,
   .ui-pop,
   .ui-badge-in,

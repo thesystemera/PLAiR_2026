@@ -222,7 +222,7 @@ export const TrackArtCrossfade = memo(function TrackArtCrossfade({ trackId, hasA
     return (
       <div
         key={layer.id}
-        className={`absolute inset-0 transition-opacity duration-theme ${front && layers.leaving ? 'opacity-0' : 'opacity-100'}`}
+        className={`absolute inset-0 transition-opacity duration-theme ease-emphasized ${front && layers.leaving ? 'opacity-0' : 'opacity-100'}`}
         style={front ? FRONT : BACK}
       >
         <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArt} intensity={intensity} scrollTilt={false} held={front && layers.leaving} alt={alt} onLoad={onDone} onError={onDone} />

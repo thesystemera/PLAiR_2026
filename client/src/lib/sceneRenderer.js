@@ -30,6 +30,7 @@ import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
 import { decodePack } from './packImage'
+import { DURATION, trackFadeEase } from './motion'
 
 const GLOW_FALLOFF_SCALE = Math.sqrt(6 / Math.LN2)
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
@@ -60,7 +61,6 @@ const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
 const CLICK_DECAY_MS = 500
 const ARTWORK_SWAP_FRAMES = 2
-const ARTWORK_FADE_S = 0.7
 const ARTWORK_FADE_MAX_STEP_S = 1 / 30
 const PANEL_CORNER_RADIUS = 0.015
 const OPAQUE_PANEL_OPACITY = 0.9995
@@ -1019,10 +1019,10 @@ export class SceneRenderer {
     const pX = hasGyro ? gyro.parallaxX * 40 : mouse.parallaxX * 40
     const pY = hasGyro ? gyro.parallaxY * 40 : mouse.parallaxY * 40
 
-    if (this.transitionProgress < 1) this.transitionProgress = Math.min(1, this.transitionProgress + Math.min(delta, ARTWORK_FADE_MAX_STEP_S) / ARTWORK_FADE_S)
+    if (this.transitionProgress < 1) this.transitionProgress = Math.min(1, this.transitionProgress + Math.min(delta, ARTWORK_FADE_MAX_STEP_S) / DURATION.theme)
 
     bgUniforms.u_time.value = (bgUniforms.u_time.value + delta) % 1000.0
-    bgUniforms.u_transition.value = this.transitionProgress
+    bgUniforms.u_transition.value = trackFadeEase(this.transitionProgress)
     if (reduceMotion) {
       bgUniforms.u_parallax.value.set(0, 0)
       bgUniforms.u_glitch.value.set(0, 0)

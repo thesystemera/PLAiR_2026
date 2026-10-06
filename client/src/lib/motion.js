@@ -45,7 +45,28 @@ export const TWEEN = {
   collapse: { duration: 0.22, ease: EASE.emphasized },
   layout: { duration: DURATION.base, ease: EASE.emphasized },
   micro: { duration: DURATION.micro, ease: EASE.decelerate },
+  track: { duration: DURATION.theme, ease: EASE.emphasized },
 }
+
+function cubicBezier(x1, y1, x2, y2) {
+  const axis = (a, b, t) => ((1 - 3 * b + 3 * a) * t + (3 * b - 6 * a)) * t * t + 3 * a * t
+  const slope = (a, b, t) => 3 * (1 - 3 * b + 3 * a) * t * t + 2 * (3 * b - 6 * a) * t + 3 * a
+  return (x) => {
+    if (x <= 0) return 0
+    if (x >= 1) return 1
+    let t = x
+    for (let i = 0; i < 8; i++) {
+      const error = axis(x1, x2, t) - x
+      if (Math.abs(error) < 1e-5) break
+      const d = slope(x1, x2, t)
+      if (Math.abs(d) < 1e-6) break
+      t -= error / d
+    }
+    return axis(y1, y2, Math.min(1, Math.max(0, t)))
+  }
+}
+
+export const trackFadeEase = cubicBezier(...EASE.emphasized)
 
 const STAGGER = {
   step: 0.035,
@@ -123,6 +144,11 @@ export const PRESETS = {
     initial: { opacity: 0 },
     animate: { opacity: 1, transition: MOTION.fade },
     exit: { opacity: 0, transition: MOTION.fade },
+  },
+  trackSwap: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1, transition: TWEEN.track },
+    exit: { opacity: 0, transition: TWEEN.track },
   },
   fadeSlide: {
     initial: { opacity: 0, y: 8 },

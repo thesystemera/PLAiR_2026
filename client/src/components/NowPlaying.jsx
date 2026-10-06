@@ -18,7 +18,7 @@ import {PRESETS} from '../lib/motion'
 import {FadeSwap} from './Motion'
 
 const NO_LYRICS = []
-const ARRIVE = { initial: PRESETS.fade.initial, animate: PRESETS.fade.animate }
+const ARRIVE = { initial: PRESETS.trackSwap.initial, animate: PRESETS.trackSwap.animate }
 const NOW_PLAYING_INTENSITY = 0.05
 const LYRIC_STATE_MARKERS = ['text-white', 'text-gray-500', 'text-gray-300', 'text-gray-400']
 const LYRIC_STATE_CLASSES = [
@@ -488,7 +488,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
         </div>
         <div className={isSplit ? 'flex-1 min-w-0' : undefined}>
-        <FadeSwap swapKey={track.id} preset={PRESETS.fade}>
+        <FadeSwap swapKey={track.id} preset={PRESETS.trackSwap}>
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
           {params.artist_name && (
