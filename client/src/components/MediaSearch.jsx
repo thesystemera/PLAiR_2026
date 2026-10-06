@@ -9,7 +9,7 @@ import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from 
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
-import { MOTION } from '../lib/motion'
+import { MOTION, PRESETS } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
 
 export const MediaSearch = memo(function MediaSearch({
@@ -40,7 +40,7 @@ export const MediaSearch = memo(function MediaSearch({
     toggleCatalogView: state.toggleCatalogView,
     offlineMode: state.audioState.offlineMode,
   }))
-  const { isLG } = useViewport()
+  const { isLG, isDesktop } = useViewport()
   const compact = isLG
   const currentView = catalogView
   const showError = toastError
@@ -61,6 +61,8 @@ export const MediaSearch = memo(function MediaSearch({
     label: intentMetadata.label,
     icon: intentMetadata.icon
   } : null
+
+  const searching = !isDesktop && query.trim().length > 0
 
   const badgeOpacity = query.length <= 20 ? 1 : Math.max(0, 1 - (query.length - 20) / 20)
 
@@ -94,7 +96,7 @@ export const MediaSearch = memo(function MediaSearch({
 
       if (result.text && result.text.trim()) {
         setQuery(result.text.trim())
-        onSearch(result.text.trim(), true, true)
+        onSearch(result.text.trim(), true)
       }
     } catch (_err) {
       showError('Voice transcription failed. Please try again.')
@@ -223,19 +225,23 @@ export const MediaSearch = memo(function MediaSearch({
           title={isTranscribing ? 'Transcribing...' : 'Hold to record voice'}
         />
 
-        {type === 'track' && (
-          <button
-            type="button"
-            onClick={() => {
-              triggerHaptic('light')
-              openUploadModal()
-            }}
-            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
-            title="Upload your music"
-          >
-            <Upload className="w-4 h-4" />
-          </button>
-        )}
+        <AnimatePresence initial={false} mode="popLayout">
+          {type === 'track' && !searching && (
+            <motion.button
+              key="upload"
+              {...PRESETS.fade}
+              type="button"
+              onClick={() => {
+                triggerHaptic('light')
+                openUploadModal()
+              }}
+              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
+              title="Upload your music"
+            >
+              <Upload className="w-4 h-4" />
+            </motion.button>
+          )}
+        </AnimatePresence>
 
         {type === 'track' && onGenerate && onToggleQueue && (
           <button
@@ -258,20 +264,24 @@ export const MediaSearch = memo(function MediaSearch({
           </button>
         )}
 
-        {(
-          <button
-            type="button"
-            onClick={toggleCatalogView}
-            className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
-            title={currentView === 'tracks' ? 'View Shoutouts' : 'View Catalog'}
-          >
-            {currentView === 'tracks' ? (
-              <ShoutoutsIcon className="w-4 h-4" />
-            ) : (
-              <CatalogIcon className="w-4 h-4" />
-            )}
-          </button>
-        )}
+        <AnimatePresence initial={false} mode="popLayout">
+          {!searching && (
+            <motion.button
+              key="view"
+              {...PRESETS.fade}
+              type="button"
+              onClick={toggleCatalogView}
+              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
+              title={currentView === 'tracks' ? 'View Shoutouts' : 'View Catalog'}
+            >
+              {currentView === 'tracks' ? (
+                <ShoutoutsIcon className="w-4 h-4" />
+              ) : (
+                <CatalogIcon className="w-4 h-4" />
+              )}
+            </motion.button>
+          )}
+        </AnimatePresence>
       </form>
     </motion.div>
   )

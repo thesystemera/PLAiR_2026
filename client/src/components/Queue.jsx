@@ -1,6 +1,5 @@
 import { X, Heart, Star, Ban, TrendingUp, Library, Sprout, ListMusic } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
-import { flushSync } from 'react-dom'
 import { forwardRef, useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
@@ -16,13 +15,18 @@ import { MOTION, PRESETS, TWEEN } from '../lib/motion'
 import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
 import { TrackArt } from './DepthArt'
 import { MediaEmptyState } from './MediaShared'
+import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 
 const QUEUE_ART_PROPS = { 'data-queue-art': true }
 
 const QUEUE_ROW = PRESETS.listReorder
-const QUEUE_ITEM_VARIANTS = {
-  exit: (mode) => mode === 'bulk' ? QUEUE_ROW.bulkExit : QUEUE_ROW.exit
-}
+const QUEUE_ROW_GONE = { opacity: 0, transition: { duration: 0 } }
+const NO_KEYS = new Set()
+const ESTIMATED_ROW_HEIGHT = 97
+const queueRowVariants = (key) => ({
+  exit: (removal) => (removal?.keys.has(key) ? (removal.bulk ? QUEUE_ROW.bulkExit : QUEUE_ROW.exit) : QUEUE_ROW_GONE)
+})
+const queueArtworkId = (item) => (item.track.has_artwork === false ? null : item.track.id)
 const QUEUE_ROW_FLASH_TRANSITION = { ...MOTION.settle, layout: TWEEN.layout }
 const BULK_REMOVAL_THRESHOLD = 2
 const QUEUE_LIST_STYLE = { overflowAnchor: 'none' }
@@ -172,7 +176,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
   track,
   uniqueKey,
   layoutKey,
-  exitMode,
+  entering,
   isPlaying,
   isLoading,
   isReselectFlashing,
@@ -187,20 +191,20 @@ const QueueRow = memo(forwardRef(function QueueRow({
   onRemovePointerDown,
   onRemovePointerMove,
 }, ref) {
+  const variants = useMemo(() => queueRowVariants(uniqueKey), [uniqueKey])
   return (
     <motion.div
       ref={ref}
       data-queue-key={uniqueKey}
       layout="position"
       layoutDependency={layoutKey}
-      initial={QUEUE_ROW.initial}
+      initial={entering ? QUEUE_ROW.initial : false}
       animate={isReselectFlashing ? {
         opacity: 1,
         x: 0,
         scale: [1, 1.03, 1]
       } : QUEUE_ROW.animate}
-      variants={QUEUE_ITEM_VARIANTS}
-      custom={exitMode}
+      variants={variants}
       exit="exit"
       transition={isReselectFlashing ? QUEUE_ROW_FLASH_TRANSITION : QUEUE_ROW.transition}
       className="relative p-4 transition-colors cursor-pointer rounded-md"
@@ -219,9 +223,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
 
         <div className="flex-1 min-w-0">
           <div className="font-medium truncate transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
-          {track.artist_name && (
-            <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{track.artist_name}</div>
-          )}
+          <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{track.artist_name || ' '}</div>
           <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey400 }}>{track.style || 'No style'}</div>
         </div>
 
@@ -408,15 +410,23 @@ function QueueComponent({ onSeedRadio, onList }) {
   }, [queue, removingTrackIds])
 
   const [contentHeight, setContentHeight] = useState(0)
-  const [removalState, setRemovalState] = useState({ items: visibleQueue, removed: 0, heldHeight: 0 })
+  const [rowHeight, setRowHeight] = useState(ESTIMATED_ROW_HEIGHT)
+  const [removalState, setRemovalState] = useState({ items: visibleQueue, removed: 0, removedKeys: NO_KEYS, addedKeys: NO_KEYS, heldHeight: 0 })
   if (removalState.items !== visibleQueue) {
     const nextKeys = new Set(visibleQueue.map(item => item.key))
-    const removed = removalState.items.reduce((count, item) => count + (nextKeys.has(item.key) ? 0 : 1), 0)
-    const heldHeight = removed > 0 ? Math.max(removalState.heldHeight, contentHeight) : removalState.heldHeight
-    setRemovalState({ items: visibleQueue, removed, heldHeight })
+    const previousKeys = new Set(removalState.items.map(item => item.key))
+    const removedKeys = new Set()
+    for (const key of previousKeys) if (!nextKeys.has(key)) removedKeys.add(key)
+    const addedKeys = new Set()
+    for (const key of nextKeys) if (!previousKeys.has(key)) addedKeys.add(key)
+    const heldHeight = removedKeys.size > 0 ? Math.max(removalState.heldHeight, contentHeight) : removalState.heldHeight
+    setRemovalState({ items: visibleQueue, removed: removedKeys.size, removedKeys, addedKeys, heldHeight })
   }
   const reduceMotion = useReducedMotion()
-  const exitMode = reduceMotion || removalState.removed > BULK_REMOVAL_THRESHOLD ? 'bulk' : 'single'
+  const removal = useMemo(() => ({
+    keys: removalState.removedKeys,
+    bulk: reduceMotion || removalState.removed > BULK_REMOVAL_THRESHOLD,
+  }), [removalState.removedKeys, removalState.removed, reduceMotion])
   const layoutKey = useMemo(() => visibleQueue.map(item => item.key).join(','), [visibleQueue])
   const currentKey = useMemo(() => {
     if (!currentTrackId) return null
@@ -424,43 +434,43 @@ function QueueComponent({ onSeedRadio, onList }) {
     const exact = indexed?.id === currentTrackId ? visibleQueue.find(item => item.track === indexed) : null
     return (exact ?? visibleQueue.find(item => item.track.id === currentTrackId))?.key ?? null
   }, [queue, currentIndex, visibleQueue, currentTrackId])
+  const currentRow = useMemo(() => (currentKey ? visibleQueue.findIndex(item => item.key === currentKey) : -1), [visibleQueue, currentKey])
   const hasQueue = queue.length > 0
+
+  const [highlightBox, setHighlightBox] = useState(null)
+  const nextBox = currentRow < 0
+    ? (highlightBox?.visible ? { ...highlightBox, visible: false } : highlightBox)
+    : (highlightBox?.visible && highlightBox.top === currentRow * rowHeight && highlightBox.height === rowHeight
+      ? highlightBox
+      : { top: currentRow * rowHeight, height: rowHeight, visible: true })
+  if (nextBox !== highlightBox) setHighlightBox(nextBox)
 
   const glowRef = useRef(null)
   const previousKeyRef = useRef(currentKey)
-
+  const scrollRef = useRef(null)
   const listRef = useRef(null)
   const holdRef = useRef(null)
-  const [highlightBox, setHighlightBox] = useState(null)
-
-  const measureHighlight = useCallback(() => {
-    const list = listRef.current
-    if (!list) return
-    const row = currentKey ? list.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`) : null
-    setHighlightBox(prev => {
-      if (!row) return prev && prev.visible ? { ...prev, visible: false } : prev
-      const top = row.offsetTop
-      const height = row.offsetHeight
-      if (prev && prev.visible && prev.top === top && prev.height === height) return prev
-      return { top, height, visible: true }
-    })
-  }, [currentKey])
-
-  const measureHighlightRef = useRef(measureHighlight)
+  const followRef = useRef({ row: currentRow, height: rowHeight })
 
   useLayoutEffect(() => {
-    measureHighlightRef.current = measureHighlight
-    queueMicrotask(() => flushSync(() => measureHighlightRef.current()))
-  }, [measureHighlight, layoutKey])
+    followRef.current = { row: currentRow, height: rowHeight }
+  }, [currentRow, rowHeight])
 
   useEffect(() => {
     const list = listRef.current
     if (!list || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
       setContentHeight(list.offsetHeight)
-      measureHighlightRef.current()
+      const rows = [...list.querySelectorAll('[data-queue-key]')].filter(row => getComputedStyle(row).position !== 'absolute')
+      if (!rows.length) return
+      const pitch = rows.length > 1
+        ? (rows[rows.length - 1].offsetTop - rows[0].offsetTop) / (rows.length - 1)
+        : rows[0].offsetHeight
+      if (pitch > 0) setRowHeight(previous => (Math.abs(previous - pitch) > 0.05 ? pitch : previous))
     })
     observer.observe(list)
+    const rowsWindow = list.querySelector('[data-virtual-window]')
+    if (rowsWindow) observer.observe(rowsWindow)
     return () => observer.disconnect()
   }, [])
 
@@ -468,7 +478,7 @@ function QueueComponent({ onSeedRadio, onList }) {
     if (!removalState.heldHeight) return
     const timeoutId = setTimeout(() => {
       const hold = holdRef.current
-      const scroller = hold?.closest('[data-scroller]')
+      const scroller = scrollRef.current
       let needed = 0
       if (hold && scroller && listRef.current) {
         const offset = hold.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
@@ -500,7 +510,7 @@ function QueueComponent({ onSeedRadio, onList }) {
   const autoScrollReleaseRef = useRef(null)
 
   useEffect(() => {
-    const scroller = listRef.current?.closest('[data-scroller]')
+    const scroller = scrollRef.current
     if (!scroller) return
     const markUserScroll = () => { lastUserScrollRef.current = performance.now() }
     const options = { passive: true }
@@ -514,26 +524,27 @@ function QueueComponent({ onSeedRadio, onList }) {
       scroller.removeEventListener('pointerdown', markUserScroll, options)
       scroller.removeEventListener('keydown', markUserScroll, options)
     }
-  }, [hasQueue])
+  }, [])
 
   useEffect(() => {
     const previousKey = previousKeyRef.current
     previousKeyRef.current = currentKey
     if (!previousKey || !currentKey || previousKey === currentKey) return
     arrivalGlow(glowRef.current)
-    const row = listRef.current?.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`)
-    arrivalPulse(row?.querySelector('[data-queue-art]'))
+    const art = listRef.current?.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"] [data-queue-art]`)
+    if (art) arrivalPulse(art)
     const timeoutId = setTimeout(() => {
-      const target = listRef.current?.querySelector(`[data-queue-key="${CSS.escape(currentKey)}"]`)
-      const scroller = target?.closest('[data-scroller]')
-      if (!target || !scroller || scroller.clientHeight === 0) return
+      const scroller = scrollRef.current
+      const list = listRef.current
+      const { row, height } = followRef.current
+      if (!scroller || !list || row < 0 || scroller.clientHeight === 0) return
       if (performance.now() - lastUserScrollRef.current < FOLLOW_USER_SCROLL_GRACE_MS) return
       const scrollerRect = scroller.getBoundingClientRect()
       if (scrollerRect.right <= 0 || scrollerRect.left >= window.innerWidth) return
-      const rowRect = target.getBoundingClientRect()
-      const fullyVisible = rowRect.top >= scrollerRect.top + FOLLOW_MARGIN_PX && rowRect.bottom <= scrollerRect.bottom - FOLLOW_MARGIN_PX
+      const rowTop = list.getBoundingClientRect().top - scrollerRect.top + scroller.scrollTop + row * height
+      const fullyVisible = rowTop >= scroller.scrollTop + FOLLOW_MARGIN_PX &&
+        rowTop + height <= scroller.scrollTop + scroller.clientHeight - FOLLOW_MARGIN_PX
       if (fullyVisible) return
-      const rowTop = rowRect.top - scrollerRect.top + scroller.scrollTop
       const top = Math.max(0, rowTop - scroller.clientHeight * 0.25)
       scroller.dataset.autoScroll = '1'
       clearTimeout(autoScrollReleaseRef.current)
@@ -548,6 +559,38 @@ function QueueComponent({ onSeedRadio, onList }) {
       queueMicrotask(() => setLoadingTrackId(null))
     }
   }, [currentTrackId, loadingTrackId])
+
+  const renderRow = useCallback(({ track, key: uniqueKey }) => {
+    const isPlaying = track.id === currentTrackId
+    return (
+      <QueueRow
+        key={uniqueKey}
+        track={track}
+        uniqueKey={uniqueKey}
+        layoutKey={layoutKey}
+        entering={removalState.addedKeys.has(uniqueKey)}
+        isPlaying={isPlaying}
+        isLoading={loadingTrackId === track.id && !isPlaying}
+        isReselectFlashing={reselectFlash === track.id}
+        playing={isPlaying && isPlayingNow}
+        showPreference={isAuthenticated}
+        preference={isAuthenticated ? getPreference('track', track.id) : null}
+        colors={rowColors}
+        onPlay={handlePlay}
+        onRemove={handleRemove}
+        onPlayPointerDown={onPlayPointerDown}
+        onPlayPointerMove={onPlayPointerMove}
+        onRemovePointerDown={onRemovePointerDown}
+        onRemovePointerMove={onRemovePointerMove}
+      />
+    )
+  }, [currentTrackId, layoutKey, removalState.addedKeys, loadingTrackId, reselectFlash, isPlayingNow, isAuthenticated, getPreference, rowColors, handlePlay, handleRemove, onPlayPointerDown, onPlayPointerMove, onRemovePointerDown, onRemovePointerMove])
+
+  const wrapRows = useCallback((rows) => (
+    <AnimatePresence initial={false} custom={removal} mode="popLayout" presenceAffectsLayout={false}>
+      {rows}
+    </AnimatePresence>
+  ), [removal])
 
   const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
   const activeCamp = activeSeedMode ? MODE_CAMPS[activeSeedMode] || 'seed' : null
@@ -592,7 +635,7 @@ function QueueComponent({ onSeedRadio, onList }) {
         )}
       </AnimatePresence>
 
-      <Scroller className="flex-1">
+      <Scroller ref={scrollRef} className="flex-1">
         <div ref={holdRef} style={removalState.heldHeight ? { ...QUEUE_LIST_STYLE, minHeight: removalState.heldHeight } : QUEUE_LIST_STYLE}>
           <div ref={listRef} className="relative">
             {highlightBox && (
@@ -604,33 +647,14 @@ function QueueComponent({ onSeedRadio, onList }) {
                 glowRef={glowRef}
               />
             )}
-            <AnimatePresence initial={false} custom={exitMode} mode="popLayout" presenceAffectsLayout={false}>
-              {visibleQueue.map(({ track, key: uniqueKey }) => {
-                const isPlaying = track.id === currentTrackId
-                return (
-                  <QueueRow
-                    key={uniqueKey}
-                    track={track}
-                    uniqueKey={uniqueKey}
-                    layoutKey={layoutKey}
-                    exitMode={exitMode}
-                    isPlaying={isPlaying}
-                    isLoading={loadingTrackId === track.id && !isPlaying}
-                    isReselectFlashing={reselectFlash === track.id}
-                    playing={isPlaying && isPlayingNow}
-                    showPreference={isAuthenticated}
-                    preference={isAuthenticated ? getPreference('track', track.id) : null}
-                    colors={rowColors}
-                    onPlay={handlePlay}
-                    onRemove={handleRemove}
-                    onPlayPointerDown={onPlayPointerDown}
-                    onPlayPointerMove={onPlayPointerMove}
-                    onRemovePointerDown={onRemovePointerDown}
-                    onRemovePointerMove={onRemovePointerMove}
-                  />
-                )
-              })}
-            </AnimatePresence>
+            <VirtualScroller
+              items={visibleQueue}
+              itemHeight={rowHeight}
+              renderItem={renderRow}
+              getPrefetchId={queueArtworkId}
+              scrollContainerRef={scrollRef}
+              wrapItems={wrapRows}
+            />
           </div>
         </div>
       </Scroller>

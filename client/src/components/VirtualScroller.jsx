@@ -42,6 +42,7 @@ function VirtualScroller({
   onRangeChange = null,
   getPrefetchId = null,
   scrollContainerRef,
+  wrapItems = null,
   className = ''
 }) {
   const listRef = useRef(null)
@@ -278,6 +279,7 @@ function VirtualScroller({
   return (
     <div ref={listRef} style={{ height: `${totalRows * itemHeight}px`, position: 'relative' }}>
       <div
+        data-virtual-window
         style={{
           position: 'absolute',
           top: 0,
@@ -288,7 +290,7 @@ function VirtualScroller({
         }}
       >
         <div className={className}>
-          {visibleItems}
+          {wrapItems ? wrapItems(visibleItems) : visibleItems}
         </div>
       </div>
     </div>
@@ -306,6 +308,7 @@ export const MemoizedVirtualScroller = memo(VirtualScroller, (prevProps, nextPro
     prevProps.renderItem === nextProps.renderItem &&
     prevProps.renderPlaceholder === nextProps.renderPlaceholder &&
     prevProps.onRangeChange === nextProps.onRangeChange &&
-    prevProps.getPrefetchId === nextProps.getPrefetchId
+    prevProps.getPrefetchId === nextProps.getPrefetchId &&
+    prevProps.wrapItems === nextProps.wrapItems
   )
 })

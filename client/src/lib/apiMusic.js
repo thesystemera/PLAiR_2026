@@ -89,14 +89,14 @@ export const musicMethods = {
     })
   },
 
-  async searchSemantic(query, nResults = 50, useAiAnalysis = false) {
+  async searchSemantic(query, nResults = 50, useAiAnalysis = false, fillQueue = false) {
     return this._routeRequest('searchSemantic', [query, nResults], async () => {
       const mode = useAiAnalysis ? '🤖 AI-powered' : '⚡ Fast keyword'
       logger.info(`[API] 🌐 ONLINE MODE - ${mode} semantic search for "${query}"`)
       const res = await this._fetch(`${API_BASE}/search/semantic`, {
         method: 'POST',
         headers: this.getHeaders(),
-        body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis }),
+        body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis, queue: fillQueue }),
       })
       return res.json()
     })

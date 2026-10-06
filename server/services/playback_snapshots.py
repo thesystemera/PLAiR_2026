@@ -49,6 +49,7 @@ def restore(state, saved: Dict[str, Any], catalog) -> bool:
     state.is_playing = False
     state.last_update_time = time.time()
     state._auto_filled_track_ids = set(saved.get("auto_filled") or []) & {t["id"] for t in queue}
+    state._enforce_queue_size()
     return True
 
 

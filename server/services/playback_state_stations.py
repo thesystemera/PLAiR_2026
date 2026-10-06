@@ -102,6 +102,7 @@ class PlaybackStations:
             async with self._queue_lock:
                 if seed_epoch == self._fill_epoch:
                     self._append_unique_tracks(new_tracks)
+                self._enforce_queue_size()
 
             log_service.playback(
                 f"{self._who()}: seeded {self.station_label()} radio"

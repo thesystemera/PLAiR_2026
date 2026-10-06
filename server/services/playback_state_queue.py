@@ -8,8 +8,8 @@ from services.task_utils import safe_background_task, spawn
 
 
 class PlaybackQueue:
-    """The queue: songs kept behind the current one, songs ahead, picks that are never cut, and the station fill
-    behind them."""
+    """The queue: songs kept behind the current one, then the songs ahead (picks first, the station fill behind
+    them), never more than QUEUE_AHEAD_SONGS of them."""
 
     def _shift_queue_to_target(self):
         while self.current_index > self.TARGET_INDEX and self.queue:
@@ -50,6 +50,8 @@ class PlaybackQueue:
                 return
             if self.queue[i].get("id") in self._auto_filled_track_ids:
                 self._auto_filled_track_ids.discard(self.queue.pop(i)["id"])
+        while len(self.queue) > self.QUEUE_SIZE and len(self.queue) > start:
+            self._auto_filled_track_ids.discard(self.queue.pop()["id"])
 
     def _reset_fill_epoch(self):
         self._fill_epoch += 1

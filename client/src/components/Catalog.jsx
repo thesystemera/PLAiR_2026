@@ -304,20 +304,21 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     handleSearch: performSearch,
     handleClearSearch: clearSearch
   } = useMediaSearch(
-    useCallback(async (query, isManual = false, autoPlayTop = false) => {
-      const result = await api.searchSemantic(query, 50, isManual)
-      if (isManual && result?.results) {
-        info(`Found ${result.results.length} tracks matching "${query}"`, 4000, 'bottom', 'search')
-      }
-      if (autoPlayTop && result?.results?.length > 0) {
+    useCallback(async (query, isManual = false) => {
+      const result = await api.searchSemantic(query, 50, isManual, isManual)
+      const found = result?.results?.length || 0
+      if (!isManual) return result
+      if (!found) {
+        info(`No tracks found for "${query}"`, 3000, 'bottom', 'search')
+      } else if (result.queued) {
+        info(`Queued ${found} tracks matching "${query}"`, 4000, 'bottom', 'search')
+      } else {
         try {
           await playback.playTrack(result.results[0].id)
         } catch (playError) {
-          logger.error('Auto-play failed:', playError)
+          logger.error('Search play failed:', playError)
           errorToast('Found tracks but playback failed', 3000, 'bottom', 'playback')
         }
-      } else if (autoPlayTop && result?.results?.length === 0) {
-        info('No tracks found for your voice search', 3000, 'bottom', 'search')
       }
       return result
     }, [info, errorToast, playback]),
@@ -425,10 +426,10 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     }
   }, [contentUpdateCounter, reloadCatalog])
 
-  const handleSearch = useCallback(async (query, isManual = false, autoPlayTop = false) => {
+  const handleSearch = useCallback(async (query, isManual = false) => {
     setLoading(true)
     try {
-      await performSearch(query, isManual, autoPlayTop)
+      await performSearch(query, isManual)
     } finally {
       setLoading(false)
     }

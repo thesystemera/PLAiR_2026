@@ -1,7 +1,8 @@
 """Queue rules, without a server, a catalog or an LLM: PlaybackState on a fake catalog and a fake fill.
 
-Checks: picks are never cut and go after earlier picks, "play next" goes right after the current song, only
-songs the station filled in itself are trimmed, seeding keeps the songs just played and remembers its seed,
+Checks: picks go after earlier picks, "play next" goes right after the current song, the songs ahead never pass
+the limit (station fill is trimmed first, then the picks furthest away), seeding keeps the songs just played and
+remembers its seed,
 a playlist switch keeps them too, and the DJs' playlist view and last track read the right songs.
 
 Usage: python tests/queue_rules_test.py
@@ -90,9 +91,17 @@ async def main():
 
     many = [f"pickC{i}" for i in range(settings.QUEUE_AHEAD_SONGS + 5)]
     await state.add_to_queue(many)
-    check("picks are never cut", all(p in ids(state) for p in first + second + many))
-    check("no station fill left once picks overflow",
-          not any(t.startswith("fill") for t in upcoming(state)), str(upcoming(state)))
+    check("the songs ahead never pass the limit", len(upcoming(state)) == settings.QUEUE_AHEAD_SONGS,
+          str(len(upcoming(state))))
+    check("station fill goes first, then the picks furthest away",
+          upcoming(state) == (first + second + many)[:settings.QUEUE_AHEAD_SONGS], str(upcoming(state)))
+
+    state = await new_state()
+    await state.add_to_queue(first)
+    batch = [f"search{i}" for i in range(50)]
+    await state.add_to_queue(batch, play_next=True)
+    check("a big play-next batch keeps its first songs up to the limit",
+          upcoming(state) == batch[:settings.QUEUE_AHEAD_SONGS], str(upcoming(state)))
 
     state = await new_state()
     await state.add_to_queue(first)

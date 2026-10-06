@@ -19,6 +19,7 @@ class SearchRequest(BaseModel):
     n_results: Optional[int] = Field(10, ge=1, le=100)
     vocals: Optional[Literal["instrumental", "male", "female", "duet", "unknown"]] = None
     use_ai_analysis: Optional[bool] = False
+    queue: Optional[bool] = False
 
 class ShoutoutSearchRequest(BaseModel):
     query: str = Field(..., max_length=1000)
