@@ -607,6 +607,12 @@ export class SceneRenderer {
   }
 
   setLyric({ image, empty, probe }) {
+    if (image && (image.width !== this.lyricCanvas.width || image.height !== this.lyricCanvas.height)) {
+      this.lyricCanvas.width = image.width
+      this.lyricCanvas.height = image.height
+      this.textTexture.dispose()
+      this.textTexture = new CanvasTexture(this.lyricCanvas)
+    }
     const ctx = this.lyricCanvas.getContext('2d')
     ctx.clearRect(0, 0, this.lyricCanvas.width, this.lyricCanvas.height)
     if (image) {

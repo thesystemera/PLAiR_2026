@@ -15,7 +15,7 @@ import {lightProbeWanted, publishBeat, publishLightLevel, publishLightProbe, set
 import {textPixels} from '../lib/backgroundProbe'
 import {addFrameWork, frameStatsActive} from '../lib/frameStats'
 import {renderLyricToCanvas} from '../lib/sceneEffects'
-import {drawLyricFrame, lyricFrameAt, prepareLyricStyle} from '../lib/lyricStyle'
+import {drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle} from '../lib/lyricStyle'
 import {loadLyricFonts} from '../lib/lyricFonts'
 import {usePlaybackActions} from '../contexts/PlaybackContext'
 
@@ -23,8 +23,7 @@ const VOICE_GAIN = 2.2
 const VOICE_STEADY = 0.4
 const LYRIC_WIDTH = 1024
 const LYRIC_HEIGHT = 512
-const LYRIC_PROBE_WIDTH = 64
-const LYRIC_PROBE_HEIGHT = 32
+const LYRIC_PROBE_DIVISOR = 16
 const LYRIC_LEAD_MS = 16
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
 
@@ -290,7 +289,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       const aspect = window.innerWidth / Math.max(1, window.innerHeight)
       let key = null
       let draw = null
+      let size = { width: LYRIC_WIDTH, height: LYRIC_HEIGHT }
       if (lyric.styled) {
+        size = lyricCanvasSize(aspect)
         const frame = lyricFrameAt(lyric.styled, seconds)
         key = frame ? `${frame.index}:${frame.count}:${aspect.toFixed(3)}` : 'none'
         if (frame) draw = (ctx, width, height) => drawLyricFrame(ctx, lyric.styled, frame, width, height, aspect)
@@ -304,13 +305,17 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       }
       if (key === lyric.key) return
       lyric.key = key
+      if (lyric.canvas.width !== size.width || lyric.canvas.height !== size.height) {
+        lyric.canvas.width = size.width
+        lyric.canvas.height = size.height
+      }
       if (!draw) {
         lyric.canvas.getContext('2d').clearRect(0, 0, lyric.canvas.width, lyric.canvas.height)
         send({ type: 'lyric', image: null, empty: true, probe: null })
         return
       }
       draw(lyric.canvas.getContext('2d'), lyric.canvas.width, lyric.canvas.height)
-      const probe = textPixels(draw, lyric.canvas.width, lyric.canvas.height, LYRIC_PROBE_WIDTH, LYRIC_PROBE_HEIGHT)
+      const probe = textPixels(draw, lyric.canvas.width, lyric.canvas.height, Math.round(lyric.canvas.width / LYRIC_PROBE_DIVISOR), Math.round(lyric.canvas.height / LYRIC_PROBE_DIVISOR))
       createImageBitmap(lyric.canvas).then(image => send({ type: 'lyric', image, empty: false, probe }, [image]))
     }
     update()

@@ -14,12 +14,20 @@ const CASCADE_STEP = 0.1
 const ALIGN_SHIFT = 0.06
 const GROW = { solo: 2.2, stack: 1, flow: 1.3, cascade: 1.3 }
 const PAST_ALPHA = 0.8
+const REFLOW_STEPS = 24
+const ORPHAN_LETTERS = 4
+const CANVAS_PIXELS = 1024 * 512
 
 function applyCase(text, mode) {
   if (mode === 'upper') return text.toLocaleUpperCase()
   if (mode === 'lower') return text.toLocaleLowerCase()
   if (mode === 'title') return text.charAt(0).toLocaleUpperCase() + text.slice(1)
   return text
+}
+
+export function lyricCanvasSize(aspect) {
+  const width = Math.round(Math.sqrt(CANVAS_PIXELS * aspect))
+  return { width, height: Math.round(CANVAS_PIXELS / width) }
 }
 
 export function prepareLyricStyle(timestamps) {
@@ -63,35 +71,65 @@ export function lyricFrameAt(styled, seconds) {
   return { index, count }
 }
 
-function measureRow(ctx, words, unit) {
+function measureWords(ctx, words, unit) {
+  return words.map(word => {
+    const px = unit * SIZE_SCALE[word.size]
+    ctx.font = lyricFont(word, px)
+    const metrics = ctx.measureText(word.text)
+    return { word, px, width: metrics.width, ascent: metrics.actualBoundingBoxAscent, descent: metrics.actualBoundingBoxDescent }
+  })
+}
+
+function buildRow(measured) {
   let x = 0
   let ascent = 0
   let descent = 0
   let previous = 0
-  const items = words.map(word => {
-    const px = unit * SIZE_SCALE[word.size]
-    ctx.font = lyricFont(word, px)
-    const metrics = ctx.measureText(word.text)
-    if (previous) x += WORD_GAP * (px + previous) / 2
-    const item = { word, px, x }
-    x += metrics.width
-    previous = px
-    ascent = Math.max(ascent, metrics.actualBoundingBoxAscent)
-    descent = Math.max(descent, metrics.actualBoundingBoxDescent)
+  const items = measured.map(entry => {
+    if (previous) x += WORD_GAP * (entry.px + previous) / 2
+    const item = { ...entry, x }
+    x += entry.width
+    previous = entry.px
+    ascent = Math.max(ascent, entry.ascent)
+    descent = Math.max(descent, entry.descent)
     return item
   })
   return { items, width: x, ascent, descent, scale: 1 }
 }
 
-function placeCard(ctx, card, boxWidth, boxHeight) {
-  const unit = boxHeight * UNIT
-  const grouped = []
-  for (const word of card.words) {
-    const line = card.layout === 'solo' ? 0 : word.line
-    if (!grouped[line]) grouped[line] = []
-    grouped[line].push(word)
+function letters(piece) {
+  return piece.reduce((count, entry) => count + entry.word.text.replace(/[^\p{L}\p{N}]/gu, '').length, 0)
+}
+
+function wrapLines(lines, limit) {
+  const rows = []
+  for (const line of lines) {
+    const pieces = []
+    let current = []
+    for (const entry of line) {
+      if (current.length && buildRow([...current, entry]).width > limit) {
+        pieces.push(current)
+        current = []
+      }
+      current.push(entry)
+    }
+    if (current.length) pieces.push(current)
+    for (let index = 0; index < pieces.length && pieces.length > 1;) {
+      if (letters(pieces[index]) >= ORPHAN_LETTERS) {
+        index++
+        continue
+      }
+      const into = index === 0 ? 1 : index - 1
+      pieces[into] = into < index ? [...pieces[into], ...pieces[index]] : [...pieces[index], ...pieces[into]]
+      pieces.splice(index, 1)
+      index = 0
+    }
+    rows.push(...pieces)
   }
-  const rows = grouped.filter(Boolean).map(words => measureRow(ctx, words, unit))
+  return rows.map(buildRow)
+}
+
+function arrange(card, rows, boxWidth, boxHeight, unit) {
   const stack = card.layout === 'stack'
   if (stack) {
     for (const row of rows) {
@@ -110,19 +148,43 @@ function placeCard(ctx, card, boxWidth, boxHeight) {
   const blockHeight = y - gap
   const fit = Math.min(boxWidth / blockWidth, boxHeight / blockHeight, GROW[card.layout] || 1)
   const placed = []
+  let size = 0
   for (const row of rows) {
     const width = row.width * row.scale
     const align = card.layout === 'cascade' ? 0 : card.align === 'right' ? blockWidth - width : card.align === 'center' ? (blockWidth - width) / 2 : 0
     for (const item of row.items) {
+      const px = item.px * row.scale * fit
+      size += px
       placed.push({
         text: item.word.text,
-        font: lyricFont(item.word, item.px * row.scale * fit),
+        font: lyricFont(item.word, px),
         x: (row.offset + align + item.x * row.scale - blockWidth / 2) * fit,
         y: (row.baseline - blockHeight / 2) * fit,
       })
     }
   }
-  return placed
+  return { placed, width: blockWidth * fit, size: size / Math.max(1, placed.length) }
+}
+
+function placeCard(ctx, card, boxWidth, boxHeight) {
+  const unit = boxHeight * UNIT
+  const lines = []
+  for (const entry of measureWords(ctx, card.words, unit)) {
+    const line = card.layout === 'solo' ? 0 : entry.word.line
+    if (!lines[line]) lines[line] = []
+    lines[line].push(entry)
+  }
+  const designed = lines.filter(Boolean)
+  let best = arrange(card, designed.map(buildRow), boxWidth, boxHeight, unit)
+  if (boxWidth >= boxHeight) return best
+  const widest = Math.max(...designed.map(line => buildRow(line).width))
+  const narrowest = Math.min(...designed.flat().map(entry => entry.width))
+  for (let step = 1; step <= REFLOW_STEPS; step++) {
+    const limit = widest - (widest - narrowest) * step / REFLOW_STEPS
+    const trial = arrange(card, wrapLines(designed, limit), boxWidth, boxHeight, unit)
+    if (trial.size > best.size) best = trial
+  }
+  return best
 }
 
 export function drawLyricFrame(ctx, styled, frame, width, height, aspect) {
@@ -133,16 +195,17 @@ export function drawLyricFrame(ctx, styled, frame, width, height, aspect) {
   const boxWidth = virtualWidth * BOX_WIDTH
   const boxHeight = height * BOX_HEIGHT
   const key = `${boxWidth.toFixed(1)}x${boxHeight.toFixed(1)}`
-  if (card.placed?.key !== key) card.placed = { key, items: placeCard(ctx, card, boxWidth, boxHeight) }
+  if (card.placed?.key !== key) card.placed = { key, ...placeCard(ctx, card, boxWidth, boxHeight) }
   const shift = card.align === 'left' ? -ALIGN_SHIFT : card.align === 'right' ? ALIGN_SHIFT : 0
   ctx.save()
   ctx.scale(width / virtualWidth, 1)
-  ctx.translate(virtualWidth * (0.5 + shift), height / 2)
+  const margin = (virtualWidth - boxWidth) / 2 + card.placed.width / 2
+  ctx.translate(Math.min(virtualWidth - margin, Math.max(margin, virtualWidth * (0.5 + shift))), height / 2)
   if (card.tilt) ctx.rotate(card.tilt * Math.PI / 180)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = 'white'
-  const items = card.placed.items
+  const items = card.placed.placed
   for (let index = 0; index < frame.count && index < items.length; index++) {
     const item = items[index]
     ctx.globalAlpha = index === frame.count - 1 ? 1 : PAST_ALPHA
