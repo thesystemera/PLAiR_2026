@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useMemo, useLayoutEffect } from 'react'
+import { createContext, useContext, useState, useMemo, useLayoutEffect, startTransition } from 'react'
 import { flushSync } from 'react-dom'
 
 const ViewportContext = createContext(null)
@@ -64,8 +64,10 @@ export function ViewportProvider({ children }) {
       const next = readViewport()
       const key = layoutKey(next)
       if (key === lastKey) return
+      const rotated = key.split('|')[1] !== lastKey.split('|')[1]
       lastKey = key
-      flushSync(() => setViewport(next))
+      if (rotated) startTransition(() => setViewport(next))
+      else flushSync(() => setViewport(next))
     }
 
     window.addEventListener('resize', handleResize)

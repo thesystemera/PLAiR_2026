@@ -77,13 +77,13 @@ export function RotationVeil() {
     }
 
     veil.addEventListener('transitionend', hidden)
-    window.addEventListener('resize', check, { passive: true })
+    window.addEventListener('resize', check, { passive: true, capture: true })
     landscapeQuery?.addEventListener?.('change', check)
     if (orientation?.addEventListener) orientation.addEventListener('change', check)
     else window.addEventListener('orientationchange', check)
     return () => {
       veil.removeEventListener('transitionend', hidden)
-      window.removeEventListener('resize', check)
+      window.removeEventListener('resize', check, { capture: true })
       landscapeQuery?.removeEventListener?.('change', check)
       if (orientation?.addEventListener) orientation.removeEventListener('change', check)
       else window.removeEventListener('orientationchange', check)
