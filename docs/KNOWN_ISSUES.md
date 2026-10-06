@@ -167,9 +167,13 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   Doubts: `MODERN_MASTER_DB` has no recorded derivation (Pestana 2013 is paywalled, so it is unknown whether its
   numbers are per-Hz density or band energy, a ~3 dB/octave difference); the Elowsson curve used before was 6-7 dB
   darker at 8-12 kHz, so published curves disagree by as much as we cut; Elowsson & Friberg found LTAS depends on
-  percussion prominence (more drums = more bass and highs), which one pop average ignores. Owner does not want to
-  supply reference WAVs: find published numeric LTAS data online (open papers, tables, open datasets of pro
-  masters) and check the curve's units and shape, then consider a percussion-aware target. No change made yet.
+  percussion prominence (more drums = more bass and highs), which one pop average ignores. Units ruled out (7 Oct, late): noise
+  shaped to the curve reads within ±0.6 dB (+1.2 at 16 kHz) through `reference_deviation_db`, and the curve's
+  per-Hz slope (-5.5 dB/oct 1-10 kHz) matches Adrian & Bitzer, DAGA 2014 (200 chart hits per decade, per-Hz PSD,
+  ~-6 dB/oct 100 Hz-10 kHz). Remaining doubts: the curve's steep top (-13 dB/oct 10-12.5 kHz, -23 above) comes
+  from 2000-2010 releases and may be too dark for current masters (that study shows bandwidth growing each
+  decade); one pop average ignores percussion. Next: a percussion-aware target, or a looser top end, by the
+  owner's ear. No change made yet.
 
 - **Finish splitting the big files (started 4 Oct):** rule: a split file keeps the original name as its prefix
   (`dj_tools.py` + `dj_tools_registry.py`, `api.js` + `apiMusic.js`), the unsuffixed file is the core, and every
