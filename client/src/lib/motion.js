@@ -112,6 +112,20 @@ export const VARIANTS = {
       transitionEnd: { overflow: 'visible' },
     },
   },
+  expandSideways: {
+    collapsed: {
+      width: 0,
+      opacity: 0,
+      overflow: 'hidden',
+      transition: { width: TWEEN.collapse, opacity: { duration: DURATION.exit } },
+    },
+    open: {
+      width: 'auto',
+      opacity: 1,
+      overflow: 'hidden',
+      transition: { width: SPRING.panel, opacity: { duration: DURATION.quick } },
+    },
+  },
   expandReduced: {
     collapsed: { height: 0, opacity: 0, overflow: 'hidden', transition: { duration: 0 } },
     open: { height: 'auto', opacity: 1, transition: { duration: 0 }, transitionEnd: { overflow: 'visible' } },

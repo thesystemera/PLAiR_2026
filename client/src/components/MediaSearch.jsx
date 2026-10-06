@@ -1,7 +1,7 @@
 import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, memo } from 'react'
 import { Search, X, Sparkles, Loader, Upload } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { api } from '../lib/api'
 import { triggerHaptic } from '../lib/haptics'
 import { useUISound } from '../hooks/useUISound'
@@ -9,7 +9,7 @@ import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from 
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
-import { MOTION, PRESETS } from '../lib/motion'
+import { MOTION, PRESETS, VARIANTS } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
 
 export const MediaSearch = memo(function MediaSearch({
@@ -63,6 +63,7 @@ export const MediaSearch = memo(function MediaSearch({
   } : null
 
   const searching = isFocused
+  const reduceMotion = useReducedMotion()
 
   const badgeOpacity = query.length <= 20 ? 1 : Math.max(0, 1 - (query.length - 20) / 20)
 
@@ -96,6 +97,7 @@ export const MediaSearch = memo(function MediaSearch({
 
       if (result.text && result.text.trim()) {
         setQuery(result.text.trim())
+        inputRef.current?.blur()
         onSearch(result.text.trim(), true)
       }
     } catch (_err) {
@@ -140,6 +142,11 @@ export const MediaSearch = memo(function MediaSearch({
     }
     setQuery('')
     onClear()
+    inputRef.current?.blur()
+  }
+
+  const keepSearchFocus = (e) => {
+    if (isFocused) e.preventDefault()
   }
 
   const handleGenerate = () => {
@@ -161,7 +168,7 @@ export const MediaSearch = memo(function MediaSearch({
       transition={TRANSITIONS.fade}
     >
       <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.searchBar} />
-      <form onSubmit={handleSubmit} className={`relative z-10 h-full flex items-center w-full ${compact ? 'px-3 gap-1.5' : 'px-4 md:px-6 gap-2'}`}>
+      <form onSubmit={handleSubmit} className={`relative z-10 h-full flex items-center w-full ${compact ? 'px-3' : 'px-4 md:px-6'}`}>
         <div className="relative flex-1 min-w-0">
           <Search
             className={`absolute ${compact ? 'left-2.5' : 'left-3'} top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
@@ -206,60 +213,75 @@ export const MediaSearch = memo(function MediaSearch({
               )(intentMeta.icon)}
             </AnimatePresence>
 
-            {query && !isGenerating && (
-              <button
-                type="button"
-                onClick={handleClear}
-                className="ui-press ui-pop-in text-gray-400 hover:text-white transition-colors"
-              >
-                <X size={16} />
-              </button>
-            )}
+            <AnimatePresence initial={false}>
+              {(searching || query) && !isGenerating && (
+                <motion.button
+                  key="clear"
+                  {...PRESETS.fade}
+                  type="button"
+                  onMouseDown={keepSearchFocus}
+                  onClick={handleClear}
+                  aria-label="Close search"
+                  title="Close search"
+                  className="ui-press text-gray-400 hover:text-white transition-colors"
+                >
+                  <X size={16} />
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
-        <AnimatePresence initial={false} mode="popLayout">
-          {type === 'track' && !searching && (
-            <motion.button
-              key="upload"
-              {...PRESETS.fade}
-              type="button"
-              onClick={() => {
-                triggerHaptic('light')
-                openUploadModal()
-              }}
-              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
-              title="Upload your music"
-            >
-              <Upload className="w-4 h-4" />
-            </motion.button>
-          )}
-          {type === 'track' && onGenerate && onToggleQueue && !searching && (
-            <motion.button
-              key="generate"
-              {...PRESETS.fade}
-              type="button"
-              onClick={isGenerating ? onToggleQueue : handleGenerate}
-              disabled={!isGenerating && !query.trim()}
-              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
-              title={isGenerating ? 'View generation queue' : 'Generate tracks'}
-            >
-              {isGenerating ? (
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={MOTION.spin}
-                >
-                  <Loader className="w-4 h-4" />
-                </motion.div>
-              ) : (
-                <Sparkles className="w-4 h-4" />
-              )}
-            </motion.button>
-          )}
-          {!searching && (
-            <motion.button
-              key="view"
-              {...PRESETS.fade}
+        <div className={`flex-shrink-0 ${compact ? 'ml-1.5' : 'ml-2'}`} onMouseDown={keepSearchFocus}>
+          <InteractiveEngagementButton
+            buttonType="search"
+            onRecordingComplete={handleRecordingComplete}
+            uiSound={uiSound}
+            title={isTranscribing ? 'Transcribing...' : 'Hold to record voice'}
+          />
+        </div>
+
+        <motion.div
+          className="flex-shrink-0"
+          variants={reduceMotion ? VARIANTS.expandReduced : VARIANTS.expandSideways}
+          initial={false}
+          animate={searching ? 'collapsed' : 'open'}
+        >
+          <div className={`flex items-center ${compact ? 'gap-1.5 pl-1.5' : 'gap-2 pl-2'}`}>
+            {type === 'track' && (
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic('light')
+                  openUploadModal()
+                }}
+                className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
+                title="Upload your music"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+            )}
+            {type === 'track' && onGenerate && onToggleQueue && (
+              <button
+                type="button"
+                onClick={isGenerating ? onToggleQueue : handleGenerate}
+                disabled={!isGenerating && !query.trim()}
+                className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
+                title={isGenerating ? 'View generation queue' : 'Generate tracks'}
+              >
+                {isGenerating ? (
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={MOTION.spin}
+                  >
+                    <Loader className="w-4 h-4" />
+                  </motion.div>
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+              </button>
+            )}
+            <button
               type="button"
               onClick={toggleCatalogView}
               className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
@@ -270,16 +292,9 @@ export const MediaSearch = memo(function MediaSearch({
               ) : (
                 <CatalogIcon className="w-4 h-4" />
               )}
-            </motion.button>
-          )}
-        </AnimatePresence>
-
-        <InteractiveEngagementButton
-          buttonType="search"
-          onRecordingComplete={handleRecordingComplete}
-          uiSound={uiSound}
-          title={isTranscribing ? 'Transcribing...' : 'Hold to record voice'}
-        />
+            </button>
+          </div>
+        </motion.div>
       </form>
     </motion.div>
   )
