@@ -16,7 +16,7 @@ import { DJTextComposer } from './DJTextComposer'
 import { GestureGuide } from './GestureGuide'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { registerKeyboardRecordingCallback } from './KeyboardControls'
-import { PanelHeader, TextRadioIcon } from './Panel'
+import { PanelHeader, TextRadioIcon, PANEL_CONFIG, PANEL_IDS } from './Panel'
 import { Scroller } from './Scroller'
 import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
@@ -163,55 +163,58 @@ export function Radio() {
       <GestureGuide />
 
       <PanelHeader title={<h2 className="text-lg md:text-xl font-bold">Radio</h2>}>
-        <div className="flex flex-wrap justify-end gap-1 min-w-0 ml-3">
-          <FadeSwap swapKey={showTimeline ? 'timeline' : 'conversation'} preset={PRESETS.fade} className="flex flex-wrap justify-end gap-1">
-            {showTimeline ? <TimelineFilters value={timelineFilter} onChange={setTimelineFilter} /> : ['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
-             const hasConversations = filterCounts[filter] > 0
-             const isDisabled = !hasConversations
-             return (
-               <button
-                 key={filter}
-                 onClick={() => !isDisabled && setMessageFilter(filter)}
-                 disabled={isDisabled}
-                 aria-label={`Show ${filter} messages`}
-                 title={`Show ${filter} messages`}
-                 className="ui-press p-1.5 rounded transition-colors border"
-                 style={
-                   isDisabled
-                     ? { backgroundColor: 'rgba(128, 128, 128, 0.1)', borderColor: 'rgba(128, 128, 128, 0.2)', color: 'rgba(128, 128, 128, 0.4)', cursor: 'not-allowed' }
-                     : messageFilter === filter ? getFilterAllActive() : getFilterInactive()
-                 }
-               >
-                 {filter === 'all' && <LayoutGrid size={16} />}
-                 {filter === 'interactive' && <MessageCircle size={16} />}
-                 {filter === 'announcer' && <RadioIcon size={16} />}
-                 {filter === 'external' && <Globe size={16} />}
-                 {filter === 'shoutouts' && <Heart size={16} />}
-                 {filter === 'system' && <AlertTriangle size={16} />}
-               </button>
-             )
-           })}
-          </FadeSwap>
-          <button
-            onClick={() => setShowTimeline(value => !value)}
-            aria-pressed={showTimeline}
-            aria-label="Timeline"
-            title={showTimeline ? 'Timeline on: back to the conversation' : 'Timeline: everything that aired for you'}
-            className="ui-press p-1.5 rounded transition-colors border ml-1"
-            style={showTimeline ? getFilterAllActive() : getFilterInactive()}
-          >
-            <History size={16} />
-          </button>
+        <div className="flex items-center gap-2 min-w-0 ml-3">
+          <div className="flex flex-wrap justify-end gap-1 min-w-0">
+            <FadeSwap swapKey={showTimeline ? 'timeline' : 'conversation'} preset={PRESETS.fade} className="flex flex-wrap justify-end gap-1">
+              {showTimeline ? <TimelineFilters value={timelineFilter} onChange={setTimelineFilter} /> : ['all', 'interactive', 'announcer', 'external', 'shoutouts', 'system'].map(filter => {
+               const hasConversations = filterCounts[filter] > 0
+               const isDisabled = !hasConversations
+               return (
+                 <button
+                   key={filter}
+                   onClick={() => !isDisabled && setMessageFilter(filter)}
+                   disabled={isDisabled}
+                   aria-label={`Show ${filter} messages`}
+                   title={`Show ${filter} messages`}
+                   className="ui-press p-1.5 rounded transition-colors border"
+                   style={
+                     isDisabled
+                       ? { backgroundColor: 'rgba(128, 128, 128, 0.1)', borderColor: 'rgba(128, 128, 128, 0.2)', color: 'rgba(128, 128, 128, 0.4)', cursor: 'not-allowed' }
+                       : messageFilter === filter ? getFilterAllActive() : getFilterInactive()
+                   }
+                 >
+                   {filter === 'all' && <LayoutGrid size={16} />}
+                   {filter === 'interactive' && <MessageCircle size={16} />}
+                   {filter === 'announcer' && <RadioIcon size={16} />}
+                   {filter === 'external' && <Globe size={16} />}
+                   {filter === 'shoutouts' && <Heart size={16} />}
+                   {filter === 'system' && <AlertTriangle size={16} />}
+                 </button>
+               )
+             })}
+            </FadeSwap>
+            <button
+              onClick={() => setShowTimeline(value => !value)}
+              aria-pressed={showTimeline}
+              aria-label="Timeline"
+              title={showTimeline ? 'Timeline on: back to the conversation' : 'Timeline: everything that aired for you'}
+              className="ui-press p-1.5 rounded transition-colors border ml-1"
+              style={showTimeline ? getFilterAllActive() : getFilterInactive()}
+            >
+              <History size={16} />
+            </button>
+          </div>
           {!isMobile && (
             <button
+              type="button"
               onClick={toggleRadioInput}
-              aria-pressed={isTextInput}
-              aria-label="Text Radio"
-              title={isTextInput ? 'Text Radio on: back to talking' : 'Text Radio: type to the DJs'}
-              className="ui-press p-1.5 rounded transition-colors border ml-1"
-              style={isTextInput ? getFilterAllActive() : getFilterInactive()}
+              aria-label={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
+              title={isTextInput ? 'Talk to the DJs' : 'Type to the DJs'}
+              className="ui-press flex-shrink-0 w-9 h-9 bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center"
             >
-              <TextRadioIcon className="w-4 h-4" />
+              <FadeSwap swapKey={radioInput} preset={PRESETS.iconSwap} mode="wait">
+                {isTextInput ? PANEL_CONFIG[PANEL_IDS.RADIO].mobileIcon('w-4 h-4') : <TextRadioIcon className="w-4 h-4" />}
+              </FadeSwap>
             </button>
           )}
         </div>
