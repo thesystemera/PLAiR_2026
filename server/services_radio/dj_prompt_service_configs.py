@@ -115,6 +115,7 @@ def build_node_configs() -> dict:
                 'station_recent_airings',
                 'studio_clock',
                 'queue_playlist',
+                'listener_guest',
                 'city_pulse'
             ],
             'use_ai_picker': True

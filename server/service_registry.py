@@ -60,6 +60,7 @@ class ServiceRegistry:
         self.request_store: Optional["ListenerRequestStore"] = None
         self.request_vector_db_service: Optional["ListenerRequestVectorDatabaseService"] = None
         self.request_search: Optional["SemanticSearch"] = None
+        self.app_guide: Optional["SemanticSearch"] = None
         self.playback_service: Optional["PlaybackService"] = None
         self.vector_search_service: Optional["CatalogVectorSearchService"] = None
         self.vector_search_prompt_cache_service: Optional["CatalogVectorSearchPromptCacheService"] = None

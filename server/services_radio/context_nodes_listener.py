@@ -37,6 +37,26 @@ async def get_user_basic(user: Optional[User] = None, session_id: Optional[str] 
 
 
 @node_registry.register(
+    "listener_guest",
+    "For a guest listener: what an account would give them and when to mention it",
+    cost="free",
+    visible=False
+)
+async def get_listener_guest(user: Optional[User] = None, **_) -> str:
+    if user is not None:
+        return ""
+    from services_radio.app_guide import ACCOUNT_ENTRY, entry
+    account = entry(ACCOUNT_ENTRY)
+    offer = f" {account['answer']}" if account else ""
+    return (
+        f"GUEST LISTENER: this listener has no account yet.{offer}\n"
+        "Bring it up when it fits, in your own words: when they ask for something that needs an account, or when a "
+        "song clearly lands with them. Once in a while at most (the conversation shows whether you already did), "
+        "never as an ad and never instead of doing what they asked."
+    )
+
+
+@node_registry.register(
     "user_local_time",
     "Current time in user's timezone (HH:MM AM/PM)",
     cost="low"

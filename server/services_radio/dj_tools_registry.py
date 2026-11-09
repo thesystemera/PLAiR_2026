@@ -52,7 +52,6 @@ SEGMENT_TOOLS = {"get_news", "get_weather", "get_events", "find_places", "get_ar
                  "play_shoutouts"}
 MAX_SEGMENTS_PER_TURN = 3
 MAX_TEXT_ARG_CHARS = 200
-TOOL_MODE_REPLACED_NODES = {"station_capabilities_detailed"}
 UNTRUSTED_NODE_KEYS = {
     "conversation_recent",
     "conversation_last_turn",

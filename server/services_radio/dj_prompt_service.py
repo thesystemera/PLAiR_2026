@@ -181,7 +181,6 @@ class DJPromptService(SegmentPrompts, PromptDebug):
             DJ_FUNCTION_DECLARATIONS,
             READ_TOOLS,
             SEGMENT_TOOLS,
-            TOOL_MODE_REPLACED_NODES,
             UNTRUSTED_NODE_KEYS,
         )
 
@@ -208,8 +207,7 @@ class DJPromptService(SegmentPrompts, PromptDebug):
 
         system_nodes = [node for node in self.node_configs['interactive_tools']['required_nodes']
                         if node_registry.is_system(node)]
-        live_nodes = [node for node in selected_nodes
-                      if not node_registry.is_system(node) and node not in TOOL_MODE_REPLACED_NODES]
+        live_nodes = [node for node in selected_nodes if not node_registry.is_system(node)]
         system_prompt = assemble_prompt(context_data, system_nodes, untrusted_keys=set(), note=None)
         live_context = assemble_prompt(context_data, live_nodes, untrusted_keys=UNTRUSTED_NODE_KEYS, note=None)
 

@@ -291,6 +291,8 @@ CONTEXT NODES:
   exchange) and "user_basic".
 - Any mention of a track: "track_title_artist", "track_style_description", "track_release_date" (and more track
   nodes for questions about the song). Music requests and discussions: "user_favorite_artists" and "user_persona".
+- Questions about the app itself (what PLAiR can do, how to do something in it, accounts, uploads, settings):
+  "app_guide".
 - When in doubt, include the node: context is cheap. Order them most important first.
 
 Examples:
@@ -298,6 +300,7 @@ Examples:
 "Skip this track" -> ["track_title_artist", "queue_next_track", "queue_next_details", "conversation_last_turn", "user_basic", "user_favorite_artists"]
 "Tell me about this song" -> ["track_title_artist", "track_release_date", "track_style_description", "track_vocal_info", "track_audio_features_full", "track_lyrics_preview", "conversation_recent", "user_basic", "user_persona", "user_favorite_artists"]
 "What's the weather like?" -> ["weather_current", "user_basic", "conversation_last_turn", "station_current_show"]
+"What can this app do?" -> ["app_guide", "conversation_last_turn", "user_basic"]
 "Play something upbeat" -> ["user_favorite_artists", "user_basic", "user_persona", "track_title_artist", "conversation_recent", "queue_next_track"]
 
 TOOL PLANNING (needs_tools + tool_plan):

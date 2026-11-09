@@ -256,6 +256,25 @@ async def get_tool_guidance(route: Optional[dict] = None, **_) -> str:
 
 
 @node_registry.register(
+    "app_guide",
+    "How the PLAiR app works: what it can do, where each feature is and what needs an account. For questions about "
+    "the app itself (what can it do, how do I..., accounts, uploading, settings, devices, offline)",
+    cost="low"
+)
+async def get_app_guide(user_input: Optional[str] = None, **_) -> str:
+    from services_radio.app_guide import closest
+    entries = await closest(user_input or "")
+    if not entries:
+        return ""
+    lines = "\n".join(f"- {entry['topic']}: {entry['answer']}" for entry in entries)
+    return (
+        "APP GUIDE - the parts of the PLAiR app closest to what the listener asked. Answer from these in your own "
+        "words, like showing a friend around: only what answers them, never read out as a list or a manual.\n"
+        f"{lines}"
+    )
+
+
+@node_registry.register(
     "city_pulse",
     "What the station already knows that fits this listener's message: local gigs, places, news, weather, "
     "shoutouts, city charts and trends",

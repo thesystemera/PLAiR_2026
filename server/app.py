@@ -61,6 +61,7 @@ from services_radio import regional_knowledge as regional_kb
 from services_radio import pulse as pulse_kb
 from services.listener_request_service import ListenerRequestPromptCache, ListenerRequestStore,     ListenerRequestVectorDatabaseService
 from services.semantic_source import SemanticSearch
+from services_radio.app_guide import AppGuideVectorDatabaseService
 from services_radio import local_knowledge
 from services_radio import event_harvest
 from services_radio import area_signals
@@ -316,6 +317,15 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         log_service.warning(f"⚠️  Listener request vectors unavailable: {e}")
         services.request_store = services.request_vector_db_service = services.request_search = None
+
+    try:
+        app_guide_db = AppGuideVectorDatabaseService()
+        await asyncio.to_thread(app_guide_db.load)
+        services.app_guide = SemanticSearch(app_guide_db)
+        log_service.success("✓ App guide ready")
+    except Exception as e:
+        log_service.warning(f"⚠️  App guide unavailable: {e}")
+        services.app_guide = None
 
     try:
         nugget_source = local_knowledge.LocalNuggetSource()
