@@ -206,7 +206,8 @@ class VectorStore:
             with self._lock:
                 seq = self._seq
                 self.dirty = False
-                target = 1 if self._slots[self._live] is None else 3 - self._live
+                previous = self._slots[self._live]
+                target = 1 if previous is None else 3 - self._live
                 spare = self._slots[target]
             if spare is not None:
                 with self._lock:
@@ -223,8 +224,13 @@ class VectorStore:
                 self._pending_slot = self.build_slot(list(self._pending.values()), None, slot) \
                     if self._pending else None
                 self.version += 1
-            self._log(f"{self.name}: rebuilt {len(entries)} items into slot {target} "
-                      f"({time.perf_counter() - started:.1f}s)")
+            seconds = time.perf_counter() - started
+            if previous is None:
+                self._log(f"{self.name}: built {len(entries)} items into slot {target} ({seconds:.1f}s)")
+            else:
+                old, fresh = {entry.key for entry in previous.entries}, {entry.key for entry in entries}
+                self._log(f"{self.name}: index rebuilt with {len(fresh - old)} new, {len(old - fresh)} removed "
+                          f"({len(entries)} total, slot {target}, {seconds:.1f}s)")
         except Exception:
             self.dirty = True
             raise
