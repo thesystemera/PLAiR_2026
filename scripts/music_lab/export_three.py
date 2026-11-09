@@ -20,6 +20,9 @@ async def main(ids):
     for tid in ids:
         meta = json.loads((settings.CATALOG_DIR / "metadata" / f"{tid}.json").read_text(encoding="utf-8"))
         name = "".join(c if c.isalnum() else "_" for c in (meta.get("generation_params") or {}).get("title", tid)).strip("_")[:28]
+        if sum(json.loads((settings.CATALOG_DIR / "metadata" / f"{i}.json").read_text(encoding="utf-8")).get("generation_params", {}).get("title")
+               == (meta.get("generation_params") or {}).get("title") for i in ids) > 1:
+            name = f"{name}_{tid[:6]}"
         sonic = settings.SONIC_WAV_DIR / f"{tid}.wav"
         with_hiss = OUT / f"_{tid}_hiss.wav"
         no_hiss = OUT / f"_{tid}_nohiss.wav"
