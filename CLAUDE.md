@@ -344,7 +344,7 @@ xs<640px (phone, 1.0), sm 640-768px (1.0), md 768-1024px (tablet, 1.0), lg 1024-
 - Moving covers render coarse (a Keep It Smooth lever, section 14): parallax and lighting run at a quarter of the pixels into half-float targets (landing offset, lighting terms, edge fill) and a full-resolution pass reads the cover colour at the blended landing position (`depthArtRenderer.drawCoarse`, `COARSE_FRAGMENT` / `COMPOSE_FRAGMENT`); 40 -> 50 fps on Now Playing while moving, 31 -> 41 on the Catalog (7 Oct).
 - Covers draw through ONE renderer (`depthArtRenderer`) via `TrackArt` / `ProfileArt`; anything that changes track uses `TrackArtCrossfade` (the new cover draws behind, the old one is frozen (`held`, no parallax pass) and fades out once the new one has drawn; 1.5 s limit). 3D Lit Artwork off draws the pack's colour half flat in the same renderer.
 - Packs are decoded only in `packDecodeWorker` (`decodePack`): decoding, cutting and resizing an ImageBitmap on the main thread cost ~90 ms per 1024 pack on the owner's phone. Inside the scene worker `decodePack` runs inline.
-- Everything else that needs the cover reads the current track's full pack: `useThemeArtwork()` = `{ key, blob, imageUrl, trackId }` (DynamicThemeContext). The background scene gets `key` + `blob`; colours come from a 100 px decode; `imageUrl` (a 512 JPEG made from the pack in idle time) is for the lock-screen art (Media Session), modal blurs and the no-WebGL fallback.
+- Everything else that needs the cover reads the current track's full pack: `useThemeArtwork()` = `{ key, blob, imageUrl, trackId }` (DynamicThemeContext). The background scene gets `key` + `blob`; colours come from a 100 px decode; `imageUrl` (a 512 JPEG made from the pack in idle time) is for the lock-screen art (Media Session) and the no-WebGL fallback.
 - Preloading: UIState preloads current + next track's packs (tile size and full) and pins them; the catalog scroller prefetches packs ahead (`artworkPrefetcher`) and warms the nearest on the GPU. Packs are rendered ahead on the server (`backfill_track_packs` at startup, all sizes); an unrendered pack takes ~0.9 s on demand, a rendered one ~4 ms.
 - Debug: `__plairArt.stats()`, `.views()`, `.drawDelays()`, `.blank()` (each blank cover on screen: no pack yet / decoding / uploading / ready but not drawn).
 
@@ -373,9 +373,9 @@ const openUploadModal = useUISelector(state => state.openUploadModal)
 ```
 **Why:** Modals MUST render at App.jsx level for proper mobile positioning. CSS `position: fixed` inside transformed containers positions relative to the transform, not viewport. Components just trigger open/close via UIState functions.
 
-**Visual Effects:** Blurred artwork background, category-based gradient, animated border glow, smooth animations, noise texture.
+**Background (owner, 9 Nov):** one static, pre-blurred copy of the current cover (`packBlurUrls` on the 256 pack, made in the worker when the song changes via `prewarmModalAssets`, so it is there in the dialog's first frame), shown at `COVER_OPACITY` under the dialog's dark layers; the category gradient only when there is no cover. Never a 3D/animated cover (`TrackArt`) or extra blurred copies in the header, body or option buttons: they were slow to appear, cost frames and clashed with the text.
 
-**Props:** `maxWidth`, `showCloseButton`, `closeOnBackdrop`, `categoryOverride`, `gradientOpacity`
+**Props:** `maxWidth`, `showCloseButton`, `closeOnBackdrop`, `categoryOverride`
 **Helpers:** `ModalSection`, `ModalButton`, `ModalOptionButton`, `ModalFooter`, `ModalCard`
 
 **DO NOT:**
@@ -727,7 +727,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/lyricFonts.json` - The lyric font list (id, family, weights, italic, a line on its character for the design prompt, woff2 files), read by client and server.
 - `client/src/lib/lyricStyle.js` - Styled lyrics: builds cards from a song's lyric style, finds the card and sung words at a moment, lays cards out (stack, flow, cascade, solo) in the screen's aspect and draws them.
 - `client/src/lib/mediaCache.js` - Multi-layer media cache (memory, IndexedDB, Cache API) for cover packs (tile and full size) and profile pictures; deletes retired caches.
-- `client/src/lib/packImage.js` - Decodes cover packs (colour and map halves) in `packDecodeWorker`, and makes the pack's colour half into a JPEG URL for the lock screen and modal blurs.
+- `client/src/lib/packImage.js` - Decodes cover packs (colour and map halves) in `packDecodeWorker`, and makes the pack's colour half into a JPEG URL for the lock screen, and the blurred copy behind modals.
 - `client/src/lib/packDecodeWorker.js` - Worker that decodes, cuts and resizes cover packs off the main thread.
 - `client/src/lib/mediaSupport.js` - Detects MSE and WebM/Opus support and picks streaming and download formats.
 - `client/src/lib/microMotion.js` - Web Animations micro-interactions: press pop, nope, burst, art pop, arrival glow.

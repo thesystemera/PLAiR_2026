@@ -116,7 +116,6 @@ export const DemoModeModal = memo(function DemoModeModal({ isOpen, onClose }) {
       maxWidth="max-w-3xl"
       maxHeight="max-h-[90vh]"
       categoryOverride="discovery"
-      gradientOpacity={0.75}
     >
       <div className="space-y-2">
         {content}
