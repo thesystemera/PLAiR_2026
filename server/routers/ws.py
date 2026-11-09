@@ -312,7 +312,9 @@ async def websocket_endpoint(
                 )
 
         if not has_existing_playback:
-            await services.playback_service.initialize_new_session(session_id, user_id=session_user_id)
+            new_station = await services.playback_service.initialize_new_session(session_id, user_id=session_user_id)
+            if new_station and not user and services.command_executor is not None:
+                spawn(services.command_executor.welcome_new_listener(session_id), name=f"welcome_{session_id}")
 
         session_callback = services.playback_service.ensure_broadcast_callback(session_id, _make_session_callback)  # type: ignore
 

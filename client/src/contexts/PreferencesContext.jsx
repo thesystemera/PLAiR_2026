@@ -12,7 +12,7 @@ const PreferencesContext = createContext(null)
 const RADIO_MODE_STORAGE_KEY = 'radioMode'
 const RADIO_MODE_TOGGLES = ['enabled', 'news', 'city', 'local', 'community', 'features', 'stings', 'reviews']
 const DEFAULT_RADIO_MODE = Object.freeze({
-  enabled: false,
+  enabled: true,
   news: true,
   city: true,
   local: true,

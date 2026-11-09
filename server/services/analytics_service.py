@@ -1,6 +1,7 @@
 import asyncio
 import json
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from sqlalchemy import select, func, case, cast, String
@@ -15,6 +16,67 @@ ANALYTICS_MAX_FLUSH_ATTEMPTS = 5
 ANALYTICS_CACHE_SIZE = 100
 AGGREGATE_CHUNK = 500
 TOP_HITS_PERIOD_DAYS = {"week": 7, "day": 1}
+
+LISTEN_MIN_PCT = 50.0
+RATING_WEIGHTS = {"super_like": 3.0, "like": 1.0}
+RATING_SCORES = {PreferenceType.SUPER_LIKE: RATING_WEIGHTS["super_like"], PreferenceType.LIKE: RATING_WEIGHTS["like"],
+                 PreferenceType.BAN: -RATING_WEIGHTS["super_like"]}
+LISTENED = (PlayEvent.event_type != "play") & (PlayEvent.completion_pct >= LISTEN_MIN_PCT)
+SKIPPED = (PlayEvent.event_type == "skip") & (func.coalesce(PlayEvent.completion_pct, 0.0) < LISTEN_MIN_PCT)
+LISTENER = func.coalesce(cast(PlayEvent.user_id, String), PlayEvent.session_id)
+
+
+@dataclass
+class Engagement:
+    score: float = 0.0
+    listeners: int = 0
+    listens: int = 0
+
+
+def rating_score(likes: int, superlikes: int, bans: int) -> float:
+    return (likes * RATING_SCORES[PreferenceType.LIKE] + superlikes * RATING_SCORES[PreferenceType.SUPER_LIKE]
+            + bans * RATING_SCORES[PreferenceType.BAN])
+
+
+async def engagement(session, track_ids: Optional[Iterable[str]] = None, since: Optional[datetime] = None,
+                     region_key: Optional[str] = None) -> Dict[str, Engagement]:
+    """How much listeners engage with each track. Every listener counts once per track, however often it played:
+    +1 when they listen through (past LISTEN_MIN_PCT), -1 when they skip, the share in between when they did both,
+    plus their rating (like, super like, ban). A track that only started counts for nothing. With `since` or
+    `region_key` only that window's plays count, with the ratings of those listeners and ratings made in the window."""
+    plays = select(PlayEvent.track_id, LISTENER, func.count().filter(LISTENED), func.count().filter(SKIPPED)) \
+        .group_by(PlayEvent.track_id, LISTENER)
+    ratings = select(TrackPreference.track_id, TrackPreference.user_id, TrackPreference.preference_type,
+                     TrackPreference.created_at)
+    if track_ids is not None:
+        wanted = list(track_ids)
+        plays = plays.where(PlayEvent.track_id.in_(wanted))
+        ratings = ratings.where(TrackPreference.track_id.in_(wanted))
+    if since is not None:
+        plays = plays.where(PlayEvent.started_at >= since)
+    if region_key is not None:
+        plays = plays.where(PlayEvent.region_key == region_key)
+
+    scored: Dict[str, Engagement] = {}
+    heard = set()
+    for track_id, listener, listens, skips in (await session.execute(plays)).all():
+        item = scored.setdefault(track_id, Engagement())
+        item.listeners += 1
+        item.listens += int(listens)
+        if listens or skips:
+            item.score += (listens - skips) / (listens + skips)
+        heard.add((track_id, listener))
+    for track_id, user_id, kind, created_at in (await session.execute(ratings)).all():
+        in_window = region_key is None and (since is None or (created_at is not None and created_at >= since))
+        if in_window or (track_id, str(user_id)) in heard:
+            scored.setdefault(track_id, Engagement()).score += RATING_SCORES.get(kind, 0.0)
+    return scored
+
+
+def ranked(scored: Dict[str, Engagement], limit: int) -> List[str]:
+    return [track_id for track_id, item in sorted(scored.items(), key=lambda kv: (-kv[1].score, kv[0]))
+            if item.score > 0][:limit]
+
 
 class AnalyticsService(SingletonService):
     def __init__(self):
@@ -211,94 +273,6 @@ class AnalyticsService(SingletonService):
             (skip_count * 0.2)
         )
 
-    async def aggregate_track_analytics(self, track_id: str) -> bool:
-        async with self.aggregate_semaphore:
-            try:
-                async with AsyncSessionLocal() as session:
-                    stats = await self._aggregate_event_stats(session, track_id)
-                    if stats is None:
-                        return True
-
-                    pref_counts = await self._count_preferences(session, TrackPreference, TrackPreference.track_id, track_id)
-                    like_count = pref_counts.get(PreferenceType.LIKE, 0)
-                    superlike_count = pref_counts.get(PreferenceType.SUPER_LIKE, 0)
-                    ban_count = pref_counts.get(PreferenceType.BAN, 0)
-
-                    total_plays = stats["total_plays"]
-                    unique_listeners = stats["unique_listeners"]
-                    last_played = stats["last_played"]
-                    skip_count = stats["skip_count"]
-                    skip_rate = stats["skip_rate"]
-                    avg_completion = stats["avg_completion"]
-                    daily_plays = stats["daily_plays"]
-                    weekly_plays = stats["weekly_plays"]
-                    popularity_score = self._popularity_score(total_plays, like_count, superlike_count, ban_count, skip_count)
-
-                    existing_analytics = await session.get(TrackAnalytics, track_id)
-                    if existing_analytics:
-                        existing_analytics.total_plays = total_plays  # type: ignore
-                        existing_analytics.unique_listeners = unique_listeners  # type: ignore
-                        existing_analytics.last_played = last_played  # type: ignore
-                        existing_analytics.like_count = like_count  # type: ignore
-                        existing_analytics.superlike_count = superlike_count  # type: ignore
-                        existing_analytics.ban_count = ban_count  # type: ignore
-                        existing_analytics.avg_completion_pct = avg_completion  # type: ignore
-                        existing_analytics.skip_count = skip_count  # type: ignore
-                        existing_analytics.skip_rate = skip_rate  # type: ignore
-                        existing_analytics.daily_plays = json.dumps(daily_plays)  # type: ignore
-                        existing_analytics.weekly_plays = json.dumps(weekly_plays)  # type: ignore
-                        existing_analytics.popularity_score = popularity_score  # type: ignore
-                        existing_analytics.updated_at = datetime.now(timezone.utc)  # type: ignore
-                    else:
-                        analytics = TrackAnalytics(
-                            track_id=track_id,
-                            total_plays=total_plays,
-                            unique_listeners=unique_listeners,
-                            last_played=last_played,
-                            like_count=like_count,
-                            superlike_count=superlike_count,
-                            ban_count=ban_count,
-                            avg_completion_pct=avg_completion,
-                            skip_count=skip_count,
-                            skip_rate=skip_rate,
-                            daily_plays=json.dumps(daily_plays),
-                            weekly_plays=json.dumps(weekly_plays),
-                            popularity_score=popularity_score
-                        )
-                        session.add(analytics)
-
-                    await session.commit()
-
-                analytics_data = {
-                    "track_id": track_id,
-                    "total_plays": total_plays,
-                    "unique_listeners": unique_listeners,
-                    "last_played": last_played.isoformat() if last_played is not None else None,
-                    "engagement": {
-                        "likes": like_count,
-                        "superlikes": superlike_count,
-                        "bans": ban_count
-                    },
-                    "quality": {
-                        "avg_completion_pct": round(float(avg_completion), 2),
-                        "skip_count": skip_count,
-                        "skip_rate": round(float(skip_rate), 4)
-                    },
-                    "time_series": {
-                        "daily": daily_plays,
-                        "weekly": weekly_plays
-                    },
-                    "popularity_score": round(float(popularity_score), 2),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-
-                await analytics_file_service.write_track_analytics(track_id, analytics_data)
-                return True
-
-            except Exception as e:
-                log_service.error(f"Failed to aggregate analytics for track {track_id}: {e}")
-                return False
-
     async def _aggregate_tracks_bulk(self, track_ids: List[str]) -> bool:
         try:
             changed = 0
@@ -336,6 +310,7 @@ class AnalyticsService(SingletonService):
                 .where(TrackPreference.track_id.in_(chunk))
                 .group_by(TrackPreference.track_id, TrackPreference.preference_type)
             )
+            scores = await engagement(session, chunk)
             existing_rows = await session.execute(select(TrackAnalytics).where(TrackAnalytics.track_id.in_(chunk)))
             existing = {row.track_id: row for row in existing_rows.scalars()}
 
@@ -373,7 +348,7 @@ class AnalyticsService(SingletonService):
                     "avg_completion_pct": float(avg_completion) if avg_completion is not None else 0.0,
                     "skip_count": skip_count,
                     "skip_rate": skip_count / total_plays if total_plays > 0 else 0.0,
-                    "popularity_score": self._popularity_score(total_plays, like_count, superlike_count, ban_count, skip_count),
+                    "popularity_score": scores.get(track_id, Engagement()).score,
                 }
 
                 row = existing.get(track_id)
@@ -507,19 +482,13 @@ class AnalyticsService(SingletonService):
     async def _fetch_top_hits_for_period(self, session, period: str, limit: int) -> List[Dict]:
         if period in TOP_HITS_PERIOD_DAYS:
             cutoff = datetime.now(timezone.utc) - timedelta(days=TOP_HITS_PERIOD_DAYS[period])
-            period_plays = func.count(PlayEvent.id)  # pylint: disable=E1102
-            query = (
-                select(TrackAnalytics)
-                .join(PlayEvent, PlayEvent.track_id == TrackAnalytics.track_id)
-                .where(PlayEvent.event_type == "play", PlayEvent.started_at >= cutoff)
-                .group_by(TrackAnalytics.track_id)
-                .order_by(period_plays.desc(), TrackAnalytics.popularity_score.desc(), TrackAnalytics.track_id)
-            )
+            order = ranked(await engagement(session, since=cutoff), limit)
+            rows = await session.execute(select(TrackAnalytics).where(TrackAnalytics.track_id.in_(order)))
+            by_id = {row.track_id: row for row in rows.scalars()}
+            analytics = [by_id[track_id] for track_id in order if track_id in by_id]
         else:
-            query = select(TrackAnalytics).order_by(TrackAnalytics.popularity_score.desc())
-
-        result = await session.execute(query.limit(limit))
-        analytics = result.scalars().all()
+            query = select(TrackAnalytics).order_by(TrackAnalytics.popularity_score.desc(), TrackAnalytics.track_id)
+            analytics = (await session.execute(query.limit(limit))).scalars().all()
 
         return [{
             "track_id": str(a.track_id) if a.track_id is not None else "",
@@ -792,11 +761,7 @@ class AnalyticsService(SingletonService):
                     superlike_count = len([p for p in preferences if str(p.preference_type) == str(PreferenceType.SUPER_LIKE)])
                     ban_count = len([p for p in preferences if str(p.preference_type) == str(PreferenceType.BAN)])
 
-                    popularity_score = (
-                        (like_count * 0.3) +
-                        (superlike_count * 0.5) -
-                        (ban_count * 0.8)
-                    )
+                    popularity_score = rating_score(like_count, superlike_count, ban_count)
 
                     analytics = TrackAnalytics(
                         track_id=track_id,
@@ -839,18 +804,11 @@ class AnalyticsService(SingletonService):
             await self._flush_events()
 
     async def _aggregate_loop(self):
-        full_rebuild_counter = 0
+        cycle = 0
         while self._running:
             await asyncio.sleep(self.aggregate_interval)
-            
-            # Every 6th cycle (30 minutes by default), do a full rebuild
-            full_rebuild_counter += 1
-            do_full_rebuild = full_rebuild_counter >= 6
-            
-            await self.aggregate_all(full_rebuild=do_full_rebuild)
-            
-            if do_full_rebuild:
-                full_rebuild_counter = 0
+            await self.aggregate_all(full_rebuild=cycle % 6 == 0)
+            cycle += 1
 
     async def stop_background_tasks(self):
         self._running = False

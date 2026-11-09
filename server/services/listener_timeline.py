@@ -33,7 +33,7 @@ TALK_TEXT_CHARS = 160
 DETAIL_MAX_CHARS = 3000
 TALK_ID_PREFIX = "aired:"
 PRUNE_EVERY_S = 3600.0
-TALK_STREAMS = {"interactive": "chat reply", "announcer": "between-track talk"}
+TALK_STREAMS = {"interactive": "chat reply", "announcer": "between-track talk", "onboarding": "welcome"}
 SEGMENT_STREAMS = {
     "news": "news bulletin",
     "weather": "weather forecast",

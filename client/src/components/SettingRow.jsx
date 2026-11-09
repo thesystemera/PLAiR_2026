@@ -14,17 +14,21 @@ export const SettingRow = ({ icon: Icon, label, color = "text-purple-400", child
   </div>
 )
 
-export const ToggleChip = ({ on, onClick, disabled = false, activeClassName = 'bg-purple-500 text-white', label }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled}
-    aria-pressed={on}
-    aria-label={label}
-    className={`ui-press relative overflow-hidden min-w-[3rem] px-3 py-1 rounded text-xs font-medium transition disabled:opacity-50 ${on ? activeClassName : 'bg-dark-hover text-gray-400'}`}
-  >
-    <FadeSwap swapKey={on ? 'on' : 'off'} preset={PRESETS.badgeSwap} className="block text-center">
-      {on ? 'ON' : 'OFF'}
-    </FadeSwap>
-  </button>
-)
+export const ToggleChip = ({ on, mixed = false, onClick, disabled = false, activeClassName = 'bg-purple-500 text-white', label }) => {
+  const state = mixed ? 'some' : on ? 'on' : 'off'
+  const stateClassName = { on: activeClassName, some: 'bg-white/15 text-gray-200', off: 'bg-dark-hover text-gray-400' }[state]
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={mixed ? 'mixed' : on}
+      aria-label={label}
+      className={`ui-press relative overflow-hidden min-w-[3rem] px-3 py-1 rounded text-xs font-medium transition disabled:opacity-50 ${stateClassName}`}
+    >
+      <FadeSwap swapKey={state} preset={PRESETS.badgeSwap} className="block text-center">
+        {state.toUpperCase()}
+      </FadeSwap>
+    </button>
+  )
+}

@@ -64,7 +64,7 @@ Tap "Reviews" on the Playing panel to read what listeners said about the song, a
 
 ## Radio Mode and talk breaks
 Asks: can you do news, I want more talking, I want less talking, turn off the talk breaks, what is Radio Mode, news on the hour, can you stop talking so much, too much talking
-Radio Mode makes PLAiR run like a real station: news on the hour, a weather and city update at half past, and short features between songs (local gigs, community shoutouts, trivia, and now and then a story made just for you). A song always finishes before the hosts take over. It's off until you switch it on in the Account panel under "Radio Mode", where each kind of break has its own switch and you set how often features come. Or just ask the hosts to turn it on or off. The between-song chat and station IDs are separate: "Stings & time checks" turns those off.
+Radio Mode makes PLAiR run like a real station: news on the hour, a weather and city update at half past, and short features between songs (local gigs, community shoutouts, trivia, and now and then a story made just for you). A song always finishes before the hosts take over. It's on from the start. In the Account panel under "Radio Mode" one switch turns everything on or off: talk breaks, stings and time checks, and listener reviews over songs. Below it each one has its own switch, and you set how often features come. Or just ask the hosts to turn it on or off.
 
 ## Human or AI music
 Asks: is this AI, is this music real, who made these songs, are these real artists, only human music, only AI music, why does it say inspired by

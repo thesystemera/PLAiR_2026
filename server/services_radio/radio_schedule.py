@@ -24,7 +24,7 @@ def default_feature_interval() -> int:
 
 @dataclass
 class RadioPrefs:
-    enabled: bool = False
+    enabled: bool = True
     news: bool = True
     city: bool = True
     local: bool = True

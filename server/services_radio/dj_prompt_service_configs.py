@@ -349,6 +349,26 @@ def build_node_configs() -> dict:
                 }
             }
         },
+        'onboarding': {
+            'required_nodes': [
+                'core_dj_identity',
+                'format_channels',
+                'format_tone',
+                'format_performance_tags_guide',
+                'format_performance_tag_examples',
+                'format_roles_detailed',
+                'format_station_characteristics',
+                'format_dialogue_examples',
+                'instruction_onboarding',
+                'track_title_artist',
+                'user_local_time',
+                'user_basic',
+                'weather_current',
+                'bank_talking_points',
+                'segment_length'
+            ],
+            'use_ai_picker': False
+        },
         'radio_segment': {
             'required_nodes': RADIO_SEGMENT_BASE_NODES + [
                 'station_recent_airings',

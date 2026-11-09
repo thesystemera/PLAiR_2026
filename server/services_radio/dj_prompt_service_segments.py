@@ -312,6 +312,21 @@ class SegmentPrompts:
                                                  session_id=session_dict.get('session_id'))
 
     @gpt_error_handler
+    async def gpt_onboarding(self, session_dict):
+        context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(
+            gpt_type='onboarding',
+            user_id=session_dict.get('user_id'),
+            session_id=session_dict.get('session_id'),
+            transition_duration_ms=settings.SEGMENT_DEPTHS[talk_clock.depth()] * 1000
+        )
+
+        system_prompt = assemble_prompt(context_data, final_nodes)
+        return await self._execute_broadcast_gpt("Onboarding", system_prompt,
+                                                 gpt_type='onboarding', debug_timestamp=debug_timestamp or "",
+                                                 context_data=context_data, user_id=session_dict.get('user_id'),
+                                                 session_id=session_dict.get('session_id'))
+
+    @gpt_error_handler
     async def gpt_shoutouts_interpretation(self, session_dict, query: str | None = None, n_results: int = 10):
 
         context_data, final_nodes, debug_timestamp = await self._get_nodes_unified(

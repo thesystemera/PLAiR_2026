@@ -8,11 +8,9 @@ from sqlalchemy import func, select
 
 from database import AsyncSessionLocal, PlayEvent
 from services import log_service
-from services.analytics_service import analytics_service
+from services.analytics_service import LISTEN_MIN_PCT, LISTENED, RATING_WEIGHTS, SKIPPED, analytics_service
 from services.user_data_cache_service import user_data_cache
 
-LISTEN_MIN_PCT = 50.0
-RATING_WEIGHTS = {"super_like": 3.0, "like": 1.0}
 SCOPES = ("favorites", "super_likes")
 
 
@@ -53,12 +51,10 @@ async def track_plays(user_id: Optional[int], session_id: Optional[str],
     wanted = set(track_ids) if track_ids is not None else None
     if wanted is not None and not wanted:
         return {}
-    listened = (PlayEvent.event_type != "play") & (PlayEvent.completion_pct >= LISTEN_MIN_PCT)
-    skipped = (PlayEvent.event_type == "skip") & (func.coalesce(PlayEvent.completion_pct, 0.0) < LISTEN_MIN_PCT)
     query = (select(PlayEvent.track_id,
                     func.count().filter(PlayEvent.event_type == "play"),
-                    func.count().filter(listened),
-                    func.count().filter(skipped),
+                    func.count().filter(LISTENED),
+                    func.count().filter(SKIPPED),
                     func.max(PlayEvent.started_at).filter(PlayEvent.event_type == "play"))
              .where(_owner(user_id, session_id)).group_by(PlayEvent.track_id))
     if wanted is not None:

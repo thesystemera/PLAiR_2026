@@ -1,4 +1,5 @@
 import asyncio
+import random
 import time
 from typing import Dict, List, Optional, Any, Callable
 from config import settings
@@ -7,6 +8,9 @@ from services import playback_snapshots
 from services.base_service import SingletonService
 from services.playback_state import PlaybackState
 from services.playback_population_service import PlaybackPopulationService
+
+TUNE_IN_SPAN = (0.25, 0.6)
+
 
 class PlaybackService(SingletonService):
     def __init__(self, catalog_service=None, vector_search_service=None):
@@ -263,10 +267,10 @@ class PlaybackService(SingletonService):
             await self._notify_session_change(session_id, snapshot)
         return await state.claim(device_id, play=play, notify_callback=notify)
 
-    async def initialize_new_session(self, session_id: str, user_id: Optional[int] = None):
+    async def initialize_new_session(self, session_id: str, user_id: Optional[int] = None) -> bool:
         state = self.get_session_state(session_id)
         async with state.init_lock:
-            await self._initialize_new_session_unlocked(state, session_id, user_id)
+            return await self._initialize_new_session_unlocked(state, session_id, user_id)
 
     async def _restore_session(self, state: PlaybackState, session_id: str, user_id: Optional[int], notify) -> bool:
         try:
@@ -288,21 +292,31 @@ class PlaybackService(SingletonService):
             state._spawn_background_fill(user_id, notify)
         return True
 
-    async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str, user_id: Optional[int]):
+    @staticmethod
+    async def _tune_in_ms(track: Dict) -> int:
+        from services.audio_features_service import AudioFeaturesService
+        features = await AudioFeaturesService().load_features(track["id"]) or {}
+        duration = float(features.get("duration") or 0)
+        low, high = (duration * share for share in TUNE_IN_SPAN)
+        starts = [section["start"] for section in features.get("sections") or []
+                  if low <= (section.get("start") or 0) <= high]
+        return int(random.choice(starts) * 1000) if starts else 0
+
+    async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str,
+                                               user_id: Optional[int]) -> bool:
         async def notify(snapshot):
             await self._notify_session_change(session_id, snapshot)
 
         if len(state.queue) > 0:
             log_service.detail(f"[PlaybackService] {log_service.who(session_id)} already initialized", "playback")
-            return
+            return False
 
         if await self._restore_session(state, session_id, user_id, notify):
-            return
+            return False
 
         if self.catalog and self.catalog.tracks:
             all_track_ids = set(self.catalog.tracks.keys())
             if all_track_ids:
-                import random
                 from services.analytics_service import analytics_service
 
                 history_tracks = []
@@ -346,15 +360,18 @@ class PlaybackService(SingletonService):
                     async with state._queue_lock:
                         state._shift_queue_to_target()
 
+                    state.progress_ms = await self._tune_in_ms(seed_track)
                     await state.play(user_id=user_id, notify_callback=notify)
 
                     log_service.playback(
-                        f"{log_service.who(session_id)}: new listening session, starting with "
-                        f"{log_service.track_label(seed_track)} from the top hits "
-                        f"({len(state.queue)} queued, {len(state.history)} in history)")
+                        f"{log_service.who(session_id)}: new listening session, tuning in to "
+                        f"{log_service.track_label(seed_track)} at {log_service.clock(state.progress_ms)} from the "
+                        f"top hits ({len(state.queue)} queued, {len(state.history)} in history)")
+                    return True
                 else:
                     log_service.error(f"{log_service.who(session_id)}: new session could not get a seed track")
             else:
                 log_service.warning(f"{log_service.who(session_id)}: no tracks available to seed the new session")
         else:
             log_service.warning(f"{log_service.who(session_id)}: catalog not available for the new session")
+        return False

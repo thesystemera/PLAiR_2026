@@ -322,7 +322,7 @@ For comparison, the plan nets about $4.55 per subscriber after Stripe fees, and 
 
 ## 14. Radio Mode: talk breaks (Phase 4, built 28 Sep 2026)
 
-Radio Mode lets the station take over now and then, like real radio: a short news bulletin at the top of the hour, a weather and city update at half past, and a feature every 15, 20 or 30 minutes. It is **off by default**; listeners switch it on in the User panel (guests too). A break never cuts a song off: it waits for the end of the current track.
+Radio Mode lets the station take over now and then, like real radio: a short news bulletin at the top of the hour, a weather and city update at half past, and a feature every 15, 20 or 30 minutes. It is **on by default** for everyone, guests included (owner, 10 Nov 2026); listeners switch it off, or any part of it, in the User panel. A saved choice is kept. A break never cuts a song off: it waits for the end of the current track.
 
 ### What the listener hears
 

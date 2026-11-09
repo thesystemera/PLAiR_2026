@@ -1,10 +1,11 @@
 """Produced segments for the DJs: news, weather, events, places, artist biographies, lyrics and shoutouts, each
-scheduled to air after the reply."""
+scheduled to air after the reply, and the hosts' welcome for a brand-new guest."""
 import asyncio
 import datetime
+import time
 from sqlalchemy import select
-from services_radio.conversation_service import save_conversation_to_database
-from services_radio import listener_location as location_resolver
+from services_radio.conversation_service import conversation_service, save_conversation_to_database
+from services_radio import listener_location as location_resolver, talk_clock
 from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
 from services_radio.tts_stream_planner import spoken_text
@@ -83,17 +84,32 @@ class ExecutorSegments:
         await self._air_segment(gpt_response, 'biography', f"Retrieved biography for {artist_name or 'this artist'}",
                                 user_id, session_id)
 
+    async def welcome_new_listener(self, session_id):
+        asked_at = time.time()
+        talk_clock.segment_depth.set("brief")
+        script = await self.dj_prompt_service.gpt_onboarding({'user_id': None, 'session_id': session_id})
+        if not script:
+            return
+        if conversation_service.last_turn_at(session_id) >= asked_at:
+            log_service.announcer(f"{log_service.who(session_id)}: welcome dropped, the listener spoke first")
+            return
+        log_service.announcer(f"{log_service.who(session_id)}: new listener, the hosts welcome them "
+                              f"({time.time() - asked_at:.1f} s to write)")
+        await self._air_segment(script, 'onboarding', None, None, session_id)
+
     async def _air_segment(self, gpt_response, message_type, feedback_msg, user_id, session_id):
         feedback_key = 'info'
         if isinstance(gpt_response, UnavailableSegment):
             feedback_key, feedback_msg = 'warning', gpt_response.feedback
         script = str(gpt_response)
 
-        async with self.async_session_maker() as db:
-            await save_conversation_to_database(user_id, db, message_type=message_type, **{feedback_key: feedback_msg})
-        if session_id:
-            await self.sio.emit('conversation_update', {feedback_key: feedback_msg, 'message_type': message_type},
-                                room=session_id)
+        if feedback_msg:
+            async with self.async_session_maker() as db:
+                await save_conversation_to_database(user_id, db, message_type=message_type,
+                                                    **{feedback_key: feedback_msg})
+            if session_id:
+                await self.sio.emit('conversation_update', {feedback_key: feedback_msg, 'message_type': message_type},
+                                    room=session_id)
 
         if not spoken_text(script):
             async with self.async_session_maker() as db:

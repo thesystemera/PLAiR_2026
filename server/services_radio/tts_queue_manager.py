@@ -69,6 +69,7 @@ TTS_TYPE_LABELS = {
     'radio_segment': 'talk break',
     'sting': 'station sting',
     'shoutouts': 'shoutout segment',
+    'onboarding': 'welcome',
     'impulse': 'impulse',
     'interlude': 'interlude',
 }

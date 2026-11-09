@@ -294,6 +294,27 @@ async def get_instruction_shoutouts(**_) -> str:
 
 
 @node_registry.register(
+    "instruction_onboarding",
+    "System prompt for the hosts welcoming a brand-new listener on air",
+    cost="low",
+    visible=False,
+    role="system"
+)
+async def get_instruction_onboarding(**_) -> str:
+    return (
+        "A NEW LISTENER has just tuned in to PLAiR for the very first time, partway through the song on air. Jess "
+        "and Leo spot them and welcome them live over the music, the way real hosts react when someone new walks "
+        "into the studio (\"hey, we've just got a new listener...\").\n\n"
+        "GUIDELINES:\n"
+        "1. Greet them warmly; mention where they're tuning in from and the time of day when you know it.\n"
+        "2. A word about the song that's playing.\n"
+        "3. One thing from the talking points if it fits.\n"
+        "4. Let them know they can talk to you any time, by voice or text, and ask you for anything.\n"
+        "5. No sales pitch: don't bring up accounts or signing up."
+    )
+
+
+@node_registry.register(
     "data_shoutouts_data",
     "Fetches and formats shoutouts data autonomously",
     cost="medium",
