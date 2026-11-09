@@ -15,6 +15,18 @@ const STREAM_APPEND_MIN_BYTES = 32 * 1024
 const SELF_PAUSE_WINDOW_MS = 2000
 const CONTEXT_RESUME_WAIT_MS = 300
 const PROGRESSIVE_READY_TIMEOUT_MS = 4000
+const PROGRESSIVE_TRACE_EVENTS = ['loadstart', 'loadedmetadata', 'canplay', 'playing', 'waiting', 'stalled', 'suspend', 'error']
+const NETWORK_STATES = ['empty', 'idle', 'loading', 'no source']
+const READY_STATES = ['nothing', 'metadata', 'current data', 'future data', 'enough data']
+
+function describeMedia(element) {
+  if (!element) return 'no element'
+  const buffered = element.buffered?.length ? element.buffered.end(element.buffered.length - 1) : 0
+  const error = element.error ? `, error ${element.error.code}${element.error.message ? ` (${element.error.message})` : ''}` : ''
+  const src = (element.currentSrc || element.getAttribute('src') || '').split('?')[0].replace(/^https?:\/\/[^/]+/, '')
+  return `network ${NETWORK_STATES[element.networkState] ?? element.networkState}, ready ${READY_STATES[element.readyState] ?? element.readyState}, ` +
+    `${element.paused ? 'paused' : 'playing'} at ${element.currentTime.toFixed(1)}s, buffered ${buffered.toFixed(1)}s${error}, ${src || 'no src'}`
+}
 
 function joinBytes(pieces, total) {
   if (pieces.length === 1) return pieces[0]
@@ -42,6 +54,7 @@ function createSlot() {
     blobUrl: null,
     isFadingOut: false,
     loaded: false,
+    progressive: false,
     token: 0,
   }
 }
@@ -161,6 +174,7 @@ export class AudioEngine {
       element.setAttribute('playsinline', '')
       slot.element = element
       this._attachBufferMonitors(slot)
+      this._attachProgressiveTrace(slot)
       this._attachPauseWatch(slot)
       AudioInteractionManager.registerMediaElement(element)
     }
@@ -223,14 +237,20 @@ export class AudioEngine {
     this._playIntent = true
     element.playbackRate = 1.0
     if (slot.gain && this.context) this._rampGain(slot.gain, 0, 1, this.vinylRapidDuration / 1000)
+    const started = performance.now()
     const attempt = element.play()
     attempt?.then?.(
       () => {
         AudioInteractionManager.markUnlocked(element)
         this._setBlocked(!this._contextRunning())
+        if (slot.progressive) logger.info(`[Audio] Started from a tap after ${Math.round(performance.now() - started)} ms`)
       },
       (err) => {
         if (err?.name === 'NotAllowedError') this._setBlocked(true)
+        else if (!isAbortError(err)) {
+          logger.error('[AudioEngine] Play from a tap failed:', err,
+            `after ${Math.round(performance.now() - started)} ms; ${describeMedia(element)}`)
+        }
       }
     )
   }
@@ -468,6 +488,18 @@ export class AudioEngine {
     slot.element.addEventListener('stalled', handleStalled)
   }
 
+  _attachProgressiveTrace(slot) {
+    const element = slot.element
+    let last = null
+    const trace = (event) => {
+      if (!slot.progressive || event.type === last) return
+      last = event.type === 'loadstart' ? null : event.type
+      const name = slot === this.slots.A ? 'A' : 'B'
+      logger.info(`[Audio] Slot ${name}${slot === this.currentSlot ? ' (current)' : ''} ${event.type}: ${describeMedia(element)}`)
+    }
+    for (const type of PROGRESSIVE_TRACE_EVENTS) element.addEventListener(type, trace)
+  }
+
   _reportStarvation(isStarving) {
     if (this.onBufferStatusChange) {
       this.onBufferStatusChange(isStarving)
@@ -491,7 +523,7 @@ export class AudioEngine {
     }
 
     const errorHandler = (e) => {
-      logger.error('[AudioEngine] SFX play failed', e)
+      logger.error('[AudioEngine] SFX play failed', e, describeMedia(this.sfxElement))
       this.sfxElement.removeEventListener('ended', endHandler)
       this.sfxElement.removeEventListener('error', errorHandler)
       if (onEnded) onEnded()
@@ -988,6 +1020,7 @@ export class AudioEngine {
     const token = slot.token
     slot.trackId = trackId
     slot.metadata = metadata || {}
+    slot.progressive = !!source.progressive
     if (slot === this.nextSlot) this.nextTrackId = trackId
 
     try {
@@ -1515,13 +1548,17 @@ export class AudioEngine {
       element.playbackRate = 0.1
       this._vinylAnimate(element, 0.1, 1.0, this.vinylRapidDuration)
 
+      const started = performance.now()
       try {
         await element.play()
         AudioInteractionManager.markUnlocked(element)
         this._setBlocked(!this._contextRunning())
       } catch (err) {
         if (err.name === 'NotAllowedError') this._setBlocked(true)
-        else if (err.name !== 'AbortError') logger.error('[AudioEngine] Play failed:', err)
+        else if (err.name !== 'AbortError') {
+          logger.error('[AudioEngine] Play failed:', err,
+            `after ${Math.round(performance.now() - started)} ms; ${describeMedia(element)}`)
+        }
       }
     }
   }
