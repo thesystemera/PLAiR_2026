@@ -23,29 +23,32 @@ import { PRESETS } from '../lib/motion'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
 
-const RADIO_BUTTON_SIZE = 240
 const RADIO_SIDE_WIDTH = 'min(18rem, 40vw)'
 
 function useRadioAnchor(scrollerRef, anchorRef) {
-  const [anchor, setAnchor] = useState({ offset: 0, scale: 1 })
+  const [anchor, setAnchor] = useState({ offset: 0, scale: 1, size: 0 })
 
   useEffect(() => {
+    const button = anchorRef.current?.querySelector('[data-shader-element="radio-button"]')
+
     const measure = () => {
       const scroller = scrollerRef.current
       const anchorNode = anchorRef.current
-      if (!scroller || !anchorNode) return
+      if (!scroller || !anchorNode || !button) return
       const scrollerRect = scroller.getBoundingClientRect()
       const anchorRect = anchorNode.getBoundingClientRect()
       const offset = (anchorRect.top + anchorRect.height / 2) - (scrollerRect.top + scrollerRect.height / 2)
+      const size = button.offsetWidth
       const fit = Math.min(anchorRect.width, anchorRect.height) - 16
-      const scale = Math.max(0.5, Math.min(1, fit / RADIO_BUTTON_SIZE))
-      setAnchor(prev => (Math.abs(prev.offset - offset) < 0.5 && Math.abs(prev.scale - scale) < 0.005) ? prev : { offset, scale })
+      const scale = size > 0 ? Math.max(0.5, Math.min(1, fit / size)) : 1
+      setAnchor(prev => (Math.abs(prev.offset - offset) < 0.5 && Math.abs(prev.scale - scale) < 0.005 && Math.abs(prev.size - size) < 0.5) ? prev : { offset, scale, size })
     }
 
     measure()
     const resizeObserver = new ResizeObserver(measure)
     if (scrollerRef.current) resizeObserver.observe(scrollerRef.current)
     if (anchorRef.current) resizeObserver.observe(anchorRef.current)
+    if (button) resizeObserver.observe(button)
     window.addEventListener('resize', measure)
 
     return () => {
@@ -89,7 +92,7 @@ export function Radio() {
   const conversationScrollRef = useRef(null)
   const scrollerRef = useRef(null)
   const anchorRef = useRef(null)
-  const { offset: maskOffset, scale: anchorScale } = useRadioAnchor(scrollerRef, anchorRef)
+  const { offset: maskOffset, scale: anchorScale, size: buttonSize } = useRadioAnchor(scrollerRef, anchorRef)
 
   const { toastError, toastInfo } = useUISelector(state => ({ toastError: state.toastError, toastInfo: state.toastInfo }))
   const errorToast = toastError
@@ -151,7 +154,7 @@ export function Radio() {
   const besideButton = isPhoneLandscape && !isTextInput
 
   const buttonScale = buttonInteraction?.scale || 1
-  const buttonVisualRadius = (RADIO_BUTTON_SIZE * buttonScale * anchorScale) / 2
+  const buttonVisualRadius = (buttonSize * buttonScale * anchorScale) / 2
   const maskInnerRadius = buttonVisualRadius * 0.92
   const maskOuterRadius = buttonVisualRadius * 1.12
 
