@@ -353,7 +353,6 @@ class ConversationService:
                                        is_guest: bool = False):
         user_id = user.id if user else None
         session_dict = {"session_id": session_id, "user_id": user_id}
-        storage_id = user_id or session_id
         usage_tracking.bind_session(session_id, user_id)
 
         turn_tasks = await self._begin_turn(session_id, session_dict, "voice")
@@ -366,7 +365,9 @@ class ConversationService:
         if self.whisper_service is None:
             raise RuntimeError("whisper_service not initialized")
 
-        save_task = asyncio.create_task(self.user_content_service.save_audio_file(storage_id, timestamp, audio_bytes))
+        save_task = None
+        if user_id is not None:
+            save_task = asyncio.create_task(self.user_content_service.save_audio_file(user_id, timestamp, audio_bytes))
 
         fast_transcription_task = asyncio.create_task(self.whisper_service.transcribe_fast(audio_bytes))
 
@@ -409,14 +410,12 @@ class ConversationService:
             if len(words) == 1 and len(words[0]) < 5:
                 return
 
-            webm_path = await asyncio.shield(save_task)
-            if not webm_path:
+            webm_path = await asyncio.shield(save_task) if save_task else None
+            if save_task and not webm_path:
                 log_service.error(f"{log_service.who(session_id)}: failed to save voice recording, skipping metadata")
-                return
 
-            timestamp = webm_path.stem
-
-            async with AsyncSessionLocal() as _db:
+            if webm_path:
+                timestamp = webm_path.stem
                 user = user_obj
 
                 metadata = {
@@ -428,7 +427,7 @@ class ConversationService:
                         "duration": result.get("duration", 0)
                     },
                     "user_data": {
-                        "user_id": user_id or session_id,
+                        "user_id": user_id,
                         "username": user.username if user else "Guest",
                         "location": user.location if user and hasattr(user, 'location') else "Unknown",
                         "latitude": float(user.latitude) if user and hasattr(user,
@@ -438,7 +437,7 @@ class ConversationService:
                     },
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
-                await asyncio.shield(self.user_content_service.save_metadata_file(user_id or session_id, timestamp, metadata))  # type: ignore
+                await asyncio.shield(self.user_content_service.save_metadata_file(user_id, timestamp, metadata))  # type: ignore
                 session_dict['recording'] = str(webm_path)
 
             await self._process_gpt_and_orchestrate(transcription, user_id, session_id, is_guest, session_dict,
