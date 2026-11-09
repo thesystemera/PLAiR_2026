@@ -116,13 +116,14 @@ export function NetworkProvider({ children }) {
     if (probeRef.current) return probeRef.current
 
     const probe = (async () => {
+      const startedAt = Date.now()
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), SERVER_HEALTH.TIMEOUT_MS)
       try {
         const response = await fetch('/api/health', { method: 'GET', cache: 'no-store', signal: controller.signal })
         return response.ok
       } catch {
-        return false
+        return api.lastServerBytesAt >= startedAt ? null : false
       } finally {
         clearTimeout(timeoutId)
       }
@@ -132,7 +133,7 @@ export function NetworkProvider({ children }) {
     lastProbeAtRef.current = Date.now()
     try {
       const ok = await probe
-      if (navigator.onLine) recordProbe(ok)
+      if (navigator.onLine && ok !== null) recordProbe(ok)
       return ok
     } finally {
       probeRef.current = null

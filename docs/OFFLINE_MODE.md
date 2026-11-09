@@ -17,7 +17,7 @@
 - **Signed-in users stay signed in** through outages and offline reloads (only a real 401/403 or WebSocket close 4401 signs out).
 
 ### How it works (files)
-- `NetworkContext.jsx`: server-down detection with hysteresis (2 failed `/api/health` probes 1.5 s apart; back after 2 successes 3 s apart; more after flapping; browser `offline` confirmed for 2 s). It publishes `audioState.offlineMode` (the SSOT) and emits `api.reportServerLost()` / `api.reportServerRecovered()`. A 502/503/504, a network error, or a WebSocket that closes abnormally triggers an immediate probe (`api.reportServerTrouble`).
+- `NetworkContext.jsx`: server-down detection with hysteresis (2 failed `/api/health` probes 1.5 s apart; back after 2 successes 3 s apart; more after flapping; browser `offline` confirmed for 2 s). A probe that times out while song bytes are still arriving (`api.lastServerBytesAt`) is not counted either way. It publishes `audioState.offlineMode` (the SSOT) and emits `api.reportServerLost()` / `api.reportServerRecovered()`. A 502/503/504, a network error, or a WebSocket that closes abnormally triggers an immediate probe (`api.reportServerTrouble`).
 - `PlaybackContext.jsx`, **local mode** (`localRef`):
   - `enterLocalMode()` runs when `offlineMode` turns on. It resets pending command state, ends any armed or on-air talk break (resuming music from a hold), marks this device locally active (`audio.setActiveDevice(true)` + `reportEngineStatus({ isActiveDevice: true })`), and starts `offlineBackend.startLocalSession()`.
     - It keeps the current track if the engine is already playing it or it is downloaded. Otherwise it starts a download: playing if this device was playing, paused if it was a remote.

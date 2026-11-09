@@ -2,6 +2,7 @@ import { useEffect, useRef, useMemo, useCallback, useState } from 'react'
 import { AudioEngine } from '../lib/audioEngine'
 import { AudioMixer } from '../lib/audioMixer'
 import { cacheManager } from '../lib/cacheManager'
+import { api } from '../lib/api'
 import { useStorage } from '../contexts/StorageContext'
 import { uiState, useUISelector } from '../contexts/UIStateContext'
 import { logger } from '../lib/logger'
@@ -125,6 +126,7 @@ export function useAudio() {
         attachListeners(engineRef.current.slots.B.element)
 
         engineRef.current.onChunkReceived = (trackId, chunk) => {
+          api.noteServerBytes()
           cacheManager.addStreamChunk(trackId, chunk)
         }
 

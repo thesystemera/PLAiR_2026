@@ -11,9 +11,21 @@ const EQUAL_POWER_STEPS = 16
 const CACHED_SWAP_SEEK_LEAD_S = 0.03
 const STREAM_RETRY_DELAY_MS = 2000
 const STREAM_RETRY_LIMIT = 90
+const STREAM_APPEND_MIN_BYTES = 32 * 1024
 const SELF_PAUSE_WINDOW_MS = 2000
 const CONTEXT_RESUME_WAIT_MS = 300
 const PROGRESSIVE_READY_TIMEOUT_MS = 4000
+
+function joinBytes(pieces, total) {
+  if (pieces.length === 1) return pieces[0]
+  const joined = new Uint8Array(total)
+  let offset = 0
+  for (const piece of pieces) {
+    joined.set(piece, offset)
+    offset += piece.byteLength
+  }
+  return joined
+}
 
 function createSlot() {
   return {
@@ -1405,19 +1417,46 @@ export class AudioEngine {
       const start = bytesDownloaded
       const end = Math.min(bytesDownloaded + CHUNK_SIZE - 1, contentLength - 1)
 
-      let chunk
+      let appendFailed = false
       try {
         const response = await fetch(url, {
           signal,
           headers: { 'Range': `bytes=${start}-${end}` }
         })
         if (!response.ok && response.status !== 206) throw new Error(`Stream chunk failed (${response.status})`)
-        chunk = await response.arrayBuffer()
+        const reader = response.body.getReader()
+        const pending = []
+        let pendingBytes = 0
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (value?.byteLength) {
+            pending.push(value)
+            pendingBytes += value.byteLength
+          }
+          if (pendingBytes && (done || pendingBytes >= STREAM_APPEND_MIN_BYTES)) {
+            const piece = joinBytes(pending, pendingBytes)
+            pending.length = 0
+            pendingBytes = 0
+            if (!await this._appendStreamPiece(slot, sourceBuffer, piece)) {
+              appendFailed = true
+              reader.cancel().catch(() => {})
+              break
+            }
+            bytesDownloaded += piece.byteLength
+            chunkArray.push(piece)
+            if (this.onChunkReceived) {
+              this.onChunkReceived(slot.trackId, piece)
+            }
+            if (failures) logger.info(`[Audio] Stream resumed after ${failures} failed attempt(s)`)
+            failures = 0
+          }
+          if (done) break
+        }
       } catch (error) {
         if (signal.aborted || isAbortError(error)) throw error
         failures++
         if (failures > STREAM_RETRY_LIMIT || slot.sourceBuffer !== sourceBuffer) throw error
-        if (failures === 1) logger.warn(`[Audio] Stream interrupted at ${start} bytes - retrying while the buffer plays`)
+        if (failures === 1) logger.warn(`[Audio] Stream interrupted at ${bytesDownloaded} bytes - retrying while the buffer plays`)
         await new Promise(resolve => {
           const timer = setTimeout(resolve, STREAM_RETRY_DELAY_MS)
           signal.addEventListener('abort', () => {
@@ -1427,29 +1466,7 @@ export class AudioEngine {
         })
         continue
       }
-      if (failures) logger.info(`[Audio] Stream resumed after ${failures} failed attempt(s)`)
-      failures = 0
-      const value = new Uint8Array(chunk)
-      bytesDownloaded += value.byteLength
-
-      try {
-        if (slot.sourceBuffer !== sourceBuffer) break
-
-        while (sourceBuffer.updating) {
-          await new Promise(resolve => sourceBuffer.addEventListener('updateend', resolve, { once: true }))
-        }
-
-        if (slot.sourceBuffer !== sourceBuffer) break
-
-        sourceBuffer.appendBuffer(value)
-        chunkArray.push(value)
-
-        if (this.onChunkReceived) {
-          this.onChunkReceived(slot.trackId, value)
-        }
-      } catch {
-        break
-      }
+      if (appendFailed) break
 
       if (bytesDownloaded >= contentLength) {
         isStreamComplete = true
@@ -1458,6 +1475,23 @@ export class AudioEngine {
     }
 
     return isStreamComplete
+  }
+
+  async _appendStreamPiece(slot, sourceBuffer, piece) {
+    try {
+      if (slot.sourceBuffer !== sourceBuffer) return false
+
+      while (sourceBuffer.updating) {
+        await new Promise(resolve => sourceBuffer.addEventListener('updateend', resolve, { once: true }))
+      }
+
+      if (slot.sourceBuffer !== sourceBuffer) return false
+
+      sourceBuffer.appendBuffer(piece)
+      return true
+    } catch {
+      return false
+    }
   }
 
   async play() {

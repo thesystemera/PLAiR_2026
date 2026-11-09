@@ -17,6 +17,7 @@ class API {
     this.authRejectedListeners = new Set()
     this.connectivityListeners = new Set()
     this.syncingOfflineWrites = null
+    this.lastServerBytesAt = 0
   }
 
   onConnectivity(listener) {
@@ -44,6 +45,10 @@ class API {
 
   reportServerLost() {
     this._notifyConnectivity({ type: 'lost' })
+  }
+
+  noteServerBytes() {
+    this.lastServerBytesAt = Date.now()
   }
 
   async _replayProfileWrites(entry) {
