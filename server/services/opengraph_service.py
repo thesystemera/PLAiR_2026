@@ -41,6 +41,8 @@ class OpenGraphService:
         track_id: str,
         title: str,
         artist: str,
+        credit: str,
+        human: bool,
         description: Optional[str] = None,
         genre: Optional[str] = None,
     ) -> str:
@@ -48,24 +50,26 @@ class OpenGraphService:
         track_url = f"{self.base_url}/track/{track_id}"
         artwork_url = f"{self.base_url}/api/artwork/{track_id}"
 
+        heading = artist if human else credit
         if not description:
-            description = f'Listen to "{title}" by {artist} on PLAiR'
+            description = f'Listen to "{title}" {credit} on PLAiR'
 
         tags = [
             '<meta property="og:type" content="music.song" />',
-            f'<meta property="og:title" content="{self._escape_attr(title)} - {self._escape_attr(artist)}" />',
+            f'<meta property="og:title" content="{self._escape_attr(title)} - {self._escape_attr(heading)}" />',
             f'<meta property="og:description" content="{self._escape_attr(description)}" />',
             f'<meta property="og:image" content="{artwork_url}" />',
             f'<meta property="og:url" content="{track_url}" />',
             '<meta property="og:site_name" content="PLAiR" />',
 
             '<meta name="twitter:card" content="summary_large_image" />',
-            f'<meta name="twitter:title" content="{self._escape_attr(title)} - {self._escape_attr(artist)}" />',
+            f'<meta name="twitter:title" content="{self._escape_attr(title)} - {self._escape_attr(heading)}" />',
             f'<meta name="twitter:description" content="{self._escape_attr(description)}" />',
             f'<meta name="twitter:image" content="{artwork_url}" />',
-
-            f'<meta property="music:musician" content="{self._escape_attr(artist)}" />',
         ]
+
+        if human:
+            tags.append(f'<meta property="music:musician" content="{self._escape_attr(artist)}" />')
 
         if genre:
             tags.append(f'<meta property="music:genre" content="{self._escape_attr(genre)}" />')
@@ -77,6 +81,8 @@ class OpenGraphService:
         track_id: str,
         title: str,
         artist: str,
+        credit: str,
+        human: bool,
         description: Optional[str] = None,
         genre: Optional[str] = None,
     ) -> str:
@@ -86,11 +92,13 @@ class OpenGraphService:
             track_id=track_id,
             title=title,
             artist=artist,
+            credit=credit,
+            human=human,
             description=description,
             genre=genre,
         )
 
-        page_title = f"{title} - {artist} | PLAiR"
+        page_title = f"{title} - {artist if human else credit} | PLAiR"
 
         if "</head>" in template:
             template = template.replace(

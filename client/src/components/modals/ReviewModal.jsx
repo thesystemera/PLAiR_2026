@@ -11,7 +11,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
-import { blobToBase64, formatTimeAgo } from '../../lib/utils'
+import { artistCredit, blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
 import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection } from './Modal'
@@ -26,7 +26,7 @@ function trackLabel(track) {
   const params = track.generation_params || {}
   return {
     title: params.title || track.title || null,
-    artist: params.artist_name || track.artist_name || track.artist || null,
+    artist: artistCredit(track),
   }
 }
 

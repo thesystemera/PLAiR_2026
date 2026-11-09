@@ -174,7 +174,7 @@ async def get_shared_video_page(share_id: str):
   <title>{escaped_title} - PLAiR Video</title>
   <meta property="og:type" content="video.other">
   <meta property="og:title" content="{escaped_title}">
-  <meta property="og:description" content="Watch {escaped_title} by {escaped_artist} on PLAiR.">
+  <meta property="og:description" content="Watch {escaped_title} ({escaped_artist}) on PLAiR.">
   <meta property="og:video" content="{mp4_url}">
   <meta property="og:video:secure_url" content="{mp4_url}">
   <meta property="og:video:type" content="video/mp4">{image_meta}

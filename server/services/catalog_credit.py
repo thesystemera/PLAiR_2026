@@ -11,6 +11,16 @@ def is_ai_track(track: Dict[str, Any]) -> bool:
     return track.get("is_ai_generated") is not False
 
 
+def listener_label(track: Dict[str, Any]) -> str:
+    params = track.get("generation_params") or {}
+    title = params.get("title") or track.get("title") or track.get("id") or "unknown track"
+    artist = (params.get("artist_name") or (track.get("track_info") or {}).get("artist")
+              or (track.get("derived_tags") or {}).get("inspired_artist") or "").strip()
+    if not artist:
+        return f"'{title}'"
+    return f"'{title}' {'inspired by' if is_ai_track(track) else 'by'} {artist}"
+
+
 def name_like(text: Any) -> bool:
     text = text.strip() if isinstance(text, str) else ""
     return bool(text) and len(text) <= NAME_MAX_CHARS and "\n" not in text and "[" not in text

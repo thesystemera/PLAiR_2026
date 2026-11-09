@@ -42,3 +42,19 @@ export function isWebGL2Available() {
     return false
   }
 }
+
+function trackArtist(track) {
+  return track?.generation_params?.artist_name || track?.track_info?.artist || track?.artist_name || track?.artist || track?.derived_tags?.inspired_artist || null
+}
+
+export function artistCredit(track) {
+  const artist = trackArtist(track)
+  if (!artist) return null
+  return track.is_ai_generated === false ? artist : `Inspired by ${artist}`
+}
+
+export function artistByline(track) {
+  const artist = trackArtist(track)
+  if (!artist) return ''
+  return track.is_ai_generated === false ? `by ${artist}` : `inspired by ${artist}`
+}

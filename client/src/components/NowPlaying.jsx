@@ -16,6 +16,7 @@ import {ExternalLink, MessageSquareText, Music} from 'lucide-react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
 import {FadeSwap} from './Motion'
+import {artistCredit} from '../lib/utils'
 
 const NO_LYRICS = []
 const ARRIVE = { initial: PRESETS.trackSwap.initial, animate: PRESETS.trackSwap.animate }
@@ -496,7 +497,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         <div className="mb-6">
           <h1 className="text-2xl font-bold mb-2 break-words">{params.title || 'Untitled'}</h1>
           {params.artist_name && (
-            <p className="text-lg text-gray-300 mb-1">{params.artist_name}</p>
+            <p className="text-lg text-gray-300 mb-1">{artistCredit(track)}</p>
           )}
           <p className="text-lg text-gray-400">{params.style_canonical || params.style || 'No style'}</p>
         </div>
@@ -597,7 +598,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
               </div>
             )}
 
-            {track.derived_tags.inspired_artist && (
+            {track.derived_tags.inspired_artist && track.is_ai_generated === false && (
               <div className="bg-white/5 p-4 rounded-lg mb-4">
                 <div className="text-xs text-gray-400 mb-2">Inspired By</div>
                 <p className="text-sm font-medium">{track.derived_tags.inspired_artist}</p>

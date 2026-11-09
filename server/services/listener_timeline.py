@@ -10,6 +10,7 @@ from config.settings import settings
 from database import AsyncSessionLocal, PlayEvent
 from database.models import AiredTalk
 from services import log_service
+from services.catalog_credit import listener_label
 from services.analytics_service import analytics_service
 from services.user_content_database_service import kind_of, KINDS
 
@@ -154,7 +155,7 @@ def _entries(events: Iterable[Dict[str, Any]], current: Optional[str], now: date
         if track is None:
             continue
         length_ms = (track.get("track_info") or {}).get("duration") or 0
-        entry = TimelineEntry(event["at"], KIND_TRACK, item_id, log_service.track_label(track),
+        entry = TimelineEntry(event["at"], KIND_TRACK, item_id, listener_label(track),
                               event["at"] + timedelta(milliseconds=length_ms))
         open_tracks[item_id] = entry
         entries.append(entry)

@@ -17,6 +17,7 @@ import { TrackArt } from './DepthArt'
 import { MediaEmptyState } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { Fade, Pop } from './Motion'
+import { artistCredit } from '../lib/utils'
 
 const QUEUE_ART_PROPS = { 'data-queue-art': true }
 
@@ -224,7 +225,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
 
         <div className="flex-1 min-w-0">
           <div className="font-medium truncate transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
-          <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{track.artist_name || ' '}</div>
+          <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{artistCredit(track) || ' '}</div>
           <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey400 }}>{track.style || 'No style'}</div>
         </div>
 

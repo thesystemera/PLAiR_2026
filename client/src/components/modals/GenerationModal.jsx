@@ -5,6 +5,7 @@ import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { Modal, ModalSection, ModalButton, ModalOptionButton, ModalTitle, ModalFooter } from './Modal'
 import { FadeSwap, Pop } from '../Motion'
 import { PRESETS } from '../../lib/motion'
+import { artistByline } from '../../lib/utils'
 
 const ARTIST_COLORS = [
   { bg: '#8b5cf620', border: '#8b5cf6', text: '#a78bfa' },
@@ -82,7 +83,7 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
         <ModalTitle
           title="Generate Music"
           subtitle="Based on: "
-          subtitleHighlight={`${trackTitle}${artistName ? ` by ${artistName}` : ''}`}
+          subtitleHighlight={`${trackTitle}${artistName ? ` ${artistByline(track)}` : ''}`}
         />
       }
       maxWidth="max-w-2xl"
@@ -107,7 +108,7 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
             icon={User}
             iconColor="#34d399"
             iconBgColor="#10b98120"
-            title={`More from ${artistName}`}
+            title={`More like ${artistName}`}
             description="Generate new tracks in this artist's style"
             isSelected={artistSelected}
           />

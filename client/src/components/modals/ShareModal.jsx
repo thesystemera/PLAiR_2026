@@ -8,6 +8,7 @@ import { logger } from '../../lib/logger'
 import { api } from '../../lib/api'
 import { FULL_PACK_SIZE, blobForUrl, packCache } from '../../lib/mediaCache'
 import { TrackArt } from '../DepthArt'
+import { artistByline, artistCredit } from '../../lib/utils'
 import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
@@ -50,7 +51,8 @@ export function ShareModal({ isOpen, onClose, track }) {
   useEffect(() => releaseVideoUrl, [releaseVideoUrl])
 
   const trackTitle = currentTrack?.generation_params?.title || 'Untitled'
-  const trackArtist = currentTrack?.generation_params?.artist_name || currentTrack?.track_info?.artist || currentTrack?.artist_name || 'Unknown Artist'
+  const trackArtist = artistCredit(currentTrack) || 'Unknown Artist'
+  const trackByline = artistByline(currentTrack)
   const trackId = currentTrack?.id
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export function ShareModal({ isOpen, onClose, track }) {
     try {
       await navigator.share({
         title: trackTitle,
-        text: `Listen to "${trackTitle}" by ${trackArtist} on plair.live`,
+        text: `Listen to "${trackTitle}" ${trackByline} on plair.live`,
         url: getShareLink()
       })
     } catch (err) {
@@ -108,7 +110,7 @@ export function ShareModal({ isOpen, onClose, track }) {
         logger.error('[ShareModal] Share failed:', err)
       }
     }
-  }, [currentTrack, trackTitle, trackArtist, getShareLink])
+  }, [currentTrack, trackTitle, trackByline, getShareLink])
 
   const handleGenerateVideo = useCallback(async () => {
     if (!currentTrack) return
@@ -239,7 +241,7 @@ export function ShareModal({ isOpen, onClose, track }) {
       if (publishedVideoUrl) {
         await navigator.share({
           title: trackTitle,
-          text: `Watch "${trackTitle}" by ${trackArtist} on PLAiR`,
+          text: `Watch "${trackTitle}" ${trackByline} on PLAiR`,
           url: publishedVideoUrl
         })
         return
@@ -254,7 +256,7 @@ export function ShareModal({ isOpen, onClose, track }) {
         if (!navigator.canShare || navigator.canShare({ files: [file] })) {
           await navigator.share({
             title: trackTitle,
-            text: `Watch "${trackTitle}" by ${trackArtist} on PLAiR`,
+            text: `Watch "${trackTitle}" ${trackByline} on PLAiR`,
             files: [file]
           })
           return
@@ -267,7 +269,7 @@ export function ShareModal({ isOpen, onClose, track }) {
       logger.error('[ShareModal] Share video failed:', err)
       setError(publishedVideoUrl ? 'Sharing failed. Copy the video link instead.' : 'Sharing failed. Download the MP4 instead.')
     }
-  }, [publishedVideoUrl, videoBlob, trackTitle, trackArtist])
+  }, [publishedVideoUrl, videoBlob, trackTitle, trackByline])
 
   const handleCopyVideoLink = useCallback(async () => {
     if (!publishedVideoUrl) return

@@ -14,6 +14,7 @@ import { useWebSocketSubscribe } from '../contexts/WebSocketContext'
 import { useAuth } from '../contexts/AuthContext'
 import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
+import { artistCredit } from '../lib/utils'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -98,11 +99,10 @@ export function MediaSessionBridge() {
   useEffect(() => {
     if ('mediaSession' in navigator && currentTrack) {
       const params = currentTrack?.generation_params || {}
-      const derivedTags = currentTrack?.derived_tags || {}
 
       navigator.mediaSession.metadata = new MediaMetadata({
         title: params.title || currentTrack.title || 'Unknown Track',
-        artist: params.artist_name || currentTrack.artist_name || derivedTags?.inspired_artist || 'PLAiR Radio',
+        artist: artistCredit(currentTrack) || 'PLAiR Radio',
         album: 'PLAiR',
         artwork: artworkUrl ? [
           { src: artworkUrl, sizes: '512x512', type: 'image/jpeg' }

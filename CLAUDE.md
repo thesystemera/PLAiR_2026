@@ -563,7 +563,7 @@ Every vector engine (TTS clip tables, catalog, shoutouts, local knowledge, news,
 **IMPORTANT:** Human uploads use the SAME catalog system as AI tracks. See `docs/HUMAN_MUSIC_UPLOAD.md` for full details.
 
 
-**AI track credits are compulsory and one name:** an AI track's artist is the artist it was inspired by, and it is shown as the artist. `generation_params.artist_name`, `track_info.artist` and `derived_tags.inspired_artist` always hold the same name (`services/catalog_credit.settle_ai_credit`: the requested artist, then the inspired-by artist, then the artist in the original request, then the first similar artist). Enrichment settles it on every new track, the Asset Doctor repairs any drift, `server/utils/backfill_artist_credit.py` fixes the catalog in bulk (run 3 Oct: 1,340 tracks). Every view reads `generation_params.artist_name`. Audit the catalog with `server/utils/catalog_audit.py`.
+**AI track credits are compulsory and one name:** an AI track's artist is the artist it was inspired by. The app always shows it as "Inspired by X" (owner, 9 Nov), never as a bare name: client `artistCredit` / `artistByline` (`lib/utils.js`) for the queue, Now Playing, lock screen, share card and texts, review and generate popups; server `catalog_credit.listener_label` for the Timeline and `/track/{id}` share-page tags. Human uploads (`is_ai_generated` false, also sent on queue items by `simplify_track_info`) show their artist plainly. The DJs may still say the name. `generation_params.artist_name`, `track_info.artist` and `derived_tags.inspired_artist` always hold the same name (`services/catalog_credit.settle_ai_credit`: the requested artist, then the inspired-by artist, then the artist in the original request, then the first similar artist). Enrichment settles it on every new track, the Asset Doctor repairs any drift, `server/utils/backfill_artist_credit.py` fixes the catalog in bulk (run 3 Oct: 1,340 tracks). Every view reads `generation_params.artist_name`. Audit the catalog with `server/utils/catalog_audit.py`.
 
 **Key Principle:** Human tracks are stored in the same `tracks` table with `is_ai_generated=0`. They use identical metadata schemas, playback systems, and discovery pipelines as AI tracks.
 
@@ -759,7 +759,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/themeManager.js` - Extracts artwork colours and holds panel, transition, fade and category colour constants.
 - `client/src/lib/uploadJobs.js` - Helpers for polling background upload jobs until they finish.
 - `client/src/lib/usageFormat.js` - Formats usage costs, counts and durations for the usage views.
-- `client/src/lib/utils.js` - Small helpers: duration and date formatting, blob to base64, WebGL2 check.
+- `client/src/lib/utils.js` - Small helpers: duration and date formatting, blob to base64, WebGL2 check, a track's artist credit ("Inspired by X" for AI tracks).
 
 #### server
 

@@ -17,6 +17,7 @@ def simplify_track_info(track: Dict[str, Any], catalog_service=None) -> Dict[str
         "id": track_id,
         "title": params.get("title", "Unknown"),
         "artist_name": next(iter(log_service.track_artists(track)), None),
+        "is_ai_generated": track.get("is_ai_generated") is not False,
         "style": params.get("style", ""),
         "duration_ms": track_info.get("duration", 0),
         "has_artwork": has_artwork

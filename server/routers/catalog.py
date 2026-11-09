@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse
 from typing import Optional
 
 from services import log_service
+from services.catalog_credit import is_ai_track
 from database import User
 from service_registry import services
 from routers.deps import get_current_user
@@ -88,12 +89,15 @@ async def get_track_page(track_id: str):
 
     title = gen_params.get("title", "Unknown Track")
     artist = gen_params.get("artist_name") or derived_tags.get("inspired_artist", "Unknown Artist")
+    credit = f"inspired by {artist}" if is_ai_track(track) else f"by {artist}"
     genre = derived_tags.get("primary_genre")
 
     html = services.opengraph_service.render_track_page(
         track_id=track_id,
         title=title,
         artist=artist,
+        credit=credit,
+        human=not is_ai_track(track),
         genre=genre,
     )
 
