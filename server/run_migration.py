@@ -151,6 +151,8 @@ def main():
         if column_exists(conn, "play_events", "region_key"):
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_play_events_region_key ON play_events (region_key)"))
             conn.commit()
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_play_events_session_id ON play_events (session_id)"))
+        conn.commit()
 
     print("\n[CHECK] stripe_webhook_events table...")
     StripeWebhookEvent.__table__.create(bind=_sync_engine, checkfirst=True)

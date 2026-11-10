@@ -148,7 +148,7 @@ class PlayEvent(Base):
 
     event_type = Column(String, nullable=False)
     skip_reason = Column(String, nullable=True)
-    session_id = Column(String, nullable=True)
+    session_id = Column(String, nullable=True, index=True)
     region_key = Column(String, nullable=True, index=True)
 
 class TrackAnalytics(Base):
