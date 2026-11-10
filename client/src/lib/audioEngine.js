@@ -3,6 +3,10 @@ import {safeStorage} from './safeStorage'
 import {AudioInteractionManager} from './audioInteractionManager'
 
 const MASTER_GAIN_HEADROOM = 1.0
+const MUSIC_LIFT_DB = 2
+const MUSIC_PEAK_GUARD = { threshold: -1, knee: 0, ratio: 20, attack: 0.001, release: 0.1 }
+const MUSIC_GUARD_MAKEUP_DB = 0.6 * -MUSIC_PEAK_GUARD.threshold * (1 - 1 / MUSIC_PEAK_GUARD.ratio)
+const dbToGain = (db) => Math.pow(10, db / 20)
 const STREAM_CANPLAY_TIMEOUT_MS = 20000
 const SEEK_METADATA_TIMEOUT_MS = 8000
 const SOURCE_RESOLVE_TIMEOUT_MS = 10000
@@ -81,6 +85,9 @@ export class AudioEngine {
     this.uiSoundsGain = null
 
     this.musicAnalyser = null
+    this.musicLift = null
+    this.musicPeakGuard = null
+    this.musicGuardTrim = null
 
     this.currentSlot = null
     this.nextSlot = null
@@ -428,8 +435,18 @@ export class AudioEngine {
     this.musicAnalyser.fftSize = 2048
     this.musicAnalyser.smoothingTimeConstant = 0.8
 
+    this.musicLift = this.context.createGain()
+    this.musicLift.gain.value = dbToGain(MUSIC_LIFT_DB)
+    this.musicPeakGuard = this.context.createDynamicsCompressor()
+    for (const [param, value] of Object.entries(MUSIC_PEAK_GUARD)) this.musicPeakGuard[param].value = value
+    this.musicGuardTrim = this.context.createGain()
+    this.musicGuardTrim.gain.value = dbToGain(-MUSIC_GUARD_MAKEUP_DB)
+
     this.musicGain.connect(this.musicAnalyser)
-    this.musicAnalyser.connect(this.masterGain)
+    this.musicAnalyser.connect(this.musicLift)
+    this.musicLift.connect(this.musicPeakGuard)
+    this.musicPeakGuard.connect(this.musicGuardTrim)
+    this.musicGuardTrim.connect(this.masterGain)
 
     this.uiSoundsGain.connect(this.masterGain)
 
