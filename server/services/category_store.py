@@ -141,6 +141,21 @@ class CategoryStore(VectorStore):
             return np.zeros(EMBEDDING_DIM, dtype=np.float32)
         return query_vector(text)
 
+    @staticmethod
+    def _gram(slot: CategorySlot) -> Tuple[Dict[str, int], np.ndarray, frozenset]:
+        cached = getattr(slot, "_rank_gram", None)
+        if cached is not None:
+            return cached
+        names = list(slot.matrices)
+        gram = np.empty((len(slot.entries), len(names), len(names)), dtype=np.float64)
+        for a, first in enumerate(names):
+            for b in range(a, len(names)):
+                gram[:, a, b] = gram[:, b, a] = np.einsum("ij,ij->i", slot.matrices[first],
+                                                          slot.matrices[names[b]], dtype=np.float64)
+        slot._rank_gram = ({name: i for i, name in enumerate(names)}, gram,
+                           frozenset(entry.key for entry in slot.entries))
+        return slot._rank_gram
+
     def rank(self, vector: np.ndarray, weights: Dict[str, float], n: int,
              keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
              boost: Optional[Callable[[Dict[str, Any]], float]] = None, exclude: Tuple[str, ...] = ()) -> List[Match]:
@@ -150,21 +165,25 @@ class CategoryStore(VectorStore):
         for slot in reversed(slots):
             if not slot.entries:
                 continue
-            combined = sum(slot.matrices[category] * weight for category, weight in weights.items()
-                           if category in slot.matrices and weight)
-            if isinstance(combined, int):
+            used = [(category, weight) for category, weight in weights.items() if category in slot.matrices and weight]
+            if not used:
                 continue
-            norms = np.linalg.norm(combined, axis=1)
-            similarity = np.divide(combined @ vector, norms, out=np.zeros(len(norms), dtype=np.float32),
-                                   where=norms > 0)
-            for i, entry in enumerate(slot.entries):
-                if entry.key in seen:
+            index, gram, slot_keys = self._gram(slot)
+            w = np.array([weight for _, weight in used], dtype=np.float64)
+            picks = [index[category] for category, _ in used]
+            numer = np.column_stack([slot.matrices[category] @ vector for category, _ in used]) @ w
+            norms = np.sqrt(np.maximum(np.einsum("ikl,k,l->i", gram[:, picks][:, :, picks], w, w), 0.0))
+            similarity = np.divide(numer, norms, out=np.zeros(len(norms)), where=norms > 0)
+            score = similarity + np.array([boost(entry.meta) for entry in slot.entries]) if boost else similarity
+            taken = 0
+            for i in np.argsort(-score, kind="stable"):
+                entry = slot.entries[i]
+                if entry.key in seen or (keep is not None and not keep(entry.meta)):
                     continue
-                seen.add(entry.key)
-                if keep is not None and not keep(entry.meta):
-                    continue
-                score = float(similarity[i])
-                matches.append(Match(score + (boost(entry.meta) if boost else 0.0), score, entry.row_id,
-                                     entry.meta, entry.key))
+                matches.append(Match(float(score[i]), float(similarity[i]), entry.row_id, entry.meta, entry.key))
+                taken += 1
+                if taken >= n:
+                    break
+            seen |= slot_keys
         matches.sort(key=lambda match: match.score, reverse=True)
         return matches[:n]
