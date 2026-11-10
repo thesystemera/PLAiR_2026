@@ -35,11 +35,6 @@ anything else is carried over as written.
   feature lists were not re-counted.
 - **Install screenshots** need recapturing after UI changes (they have no WebGL background); optional iOS splash
   images were never made. Masters and the rebuild script are in `brand/2026-refresh/`.
-- **WebSocket disconnect race logs two false errors (10 Nov):** when a client closes while its ping is being
-  answered, the `except Exception` around message handling in `routers/ws.py` catches the
-  `WebSocketDisconnect` from the pong send and loops back to `receive_text()` on the dead socket, which raises
-  `WebSocket is not connected. Need to call "accept" first`. Harmless (cleanup still runs), but it shows in
-  production's `radio.log` and gets louder with more listeners. Let `WebSocketDisconnect` leave the loop.
 
 ## 2. DJ turn: bugs and things to watch
 
@@ -176,13 +171,14 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     site. Fix (owner's call, it fronts all sites): a reverse proxy without that cap (Caddy for Windows, or nginx
     on Linux/WSL2). Interim: `keepalive_timeout 15` in the plair.live block frees idle connections (estimate, not
     measured: ~350-400 listeners).
-  - **Backend stalls from Python's garbage collector:** each full collection walks ~900K long-lived objects
-    loaded at startup (catalog, vectors) and freezes the event loop for ~640 ms (max 880 ms), every ~12 s under
-    load. `gc.collect(); gc.freeze()` at the end of the lifespan startup took it to 92 ms. Together with reading
-    stream files in 1 MB pieces instead of 64 KB (`media_streaming_service.stream_file`), 600 stress listeners
-    went from collapse (2 MB range p50 7.9 s, p99 26 s, connection errors) to clean (p50 0.12 s, p99 0.77 s,
-    488 Mbps served, no errors); at 300 the worst loop stall fell from 589 to 137 ms. Two small code changes.
-    Without them the backend is fine at 300 (p95 song start ~1.1 s) and saturates at ~600 (one core, ~400 Mbps).
+  - **Backend stalls from Python's garbage collector (fixed 10 Nov, live from the next PLAiR Start):** each full
+    collection walked ~900K long-lived objects loaded at startup (catalog, vectors) and froze the event loop for
+    ~640 ms (max 880 ms), every ~12 s under load. `gc.collect(); gc.freeze()` at the end of the lifespan startup
+    took it to 92 ms. Together with reading stream files in 1 MB pieces instead of 64 KB
+    (`media_streaming_service.STREAM_READ_BYTES`), 600 stress listeners went from collapse (2 MB range p50 7.9 s,
+    p99 26 s, connection errors) to clean (p50 0.12 s, p99 0.77 s, 488 Mbps served, no errors); at 300 the worst
+    loop stall fell from 589 to 137 ms. Without them the backend was fine at 300 (p95 song start ~1.1 s) and
+    saturated at ~600 (one core, ~400 Mbps).
   - **The hosts' voice is the first thing to degrade, estimated ~100 listeners (not load-tested).** Chatterbox
     renders ~6.4 s of audio per second at 8 slots (README); CVSR upscaling is serial (`voice_upscale` lock) on the
     same P6000. Production renders 100-150 s of fresh host audio per listener-hour with only between-song talk

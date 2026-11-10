@@ -5,6 +5,9 @@ from fastapi.responses import StreamingResponse, FileResponse, Response
 import aiofiles
 from database import User
 
+STREAM_READ_BYTES = 1024 * 1024
+
+
 def parse_range(range_header: str, file_size: int):
     spec = range_header.strip().lower()
     if not spec.startswith("bytes="):
@@ -69,7 +72,7 @@ class MediaStreamingService:
                     await f.seek(start)
                     remaining = content_length
                     while remaining > 0:
-                        chunk_size = min(65536, remaining)
+                        chunk_size = min(STREAM_READ_BYTES, remaining)
                         data = await f.read(chunk_size)
                         if not data:
                             break

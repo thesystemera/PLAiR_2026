@@ -374,6 +374,8 @@ async def websocket_endpoint(
 
             except json.JSONDecodeError:
                 log_service.warning(f"{log_service.who(session_id, session_device_id)}: unparseable WebSocket message")
+            except WebSocketDisconnect:
+                raise
             except Exception as e:
                 log_service.error(f"Error handling WebSocket message: {str(e)}")
                 import traceback

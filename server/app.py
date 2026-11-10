@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import platform
 
 if platform.system() == "Windows":
@@ -622,6 +623,10 @@ async def lifespan(_app: FastAPI):
     )
     services.asset_integrity_service = asset_integrity_service
     asset_integrity_service.start()
+
+    gc.collect()
+    gc.freeze()
+    log_service.success(f"✓ {gc.get_freeze_count():,} startup objects kept out of garbage collection")
 
     log_service.success("🚀 All services initialized - Suno Playback Engine + DJ ready!")
 
