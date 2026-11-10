@@ -2,6 +2,15 @@ from typing import Dict, Any
 
 from services import log_service
 
+def without_lyrics(track: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(track)
+    for part in ("generation_params", "track_info"):
+        fields = out.get(part)
+        if isinstance(fields, dict) and "prompt" in fields:
+            out[part] = {key: value for key, value in fields.items() if key != "prompt"}
+    return out
+
+
 def simplify_track_info(track: Dict[str, Any], catalog_service=None) -> Dict[str, Any]:
     params = track.get("generation_params", {})
     track_info = track.get("track_info", {})

@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Any, Set
 from datetime import datetime, timezone
 from config import settings
 from services import log_service
-from services.api_utils import simplify_track_info
+from services.api_utils import simplify_track_info, without_lyrics
 from services.analytics_service import analytics_service
 from services.task_utils import safe_background_task, spawn
 from services.playback_state_devices import PlaybackDevices
@@ -573,7 +573,7 @@ class PlaybackState(PlaybackDevices, PlaybackQueue, PlaybackStations):
         current_track_info = None
         if self.current_track:
             current_track_info = {
-                **self.current_track,
+                **(without_lyrics(self.current_track) if simplified else self.current_track),
                 "duration_ms": self.current_track.get("track_info", {}).get("duration", 0),
                 "has_artwork": self.catalog.has_artwork(self.current_track.get("id")) if self.catalog else False
             }

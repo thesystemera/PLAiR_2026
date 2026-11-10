@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse
 from typing import Optional
 
 from services import log_service
+from services.api_utils import without_lyrics
 from services.catalog_credit import is_ai_track
 from database import User
 from service_registry import services
@@ -38,8 +39,8 @@ async def get_catalog_tracks(
         banned_ids
     )
 
-    for track in tracks:
-        track["has_artwork"] = services.catalog_service.has_artwork(track["id"])  # type: ignore
+    tracks = [{**without_lyrics(track), "has_artwork": services.catalog_service.has_artwork(track["id"])}
+              for track in tracks]
 
     log_service.debug(
         f"[API] /catalog/tracks: skip={skip}, limit={limit}, genre={genre}, returned={len(tracks)}, total={filtered_total}")

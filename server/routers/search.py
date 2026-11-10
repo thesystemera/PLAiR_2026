@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from services import log_service
+from services.api_utils import without_lyrics
 from database import User
 from service_registry import services
 from routers.deps import get_session_info, get_current_user, RateLimit, enforce_rate_limit
@@ -49,7 +50,7 @@ async def semantic_search(
     results = results[:request.n_results]
 
     assert services.catalog_service is not None
-    for track in results:
-        track["has_artwork"] = services.catalog_service.has_artwork(track["id"])  # type: ignore
+    results = [{**without_lyrics(track), "has_artwork": services.catalog_service.has_artwork(track["id"])}
+               for track in results]
 
     return {"results": results, "count": len(results), "queued": queued}
