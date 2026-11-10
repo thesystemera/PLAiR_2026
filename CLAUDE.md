@@ -617,7 +617,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/FPSCounter.jsx` - Developer overlay: page and scene frames per second, the screen's refresh rate, frames dropped against it, the worst frame, ms per page frame (main thread, artwork JS and GPU) and ms per scene frame (JS and GPU, worker or main thread).
 - `client/src/components/GenerationQueuePanel.jsx` - Panel listing Suno generation jobs with progress, cancel and remove.
 - `client/src/components/GestureGuide.jsx` - One-time onboarding overlay for guests showing swipe gestures for play, pause, previous, next.
-- `client/src/components/InteractiveEngagementButton.jsx` - Animated canvas-blob engagement button with haptics and visual feedback.
+- `client/src/components/InteractiveEngagementButton.jsx` - Animated canvas-blob engagement button with haptics and visual feedback; the Radio talk button fades to grey (dimmed mic, "hosts reply in text" title) while the DJ voice is off (`settingsState.ttsMuted`).
 - `client/src/components/KeyboardControls.jsx` - Global keyboard shortcuts for playback, seeking and push-to-talk recording.
 - `client/src/components/ListenerTimeline.jsx` - Listener timeline of what aired in the last 24 hours, with kind filters.
 - `client/src/components/MediaActions.jsx` - Like, super like, ban (and delete) buttons for tracks and shoutouts.
@@ -632,7 +632,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/components/OnAirBadge.jsx` - ON AIR notice and frame shown during Radio Mode talk breaks.
 - `client/src/components/Panel.jsx` - Generic panel wrapper, header, curved backdrop, panel ids/config and text radio icon.
 - `client/src/components/Player.jsx` - Main player bar: artwork, transport controls, waveform progress, talk break progress, device status.
-- `client/src/components/Queue.jsx` - Playback queue list, virtualised through `VirtualScroller` like the Catalog (rows of one measured height, the now-playing highlight and the follow-the-current-song scroll computed from the row index, rows fade out only when removed), preference badges and seed/list mode buttons.
+- `client/src/components/Queue.jsx` - Playback queue list, virtualised through `VirtualScroller` like the Catalog (rows of one measured height, the now-playing highlight and the follow-the-current-song scroll computed from the row index, rows fade out only when removed), preference badges and seed/list mode buttons (the active one shows the current mode's own icon from `getCategoryMetadata`, e.g. Style's palette).
 - `client/src/components/Radio.jsx` - Radio panel container holding the radio talk button, conversation and timeline.
 - `client/src/components/RadioModeSettings.jsx` - Settings for Radio Mode talk breaks and their segment types.
 - `client/src/components/RotationVeil.jsx` - Black veil set opaque inside the first resize/orientation event of a real screen rotation (so the first frame at the new size is black) and faded back once resizing has stopped and frames flow again (4 under 50 ms), at most 1.5 s.

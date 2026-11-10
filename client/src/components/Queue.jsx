@@ -16,7 +16,7 @@ import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen
 import { TrackArt } from './DepthArt'
 import { MediaEmptyState } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
-import { Fade, Pop } from './Motion'
+import { Fade, FadeSwap, Pop } from './Motion'
 import { artistCredit } from '../lib/utils'
 
 const QUEUE_ART_PROPS = { 'data-queue-art': true }
@@ -266,7 +266,7 @@ const MODE_CAMPS = {
   top_hits_day: 'charts',
 }
 
-function QueueModeButton({ icon: Icon, label, active, color, disabled, onOpen }) {
+function QueueModeButton({ icon: Icon, iconKey, label, active, color, disabled, onOpen }) {
   const { onPointerDown, onPointerMove, shouldTrigger } = usePointerInteraction()
   const { getGrey400, getWhite, getButtonHoverBg } = useDynamicTheme()
   const restBackground = active ? `${color}15` : 'transparent'
@@ -301,7 +301,9 @@ function QueueModeButton({ icon: Icon, label, active, color, disabled, onOpen })
         if (!active) e.currentTarget.style.color = getGrey400()
       }}
     >
-      <Icon size={16} />
+      <FadeSwap swapKey={iconKey} preset={PRESETS.badgeSwap} className="block">
+        <Icon size={16} />
+      </FadeSwap>
     </button>
   )
 }
@@ -597,13 +599,14 @@ function QueueComponent({ onSeedRadio, onList }) {
   const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
   const activeCamp = activeSeedMode ? MODE_CAMPS[activeSeedMode] || 'seed' : null
   const campLabel = (camp, name) => (activeCamp === camp ? `${name}: ${seedMeta.label}` : name)
+  const campIcon = (camp, icon) => (activeCamp === camp ? { icon: seedMeta.icon, iconKey: activeSeedMode } : { icon, iconKey: camp })
 
   return (
     <div className="flex flex-col h-full relative">
         <PanelHeader title="Queue">
           <Fade show={hasQueue} className="flex items-center gap-2">
             <QueueModeButton
-              icon={Library}
+              {...campIcon('mine', Library)}
               label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
               active={activeCamp === 'mine'}
               color={seedMeta?.color}
@@ -611,14 +614,14 @@ function QueueComponent({ onSeedRadio, onList }) {
               onOpen={() => onList('mine')}
             />
             <QueueModeButton
-              icon={Sprout}
+              {...campIcon('seed', Sprout)}
               label={campLabel('seed', 'Seed radio')}
               active={activeCamp === 'seed'}
               color={seedMeta?.color}
               onOpen={onSeedRadio}
             />
             <QueueModeButton
-              icon={TrendingUp}
+              {...campIcon('charts', TrendingUp)}
               label={campLabel('charts', 'Charts')}
               active={activeCamp === 'charts'}
               color={seedMeta?.color}

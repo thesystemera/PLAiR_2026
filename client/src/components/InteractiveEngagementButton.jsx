@@ -13,6 +13,16 @@ const SILENT_FFT = new Array(32).fill(0)
 
 const numPoints = 32
 
+const QUIET_GREY_MIX = 0.85
+const QUIET_ALPHA = 0.4
+const QUIET_TITLE = 'DJ voice is off: hold to talk, the hosts reply in text'
+
+function quietColor(color, alpha) {
+  const grey = 0.3 * color.r + 0.59 * color.g + 0.11 * color.b
+  const mix = (value) => value + (grey - value) * QUIET_GREY_MIX
+  return { color: { r: mix(color.r), g: mix(color.g), b: mix(color.b) }, alpha: alpha * QUIET_ALPHA }
+}
+
 const SEARCH_SIZE_CONFIG = {
   containerSize: 'w-9 h-9',
   scale: { normal: 1, hover: 1.1, recording: 1.15 },
@@ -40,8 +50,9 @@ export function InteractiveEngagementButton({
   buttonType = 'radio',
   title = 'Hold to record voice'
 }) {
-  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef } = useUISelector(state => ({
+  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef, ttsMuted } = useUISelector(state => ({
     visualState: state.visualState,
+    ttsMuted: state.settingsState.ttsMuted,
     updateButtonInteraction: state.updateRadioButtonInteraction,
     visualColorData: state.visualColorData,
     djFftDataRef: state.djFftDataRef,
@@ -57,6 +68,7 @@ export function InteractiveEngagementButton({
   const [isPressed, setIsPressed] = useState(false)
 
   const sizeConfig = buttonType === 'search' ? SEARCH_SIZE_CONFIG : RADIO_SIZE_CONFIG
+  const djQuiet = buttonType === 'radio' && !!ttsMuted && !(isRecording && activeRecordingSource === buttonType)
 
   useEffect(() => {
     const currentScale = isPressed
@@ -133,7 +145,8 @@ export function InteractiveEngagementButton({
       ctx.clearRect(0, 0, logicalSize, logicalSize)
 
       let ctxColor = visualColorData?.currentVisualColor || getRadioButtonBaseRgb()
-      const targetAlpha = visualState === 5 ? 0.8 : 0.9
+      let targetAlpha = visualState === 5 ? 0.8 : 0.9
+      if (djQuiet) ({ color: ctxColor, alpha: targetAlpha } = quietColor(ctxColor, targetAlpha))
       const baseRadius = sizeConfig.baseRadius
 
       ctx.beginPath()
@@ -188,6 +201,7 @@ export function InteractiveEngagementButton({
       if (visualState === 4) targetAlpha = 1.0
       if (visualState === 5) targetAlpha = 0.8
       if (isHovered && !isPressed) targetAlpha = Math.min(1.0, targetAlpha + 0.1)
+      if (djQuiet) ({ color: ctxColor, alpha: targetAlpha } = quietColor(ctxColor, targetAlpha))
 
       const targetColor = { r: ctxColor.r, g: ctxColor.g, b: ctxColor.b, a: targetAlpha }
 
@@ -261,7 +275,7 @@ export function InteractiveEngagementButton({
       isRunningRef.current = false
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
     }
-  }, [visualState, sizeConfig, buttonType, isRecording, activeRecordingSource, micFftDataRef, djFftDataRef, isPressed, isHovered, visualColorData, speakerColorRef, getRadioButtonBaseRgb, blobDprCap])
+  }, [visualState, sizeConfig, buttonType, isRecording, activeRecordingSource, micFftDataRef, djFftDataRef, isPressed, isHovered, visualColorData, speakerColorRef, getRadioButtonBaseRgb, blobDprCap, djQuiet])
 
   const getSwipeDirection = useCallback((startX, startY, endX, endY, threshold) => {
     const diffX = startX - endX
@@ -441,7 +455,7 @@ export function InteractiveEngagementButton({
           WebkitTapHighlightColor: 'transparent',
           touchAction: 'none'
         }}
-        title={title}
+        title={djQuiet ? QUIET_TITLE : title}
       >
         <canvas
           ref={canvasRef}
@@ -465,7 +479,7 @@ export function InteractiveEngagementButton({
               key="mic-icon"
               initial={{ opacity: 0, scale: 0.5 }}
               animate={{
-                opacity: 1,
+                opacity: djQuiet ? QUIET_ALPHA : 1,
                 scale: isHovered ? 1.1 : 1
               }}
               exit={{ opacity: 0, scale: 0.5 }}
