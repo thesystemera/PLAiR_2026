@@ -1,7 +1,7 @@
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from models_global import run_on_gpu_executor
+from models_global import run_on_gpu_executor, run_on_rank_executor
 from services import log_service
 from services.catalog_aspects import Aspect, AspectRanker
 from services.catalog_names import NameLookup
@@ -132,15 +132,17 @@ class CatalogVectorSearchService:
 
     async def station(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
                       n_results: int, banned_ids: Optional[set] = None,
-                      keep: Optional[Callable[[Dict[str, Any]], bool]] = None) -> List[Dict[str, Any]]:
+                      keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                      distinct_titles: bool = False) -> List[Dict[str, Any]]:
         if not aspects or not self.catalog or not self.catalog.tracks:
             return []
         exclude = {t.get("id") for t in recent} | ({seed.get("id")} if seed else set())
-        return await run_on_gpu_executor(self.aspects.rank, aspects, seed, recent, n_results,
-                                         self.allowed(exclude, banned_ids, keep))
+        run = run_on_gpu_executor if any(aspect.words for aspect in aspects) else run_on_rank_executor
+        return await run(self.aspects.rank, aspects, seed, recent, n_results,
+                         self.allowed(exclude, banned_ids, keep), distinct_titles)
 
     async def closest_names(self, field: str, text: str, how_many: int) -> List[Tuple[str, float]]:
-        return await run_on_gpu_executor(self.names.closest, field, text, how_many)
+        return await run_on_rank_executor(self.names.closest, field, text, how_many)
 
     def _clean_natural_query(self, query: str, trigger_patterns: list) -> str:
         cleaned = query.lower()

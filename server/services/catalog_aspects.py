@@ -1,4 +1,5 @@
 import itertools
+import random
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from threading import Lock
@@ -10,7 +11,7 @@ from services.catalog_names import NameLookup, track_names
 from services.catalog_vector_database_service import TAG_LISTS
 
 LABEL_ASPECTS = set(TAG_LISTS) | {"primary_genre", "vocal"}
-ANCHOR_SCORES_KEPT = 512
+ANCHOR_SCORES_KEPT = 8192
 NAME_ASPECTS = {"primary_artist", "similar_artists"}
 
 
@@ -31,6 +32,10 @@ class TagIndex:
     counts: np.ndarray
     vectors: np.ndarray
     serial: int = field(default_factory=lambda: next(INDEX_SERIALS))
+
+
+def track_title(track: Dict[str, Any]) -> str:
+    return ((track.get("generation_params") or {}).get("title") or "").strip().lower()
 
 
 def _unit(vectors: np.ndarray) -> np.ndarray:
@@ -181,25 +186,90 @@ class AspectRanker:
         anchors += [(tags(track).get(aspect.category) or [], True) for track in recent]
         return self._meaning(slot, aspect.category, anchors), None
 
-    def rank(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
-             n_results: int, allowed: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _titles(slot) -> Dict[str, List[str]]:
+        cached = getattr(slot, "_title_keys", None)
+        if cached is None:
+            cached = {}
+            for entry in slot.entries:
+                title = track_title(entry.meta)
+                if title:
+                    cached.setdefault(title, []).append(entry.key)
+            slot._title_keys = cached
+        return cached
+
+    def _candidates(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]]):
         slots, hidden = self.vector_db.views()
-        scored: Dict[str, Tuple[float, float, Dict[str, Any]]] = {}
+        finals, artists, metas, present = None, None, [], None
+        position: Dict[str, int] = {}
+        scored_slots = []
         for slot in slots:
             final, artist = self._slot_scores(slot, aspects, seed, recent)
             if final is None:
                 continue
+            scored_slots.append(slot)
+            ok = ~np.isnan(final)
+            if hidden:
+                ok &= np.fromiter((entry.key not in hidden for entry in slot.entries), bool, len(slot.entries))
+            if finals is None:
+                rows = np.flatnonzero(ok)
+                finals, artists = final[rows].astype(np.float64), artist[rows].astype(np.float64)
+                metas = [slot.entries[i].meta for i in rows]
+                position = {slot.entries[i].key: n for n, i in enumerate(rows)}
+                present = np.ones(len(rows), dtype=bool)
+                continue
+            extra_finals, extra_artists = [], []
             for i, entry in enumerate(slot.entries):
-                if entry.key in hidden or np.isnan(final[i]):
-                    scored.pop(entry.key, None)
+                at = position.get(entry.key)
+                alive = at is not None and at < len(present) and present[at]
+                if not ok[i]:
+                    if alive:
+                        present[at] = False
+                elif alive:
+                    finals[at], artists[at], metas[at] = final[i], artist[i], entry.meta
+                else:
+                    position[entry.key] = len(metas)
+                    metas.append(entry.meta)
+                    extra_finals.append(float(final[i]))
+                    extra_artists.append(float(artist[i]))
+            if extra_finals:
+                finals = np.concatenate([finals, np.array(extra_finals, dtype=np.float64)])
+                artists = np.concatenate([artists, np.array(extra_artists, dtype=np.float64)])
+                present = np.concatenate([present, np.ones(len(extra_finals), dtype=bool)])
+        if finals is None:
+            return np.zeros(0, dtype=int), finals, metas, position, scored_slots
+        alive = np.flatnonzero(present)
+        order = alive[np.lexsort((-artists[alive], -finals[alive]))]
+        return order, finals, metas, position, scored_slots
+
+    def rank(self, aspects: List[Aspect], seed: Optional[Dict[str, Any]], recent: List[Dict[str, Any]],
+             n_results: int, allowed: Callable[[Dict[str, Any]], bool],
+             distinct_titles: bool = False) -> List[Dict[str, Any]]:
+        order, finals, metas, position, scored_slots = self._candidates(aspects, seed, recent)
+        out: List[Dict[str, Any]] = []
+        titles_done = set()
+        rank_of = None
+        for i in order:
+            meta = metas[i]
+            if not allowed(meta):
+                continue
+            if distinct_titles:
+                title = track_title(meta)
+                if title in titles_done:
                     continue
-                scored[entry.key] = (float(final[i]), float(artist[i]), entry.meta)
-        out = []
-        for final, _artist, meta in sorted(scored.values(), key=lambda row: (row[0], row[1]), reverse=True):
-            if allowed(meta):
-                out.append({**meta, "similarity_score": final})
-                if len(out) >= n_results:
-                    break
+                if title:
+                    titles_done.add(title)
+                    if rank_of is None:
+                        rank_of = np.full(len(metas), -1, dtype=np.int64)
+                        rank_of[order] = np.arange(len(order))
+                    group = sorted({position[key] for slot in scored_slots
+                                    for key in self._titles(slot).get(title, ()) if key in position
+                                    and rank_of[position[key]] >= 0}, key=lambda j: rank_of[j])
+                    i = random.choice([j for j in group if track_title(metas[j]) == title and allowed(metas[j])])
+                    meta = metas[i]
+            out.append({**meta, "similarity_score": float(finals[i])})
+            if len(out) >= n_results:
+                break
         return out
 
     def _slot_scores(self, slot, aspects: List[Aspect], seed: Optional[Dict[str, Any]],

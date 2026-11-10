@@ -29,42 +29,6 @@ def _recent(history: List[Dict]) -> List[Dict]:
     return history[-settings.QUEUE_NO_REPEAT_SONGS:] if settings.QUEUE_NO_REPEAT_SONGS > 0 else []
 
 
-def _deduplicate_by_title(
-    results: List[Dict],
-    existing_ids: Set[str],
-    existing_titles: Set[str],
-    needed: int,
-) -> List[Dict]:
-
-    title_groups: Dict[str, List[Dict]] = {}
-    for t in results:
-        t_title = t.get("generation_params", {}).get("title", "").strip().lower()
-        key = t_title if t_title else "untitled"
-        title_groups.setdefault(key, []).append(t)
-
-    out: List[Dict] = []
-    processed_titles: Set[str] = set()
-
-    for t in results:
-        if len(out) >= needed:
-            break
-        t_title = t.get("generation_params", {}).get("title", "").strip().lower()
-
-        if not t_title:
-            if t["id"] not in existing_ids:
-                out.append(t)
-                existing_ids.add(t["id"])
-        elif t_title not in processed_titles:
-            winner = random.choice(title_groups[t_title])
-            if winner["id"] not in existing_ids and t_title not in existing_titles:
-                out.append(winner)
-                existing_ids.add(winner["id"])
-                existing_titles.add(t_title)
-            processed_titles.add(t_title)
-
-    return out
-
-
 class PlaybackPopulationService:
     """Fills a station's queue. Lists (favorites, discovery, top hits) come from ListFills; every other mode is a
     station built from aspects: one aspect (a pure seed) or a weighted blend, matched to the seed (a song, or words)
@@ -176,16 +140,17 @@ class PlaybackPopulationService:
             return track.get("id") not in existing_ids and _title(track) not in existing_titles
 
         try:
-            results = await self.vector_search.station(
-                aspects, seed_track, recent, n_results=len(self.catalog.tracks), banned_ids=prefs["bans"],
-                keep=fresh,
+            picks = await self.vector_search.station(
+                aspects, seed_track, recent, n_results=needed, banned_ids=prefs["bans"], keep=fresh,
+                distinct_titles=True,
             )
         except Exception as e:
             log_service.error(f"{log_service.who(session_id)}: station search failed "
                               f"({', '.join(a.category for a in aspects)}): {e}")
             return []
 
-        return _deduplicate_by_title(results, existing_ids, existing_titles, needed)
+        existing_ids.update(track["id"] for track in picks)
+        return picks
 
     def _fill_random_fallback(
         self,

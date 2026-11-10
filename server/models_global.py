@@ -39,6 +39,14 @@ async def run_on_gpu_executor(fn, *args, **kwargs):
         return await loop.run_in_executor(_gpu_executor, functools.partial(fn, *args, **kwargs))
     return await loop.run_in_executor(_gpu_executor, fn, *args)
 
+_rank_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="rank")
+
+async def run_on_rank_executor(fn, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    if kwargs:
+        return await loop.run_in_executor(_rank_executor, functools.partial(fn, *args, **kwargs))
+    return await loop.run_in_executor(_rank_executor, fn, *args)
+
 class GPUOutOfMemoryError(RuntimeError):
     pass
 

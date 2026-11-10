@@ -3,7 +3,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from pydantic import Field, create_model
 
-from models_global import run_on_gpu_executor
+from models_global import run_on_gpu_executor, run_on_rank_executor
 from services import log_service
 from services.base_prompt_cache_service import BasePromptCacheService
 from services.category_store import CategoryStore, Match
@@ -108,4 +108,4 @@ class SemanticSearch:
             return [Match(boost(entry.meta) if boost else 0.0, 0.0, entry.row_id, entry.meta, entry.key)
                     for entry in db.entries() if keep is None or keep(entry.meta)][:n]
         query_vector = await run_on_gpu_executor(db._generate_embedding, query)
-        return await run_on_gpu_executor(db.rank, query_vector, weights, n, keep, boost)
+        return await run_on_rank_executor(db.rank, query_vector, weights, n, keep, boost)

@@ -765,7 +765,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 #### server
 
 - `server/app.py` - FastAPI app: lifespan that starts and stops every service, middleware and router includes.
-- `server/models_global.py` - Shared torch device, cached sentence encoders, GPU executor, GPU lease lock and CUDA out-of-memory helpers.
+- `server/models_global.py` - Shared torch device, cached sentence encoders, GPU executor (encoder work), a small ranking pool (catalog stations, name lookups, search ranking), GPU lease lock and CUDA out-of-memory helpers.
 - `server/run_migration.py` - Adds columns missing from PostgreSQL tables after models.py changes (users, device settings).
 - `server/security_middleware.py` - Request guard (traversal, guest ids, body limits), media-aware gzip, secret redaction and quiet access logs.
 - `server/service_registry.py` - The `services` registry the lifespan fills and routers read at request time.
