@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
 
-from services.rate_limit_service import rate_limit_service
 from services import log_service
 from service_registry import services
 from routers.deps import get_session_info
@@ -14,18 +13,6 @@ def _owns_job(job_id: str, session: dict) -> bool:
     user_id = int(user.id) if user else None
     return services.suno_generation_queue_service.is_job_owner(job_id, session["session_id"], user_id)
 
-async def _reserve(user_id, session_id: str, user, batch_count: int) -> dict:
-    allowed, error_msg, usage = await rate_limit_service.reserve_generations(
-        user_id=user_id,
-        session_id=session_id,
-        user=user,
-        cost=batch_count
-    )
-    if not allowed:
-        log_service.warning(f"[{session_id}] Generation limit reached: {error_msg}")
-        raise HTTPException(status_code=429, detail=error_msg)
-    return usage
-
 @router.post("/api/generate")
 async def generate_music(
         request: GenerateRequest,
@@ -33,7 +20,6 @@ async def generate_music(
 ):
     session_id = session["session_id"]
     user = session["user"]
-    user_id = int(user.id) if user else None
 
     if not user:
         log_service.warning(f"[{session_id}] Guest user attempted to generate music")
@@ -60,26 +46,20 @@ async def generate_music(
         if not original_params:
             raise HTTPException(status_code=400, detail="Source track has no generation parameters")
 
-        usage = await _reserve(user_id, session_id, user, batch_count)
-        reservation = rate_limit_service.reservation_stamp()
-
         log_service.api(
             f"Starting 'Similar' generation from track {source_track_id}: "
             f"{batch_count} batches (~{batch_count * 2} tracks)"
         )
 
-        try:
-            job_ids, _ = await services.suno_generation_queue_service.start_generation_job(
-                session_id=session_id,
-                original_params=original_params,
-                batch_count=batch_count,
-                user_id=user_id,  # type: ignore
-                source_track_id=source_track_id,
-                reservation=reservation
-            )
-        except Exception:
-            await rate_limit_service.refund_generations(user_id, session_id, batch_count, reservation)
-            raise
+        job_ids, error_msg, usage = await services.suno_generation_queue_service.request_generation(
+            session_id=session_id,
+            user=user,
+            batch_count=batch_count,
+            source_track_id=source_track_id,
+            original_params=original_params
+        )
+        if error_msg:
+            raise HTTPException(status_code=429, detail=error_msg)
 
         return {
             "status": "started",
@@ -99,9 +79,6 @@ async def generate_music(
         if not user_request:
             raise HTTPException(status_code=400, detail="user_request required for new generation")
 
-        usage = await _reserve(user_id, session_id, user, batch_count)
-        reservation = rate_limit_service.reservation_stamp()
-
         log_service.system("=" * 60)
         log_service.system(f"USER REQUEST: {user_request}")
         log_service.system("=" * 60)
@@ -110,19 +87,14 @@ async def generate_music(
             f"Starting 'New' generation: {batch_count} batches (~{batch_count * 2} tracks)"
         )
 
-        try:
-            job_ids, _ = await services.suno_generation_queue_service.start_generation_job(
-                session_id=session_id,
-                original_params={},
-                batch_count=batch_count,
-                user_id=user_id,  # type: ignore
-                source_track_id=None,
-                user_request=user_request,
-                reservation=reservation
-            )
-        except Exception:
-            await rate_limit_service.refund_generations(user_id, session_id, batch_count, reservation)
-            raise
+        job_ids, error_msg, usage = await services.suno_generation_queue_service.request_generation(
+            session_id=session_id,
+            user=user,
+            batch_count=batch_count,
+            user_request=user_request
+        )
+        if error_msg:
+            raise HTTPException(status_code=429, detail=error_msg)
 
         return {
             "status": "started",

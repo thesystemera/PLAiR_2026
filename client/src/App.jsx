@@ -217,7 +217,7 @@ function App() {
     publishContentUpdate: state.publishContentUpdate,
   }))
   const getUIState = useUIStateGetter()
-  const { addJob, setIsOpen: setQueueOpen } = useGenerationQueue()
+  const { setIsOpen: setQueueOpen } = useGenerationQueue()
 
 
   const success = toastSuccess
@@ -574,28 +574,6 @@ function App() {
     success(`Seeded ${modeLabel} playlist from track`)
   }, [seedRadio, success])
 
-  const handleGenerationBatchCompleted = useCallback((data) => {
-    const trackCount = (data?.tracks) ? data.tracks.length : 0
-
-    success(`${trackCount} new track${trackCount > 1 ? 's' : ''} added to queue!`, 4000, 'top')
-  }, [success])
-
-  const handleGenerationRetrying = useCallback((data) => {
-    const maxAttempts = data?.max_attempts ?? '??'
-    info(`Generation retry ${data.attempt}/${maxAttempts}...`, 3000, 'top')
-  }, [info])
-
-  const handleGenerationBatchFailed = useCallback((data) => {
-    if (data?.cancelled || data?.status?.status !== 'processing') return
-    const refund = data.refunded ? ' Your generation credit was refunded.' : ''
-    errorToast(`One song in your batch failed: ${data.error}${refund}`, 6000, 'top')
-  }, [errorToast])
-
-  const handleGenerationJobCompleted = useCallback((data) => {
-    const totalTracks = data?.total_tracks || 0
-    success(`✓ Generated ${totalTracks} tracks!`, 5000, 'top')
-  }, [success])
-
   const handleCloseLogin = useCallback(() => setShowLogin(false), [])
   const handleCloseRegister = useCallback(() => setShowRegister(false), [])
   const handleCloseSeedModal = useCallback(() => setShowSeedModal(false), [])
@@ -659,63 +637,10 @@ function App() {
     }
 
     try {
-      const params = generationModalTrack.generation_params || {}
-
       for (const job of jobs) {
-        let response
-
-        if (job.type === 'remix') {
-          response = await api.generate({
-            type: 'similar',
-            sourceTrackId: generationModalTrack.id,
-            batchCount: 1
-          })
-
-          if (response.job_ids && Array.isArray(response.job_ids)) {
-            response.job_ids.forEach((jobId) => {
-              addJob({
-                job_id: jobId,
-                type: 'similar',
-                query: `Remix of "${params.title || 'Untitled'}"`,
-                total_tracks: 2
-              })
-            })
-          }
-        } else if (job.type === 'artist') {
-          response = await api.generate({
-            type: 'new',
-            userRequest: job.artistName,
-            batchCount: 1
-          })
-
-          if (response.job_ids && Array.isArray(response.job_ids)) {
-            response.job_ids.forEach((jobId) => {
-              addJob({
-                job_id: jobId,
-                type: 'new',
-                query: job.artistName,
-                total_tracks: 2
-              })
-            })
-          }
-        } else if (job.type === 'similar_artist') {
-          response = await api.generate({
-            type: 'new',
-            userRequest: job.artistName,
-            batchCount: 1
-          })
-
-          if (response.job_ids && Array.isArray(response.job_ids)) {
-            response.job_ids.forEach((jobId) => {
-              addJob({
-                job_id: jobId,
-                type: 'new',
-                query: `${job.artistName} (similar to ${params.artist_name || 'current artist'})`,
-                total_tracks: 2
-              })
-            })
-          }
-        }
+        await api.generate(job.type === 'remix'
+          ? { type: 'similar', sourceTrackId: generationModalTrack.id, batchCount: 1 }
+          : { type: 'new', userRequest: job.artistName, batchCount: 1 })
       }
 
       setQueueOpen(true)
@@ -726,13 +651,8 @@ function App() {
     }
 
     handleCloseGenerationModal()
-  }, [generationModalTrack, hasActiveJobs, addJob, setQueueOpen, success, errorToast, handleCloseGenerationModal])
+  }, [generationModalTrack, hasActiveJobs, setQueueOpen, success, errorToast, handleCloseGenerationModal])
 
-  useWebSocketSubscribe('generation_batch_completed', handleGenerationBatchCompleted)
-  useWebSocketSubscribe('generation_retrying', handleGenerationRetrying)
-  useWebSocketSubscribe('generation_batch_failed', handleGenerationBatchFailed)
-  useWebSocketSubscribe('generation_job_completed', handleGenerationJobCompleted)
-  useWebSocketSubscribe('generation_stage_update', () => {})
   useWebSocketSubscribe('content_updated', (data) => {
     const normalizedType = CONTENT_UPDATE_TYPES[data?.content_type]
     if (normalizedType) publishContentUpdate(normalizedType)

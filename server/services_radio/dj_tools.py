@@ -83,6 +83,12 @@ def authorize_tool_call(name: str, args: Dict[str, Any], ctx: DJTurnContext) -> 
     if name == "move_playback" and not ctx.user_id:
         return "Only signed-in listeners can move playback between their devices."
 
+    if name == "generate_song":
+        if not ctx.user_id:
+            return "Only signed-in listeners can have new songs made."
+        if any(record["name"] == name and record["status"] == "executed" for record in ctx.records):
+            return "New songs are already ordered this turn."
+
     if name in SEGMENT_TOOLS:
         if name in ctx.segments:
             return "That segment is already scheduled for this turn."
@@ -115,6 +121,7 @@ class DJToolRuntime:
             "save_shoutout": self._save_shoutout,
             "save_shoutout_reply": self._save_shoutout_reply,
             "save_review": self._save_review,
+            "generate_song": self._generate_song,
             "pulse_search": self._pulse_search,
             "pulse_detail": self._pulse_detail,
             "listener_context": self._listener_context,
@@ -361,6 +368,9 @@ class DJToolRuntime:
         async with self.ctx.playback_lock:
             return await self.executor.execute_seed_radio(self.session_dict, args["category"], args["target"],
                                                           blend=args["blend"])
+
+    async def _generate_song(self, args):
+        return await self.executor.execute_generate_song(self.session_dict, args["request"])
 
     async def _move_playback(self, args):
         async with self.ctx.playback_lock:

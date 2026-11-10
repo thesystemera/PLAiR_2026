@@ -219,4 +219,6 @@ def _normalize_tool_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return {"parent_id": parent_id or None}
     if name == "save_review":
         return {"target": track_target()}
+    if name == "generate_song":
+        return {"request": text("request", True)}
     raise ValueError(f"Unknown tool '{name}'")

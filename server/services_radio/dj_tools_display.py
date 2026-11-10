@@ -38,6 +38,7 @@ LABELS = {
     "save_shoutout": "posting the shoutout",
     "save_shoutout_reply": "posting the reply",
     "save_review": "saving the review",
+    "generate_song": "ordering new songs",
 }
 
 
@@ -98,6 +99,8 @@ def activity_summary(name: str, result: Any) -> tuple[str, str]:
         return ("found", f"{len(items)} found") if items else ("empty", "nothing on hand")
     if status == "scheduled":
         return "done", "segment airs after the reply" if name in SEGMENT_TOOLS else "on it"
+    if status == "ordered":
+        return "done", f"ordered {result['songs']} new songs"
     return "done", "on it" if name in SEGMENT_TOOLS else "done"
 
 
@@ -182,4 +185,6 @@ def command_string(name: str, args: Dict[str, Any]) -> str:
         return _brace("save_shoutout_reply", value=args.get("parent_id") or "just played")
     if name == "save_review":
         return _brace("save_review", _target(args["target"]))
+    if name == "generate_song":
+        return _brace("generate", value=args["request"])
     return _brace(name)

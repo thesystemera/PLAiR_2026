@@ -125,6 +125,7 @@ COST_TEXT = {
     "memory": "instant, from station memory",
     "live": "instant from station memory, goes online by itself only when nothing is on hand (a few seconds)",
     "segment": "expensive: gathers the material and airs a full produced segment of 30-60 s",
+    "song": "uses one of the listener's song credits; the songs take a while to make and join their queue when ready",
 }
 SAVE_REQUIRES = "the listener's own words from this turn (voice or typed); signed-in listener"
 TOOL_REGISTRY: List[Dict[str, Any]] = [
@@ -511,6 +512,20 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "parameters": _schema({"target": _enum(TRACK_TARGETS, "Which track the review is about."),
                                "track_id": TRACK_ID}),
     },
+    {
+        "name": "generate_song",
+        "cost": "song",
+        "requires": "signed-in listener with song credits left",
+        "summary": "have new songs made when the catalog doesn't have what the listener wants",
+        "description": "Orders new songs from PLAiR's song maker, the same as the app's Generate button: give it what "
+                       "the listener asked for (an artist, a song, a style or an idea) and it writes and records two "
+                       "new songs in that spirit, credited 'Inspired by' the artist. Use it when the catalog doesn't "
+                       "have what the listener wants, or when they ask for something new to be made. The songs aren't "
+                       "ready yet: they go into the listener's queue by themselves when they're done, so keep the "
+                       "music going with the nearest match meanwhile.",
+        "parameters": _schema({"request": _string("What to make, in the listener's own words: 'Michael Jackson', "
+                                                  "'a slow country song about rain on a tin roof'.")}, ["request"]),
+    },
 ]
 DONE_WITH = {"type": "object", "additionalProperties": {"type": "string"},
              "description": "Earlier results you're done with: {tool_name: what you took from it}."}
@@ -576,9 +591,9 @@ def next_options(name: str, args: Dict[str, Any], result: Any) -> List[str]:
         kinds = args.get("kinds") or list(KIND_SEGMENTS)
         return list(dict.fromkeys(KIND_SEGMENTS[kind] for kind in kinds if kind in KIND_SEGMENTS))
     if name == "search_and_play":
-        return ["find_tracks", "pulse_search", "seed_radio"]
+        return ["find_tracks", "pulse_search", "seed_radio", "generate_song"]
     if name == "find_tracks":
-        return ["pulse_search"]
+        return ["pulse_search", "generate_song"]
     if name == "pulse_detail":
         return ["pulse_search"]
     if name in SEGMENT_TOOLS:

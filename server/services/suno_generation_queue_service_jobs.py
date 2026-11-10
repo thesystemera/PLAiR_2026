@@ -197,6 +197,7 @@ class GenerationJob:
             "source_track_id": self.source_track_id,
             "current_stage": current_stage,
             "title": title,
+            "query": self.user_request,
             "progress_percent": progress_percent,
             "tracks": self.completed_track_ids,
             "error": next((b.get("error_message") for b in reversed(list(self.batches.values()))

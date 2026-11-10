@@ -377,7 +377,6 @@ async def lifespan(_app: FastAPI):
         metadata_service=metadata_service,
         catalog_service=catalog_service,
         playback_service=playback_service,
-        vector_search_service=vector_search_service,
         orchestrator=orchestrator,
         enriched_metadata_service=enriched_metadata_service
     )

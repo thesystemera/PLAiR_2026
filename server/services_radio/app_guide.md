@@ -95,8 +95,8 @@ Asks: how do I add my band, change my artist name, artist profile, credit my son
 In Account under "Artists & Bands" you add the names you release under, with an optional bio and links. Uploads are credited to the artist you choose (your username until you add one), and renaming an artist updates all its songs. Listeners see your bio under "About" on the Playing panel.
 
 ## Making songs
-Asks: can I make my own song, generate music, create a song, make a remix, make a song like this
-With an account you can have PLAiR make new songs: type an idea in the Catalog search bar and tap the purple sparkles "Generate tracks", or tap "+" on the Playing panel to remix the current song or make more like its artist or similar artists. Each uses credits; free accounts get a few a month and Premium gets more. New songs appear in the catalog when they're ready.
+Asks: can I make my own song, generate music, create a song, make a remix, make a song like this, can you make one
+With an account you can have PLAiR make new songs: just ask the hosts ("make us a Michael Jackson style track"), type an idea in the Catalog search bar and tap the purple sparkles "Generate tracks", or tap "+" on the Playing panel to remix the current song or make more like its artist or similar artists. Each uses credits; free accounts get a few a month and Premium gets more. New songs go into your queue when they're ready, usually ten minutes or so, and join the catalog for everyone.
 
 ## Sharing a song
 Asks: how do I share this, send this song to a friend, make a video of this song, share link

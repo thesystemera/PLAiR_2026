@@ -175,6 +175,3 @@ class CatalogVectorSearchService:
 
         log_service.detail(f"🎯 Query intent: {category or 'general'}", "vector_music")
         return category or "general", CatalogVectorDatabaseService.weights_for(category or ""), cleaned_query
-
-    async def add_track(self, track_id: str):
-        log_service.vector_music(f"New track {track_id} added - background task will rebuild index")

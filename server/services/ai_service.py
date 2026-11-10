@@ -212,7 +212,7 @@ class AIService(SingletonService):
 
         config = types.GenerateContentConfig(**config_params)
 
-        conversation: list[dict[str, Any]] = [{"role": "user", "parts": [{"text": prompt}]}]  # type: ignore
+        conversation: list = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
         for iteration in range(max_iterations):
             log_service.ai(f"Tool iteration {iteration + 1}/{max_iterations}")
@@ -226,63 +226,30 @@ class AIService(SingletonService):
                 timeout=GEMINI_HTTP_TIMEOUT_MS / 1000
             )
 
-            function_call_found = False
-            if response.candidates and len(response.candidates) > 0:
-                candidate = response.candidates[0]
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if part.function_call:
-                            function_call_found = True
-                            fc = part.function_call
-                            function_name = fc.name if fc.name else ""
-                            function_args = dict(fc.args) if fc.args else {}
-
-                            log_service.ai(f"🔧 Gemini calling tool: {function_name}({function_args})")
-
-                            handler = tool_handlers.get(function_name)
-                            if handler is not None:
-                                tool_result = await handler(**function_args)
-
-                                result_str = str(tool_result)
-                                log_service.ai(f"Tool {function_name} returned: {len(result_str)} chars")
-
-                                conversation.append({
-                                    "role": "model",
-                                    "parts": [{"function_call": fc}]  # type: ignore
-                                })
-                                conversation.append({
-                                    "role": "user",
-                                    "parts": [{
-                                        "function_response": {
-                                            "name": function_name,
-                                            "response": tool_result
-                                        }
-                                    }]  # type: ignore
-                                })
-                            else:
-                                raise ValueError(f"Unknown tool requested: {function_name}")
-                            break
-
-            if function_call_found:
+            candidate = response.candidates[0] if response.candidates else None
+            parts = (candidate.content.parts or []) if candidate is not None and candidate.content else []
+            function_calls = [part.function_call for part in parts if part.function_call]
+            if function_calls:
+                conversation.append(candidate.content)
+                response_parts = []
+                for fc in function_calls:
+                    function_name = fc.name or ""
+                    function_args = dict(fc.args) if fc.args else {}
+                    log_service.ai(f"🔧 Gemini calling tool: {function_name}({function_args})")
+                    handler = tool_handlers.get(function_name)
+                    if handler is None:
+                        raise ValueError(f"Unknown tool requested: {function_name}")
+                    tool_result = await handler(**function_args)
+                    log_service.ai(f"Tool {function_name} returned: {len(str(tool_result))} chars")
+                    response_parts.append(types.Part(function_response=types.FunctionResponse(
+                        id=fc.id, name=function_name, response=tool_result)))
+                conversation.append(types.Content(role="user", parts=response_parts))
                 continue
 
+            text_response = self._visible_text(parts)
             if response_schema:
-                text_response = None
-
-                if hasattr(response, 'text') and response.text:
-                    text_response = response.text
-
-                if not text_response and response.candidates and len(response.candidates) > 0:
-                    candidate = response.candidates[0]
-                    if candidate.content and candidate.content.parts:
-                        text_parts = [p.text for p in candidate.content.parts if hasattr(p, 'text') and p.text]
-                        if text_parts:
-                            text_response = "".join(text_parts)
-
                 if not text_response:
-                    finish_reason = "Unknown"
-                    if response.candidates:
-                        finish_reason = response.candidates[0].finish_reason
+                    finish_reason = candidate.finish_reason if candidate is not None else "Unknown"
                     log_service.error(f"Gemini returned empty text. Finish Reason: {finish_reason}")
                     raise ValueError(f"Gemini generated empty response (Finish Reason: {finish_reason})")
 
@@ -297,7 +264,7 @@ class AIService(SingletonService):
                 return result
             else:
                 log_service.ai("Text generation with tools completed")
-                return {"text": response.text if response.text else ""}
+                return {"text": text_response}
 
         raise RuntimeError(f"Tool call loop exceeded {max_iterations} iterations without final response")
 

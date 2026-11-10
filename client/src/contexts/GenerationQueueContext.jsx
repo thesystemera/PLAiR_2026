@@ -35,21 +35,16 @@ export function GenerationQueueProvider({ children }) {
     publishQueueState,
     toastError,
     toastInfo,
+    toastSuccess,
   } = useUISelector(state => ({
     publishQueueState: state.publishQueueState,
     toastError: state.toastError,
     toastInfo: state.toastInfo,
+    toastSuccess: state.toastSuccess,
   }))
   const [jobs, setJobs] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [hasLoadedInitialJobs, setHasLoadedInitialJobs] = useState(false)
-
-  const addJob = useCallback((jobData) => {
-    const newJob = normalizeJobData(jobData)
-    setJobs(prev => [...prev, newJob])
-    setIsOpen(true)
-    return newJob.id
-  }, [])
 
   const updateJobFromStatus = useCallback((jobId, statusData) => {
     setJobs(prev => {
@@ -98,11 +93,23 @@ export function GenerationQueueProvider({ children }) {
     }
   }, [updateJobFromStatus])
 
+  const handleGenerationBatchCompleted = useCallback((data) => {
+    handleGenerationUpdate(data)
+    const count = data?.tracks?.length || 0
+    if (count) toastSuccess(`${count} new song${count > 1 ? 's' : ''} added to your queue!`, 4000, 'top')
+  }, [handleGenerationUpdate, toastSuccess])
+
+  const handleGenerationRetrying = useCallback((data) => {
+    if (data?.attempt) toastInfo(`Generation retry ${data.attempt}/${data.max_attempts ?? '?'}...`, 3000, 'top')
+  }, [toastInfo])
+
   const handleGenerationBatchFailed = useCallback((data) => {
     if (!data?.job_id) return
     const jobStatus = typeof data.status === 'object' && data.status ? data.status : {}
     updateJobFromStatus(data.job_id, { ...jobStatus, error: data.error })
-  }, [updateJobFromStatus])
+    if (data.cancelled || jobStatus.status !== 'processing') return
+    toastError(`One song in your batch failed: ${data.error}${refundNote(data.refunded ? 1 : 0)}`, 6000, 'top')
+  }, [updateJobFromStatus, toastError])
 
   const handleGenerationJobFailed = useCallback((data) => {
     if (!data?.job_id) return
@@ -123,7 +130,8 @@ export function GenerationQueueProvider({ children }) {
   useWebSocketSubscribe('generation_stage_update', handleGenerationUpdate)
   useWebSocketSubscribe('generation_processing', handleGenerationUpdate)
   useWebSocketSubscribe('generation_job_completed', handleGenerationCompleted)
-  useWebSocketSubscribe('generation_batch_completed', handleGenerationUpdate)
+  useWebSocketSubscribe('generation_batch_completed', handleGenerationBatchCompleted)
+  useWebSocketSubscribe('generation_retrying', handleGenerationRetrying)
   useWebSocketSubscribe('generation_batch_failed', handleGenerationBatchFailed)
   useWebSocketSubscribe('generation_job_failed', handleGenerationJobFailed)
   useWebSocketSubscribe('generation_job_cancelled', handleGenerationJobCancelled)
@@ -199,12 +207,11 @@ export function GenerationQueueProvider({ children }) {
     isOpen,
     setIsOpen,
     togglePanel,
-    addJob,
     cancelJob,
     removeJob,
     clearCompleted,
     hasActiveJobs
-  }), [jobs, isOpen, togglePanel, addJob, cancelJob, removeJob, clearCompleted, hasActiveJobs])
+  }), [jobs, isOpen, togglePanel, cancelJob, removeJob, clearCompleted, hasActiveJobs])
 
   return (
     <GenerationQueueContext.Provider value={value}>

@@ -268,7 +268,8 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     offline hand-back) before deploying.
   - `AudioReactiveCanvas.jsx` (2345) and `App.jsx` (1113): wait until the shader optimisation session is done
     with them.
-  - `suno_generation_queue_service._run_batch` (a 570-line method): needs a real Suno generation to test.
+  - `suno_generation_queue_service._run_batch` (432 lines after the 10 Nov cleanup): needs a real Suno generation
+    to test.
 
 - **Resemble Enhance on music vocal stems (owner, 3 Oct, parked):** it gave the DJ voices only a small lift
   over CVSR, too slow to run live, but it may help vocals in the music remaster chain (offline). Runner and setup:
@@ -362,6 +363,23 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
 - **Voiced speech at higher quality:** cached host lines are MP3 and the live stream is fixed at 128 kbps Opus;
   lossless storage and a bitrate that follows the listener's music quality were proposed.
 - **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
+
+## Done on 10 Nov 2026 (song generation)
+
+- Song generation was broken for every request: the prompt's Gemini tool loop (`ai_service.call_gemini_with_tools`)
+  sent the model's function call back without its `thought_signature`, so gemini-3.5-flash answered 400 INVALID_ARGUMENT
+  on every attempt (owner's "Michael Jackson" request, 10 Nov 16:45). It now keeps the model's whole turn and answers
+  every call in it, like the DJ loop. Checked with one real request (Gemini called `get_artist_catalog`, parameters came
+  back); a full Suno generation has not been run since.
+- The DJs can order songs: `generate_song` (CLAUDE.md section 5). The app's route and the tool share
+  `SunoGenerationQueueService.request_generation` (quota, start, refund).
+- `batch_music_generate_and_repair.py` never initialised its services (every singleton sets `_initialized` in its
+  constructor, so the "initialise if not yet" checks always skipped); it now uses `SingletonService.ensure_initialized()`.
+- Generation jobs appear in the app only from the server's events (the client's own `addJob` never ran: `job_ids` is
+  one string), and every generation notice lives in `GenerationQueueContext` (App.jsx had half of them, and its
+  "Generated N tracks" counted the expected songs, not the finished ones).
+- Open, owner's call: the Catalog's "Generate tracks" orders 3 batches (6 songs, 3 credits) while the hosts and the
+  Playing panel's "+" order 1 (2 songs, 1 credit).
 
 ## Done on 1 Oct 2026 (cleanup)
 

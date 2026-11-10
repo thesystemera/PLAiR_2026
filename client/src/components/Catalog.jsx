@@ -292,7 +292,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     }
   }, [itemsPerRow, measuredRowHeight])
 
-  const { togglePanel: toggleQueuePanel, addJob } = useGenerationQueue()
+  const { togglePanel: toggleQueuePanel } = useGenerationQueue()
 
   const info = toastInfo
   const errorToast = toastError
@@ -447,21 +447,11 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     }
 
     try {
-      const response = await api.generate({
+      await api.generate({
         type: 'new',
         userRequest: query,
         batchCount: 3
       })
-      if (response?.job_ids && Array.isArray(response.job_ids)) {
-        response.job_ids.forEach((jobId) => {
-          addJob({
-            job_id: jobId,
-            type: 'generate',
-            query: response.title || query,
-            total_tracks: 2
-          })
-        })
-      }
     } catch (error) {
       logger.error('Generation failed:', error)
       const errorMsg = error.message || 'Failed to start generation. Please try again.'
@@ -473,7 +463,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
         errorToast('Failed to start generation. Please try again.', 5000, 'bottom')
       }
     }
-  }, [addJob, errorToast, hasActiveJobs, info])
+  }, [errorToast, hasActiveJobs, info])
 
   const handleToggleQueue = useCallback(() => {
     toggleQueuePanel()

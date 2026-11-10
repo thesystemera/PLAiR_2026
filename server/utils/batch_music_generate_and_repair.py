@@ -63,20 +63,16 @@ async def initialize_generation_stack(
     log_service.batch_music("Initializing Generation Stack...")
 
     ai_service = AIService()
-    if not getattr(ai_service, '_initialized', False):
-        await ai_service.initialize()
+    await ai_service.ensure_initialized()
 
     suno_service = SunoService()
-    if not getattr(suno_service, '_initialized', False):
-        await suno_service.initialize()
+    await suno_service.ensure_initialized()
 
     prompt_service = MusicPromptService(ai_service)
-    if not getattr(prompt_service, '_initialized', False):
-        await prompt_service.initialize()
+    await prompt_service.ensure_initialized()
 
     catalog_service = CatalogDatabaseService()
-    if not getattr(catalog_service, '_initialized', False):
-        await catalog_service.initialize()
+    await catalog_service.ensure_initialized()
 
     await models_global.initialize_semantic_encoder()
 
@@ -87,21 +83,18 @@ async def initialize_generation_stack(
     playback = PlaybackService(catalog_service, vec_search)
 
     enriched_metadata_service = EnrichedMetadataService()
-    if not getattr(enriched_metadata_service, '_initialized', False):
-        await enriched_metadata_service.initialize()
+    await enriched_metadata_service.ensure_initialized()
 
     background_service = SunoGenerationQueueService()
-    if not getattr(background_service, '_initialized', False):
-        await background_service.initialize(
-            suno_service=suno_service,
-            prompt_service=prompt_service,
-            metadata_service=metadata_service,
-            catalog_service=catalog_service,
-            playback_service=playback,
-            vector_search_service=vec_search,
-            orchestrator=orchestrator,
-            enriched_metadata_service=enriched_metadata_service
-        )
+    await background_service.ensure_initialized(
+        suno_service=suno_service,
+        prompt_service=prompt_service,
+        metadata_service=metadata_service,
+        catalog_service=catalog_service,
+        playback_service=playback,
+        orchestrator=orchestrator,
+        enriched_metadata_service=enriched_metadata_service
+    )
 
     return background_service, catalog_service
 
@@ -413,8 +406,7 @@ async def batch_generate_webm_variants() -> None:
 
     from services.audio_transcoding_service import AudioTranscodingService
     transcoder = AudioTranscodingService()
-    if not getattr(transcoder, '_initialized', False):
-        await transcoder.initialize()
+    await transcoder.ensure_initialized()
 
     targets = []
     wav_files = list(settings.ENHANCED_WAV_DIR.glob("*.wav"))
@@ -786,8 +778,7 @@ async def main() -> None:
     init_db()
 
     metadata_service = MusicMetadata()
-    if not getattr(metadata_service, '_initialized', False):
-        await metadata_service.initialize()
+    await metadata_service.ensure_initialized()
 
     orchestrator: Optional[SunoServiceOrchestrator] = None
     background_service: Optional[SunoGenerationQueueService] = None
@@ -803,8 +794,7 @@ async def main() -> None:
         elif choice == "1":
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-                if not getattr(orchestrator, '_initialized', False):
-                    await orchestrator.initialize()
+                await orchestrator.ensure_initialized()
             await comprehensive_system_check_and_repair(metadata_service, orchestrator)
 
         elif choice == "2":
@@ -813,8 +803,7 @@ async def main() -> None:
         elif choice == "3":
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-                if not getattr(orchestrator, '_initialized', False):
-                    await orchestrator.initialize()
+                await orchestrator.ensure_initialized()
             if background_service is None:
                 result = await initialize_generation_stack(metadata_service, orchestrator)
                 if result is not None:
@@ -827,8 +816,7 @@ async def main() -> None:
 
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-                if not getattr(orchestrator, '_initialized', False):
-                    await orchestrator.initialize()
+                await orchestrator.ensure_initialized()
             if background_service is None:
                 result = await initialize_generation_stack(metadata_service, orchestrator)
                 if result is not None:
@@ -1013,8 +1001,7 @@ No additional commentary.{exclusion_prompt}
         elif choice == "6":
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-                if not getattr(orchestrator, '_initialized', False):
-                    await orchestrator.initialize()
+                await orchestrator.ensure_initialized()
 
             track_input = input("Enter track IDs (comma-separated) or leave blank for random: ").strip()
             test_jobs = []
@@ -1078,8 +1065,7 @@ No additional commentary.{exclusion_prompt}
         elif choice == "7":
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-            if not getattr(orchestrator, '_initialized', False):
-                await orchestrator.initialize()
+            await orchestrator.ensure_initialized()
             # Fix: artwork_enrichment might be None if singleton was created before this attribute was added
             if orchestrator.artwork_enrichment is None:
                 from services.suno_artwork_enrichment_service import ArtworkEnrichmentService
@@ -1093,12 +1079,10 @@ No additional commentary.{exclusion_prompt}
         elif choice == "8":
             if orchestrator is None:
                 orchestrator = SunoServiceOrchestrator()
-                if not getattr(orchestrator, '_initialized', False):
-                    await orchestrator.initialize()
+                await orchestrator.ensure_initialized()
             if catalog_service is None:
                 catalog_service = CatalogDatabaseService()
-                if not getattr(catalog_service, '_initialized', False):
-                    await catalog_service.initialize()
+                await catalog_service.ensure_initialized()
             if orchestrator is not None and catalog_service is not None:
                 await catalog_polish(metadata_service, orchestrator, catalog_service)
             else:

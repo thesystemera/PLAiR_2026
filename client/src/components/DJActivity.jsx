@@ -87,6 +87,7 @@ const COSTS = {
   memory: 'from memory',
   live: 'may go online',
   segment: 'full segment',
+  song: 'song credit',
 }
 
 function sentenceCase(text) {

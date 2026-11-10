@@ -34,7 +34,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
         self.metadata_service: Optional[Any] = None
         self.catalog_service: Optional[Any] = None
         self.playback_service: Optional[Any] = None
-        self.vector_search_service: Optional[Any] = None
         self.orchestrator: Optional[Any] = None
         self.enriched_metadata_service: Optional[Any] = None
         self.notification_callback: Optional[Callable] = None
@@ -80,7 +79,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             metadata_service,
             catalog_service,
             playback_service,
-            vector_search_service,
             orchestrator,
             enriched_metadata_service
     ):
@@ -89,7 +87,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
         self.metadata_service = metadata_service
         self.catalog_service = catalog_service
         self.playback_service = playback_service
-        self.vector_search_service = vector_search_service
         self.orchestrator = orchestrator
         self.enriched_metadata_service = enriched_metadata_service
 
@@ -161,6 +158,41 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
 
         except Exception as e:
             log_service.warning(f"Could not log failed prompt: {str(e)}")
+
+    async def request_generation(
+            self,
+            session_id: str,
+            user,
+            batch_count: int,
+            user_request: Optional[str] = None,
+            source_track_id: Optional[str] = None,
+            original_params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
+        user_id = int(user.id) if user else None
+        allowed, error_msg, usage = await rate_limit_service.reserve_generations(
+            user_id=user_id, session_id=session_id, user=user, cost=batch_count)
+        if not allowed:
+            log_service.warning(f"[{session_id}] Generation limit reached: {error_msg}")
+            return None, error_msg, usage
+        reservation = rate_limit_service.reservation_stamp()
+        try:
+            job_id, _ = await self.start_generation_job(
+                session_id=session_id,
+                original_params=original_params or {},
+                batch_count=batch_count,
+                user_id=user_id,
+                source_track_id=source_track_id,
+                user_request=user_request,
+                reservation=reservation
+            )
+        except Exception:
+            await rate_limit_service.refund_generations(user_id, session_id, batch_count, reservation)
+            raise
+        return job_id, None, usage
+
+    def active_jobs(self) -> int:
+        return sum(1 for job in self.jobs.values()
+                   if not job.cancelled and job.get_status()["status"] == "processing")
 
     async def start_generation_job(
             self,
@@ -338,6 +370,38 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                 }
             })
 
+    async def _stage(self, job: GenerationJob, batch_index: int, text: str):
+        job.batches[batch_index]["current_stage"] = text
+        await self._notify(job.session_id, {
+            "type": "generation_stage_update",
+            "data": {
+                "job_id": job.job_id,
+                "batch_index": batch_index,
+                "current_stage": text,
+                "status": job.get_status()
+            }
+        })
+
+    async def _fresh_params(self, job: GenerationJob) -> Dict[str, Any]:
+        if self.catalog_service is None or self.prompt_service is None:
+            raise Exception("Catalog or prompt service not initialized")
+        overused_phrases = self.catalog_service.get_cycled_phrases(
+            cycle_index=self.phrase_cycle_counter,
+            phrases_per_cycle=5,
+            top_n=20
+        )
+        self.phrase_cycle_counter = (self.phrase_cycle_counter + 1) % 4
+        music_params = await self.prompt_service.generate_music_params(
+            job.user_request,
+            catalog_service=self.catalog_service,
+            repeated_titles=self.catalog_service.get_repeated_titles(min_occurrences=2),
+            overused_phrases=overused_phrases
+        )
+        self.generation_stats["gemini_calls"] += 1
+        if not music_params:
+            raise Exception("Failed to generate music parameters")
+        return music_params
+
     async def _generate_batch(self, job_id: str, batch_index: int):
         job = self.jobs.get(job_id)
         if not job:
@@ -426,59 +490,19 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                         batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
 
                     elif job.user_request:
-                        batch["current_stage"] = "Generating song parameters..."
                         batch["gemini_stage"] = "GENERATING"
                         batch["progress_percent"] = job.calculate_progress(batch_index, "gemini", 0)
-                        await self._notify(job.session_id, {
-                            "type": "generation_stage_update",
-                            "data": {
-                                "job_id": job_id,
-                                "batch_index": batch_index,
-                                "current_stage": batch["current_stage"],
-                                "status": job.get_status()
-                            }
-                        })
+                        await self._stage(job, batch_index, "Generating song parameters...")
 
                         log_service.system(
                             f"Batch {batch_index}: Generating fresh music params from user request")
-
-                        if self.catalog_service is None:
-                            raise Exception("Catalog service not initialized")
-                        if self.prompt_service is None:
-                            raise Exception("Prompt service not initialized")
-                        repeated_titles = self.catalog_service.get_repeated_titles(min_occurrences=2)
-                        overused_phrases = self.catalog_service.get_cycled_phrases(
-                            cycle_index=self.phrase_cycle_counter,
-                            phrases_per_cycle=5,
-                            top_n=20
-                        )
-                        self.phrase_cycle_counter = (self.phrase_cycle_counter + 1) % 4
-                        music_params = await self.prompt_service.generate_music_params(
-                            job.user_request,
-                            catalog_service=self.catalog_service,
-                            repeated_titles=repeated_titles,
-                            overused_phrases=overused_phrases
-                        )
-                        self.generation_stats["gemini_calls"] += 1
-
-                        if not music_params:
-                            raise Exception("Failed to generate music parameters")
-
+                        music_params = await self._fresh_params(job)
                         unique_id = await self._save_params_metadata(job, music_params)
 
                         batch["title"] = music_params.get("title", "Untitled")
                         batch["gemini_stage"] = "COMPLETE"
-                        batch["current_stage"] = "Song parameters generated"
                         batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
-                        await self._notify(job.session_id, {
-                            "type": "generation_stage_update",
-                            "data": {
-                                "job_id": job_id,
-                                "batch_index": batch_index,
-                                "current_stage": batch["current_stage"],
-                                "status": job.get_status()
-                            }
-                        })
+                        await self._stage(job, batch_index, "Song parameters generated")
                     else:
                         music_params = job.original_params
                         unique_id = None
@@ -496,32 +520,14 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             "Music params have been saved and can be resumed later after topping up credits.")
                         raise SunoAPIError(429, "Suno credits exhausted - circuit breaker open (insufficient credits)")
 
-                    batch["current_stage"] = "Waiting for Suno slot..."
                     batch["suno_stage"] = "QUEUED"
-                    await self._notify(job.session_id, {
-                        "type": "generation_stage_update",
-                        "data": {
-                            "job_id": job_id,
-                            "batch_index": batch_index,
-                            "current_stage": batch["current_stage"],
-                            "status": job.get_status()
-                        }
-                    })
+                    await self._stage(job, batch_index, "Waiting for Suno slot...")
 
                     if self.suno_semaphore is None:
                         raise Exception("Suno semaphore not initialized")
                     async with self.suno_semaphore:
-                        batch["current_stage"] = "Submitting to Suno AI..."
                         batch["suno_stage"] = "SUBMITTING"
-                        await self._notify(job.session_id, {
-                            "type": "generation_stage_update",
-                            "data": {
-                                "job_id": job_id,
-                                "batch_index": batch_index,
-                                "current_stage": batch["current_stage"],
-                                "status": job.get_status()
-                            }
-                        })
+                        await self._stage(job, batch_index, "Submitting to Suno AI...")
 
                         task_id, inflight_record = await self._submit_once(job, batch_index, music_params, unique_id)
                         self.suno_credits_exhausted = False
@@ -530,31 +536,13 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                         await asyncio.sleep(10)
 
                 batch["suno_task_id"] = task_id
-                batch["current_stage"] = "Generating with Suno AI..."
                 batch["suno_stage"] = "PENDING"
                 batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
-                await self._notify(job.session_id, {
-                    "type": "generation_stage_update",
-                    "data": {
-                        "job_id": job_id,
-                        "batch_index": batch_index,
-                        "current_stage": batch["current_stage"],
-                        "status": job.get_status()
-                    }
-                })
+                await self._stage(job, batch_index, "Generating with Suno AI...")
 
                 async def suno_status_callback(status):
                     batch["suno_stage"] = status
-                    batch["current_stage"] = f"Suno AI: {status}"
-                    await self._notify(job.session_id, {
-                        "type": "generation_stage_update",
-                        "data": {
-                            "job_id": job_id,
-                            "batch_index": batch_index,
-                            "current_stage": batch["current_stage"],
-                            "status": job.get_status()
-                        }
-                    })
+                    await self._stage(job, batch_index, f"Suno AI: {status}")
 
                 poll_data = await self.suno_service.await_task(task_id, status_callback=suno_status_callback)
 
@@ -584,30 +572,9 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             f"Calling Gemini again for fresh params..."
                         )
 
-                        batch["current_stage"] = "Regenerating parameters (avoiding sensitive words)..."
                         batch["gemini_stage"] = "REGENERATING"
-
-                        if self.catalog_service is None:
-                            raise Exception("Catalog service not initialized")
-                        if self.prompt_service is None:
-                            raise Exception("Prompt service not initialized")
-                        repeated_titles = self.catalog_service.get_repeated_titles(min_occurrences=2)
-                        overused_phrases = self.catalog_service.get_cycled_phrases(
-                            cycle_index=self.phrase_cycle_counter,
-                            phrases_per_cycle=5,
-                            top_n=20
-                        )
-                        self.phrase_cycle_counter = (self.phrase_cycle_counter + 1) % 4
-                        music_params = await self.prompt_service.generate_music_params(
-                            job.user_request,
-                            catalog_service=self.catalog_service,
-                            repeated_titles=repeated_titles,
-                            overused_phrases=overused_phrases
-                        )
-                        self.generation_stats["gemini_calls"] += 1
-
-                        if not music_params:
-                            raise Exception("Failed to regenerate music parameters after SENSITIVE_WORD_ERROR")
+                        await self._stage(job, batch_index, "Regenerating parameters (avoiding sensitive words)...")
+                        music_params = await self._fresh_params(job)
 
                         log_service.success("Fresh params generated - retrying with new content")
                         batch["title"] = music_params.get("title", batch.get("title"))
@@ -665,17 +632,8 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                     image_url = track.get("imageUrl")
 
                     if audio_url:
-                        batch["current_stage"] = f"Downloading track {track_index + 1}/2..."
                         batch["progress_percent"] = job.calculate_progress(batch_index, "downloading", track_index)
-                        await self._notify(job.session_id, {
-                            "type": "generation_stage_update",
-                            "data": {
-                                "job_id": job_id,
-                                "batch_index": batch_index,
-                                "current_stage": batch["current_stage"],
-                                "status": job.get_status()
-                            }
-                        })
+                        await self._stage(job, batch_index, f"Downloading track {track_index + 1}/2...")
 
                         audio_path = self.metadata_service.get_audio_path(current_track_unique_id)
                         success = await self.suno_service.download_track(audio_url, audio_path)
@@ -684,17 +642,9 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             await self.metadata_service.save_metadata(track_metadata, current_track_unique_id)
 
                             log_service.system(f"Enriching metadata with advanced tags for {current_track_unique_id}")
-                            batch["current_stage"] = f"Track {track_index + 1}/2: Enriching Metadata"
                             batch["upscaling_stage"] = "MetadataEnrichment"
                             batch["progress_percent"] = job.calculate_progress(batch_index, "metadata_enrichment", track_index)
-                            await self._notify(job.session_id, {
-                                "type": "generation_stage_update",
-                                "data": {
-                                    "job_id": job_id, "batch_index": batch_index,
-                                    "current_stage": batch["current_stage"],
-                                    "status": job.get_status()
-                                }
-                            })
+                            await self._stage(job, batch_index, f"Track {track_index + 1}/2: Enriching Metadata")
                             try:
                                 if self.enriched_metadata_service is None:
                                     raise Exception("Enriched metadata service not initialized")
@@ -734,19 +684,9 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                                         "MetadataEnrichment": {"key": "metadata_enrichment", "display": "Enriching Metadata"},
                                     }
                                     info = stage_info.get(stage, {"key": "apollo", "display": stage})
-                                    progress_stage = info["key"]
-                                    batch["current_stage"] = f"Track {idx + 1}/2: {info['display']}"
                                     batch["upscaling_stage"] = stage
-                                    batch["progress_percent"] = job.calculate_progress(batch_index, progress_stage, idx)
-                                    await self._notify(job.session_id, {
-                                        "type": "generation_stage_update",
-                                        "data": {
-                                            "job_id": job_id,
-                                            "batch_index": batch_index,
-                                            "current_stage": batch["current_stage"],
-                                            "status": job.get_status()
-                                        }
-                                    })
+                                    batch["progress_percent"] = job.calculate_progress(batch_index, info["key"], idx)
+                                    await self._stage(job, batch_index, f"Track {idx + 1}/2: {info['display']}")
 
                                 return upscaling_progress_callback
 
@@ -800,25 +740,10 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                     log_service.success(f"Orchestrator complete: {track_job.master_wav_path.name}")
                     job.completed_tracks += 1
 
-                    batch["current_stage"] = f"Track {track_index + 1}/2: Finalizing..."
                     batch["upscaling_stage"] = "Complete"
                     batch["progress_percent"] = job.calculate_progress(batch_index, "finalizing", track_index)
-                    await self._notify(job.session_id, {
-                        "type": "generation_stage_update",
-                        "data": {
-                            "job_id": job_id,
-                            "batch_index": batch_index,
-                            "current_stage": batch["current_stage"],
-                            "status": job.get_status()
-                        }
-                    })
+                    await self._stage(job, batch_index, f"Track {track_index + 1}/2: Finalizing...")
 
-                    if self.vector_search_service is None:
-                        raise Exception("Vector search service not initialized")
-                    await self.vector_search_service.add_track(current_track_unique_id)
-
-                    if settings is None:
-                        raise Exception("Settings not initialized")
                     master_wav_path = settings.ENHANCED_WAV_DIR / f"{current_track_unique_id}.wav"
                     if master_wav_path.exists():
                         await self.metadata_service.update_generation_status(
