@@ -1,5 +1,7 @@
 import aiofiles
 import asyncio
+import gzip
+import hashlib
 import json
 import os
 import re
@@ -7,7 +9,7 @@ import threading
 from collections import OrderedDict
 from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
-from typing import Optional
+from typing import Optional, Tuple
 
 from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import PACK_SIZES, ensure_pack, pack_path
@@ -28,9 +30,10 @@ router = APIRouter()
 
 STREAM_PURPOSES = {"play": "playing", "download": "downloading for offline"}
 RANGE_START = re.compile(r"bytes=(\d+)-")
-JSON_FILE_CACHE_MAX = 32
+JSON_FILE_CACHE_BYTES = 128 * 1024 * 1024
 _json_file_lock = threading.Lock()
-_json_file_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_json_file_cache: "OrderedDict[str, Tuple[tuple, str, bytes]]" = OrderedDict()
+_json_file_cache_bytes = 0
 
 
 def _file_stamp(path) -> tuple:
@@ -41,32 +44,42 @@ def _file_stamp(path) -> tuple:
     return (stat.st_mtime_ns, stat.st_size)
 
 
-def _render_json_file(path, extend=None, extra=()) -> bytes:
+def _render_json_file(path, extend=None, extra=()) -> Tuple[str, bytes]:
+    global _json_file_cache_bytes
     stat = os.stat(path)
-    key = (str(path), stat.st_mtime_ns, stat.st_size, *(_file_stamp(other) for other in extra))
+    key = str(path)
+    stamp = (stat.st_mtime_ns, stat.st_size, *(_file_stamp(other) for other in extra))
     with _json_file_lock:
-        body = _json_file_cache.get(key)
-        if body is not None:
+        entry = _json_file_cache.get(key)
+        if entry is not None and entry[0] == stamp:
             _json_file_cache.move_to_end(key)
-            return body
+            return entry[1], entry[2]
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     if extend:
         extend(data)
-    body = JSONResponse(data).body
+    body = gzip.compress(JSONResponse(data).body, compresslevel=6, mtime=0)
+    etag = '"' + hashlib.blake2b(repr((key, stamp)).encode(), digest_size=8).hexdigest() + '"'
     with _json_file_lock:
-        _json_file_cache[key] = body
-        while len(_json_file_cache) > JSON_FILE_CACHE_MAX:
-            _json_file_cache.popitem(last=False)
-    return body
+        old = _json_file_cache.pop(key, None)
+        _json_file_cache_bytes += len(body) - (len(old[2]) if old else 0)
+        _json_file_cache[key] = (stamp, etag, body)
+        while _json_file_cache_bytes > JSON_FILE_CACHE_BYTES and len(_json_file_cache) > 1:
+            _json_file_cache_bytes -= len(_json_file_cache.popitem(last=False)[1][2])
+    return etag, body
 
 
-async def _json_file_response(path, missing_detail: str, extend=None, extra=()) -> Response:
+async def _json_file_response(request: Request, path, missing_detail: str, extend=None, extra=()) -> Response:
     try:
-        body = await asyncio.to_thread(_render_json_file, path, extend, extra)
+        etag, body = await asyncio.to_thread(_render_json_file, path, extend, extra)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=missing_detail)
-    return Response(content=body, media_type="application/json")
+    headers = {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if etag in (tag.strip() for tag in (request.headers.get("if-none-match") or "").split(",")):
+        return Response(status_code=304, headers=headers)
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        return Response(content=body, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(content=gzip.decompress(body), media_type="application/json", headers=headers)
 
 
 def _listener_label(request: Request, current_user: Optional[User]) -> str:
@@ -253,10 +266,10 @@ async def get_artwork_pack(track_id: str, size: int):
     return FileResponse(target, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000"})
 
 @router.get("/api/audio-features/{track_id}")
-async def get_audio_features(track_id: str):
+async def get_audio_features(request: Request, track_id: str):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Audio features not found")
-    return await _json_file_response(settings.AUDIOFEATURES_DIR / f"{track_id}.json", "Audio features not found")
+    return await _json_file_response(request, settings.AUDIOFEATURES_DIR / f"{track_id}.json", "Audio features not found")
 
 @router.get("/api/video-clips/{track_id}")
 async def get_video_clips(track_id: str, current_user: Optional[User] = Depends(get_cached_current_user),
@@ -280,10 +293,10 @@ async def get_video_clip_file(filename: str):
     return FileResponse(clip_path, media_type="video/mp4")
 
 @router.get("/api/lyric-timestamps/{track_id}")
-async def get_lyric_timestamps(track_id: str):
+async def get_lyric_timestamps(request: Request, track_id: str):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Lyric timestamps not found")
-    return await _json_file_response(settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found",
+    return await _json_file_response(request, settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found",
                                      extend=lambda timing: lyric_style_service.attach_style(track_id, timing),
                                      extra=(lyric_style_service.style_path(track_id),))
 
