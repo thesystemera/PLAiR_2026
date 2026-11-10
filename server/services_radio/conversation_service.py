@@ -141,6 +141,15 @@ async def save_conversation_to_database(
         log_service.conversation("User not authenticated. Cannot save conversation.")
         return None
 
+async def post_to_chat(session_id: Optional[str], user_id: Optional[int], message_type: str = 'interactive', **fields):
+    if user_id:
+        async with AsyncSessionLocal() as db:
+            await save_conversation_to_database(user_id=user_id, db=db, message_type=message_type, **fields)
+    from service_registry import services
+    if session_id and services.websocket_service is not None:
+        await services.websocket_service.broadcast_to_session(
+            session_id, {"type": "conversation_update", "data": {**fields, "message_type": message_type}})
+
 def _prune_temp_conversations(now: float):
     for stale in [key for key, touched in _temp_conversation_touched.items() if now - touched >= TEMP_CONVERSATION_TTL_S]:
         temp_conversations.pop(stale, None)

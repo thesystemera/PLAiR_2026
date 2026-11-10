@@ -1,9 +1,14 @@
-from typing import Dict, Any, Optional
+import json
+from typing import Dict, Any, Optional, Set
 from google.genai import types
 from services import log_service
 from services.base_service import SingletonService
 from services.ai_service import MusicGenerationParams
+from services.suno_service import blocked_artist, rejection_reason
 from config import settings
+
+REJECTION_LOG_GLOB = "SENSITIVE_WORD_ERROR_*.json"
+
 
 class MusicPromptService(SingletonService):
     def __init__(self, ai_service=None):
@@ -11,10 +16,30 @@ class MusicPromptService(SingletonService):
             return
 
         self.ai_service = ai_service
+        self._blocked_artists: Optional[Set[str]] = None
         self._initialized = True
 
     async def initialize(self):
-        log_service.system("MusicPromptService initialized")
+        log_service.system(f"MusicPromptService initialized ({len(self.blocked_artists())} artist names Suno refuses)")
+
+    def blocked_artists(self) -> Set[str]:
+        if self._blocked_artists is None:
+            names = set()
+            for path in settings.FAILED_PROMPTS_DIR.glob(REJECTION_LOG_GLOB):
+                try:
+                    name = blocked_artist(rejection_reason(json.loads(path.read_text(encoding="utf-8")).get("error_details")))
+                except (OSError, ValueError, AttributeError):
+                    continue
+                if name:
+                    names.add(name)
+            self._blocked_artists = names
+        return self._blocked_artists
+
+    def note_rejection(self, reason: Optional[str]):
+        name = blocked_artist(reason)
+        if name and name not in self.blocked_artists():
+            self._blocked_artists.add(name)
+            log_service.system(f"Suno refuses the artist name '{name}': left out of song prompts from now on")
 
     def _build_system_prompt(self, overused_words: Optional[list] = None, overused_phrases: Optional[list] = None,
                              repeated_titles: Optional[list] = None) -> str:
@@ -128,9 +153,9 @@ ARTIST REFERENCES (CRITICAL):
 To avoid copyright flags, use "Contextual Associations" to trigger the vibe without naming the artist:
 - Reference iconic Studios, Labels, or Album titles: "Recorded at Abbey Road", "Factory Records production", "Sounds like 'Loveless'", "Sun Studio slapback".
 - Use adjectivized names: "-esque", "-ish", "-style" (e.g., "Portishead-ish", "NIN-esque").
-- If the name is common, use phonetic alterations: "Radiohd-esque", "Deftones-ish".
+- If the name is common, use phonetic alterations: "Radiohd-esque", "Pavement-ish".
 - Focus on production approach, era, and sonic signature.
-
+{self._refused_names_section()}
 META TAGS (RECOMMENDED):
 Meta tags are powerful markers in square brackets that significantly improve song structure, vocal delivery, and production control. They're placed within the lyrics and are highly recommended for better results.
 
@@ -183,15 +208,30 @@ TECHNICAL LIMITS (API constraints):
 YOUR GOAL:
 Create something that sounds genuinely real - like it actually came from that artist, era, and moment. Let authenticity guide every choice. Return valid JSON with all fields within character limits."""
 
-    def _build_user_prompt(self, user_request: str) -> str:
-        return f"""User Request: "{user_request}"
+    def _refused_names_section(self) -> str:
+        names = sorted(self.blocked_artists())
+        if not names:
+            return ""
+        return f"""
+NAMES THE MUSIC SERVICE REFUSES:
+The music service rejects any song whose style names one of these artists, in any form ("-esque", "-ish", "-style", initials, respellings or nicknames): {", ".join(names)}.
+When a request involves one of them (as the artist or as a producer or collaborator), name no one in the style: describe the era, sound, production and vocal delivery in plain words instead. Still put the requested artist in 'artist_name'.
+"""
 
+    @staticmethod
+    def _build_user_prompt(user_request: str, rejected: Optional[str] = None) -> str:
+        refused = f"""
+LAST VERSION REFUSED:
+The music service refused the last version of this song: "{rejected}". Write a new version that avoids exactly that.
+""" if rejected else ""
+        return f"""User Request: "{user_request}"
+{refused}
 Create a complete authentic song. Write real lyrics that capture the essence of what was requested.
 
 CRITICAL STYLE INSTRUCTION:
 If the user mentions a specific artist or band (e.g. "Nine Inch Nails", "Drake"):
 1. Extract that name into the 'artist_name' field.
-2. In the 'style' field, you MUST include a reference to them using "-esque", "-ish", or phonetic spellings (e.g. "NIN-esque", "Drake-style", "Radiohd-ish") to capture the vibe without triggering copyright filters.
+2. In the 'style' field, you MUST include a reference to them using "-esque", "-ish", or phonetic spellings (e.g. "NIN-esque", "Drake-style", "Radiohd-ish") to capture the vibe without triggering copyright filters, unless the music service refuses that name (see the system instructions).
 
 Describe the sound with technical specificity. Make it feel genuine.
 
@@ -218,7 +258,8 @@ Generate all required JSON fields:
             overused_words: Optional[list] = None,
             overused_phrases: Optional[list] = None,
             repeated_titles: Optional[list] = None,
-            log_prompt: bool = False
+            log_prompt: bool = False,
+            rejected: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
 
         if not self.ai_service:
@@ -255,13 +296,14 @@ Generate all required JSON fields:
             "get_artist_catalog": catalog_service.get_tracks_by_artist
         }
 
+        self.note_rejection(rejected)
         system_prompt = self._build_system_prompt(
             overused_words=overused_words,
             overused_phrases=overused_phrases,
             repeated_titles=repeated_titles
         )
 
-        user_prompt = self._build_user_prompt(user_request)
+        user_prompt = self._build_user_prompt(user_request, rejected)
 
         if log_prompt:
             log_service.system("\n" + "=" * 80)

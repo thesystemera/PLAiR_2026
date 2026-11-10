@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, UTC
 from config import settings
 from services import task_progress
+from services.suno_service import blocked_artist
 
 
 SONGS_PER_BATCH = 2
@@ -24,7 +25,7 @@ FRIENDLY_ERRORS = (
     (("cancelled by user",), "Cancelled."),
     ((UNCONFIRMED_MARKER.lower(),), "The music service didn't confirm your request in time, so we stopped it to avoid charging you twice."),
     (("insufficient", "credits exhausted", "circuit breaker"), "The music generator is out of capacity right now. Please try again later."),
-    (("sensitive_word",), "The music service rejected the lyrics or title for this idea. Try rephrasing your request."),
+    (("sensitive_word",), "The music service refused a word in this song idea. Try rephrasing your request."),
     (("failed to generate music parameters", "failed to regenerate music parameters"), "We couldn't turn your request into a song idea. Try rephrasing it."),
     (("suno polling failed", "no tracks returned"), "The music service didn't finish this song in time."),
     (("download",), "We couldn't download the finished song from the music service."),
@@ -40,6 +41,10 @@ class SunoSubmitNeedsAttention(Exception):
 
 def friendly_generation_error(raw: Optional[str]) -> str:
     lowered = (raw or "").lower()
+    refused_name = blocked_artist(raw) if "sensitive_word" in lowered else None
+    if refused_name:
+        return (f"The music service won't make songs that name {refused_name.title()}, "
+                "and rewording it didn't get past that.")
     for needles, message in FRIENDLY_ERRORS:
         if any(needle in lowered for needle in needles):
             return message

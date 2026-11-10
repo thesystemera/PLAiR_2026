@@ -1,6 +1,6 @@
 import asyncio
 
-from services_radio.conversation_service import save_conversation_to_database
+from services_radio.conversation_service import post_to_chat
 from services.task_utils import spawn
 from services import log_service
 from services_radio.dj_command_executor_community import ExecutorCommunity
@@ -94,12 +94,7 @@ class CommandExecutorService(ExecutorSearch, ExecutorPlayback, ExecutorCommunity
 
     RATINGS = ("like", "super_like", "clear", "ban")
 
-    async def _note(self, session_dict, message, kind="info"):
-        user_id = session_dict.get('user_id')
-        if user_id:
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(user_id=user_id, db=db, message_type='interactive',
-                                                    **{kind: message})
-        await self.sio.emit('conversation_update', {kind: message, 'message_type': 'interactive'},
-                            room=session_dict.get('session_id'))
+    @staticmethod
+    async def _note(session_dict, message, kind="info"):
+        await post_to_chat(session_dict.get('session_id'), session_dict.get('user_id'), **{kind: message})
 

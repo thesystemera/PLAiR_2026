@@ -326,12 +326,14 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             errors = [b["error"] for b in job.batches.values() if b.get("error")]
             log_service.error(f"Job {job.job_id} failed: all {job.batch_count} batches failed ({errors[-1] if errors else 'unknown'})")
         await self._publish(job, {"kind": "finished"})
+        await task_progress.post_outcome(job.session_id, job.user_id, status,
+                                         f'New songs for "{job.user_request or job.title or "your request"}"')
 
     async def _stage(self, job: GenerationJob, batch_index: int, text: str):
         job.batches[batch_index]["current_stage"] = text
         await self._publish(job)
 
-    async def _fresh_params(self, job: GenerationJob) -> Dict[str, Any]:
+    async def _fresh_params(self, job: GenerationJob, rejected: Optional[str] = None) -> Dict[str, Any]:
         if self.catalog_service is None or self.prompt_service is None:
             raise Exception("Catalog or prompt service not initialized")
         overused_phrases = self.catalog_service.get_cycled_phrases(
@@ -344,7 +346,8 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             job.user_request,
             catalog_service=self.catalog_service,
             repeated_titles=self.catalog_service.get_repeated_titles(min_occurrences=2),
-            overused_phrases=overused_phrases
+            overused_phrases=overused_phrases,
+            rejected=rejected
         )
         self.generation_stats["gemini_calls"] += 1
         if not music_params:
@@ -478,6 +481,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
 
                 if isinstance(poll_data, dict) and poll_data.get("error") == "SENSITIVE_WORD_ERROR":
                     sensitive_word_attempts += 1
+                    refused = poll_data.get("reason") or "no reason given"
 
                     await self._log_failed_prompt(
                         music_params=music_params,
@@ -499,8 +503,8 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             f"Calling Gemini again for fresh params..."
                         )
 
-                        await self._stage(job, batch_index, "Regenerating parameters (avoiding sensitive words)...")
-                        music_params = await self._fresh_params(job)
+                        await self._stage(job, batch_index, "Rewriting the song idea: the music service refused it")
+                        music_params = await self._fresh_params(job, rejected=refused)
 
                         log_service.success("Fresh params generated - retrying with new content")
                         batch["title"] = music_params.get("title", batch.get("title"))
@@ -509,7 +513,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             f"SENSITIVE_WORD_ERROR - retrying with fresh Gemini params (attempt {sensitive_word_attempts})")
                     else:
                         reason = "max retries reached" if job.user_request else "no user_request to regenerate"
-                        raise Exception(f"SENSITIVE_WORD_ERROR - cannot retry ({reason})")
+                        raise Exception(f"SENSITIVE_WORD_ERROR - cannot retry ({reason}): {refused}")
 
                 tracks = poll_data.get("tracks")
                 if tracks is None:

@@ -1,4 +1,5 @@
 import httpx
+import re
 import time
 import asyncio
 import aiofiles
@@ -13,6 +14,16 @@ from config import settings
 SUNO_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
 SUNO_POLL_MAX_BACKOFF_S = 60
 SUNO_TRANSIENT_CODES = {430, 455}
+BLOCKED_ARTIST = re.compile(r"artist name:?\s*(.+?)(?:\s+-\s|[.,;]?\s*$)", re.IGNORECASE)
+
+
+def rejection_reason(result: Optional[Dict[str, Any]]) -> str:
+    return str(((result or {}).get("data") or {}).get("errorMessage") or "").strip()
+
+
+def blocked_artist(reason: Optional[str]) -> Optional[str]:
+    match = BLOCKED_ARTIST.search(reason or "")
+    return match.group(1).strip().lower() if match else None
 
 class SunoAPIError(Exception):
     def __init__(self, code: Optional[int], msg: str, http_status: Optional[int] = None):
@@ -206,10 +217,9 @@ class SunoAPI:
                 log_service.error(f"Full response: {result}")
                 return {"error": "FAILED", "details": result}
             elif status == "SENSITIVE_WORD_ERROR":
-                log_service.error(f"Task {task_id} rejected - sensitive word detected")
-                log_service.error(f"Full API response: {result}")
-                log_service.error(f"Full data object: {result.get('data')}")
-                return {"error": "SENSITIVE_WORD_ERROR", "details": result}
+                reason = rejection_reason(result)
+                log_service.warning(f"Task {task_id} refused by Suno: {reason or 'no reason given'}")
+                return {"error": "SENSITIVE_WORD_ERROR", "details": result, "reason": reason}
 
 class SunoService(SingletonService):
     def __init__(self):
