@@ -120,7 +120,7 @@ async def main():
                 mark_added(track_id)
             metadata = json.loads((settings.CATALOG_DIR / "metadata" / f"{track_id}.json").read_text(encoding="utf-8"))
             job = TrackJob(track_id=track_id, mp3_path=settings.CATALOG_DIR / "mp3" / f"{track_id}.mp3",
-                           metadata=metadata, defer_catalog_reload=True)
+                           metadata=metadata)
             await orchestrator.lane1_queue.put(job)
             running.append((job, time.time()))
         await asyncio.sleep(2)
@@ -139,7 +139,6 @@ async def main():
                                  f"{done} ready, {failed} failed, {left} left, ~{rate * left / 3600:.1f} h to go")
 
     await lyric_style_service.wait_for_refreshes()
-    await orchestrator.catalog.reload_catalog()
     log_service.suno(f"[Backlog] Finished: {done} ready, {failed} failed")
     await stop_worker()
 

@@ -362,6 +362,17 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
   lossless storage and a bitrate that follows the listener's music quality were proposed.
 - **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
 
+## Done on 11 Nov 2026 (catalog updates)
+
+- The station crawled for minutes after a generation: every catalog update was a full 86 s reload (all 2,048
+  files re-read and rows rewritten one commit at a time, 50 at once on the shared thread pool), slowing song-file
+  reads from 1.5 ms to 271 ms; two new songs set off three reloads, and the watcher added each song about a minute
+  before it could play. Now one track at a time (`add_finished_track`, ~30 ms), only when ready, and the full scan
+  only at boot (2.2 s, reads at 3.8 ms). CLAUDE.md section 19b.
+- Still open: the hosts' voices slowed (first audio up to 41 s) while the songs mastered on the same P6000; measure
+  one render against the live station before changing where listener songs master.
+- Still open (small): the phone's offline downloader re-reads its whole library after every download.
+
 ## Done on 11 Nov 2026 (Suno refusals, chat and activity)
 
 - What Suno refuses: 129 of 130 logged refusals were artist names (52 different, from Michael Jackson to "bratty"

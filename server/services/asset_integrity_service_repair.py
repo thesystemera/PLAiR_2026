@@ -260,16 +260,7 @@ class AssetRepairs:
             subject.db.update({"has_mp3": flags[0], "has_wav": flags[1], "has_artwork": flags[2]})
 
     async def _save_track_metadata(self, track_id: str, metadata: Dict[str, Any]):
-        catalog = self._svc("catalog")
-        await asyncio.to_thread(catalog.write_track_metadata, track_id, metadata)
-        if track_id in catalog.tracks:
-            catalog.tracks[track_id] = metadata
-        vector_db = self._svc("vector_db")
-        if vector_db is not None:
-            try:
-                await asyncio.to_thread(vector_db.add_single_track, metadata)
-            except Exception as e:
-                log_service.warning(f"[AssetDoctor] Embedding refresh failed for {track_id}: {e}")
+        await self._svc("catalog").update_track(track_id, metadata)
 
     async def _repair_metadata(self, subject: Subject, finding: Finding):
         track_id = subject.id
@@ -436,12 +427,8 @@ class AssetRepairs:
     async def _repair_db_flags(self, subject: Subject, finding: Finding):
         catalog = self._svc("catalog")
         if subject.db is None:
-            flags = await asyncio.to_thread(catalog.compute_track_flags, subject.id)
-            await asyncio.to_thread(catalog._upsert_track_to_db, subject.id, subject.metadata, *flags)
-            state = await asyncio.to_thread(catalog.get_track_db_state, subject.id)
-            subject.db = state
-            if subject.id not in catalog.tracks:
-                catalog.add_track_to_memory(subject.id, subject.metadata, has_artwork=flags[2])
+            await catalog.add_finished_track(subject.id, metadata=subject.metadata)
+            subject.db = await asyncio.to_thread(catalog.get_track_db_state, subject.id)
             return
         flags = await asyncio.to_thread(catalog.refresh_track_flags, subject.id)
         subject.db.update({"has_mp3": flags[0], "has_wav": flags[1], "has_artwork": flags[2]})

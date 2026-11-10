@@ -375,8 +375,7 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
             if song_fingerprint is None:
                 continue
             updated = {**metadata, "fingerprint": audio_fingerprint.encode(song_fingerprint)}
-            await asyncio.to_thread(self.catalog_db_service.write_track_metadata, track_id, updated)
-            self.catalog_db_service.add_track_to_memory(track_id, updated)
+            await self.catalog_db_service.update_track(track_id, updated)
             added += 1
         if added:
             log_service.upload(f"[Upload] Fingerprinted {added} existing upload(s) for duplicate detection")
@@ -549,7 +548,7 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
             should_apply_apollo=should_apply_apollo
         )
 
-        has_artwork = await self._run_visual_lane(
+        await self._run_visual_lane(
             progress=progress,
             catalog_metadata=catalog_metadata,
             track_id=track_id,
@@ -572,29 +571,14 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
 
         if self.catalog_db_service:
             try:
-                await asyncio.to_thread(
-                    self.catalog_db_service._upsert_track_to_db,
-                    track_id,
-                    clean_metadata,
-                    True,
-                    master_wav_path.exists(),
-                    has_artwork
-                )
-                job["catalog_added"] = True
-                self.catalog_db_service.add_track_to_memory(track_id, clean_metadata, has_artwork=has_artwork)
-                log_service.upload(f"[Upload] Added to catalog database: {track_id}")
+                job["catalog_added"] = await self.catalog_db_service.add_finished_track(track_id, metadata=clean_metadata)
             except Exception as e:
                 log_service.error(f"[Upload] Failed to add to catalog database: {e}")
                 raise UploadFailed("Failed to add track to the catalog - please try again")
+            if not job["catalog_added"]:
+                raise UploadFailed("Failed to add track to the catalog - please try again")
 
         await progress.stage("index")
-
-        if self.vector_db_service:
-            try:
-                await asyncio.to_thread(self.vector_db_service.add_single_track, clean_metadata)
-                log_service.upload(f"[Upload] Added to vector index: {track_id}")
-            except Exception as e:
-                log_service.warning(f"[Upload] Failed to add to vector index (will be picked up by next rebuild): {e}")
 
         removed = await self._remove_paths(
             [p for p in self._intermediate_paths(user_tracks_dir, track_id) if p != transcode_source]

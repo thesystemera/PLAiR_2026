@@ -623,8 +623,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                                 track_id=current_track_unique_id,
                                 mp3_path=audio_path,
                                 metadata=track_metadata,
-                                progress_callback=make_progress_callback(track_index),
-                                defer_catalog_reload=True
+                                progress_callback=make_progress_callback(track_index)
                             )
 
                             track_jobs.append(track_job)
@@ -676,6 +675,9 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             current_track_unique_id,
                             "completed"
                         )
+                        if self.catalog_service is None:
+                            raise Exception("Catalog service not initialized")
+                        await self.catalog_service.add_finished_track(current_track_unique_id)
                         log_service.success(
                             f"Job {job_id} batch {batch_index}: Track {current_track_unique_id} completed"
                         )
@@ -684,10 +686,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             f"CRITICAL: Master WAV missing for {current_track_unique_id}, NOT marking as completed!"
                         )
                         raise Exception(f"Master WAV file missing: {master_wav_path}")
-
-                if self.catalog_service is None:
-                    raise Exception("Catalog service not initialized")
-                await self.catalog_service.reload_catalog()
 
                 if batch["tracks"]:
                     if self.playback_service is None:

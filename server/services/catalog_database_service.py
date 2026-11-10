@@ -1,16 +1,21 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
 import numpy as np
 from collections import Counter
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Tuple
 from services import log_service
 from services.base_service import SingletonService
 from database.pg_pool import get_pooled_connection
 from config import settings
-from services.track_asset_stages import CATALOG_AUDIO_EXTENSIONS
+from services.track_asset_stages import CATALOG_AUDIO_EXTENSIONS, webm_path
+
+SCAN_THREADS = 4
+READY_STREAM_BITRATE = "128k"
 
 def is_hidden_track(metadata: Optional[Dict]) -> bool:
     return (metadata or {}).get("visibility", "public") in ("unlisted", "private")
@@ -38,10 +43,7 @@ class CatalogDatabaseService(SingletonService):
         self.broadcast_callback = None
         self._catalog_version = 0
         self._phrase_cache = {}
-        self._reload_lock = asyncio.Lock()
-        self._reload_in_progress = False
-        self._pending_adds = {}
-        self._pending_removes = set()
+        self._scan_executor = ThreadPoolExecutor(max_workers=SCAN_THREADS, thread_name_prefix="catalog")
         self._initialize_database()
 
     def _get_connection(self):
@@ -89,19 +91,6 @@ class CatalogDatabaseService(SingletonService):
         self._catalog_initialized = True
 
     def _swap_catalog(self, tracks: Dict[str, Dict], track_ids: List[str], artwork_cache: Dict[str, bool]):
-        for track_id in self._pending_removes:
-            tracks.pop(track_id, None)
-            artwork_cache.pop(track_id, None)
-        for track_id, (metadata, has_artwork) in self._pending_adds.items():
-            if track_id not in self._pending_removes:
-                tracks[track_id] = metadata
-                artwork_cache[track_id] = has_artwork
-        track_ids = [tid for tid in track_ids if tid in tracks]
-        known = set(track_ids)
-        track_ids.extend(tid for tid in tracks if tid not in known)
-        track_ids.sort(key=lambda tid: station_recency(tracks[tid]), reverse=True)
-        self._pending_adds = {}
-        self._pending_removes = set()
         self.tracks = tracks
         self.track_ids = track_ids
         self._artwork_cache = artwork_cache
@@ -127,9 +116,6 @@ class CatalogDatabaseService(SingletonService):
             self.track_ids.insert(0, track_id)
         if has_artwork is not None:
             self._artwork_cache[track_id] = has_artwork
-        if self._reload_in_progress:
-            self._pending_removes.discard(track_id)
-            self._pending_adds[track_id] = (metadata, bool(has_artwork))
         self._bump_version()
 
     def remove_track_from_memory(self, track_id: str):
@@ -139,10 +125,10 @@ class CatalogDatabaseService(SingletonService):
         if track_id in self.track_ids:
             self.track_ids.remove(track_id)
         self._artwork_cache.pop(track_id, None)
-        if self._reload_in_progress:
-            self._pending_adds.pop(track_id, None)
-            self._pending_removes.add(track_id)
         self._bump_version()
+
+    async def _in_scan_thread(self, func, *args):
+        return await asyncio.get_running_loop().run_in_executor(self._scan_executor, func, *args)
 
     async def _scan_catalog(self):
         tracks: Dict[str, Dict] = {}
@@ -156,93 +142,68 @@ class CatalogDatabaseService(SingletonService):
             log_service.warning(f"Metadata directory not found: {self.metadata_dir}")
             return tracks, track_ids, artwork_cache
 
-        from services.suno_metadata_service import MusicMetadata
-        metadata_service = MusicMetadata()
+        stored = await self._in_scan_thread(self._stored_rows)
+        file_ids = await self._in_scan_thread(lambda: [f.stem for f in self.metadata_dir.glob("*.json")])
+        results = await asyncio.gather(*[self._in_scan_thread(self._scan_file, tid, stored.get(tid))
+                                         for tid in file_ids])
 
-        json_files = await asyncio.to_thread(list, self.metadata_dir.glob("*.json"))
-
-        existing_db_ids = set(await asyncio.to_thread(self._get_all_track_ids_from_db))
-        json_file_ids = {f.stem for f in json_files}
-
-        removed_ids = existing_db_ids - json_file_ids
-        if removed_ids:
-            log_service.catalog(f"Removing {len(removed_ids)} tracks no longer in JSON files...")
-            await asyncio.to_thread(self._bulk_delete_tracks, list(removed_ids))
-
-        master_wav_dir = settings.ENHANCED_WAV_DIR
-        no_master_ids = []
-        for tid in existing_db_ids - removed_ids:
-            wav_path = master_wav_dir / f"{tid}.wav"
-            if not await asyncio.to_thread(wav_path.exists):
-                no_master_ids.append(tid)
-        if no_master_ids:
-            log_service.catalog(f"Removing {len(no_master_ids)} tracks without master WAV...")
-            await asyncio.to_thread(self._bulk_delete_tracks, no_master_ids)
-
-        semaphore = asyncio.Semaphore(50)
-        added_count = 0
-        updated_count = 0
-
-        async def process_file(json_file):
-            async with semaphore:
-                try:
-                    metadata = await metadata_service.load_metadata(json_file.name)
-                    if not metadata:
-                        return None
-
-                    track_id = json_file.stem
-
-                    audio_exists = False
-                    for ext in CATALOG_AUDIO_EXTENSIONS:
-                        audio_path = self.audio_dir / f"{track_id}{ext}"
-                        if await asyncio.to_thread(audio_path.exists):
-                            audio_exists = True
-                            break
-
-                    wav_path = master_wav_dir / f"{track_id}.wav"
-                    art_path = self.artwork_dir / f"{track_id}.jpeg"
-
-                    wav_exists, art_exists = await asyncio.gather(
-                        asyncio.to_thread(wav_path.exists),
-                        asyncio.to_thread(art_path.exists)
-                    )
-
-                    if wav_exists:
-                        metadata['id'] = track_id
-                        is_new = await asyncio.to_thread(self._upsert_track_to_db, track_id, metadata, audio_exists,
-                                                         wav_exists, art_exists)
-                        return (track_id, metadata, is_new, art_exists)
-                except Exception as e:
-                    log_service.error(f"Error processing {json_file.name}: {e}")
-                return None
-
-        results = await asyncio.gather(*[process_file(f) for f in json_files])
-
+        counts = Counter()
+        on_file = set(file_ids)
+        gone = [tid for tid in stored if tid not in on_file]
         for res in results:
-            if res:
-                tid, meta, is_new, art_exists = res
-                tracks[tid] = meta
-                artwork_cache[tid] = art_exists
-                track_ids.append(tid)
-                if is_new:
-                    added_count += 1
-                else:
-                    updated_count += 1
+            if res is None:
+                continue
+            tid, meta, state, art_exists = res
+            if meta is None:
+                if tid in stored:
+                    gone.append(tid)
+                continue
+            tracks[tid] = meta
+            artwork_cache[tid] = art_exists
+            track_ids.append(tid)
+            counts[state] += 1
+        if gone:
+            log_service.catalog(f"Removing {len(gone)} tracks without metadata or master WAV...")
+            await self._in_scan_thread(self._bulk_delete_tracks, gone)
 
         track_ids.sort(key=lambda tid: station_recency(tracks[tid]), reverse=True)
 
         log_service.catalog(
-            f"📊 Sync complete: {len(tracks)} total | +{added_count} new | ~{updated_count} updated | -{len(removed_ids)} removed")
+            f"📊 Sync complete: {len(tracks)} total | +{counts['new']} new | ~{counts['updated']} updated | "
+            f"={counts['same']} unchanged | -{len(gone)} removed")
         log_service.catalog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return tracks, track_ids, artwork_cache
 
-    def _get_all_track_ids_from_db(self) -> List[str]:
+    def _scan_file(self, track_id: str, stored: Optional[Tuple]) -> Optional[Tuple]:
+        from services.suno_metadata_service import MusicMetadata
+        try:
+            metadata = MusicMetadata().read_metadata(track_id)
+            if not metadata:
+                return None
+            flags = self.compute_track_flags(track_id)
+            if not flags[1]:
+                return track_id, None, "no_master", False
+            metadata['id'] = track_id
+            if stored == (self._fingerprint(metadata), *flags):
+                return track_id, metadata, "same", flags[2]
+            is_new = self._upsert_track_to_db(track_id, metadata, *flags)
+            return track_id, metadata, "new" if is_new else "updated", flags[2]
+        except Exception as e:
+            log_service.error(f"Error processing {track_id}.json: {e}")
+            return None
+
+    @staticmethod
+    def _fingerprint(metadata: Dict) -> str:
+        return hashlib.md5(json.dumps(metadata).encode("utf-8")).hexdigest()
+
+    def _stored_rows(self) -> Dict[str, Tuple]:
         conn = self._get_connection()
-        c = conn.cursor()
-        c.execute("SELECT track_id FROM tracks")
-        ids = [row[0] for row in c.fetchall()]
-        conn.close()
-        return ids
+        try:
+            c = conn.cursor()
+            c.execute("SELECT track_id, md5(metadata_json), has_mp3, has_wav, has_artwork FROM tracks")
+            return {tid: (digest, bool(mp3), bool(wav), bool(art)) for tid, digest, mp3, wav, art in c.fetchall()}
+        finally:
+            conn.close()
 
     def _bulk_delete_tracks(self, track_ids: List[str]):
         conn = self._get_connection()
@@ -346,9 +307,55 @@ class CatalogDatabaseService(SingletonService):
         temp_path = metadata_path.with_name(f"{track_id}.json.tmp")
         temp_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(temp_path, metadata_path)
+        return self._store_row(track_id, metadata)
+
+    def _store_row(self, track_id: str, metadata: Dict) -> Tuple[bool, bool, bool]:
         flags = self.compute_track_flags(track_id)
         self._upsert_track_to_db(track_id, metadata, *flags)
         return flags
+
+    def ready_files(self, track_id: str) -> List[Path]:
+        return [
+            settings.ENHANCED_WAV_DIR / f"{track_id}.wav",
+            settings.AUDIOFEATURES_DIR / f"{track_id}.json",
+            settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json",
+            self.artwork_dir / f"{track_id}.jpeg",
+            webm_path(track_id, READY_STREAM_BITRATE),
+        ]
+
+    def is_ready(self, track_id: str) -> bool:
+        return (self.metadata_dir / f"{track_id}.json").exists() and all(p.exists() for p in self.ready_files(track_id))
+
+    async def add_finished_track(self, track_id: str, metadata: Optional[Dict] = None) -> bool:
+        from services.suno_metadata_service import MusicMetadata
+        if metadata is None:
+            metadata = await self._in_scan_thread(MusicMetadata().read_metadata, track_id)
+        if not metadata:
+            log_service.warning(f"[Catalog] {track_id[:8]}: no metadata to add")
+            return False
+        metadata['id'] = track_id
+        is_new = track_id not in self.tracks
+        await self._index(track_id, metadata, await self._in_scan_thread(self._store_row, track_id, metadata))
+        log_service.catalog(f"[Catalog] {'Added' if is_new else 'Updated'} {log_service.track_label(metadata)} "
+                            f"({len(self.tracks)} tracks)")
+        if is_new and self.broadcast_callback:
+            await self.broadcast_callback("track", "added", {"track_id": track_id, "total_tracks": len(self.tracks)})
+        return True
+
+    async def update_track(self, track_id: str, metadata: Dict) -> Tuple[bool, bool, bool]:
+        flags = await self._in_scan_thread(self.write_track_metadata, track_id, metadata)
+        if track_id in self.tracks:
+            await self._index(track_id, metadata, flags)
+        return flags
+
+    async def _index(self, track_id: str, metadata: Dict, flags: Tuple[bool, bool, bool]):
+        self.add_track_to_memory(track_id, metadata, has_artwork=flags[2])
+        if self.vector_db_service:
+            try:
+                await self._in_scan_thread(self.vector_db_service.add_rows, [track_id])
+            except Exception as e:
+                log_service.warning(f"[Catalog] {track_id[:8]}: search index update failed, the next rebuild "
+                                    f"picks it up: {e}")
 
     def get_track(self, track_id: str) -> Optional[Dict]:
         return self.tracks.get(track_id)
@@ -417,48 +424,17 @@ class CatalogDatabaseService(SingletonService):
 
     def _finished_outside_catalog(self) -> List[str]:
         masters = {p.stem for p in settings.ENHANCED_WAV_DIR.glob("*.wav")}
-        return [tid for tid in masters - set(self.tracks) if (self.metadata_dir / f"{tid}.json").exists()]
+        return [tid for tid in masters - set(self.tracks) if self.is_ready(tid)]
 
     async def watch_for_finished_tracks(self, interval_s: float):
         while True:
             await asyncio.sleep(interval_s)
             try:
-                new_ids = await asyncio.to_thread(self._finished_outside_catalog)
-                if new_ids and not self._reload_in_progress:
-                    log_service.catalog(f"[Catalog] {len(new_ids)} finished tracks found outside the catalog, reloading")
-                    await self.reload_catalog()
+                for track_id in await self._in_scan_thread(self._finished_outside_catalog):
+                    if track_id not in self.tracks:
+                        await self.add_finished_track(track_id)
             except Exception as e:
                 log_service.throttled("catalog_watch", f"[Catalog] Watch for finished tracks failed: {e}")
-
-    async def reload_catalog(self):
-        async with self._reload_lock:
-            old_ids = set(self.tracks)
-            self._reload_in_progress = True
-            try:
-                tracks, track_ids, artwork_cache = await self._scan_catalog()
-                self._swap_catalog(tracks, track_ids, artwork_cache)
-                self._catalog_initialized = True
-            finally:
-                self._reload_in_progress = False
-                self._pending_adds = {}
-                self._pending_removes = set()
-            new_ids = set(self.tracks) - old_ids
-            new_track_count = len(new_ids)
-            if self.vector_db_service:
-                for track_id in old_ids - set(self.tracks):
-                    self.vector_db_service.remove(track_id)
-
-            if new_track_count > 0 and self.vector_db_service:
-                added = await asyncio.to_thread(self.vector_db_service.add_rows, sorted(new_ids))
-                log_service.success(f"✅ Catalog: {added} new tracks searchable (+{new_track_count} new tracks)")
-
-                if self.broadcast_callback:
-                    await self.broadcast_callback("track", "batch_reload", {
-                        "new_tracks_count": new_track_count,
-                        "total_tracks": len(self.tracks)
-                    })
-
-            return new_track_count
 
     def get_all_genres(self) -> List[Dict]:
         cached = getattr(self, "_genres_cache", None)

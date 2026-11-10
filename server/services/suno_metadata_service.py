@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+import time
 import asyncio
 import aiofiles
 import aiofiles.os
@@ -130,6 +131,9 @@ class MusicMetadata(SingletonService):
             raise
 
     async def load_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
+        return await asyncio.to_thread(self.read_metadata, filename)
+
+    def read_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
         if not filename.endswith('.json'):
             filepath = self.metadata_dir / f"{filename}.json"
         else:
@@ -139,12 +143,12 @@ class MusicMetadata(SingletonService):
         retry_delay = 0.1
 
         for attempt in range(max_retries):
+            last_try = attempt == max_retries - 1
             try:
-                async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                if not content or content.strip() == "":
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(retry_delay)
+                content = filepath.read_text(encoding='utf-8')
+                if not content.strip():
+                    if not last_try:
+                        time.sleep(retry_delay)
                         continue
                     self._quarantine_metadata(filepath, "is empty")
                     return None
@@ -153,25 +157,23 @@ class MusicMetadata(SingletonService):
             except FileNotFoundError:
                 return None
             except json.JSONDecodeError:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
+                if not last_try:
+                    time.sleep(retry_delay)
                     continue
                 self._quarantine_metadata(filepath, "has invalid JSON")
                 return None
             except PermissionError:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
+                if not last_try:
+                    time.sleep(retry_delay)
                     continue
-                else:
-                    log_service.error(f"File locked after {max_retries} attempts: {filepath.name}")
-                    return None
+                log_service.error(f"File locked after {max_retries} attempts: {filepath.name}")
+                return None
             except Exception as e:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
+                if not last_try:
+                    time.sleep(retry_delay)
                     continue
-                else:
-                    log_service.error(f"Unexpected error loading {filepath.name}: {str(e)}")
-                    return None
+                log_service.error(f"Unexpected error loading {filepath.name}: {str(e)}")
+                return None
 
         return None
 

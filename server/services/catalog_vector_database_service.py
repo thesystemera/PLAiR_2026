@@ -2,7 +2,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from services import log_service
 from services.catalog_credit import credited_artists
 from services.catalog_vocals import VOCALS_TEXT, vocals_of
 from services.category_store import CategorySlot, CategoryStore
@@ -95,11 +94,3 @@ class CatalogVectorDatabaseService(CategoryStore):
         return CatalogSlot(entries, base.matrices, metas, build_tag_indexes(self, metas),
                            build_name_space(metas, spelling))
 
-    def add_single_track(self, track_data: dict) -> bool:
-        track_id = track_data.get("id")
-        if not track_id:
-            log_service.warning("add_single_track: track has no id - left for the background rebuild")
-            self.dirty = True
-            return False
-        self.add_meta(str(track_id), track_data)
-        return True

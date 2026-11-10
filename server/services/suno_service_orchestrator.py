@@ -56,7 +56,6 @@ import torch
 
 LANE_BUFFER = 10
 MASTERING_WAIT_TIMEOUT_S = 1800
-BATCH_CATALOG_RELOAD_TIMEOUT_S = 7200
 
 def _clear_cuda_cache():
     if torch.cuda.is_available():
@@ -92,7 +91,6 @@ class TrackJob:
     failed: bool = False
     lane6_finished: bool = False
     lyrics_queued: bool = False
-    defer_catalog_reload: bool = False
     catalog_ready: bool = False
     cancelled: bool = False
 
@@ -280,8 +278,7 @@ class SunoServiceOrchestrator(SingletonService):
             mp3_path: Path,
             metadata: Dict[str, Any],
             progress_callback: Optional[Callable] = None,
-            verbose: bool = True,
-            defer_catalog_reload: bool = False
+            verbose: bool = True
     ) -> TrackJob:
         assert self.lane1_queue is not None
         assert self.lane2_queue is not None
@@ -296,8 +293,7 @@ class SunoServiceOrchestrator(SingletonService):
             track_id=track_id,
             mp3_path=mp3_path,
             metadata=metadata,
-            progress_callback=progress_callback,
-            defer_catalog_reload=defer_catalog_reload
+            progress_callback=progress_callback
         )
 
         def log(msg):
@@ -369,13 +365,9 @@ class SunoServiceOrchestrator(SingletonService):
             track_id: str,
             mp3_path: Path,
             metadata: Dict[str, Any],
-            progress_callback: Optional[Callable] = None,
-            defer_catalog_reload: bool = False
+            progress_callback: Optional[Callable] = None
     ) -> TrackJob:
-        return await self.smart_submit(
-            track_id, mp3_path, metadata, progress_callback, verbose=True,
-            defer_catalog_reload=defer_catalog_reload
-        )
+        return await self.smart_submit(track_id, mp3_path, metadata, progress_callback, verbose=True)
 
     async def submit_batch(
             self,
@@ -424,7 +416,7 @@ class SunoServiceOrchestrator(SingletonService):
 
         async def queue_one(track_id, mp3_path, metadata):
             job = await self.smart_submit(
-                track_id, mp3_path, metadata, progress_callback, verbose=False, defer_catalog_reload=True
+                track_id, mp3_path, metadata, progress_callback, verbose=False
             )
             jobs.append(job)
 
@@ -434,27 +426,7 @@ class SunoServiceOrchestrator(SingletonService):
         ])
 
         log_service.suno(f"✓ All {len(jobs)} tracks successfully queued on Highway.")
-        if jobs:
-            spawn(self._reload_catalog_when_finished(list(jobs)), name="orchestrator_batch_catalog_reload")
         return jobs
-
-    async def _reload_catalog_when_finished(self, jobs: List[TrackJob]):
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + BATCH_CATALOG_RELOAD_TIMEOUT_S
-        while any(not j.is_finished() for j in jobs):
-            if loop.time() >= deadline:
-                log_service.warning(
-                    f"[Catalog] Batch still running after {BATCH_CATALOG_RELOAD_TIMEOUT_S}s - reloading with finished tracks"
-                )
-                break
-            await asyncio.sleep(2.0)
-        ready = sum(1 for j in jobs if j.catalog_ready)
-        if ready == 0:
-            return
-        if self.catalog is None:
-            raise RuntimeError("catalog service not initialized")
-        await self.catalog.reload_catalog()
-        log_service.suno(f"[Catalog] ✓ Registered {ready}/{len(jobs)} batch tracks (single reload)")
 
     @staticmethod
     def _skip_if_cancelled(job: TrackJob, lane: str) -> bool:
@@ -954,25 +926,12 @@ class SunoServiceOrchestrator(SingletonService):
 
     async def _register_to_catalog(self, job: TrackJob):
         try:
-            if self.transcoding is None:
-                raise RuntimeError("transcoding service not initialized")
             if self.catalog is None:
                 raise RuntimeError("catalog service not initialized")
-            required_files = [
-                job.master_wav_path,
-                settings.AUDIOFEATURES_DIR / f"{job.track_id}.json",
-                settings.LYRIC_TIMESTAMPS_DIR / f"{job.track_id}.json",
-                settings.ARTWORK_DIR / f"{job.track_id}.jpeg",
-                self.transcoding.get_webm_path(job.track_id, "128k"),
-            ]
-            if not all(f.exists() for f in required_files):
-                log_service.error(f"[Catalog] [{job.track_id[:8]}] Missing files")
+            missing = [path.name for path in self.catalog.ready_files(job.track_id) if not path.exists()]
+            if missing:
+                log_service.error(f"[Catalog] [{job.track_id[:8]}] Missing files: {', '.join(missing)}")
                 return
-            job.catalog_ready = True
-            if job.defer_catalog_reload:
-                log_service.suno(f"[Catalog] [{job.track_id[:8]}] Ready (catalog reload deferred to batch completion)")
-                return
-            await self.catalog.reload_catalog()
-            log_service.suno(f"[Catalog] [{job.track_id[:8]}] ✓ Registered")
+            job.catalog_ready = await self.catalog.add_finished_track(job.track_id)
         except Exception as e:
             log_service.error(f"[Catalog] [{job.track_id[:8]}] Registration error: {str(e)}")

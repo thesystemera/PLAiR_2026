@@ -139,18 +139,11 @@ class UploadedTracks:
         track["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         try:
-            await asyncio.to_thread(self.catalog_db_service.write_track_metadata, track_id, track)
+            await self.catalog_db_service.update_track(track_id, track)
         except OSError as e:
             return False, f"Failed to save updates: {e}"
         except Exception as e:
             log_service.warning(f"Failed to update database: {e}")
-
-        self.catalog_db_service.add_track_to_memory(track_id, track)
-        if self.vector_db_service:
-            try:
-                await asyncio.to_thread(self.vector_db_service.add_single_track, track)
-            except Exception as e:
-                log_service.warning(f"[Upload] Re-indexing {track_id} after edit failed: {e}")
         if "lyrics" in updates:
             await self._remove_paths([settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json"])
             asset_integrity_service.notify_tracks_changed([track_id], "lyrics edited")
