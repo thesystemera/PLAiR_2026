@@ -2,6 +2,7 @@ import asyncio
 import base64
 import bisect
 import time
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -53,6 +54,16 @@ def _cluster_timecode(buf, pos: int) -> Optional[int]:
     return int.from_bytes(bytes(buf[start:end]), 'big')
 
 
+@dataclass(frozen=True)
+class EncodedClip:
+    chunks: Tuple[Tuple[str, Dict], ...]
+    fed_seconds: float
+    talk_end_s: Optional[float]
+
+    def size(self) -> int:
+        return sum(len(chunk) for chunk, _ in self.chunks)
+
+
 class _StreamResampler:
     def __init__(self, out_rate: int):
         self.out_rate = out_rate
@@ -96,8 +107,11 @@ class _StreamResampler:
 
 
 class LiveStreamEncoder:
-    def __init__(self, sio, room: str, user_id, tts_type: str, stream_id: str, blips: Optional[str] = None):
+    def __init__(self, sio, room: str, user_id, tts_type: str, stream_id: str, blips: Optional[str] = None,
+                 picked: Optional[Tuple] = None, record: bool = False):
         self.sio = sio
+        self.picked = picked
+        self.recorded: Optional[List[Tuple[str, Dict]]] = [] if record else None
         self.room = room
         self.user_id = user_id
         self.tts_type = tts_type
@@ -216,17 +230,40 @@ class LiveStreamEncoder:
     async def _emit(self, final: bool):
         async with self._emit_lock:
             for data, intensities in self._take_pieces(final):
-                if self.first_emit_at is None:
-                    self.first_emit_at = time.perf_counter()
-                await self.sio.emit('tts_stream_audio_chunk', {
-                    'user_id': self.user_id,
-                    'tts_type': self.tts_type,
-                    'unique_id': self.stream_id,
-                    'chunk': base64.b64encode(data).decode('utf-8'),
-                    'speaker_intensities': dict(intensities),
-                    'chunk_num': self.chunks_emitted
-                }, room=self.room)
-                self.chunks_emitted += 1
+                chunk = base64.b64encode(data).decode('utf-8')
+                if self.recorded is not None:
+                    self.recorded.append((chunk, dict(intensities)))
+                await self._send_chunk(chunk, intensities)
+
+    async def _send_chunk(self, chunk: str, intensities: Dict):
+        if self.first_emit_at is None:
+            self.first_emit_at = time.perf_counter()
+        await self.sio.emit('tts_stream_audio_chunk', {
+            'user_id': self.user_id,
+            'tts_type': self.tts_type,
+            'unique_id': self.stream_id,
+            'chunk': chunk,
+            'speaker_intensities': dict(intensities),
+            'chunk_num': self.chunks_emitted
+        }, room=self.room)
+        self.chunks_emitted += 1
+
+    def encoded(self) -> Optional[EncodedClip]:
+        if self.failed or not self.recorded:
+            return None
+        return EncodedClip(tuple(self.recorded), self.fed_seconds, self.talk_end_s)
+
+    async def replay(self, clip: EncodedClip):
+        self.started = True
+        await self.sio.emit('tts_stream_start', {
+            'session_id': self.room,
+            'tts_type': self.tts_type,
+            'unique_id': self.stream_id
+        }, room=self.room)
+        for chunk, intensities in clip.chunks:
+            await self._send_chunk(chunk, intensities)
+        self.fed_seconds, self.talk_end_s = clip.fed_seconds, clip.talk_end_s
+        await self._emit_end(complete=True)
 
     async def _write(self, pcm: bytes):
         if not pcm or self._proc is None or self._proc.stdin is None:
@@ -272,13 +309,13 @@ class LiveStreamEncoder:
 
     def _blip_in(self):
         self._intro_done = True
-        blip = station_blips.pick(self.blips, "in")
+        blip = self.picked[0] if self.picked else station_blips.pick(self.blips, "in")
         if blip is not None and self._held:
             mixed, voice_at = station_blips.mix_in(blip, self._held_audio())
             self._resplit(mixed, voice_at)
 
     def _blip_out(self):
-        blip = station_blips.pick(self.blips, "out")
+        blip = self.picked[1] if self.picked else station_blips.pick(self.blips, "out")
         if blip is not None and self._held:
             held = self._held_audio()
             self.talk_end_s = round(self.fed_seconds + station_blips.speech_bounds(held)[1] / 1000.0, 3)

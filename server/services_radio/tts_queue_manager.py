@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import itertools
 import re
 import time
@@ -6,6 +7,7 @@ import uuid
 import os
 from pydub import AudioSegment
 from pathlib import Path
+from collections import OrderedDict
 from typing import List, Dict, Optional, Tuple
 
 from config.settings import settings
@@ -15,7 +17,7 @@ from services import listener_timeline
 from services.task_utils import spawn
 from services_radio.tts_broadcast_service import TimelineMixer, CLIP_CHUNK_MS
 from services_radio.tts_generation_service import EMBEDDINGS_BY_CONTENT_TYPE, GENERATED_TYPES
-from services_radio.tts_live_stream import LiveStreamEncoder
+from services_radio.tts_live_stream import EncodedClip, LiveStreamEncoder
 from services_radio.tts_processing_service import MotionSlot, MotionTrack, audible_bounds, decode_mp3
 from services_radio.tts_voice_threads import voice_thread
 from services_radio import station_blips, talk_clock
@@ -100,6 +102,15 @@ class PrerenderedClip:
                 pieces.append((self.audio[position:stop], self.intensities_at(position)))
                 position = stop
         return pieces
+
+
+ENCODED_CLIPS_BYTES = 64 * 1024 * 1024
+
+
+def _clip_key(clip: PrerenderedClip, picked: Optional[Tuple]) -> tuple:
+    audio = clip.audio
+    return (hashlib.blake2b(audio.raw_data, digest_size=16).hexdigest(), audio.frame_rate, audio.channels,
+            audio.sample_width, repr(clip.marks), clip.blips, tuple(id(blip) if blip else None for blip in picked or ()))
 
 
 class _SegmentRender:
@@ -286,6 +297,8 @@ class TTSQueueManager:
         self._session_active: Dict[str, asyncio.Task] = {}
         self._turn_seq = itertools.count(1)
         self._audio_until: Dict[str, float] = {}
+        self._encoded_clips: "OrderedDict[tuple, EncodedClip]" = OrderedDict()
+        self._encoded_bytes = 0
 
         log_service.detail("TTS Request: Initializing TTSQueueManager", "tts_queue_manager")
 
@@ -565,24 +578,44 @@ class TTSQueueManager:
                            session_id: Optional[str] = None):
         usage_tracking.bind_session(session_id, None if session_id else user_id)
         room = session_id or str(user_id)
+        picked = (station_blips.pick(clip.blips, "in"), station_blips.pick(clip.blips, "out")) if clip.blips else None
+        key = await voice_thread(_clip_key, clip, picked)
         encoder = LiveStreamEncoder(self.audio_broadcast_service.sio, room, user_id, tts_type, stream_id,
-                                    blips=clip.blips)
+                                    blips=clip.blips, picked=picked, record=True)
+        stored = self._encoded_clips.get(key)
         completed = False
         try:
-            await encoder.start()
-            for audio, intensities in clip.pieces():
-                await encoder.feed(audio, intensities)
-                self._note_audio(self._session_key(session_id, user_id), len(audio) / 1000.0)
+            if stored is not None:
+                self._encoded_clips.move_to_end(key)
+                await encoder.replay(stored)
+                self._note_audio(self._session_key(session_id, user_id), len(clip.audio) / 1000.0)
+            else:
+                await encoder.start()
+                for audio, intensities in clip.pieces():
+                    await encoder.feed(audio, intensities)
+                    self._note_audio(self._session_key(session_id, user_id), len(audio) / 1000.0)
             completed = True
         finally:
-            if completed:
-                await encoder.finish()
-            else:
-                await encoder.cancel()
+            if stored is None:
+                if completed:
+                    await encoder.finish()
+                    self._keep_encoding(key, encoder.encoded())
+                else:
+                    await encoder.cancel()
             log_service.tts_queue_manager(
                 f"DJ voice for {log_service.who(session_id, user_id=user_id)}: "
                 f"{TTS_TYPE_LABELS.get(tts_type, tts_type)} '{clip.label}' "
-                f"{'played' if completed else 'cancelled'} ({encoder.fed_seconds:.1f}s)")
+                f"{'played' if completed else 'cancelled'} ({encoder.fed_seconds:.1f}s"
+                f"{', stored encoding' if stored is not None else ''})")
+
+    def _keep_encoding(self, key: tuple, encoded: Optional[EncodedClip]):
+        if encoded is None:
+            return
+        old = self._encoded_clips.pop(key, None)
+        self._encoded_bytes += encoded.size() - (old.size() if old else 0)
+        self._encoded_clips[key] = encoded
+        while self._encoded_bytes > ENCODED_CLIPS_BYTES and len(self._encoded_clips) > 1:
+            self._encoded_bytes -= self._encoded_clips.popitem(last=False)[1].size()
 
     async def _feed(self, encoder: LiveStreamEncoder, chunks: List[Tuple[AudioSegment, Dict]], turn: _Turn):
         for audio, intensities in chunks:
