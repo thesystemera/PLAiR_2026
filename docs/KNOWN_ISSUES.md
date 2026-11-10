@@ -197,12 +197,6 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     p99 26 s, connection errors) to clean (p50 0.12 s, p99 0.77 s, 488 Mbps served, no errors); at 300 the worst
     loop stall fell from 589 to 137 ms. Without them the backend was fine at 300 (p95 song start ~1.1 s) and
     saturated at ~600 (one core, ~400 Mbps).
-  - **The hosts' voice is the first thing to degrade, estimated ~100 listeners (not load-tested).** Chatterbox
-    renders ~6.4 s of audio per second at 8 slots (README); CVSR upscaling is serial (`voice_upscale` lock) on the
-    same P6000. Production renders 100-150 s of fresh host audio per listener-hour with only between-song talk
-    (deano, 10 Nov) and 150-380 s with Radio Mode and chat (owner), so the engine is full at ~90-150 listeners;
-    past that, lines arrive late and are skipped (music unaffected). Next step: a saturation test that replays
-    cached announcer scripts into the engine with zero LLM calls, on the GPU, when the owner isn't listening.
   - **Upload bandwidth:** per listener ~0.29 Mbps signed in (Opus 256k = 261 kbps + covers ~18 + DJ voice ~14),
     ~0.23 for guests (192k), ~0.35 on iPhone (MP3 320k), +10-30% for heavy skippers (preloads). About 33
     listeners per 10 Mbps of upload; 300 listeners ~90-105 Mbps sustained. Check the new plan's upload figure.
@@ -224,6 +218,32 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     RAM (backend 7.9 GB idle, ~0.65 MB per session); per-session work (~5.5 asyncio tasks per listener, snapshot
     upserts batched). Restarts: one process, ~2-3 min to serve after PLAiR Start, so every deploy drops all
     listeners; plan deploys around that once there are many.
+  - Voice rendering is left out on purpose (owner, 10 Nov): with hundreds of listeners the voice cache covers
+    almost every line, so live renders drop to a few percent.
+  - **Code review of the backend hot paths (10 Nov).** Fixed the same day: one in-memory timing profile per
+    track for the announcer, talk clock and tune-in (`track_timing.py`; identical to the old results on all
+    2,225 tracks); no announcer slot, LLM call or render when no device is online; `play_events.session_id`
+    index (guest history 11.9 -> 0.16 ms); snapshots skip position-only changes (once a minute instead of every
+    15 s); features and lyric timing served from a gzipped in-memory cache with an ETag. Still open, most useful
+    first:
+    - Search rebuilds a 2,050 x 768 matrix per category on every query (`category_store.py`, 63 ms); build the
+      combined matrices for the fixed weight sets once per slot (~0.4 ms per query).
+    - A station fill (genre, mood, artist...) ranks the whole catalog in Python to pick one song
+      (`playback_population_service._station_picks` passes `n_results=len(catalog)`), on the single
+      `_gpu_executor` thread that search and background jobs share; `ANCHOR_SCORES_KEPT` (512) thrashes past ~40
+      station listeners. Rank only the top candidates (`argpartition`), give ranking its own small pool, raise
+      the cache. The load test above only used top-hits stations, so this path was not exercised.
+    - Payloads carry full metadata: catalog pages and search results include lyrics (~38 ms per 60-track page
+      to encode and gzip at level 6), and every `playback_state` carries the current song's lyrics twice
+      (10-30 KB per broadcast). Send summaries; lower the gzip level to 1-3.
+    - Every voice stream starts an ffmpeg process, pre-made stings included (~67 ms each, `Popen` on the event
+      loop); cache the encoded stings and keep a persistent encoder for live voice.
+    - Top-hits cache is skipped once queue + history + bans pass ~90 songs (`playback_lists._top_hits` asks for
+      more than the 100 cached), so the fill queries the DB on each song change.
+    - The Radio Mode tick awaits sessions one by one; one stuck socket delays every listener's break by 3 s.
+    - Small: ~7 file stats per audio range and ~12 per cover pack request on the event loop (`get_webm_path`
+      calls `mkdir` every time); downloads and packs still read 64 KB at a time (`FileResponse`); no
+      single-flight on WebM/Opus creation for new tracks; `_for_you_runs` and `_audio_until` grow without bound.
 
 - **Reference EQ target may be wrong in the highs (7 Oct, owner: "something is amiss"):** chain v5 masters lose
   treble the owner hears. Measured on 4 super-likes (`upscale_ab/treble_stages`): SonicMaster 50% with the Feb
