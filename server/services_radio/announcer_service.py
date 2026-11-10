@@ -1,25 +1,18 @@
 import asyncio
 import time
 import random
-import numpy as np
 from typing import Dict, Optional, List, Tuple
 from collections import deque
 from services import log_service
 from services import usage_tracking
 from services.task_utils import spawn
-from services_radio import crossfade_plan
+from services_radio import crossfade_plan, track_timing
 from services_radio.dj_content_bank import content_bank
 from services_radio.sting_service import midtrack_max_len
 from config.settings import settings
 
 FILL_DEFAULT_MS = 3000
 FILL_LATE_MS = 8000
-SPACE_START_PCT = 0.1
-SPACE_END_PCT = 0.85
-VOCAL_PAD_S = 0.4
-LYRIC_ALIGNMENT_MIN = 0.3
-LYRIC_SPAN_MIN = 0.3
-SPACE_LOUDNESS_PCT = 40
 
 
 class AnnouncerService:
@@ -291,28 +284,23 @@ class AnnouncerService:
             pass
 
         try:
-            current_features = await self.orchestrator.features.load_features(current_track_id)
-            next_features = await self.orchestrator.features.load_features(next_track_id)
+            current_timing = await track_timing.profile(current_track_id)
+            next_timing = await track_timing.profile(next_track_id)
 
-            if not current_features or not next_features:
+            if not (current_timing and current_timing.has_features and next_timing and next_timing.has_features):
                 self._cache_transition(session_id, cache_key, None)
                 return None
 
-            current_lyrics = await self.orchestrator.lyrics.load_timestamps(current_track_id)
-            next_lyrics = await self.orchestrator.lyrics.load_timestamps(next_track_id)
-            crossfade_timing = crossfade_plan.plan(current_features, next_features, current_lyrics, next_lyrics)
+            crossfade_timing = crossfade_plan.plan_from(current_timing.shape, next_timing.shape,
+                                                        current_timing.vocals[1], next_timing.vocals[0])
 
             if crossfade_timing:
                 await self._publish_crossfade(session_id, cache_key, crossfade_timing)
 
-            current_duration = current_features.get('duration', 0) * 1000
+            current_duration = current_timing.duration_ms
 
-            outro_segments = await self._get_quiet_segments(
-                current_features, current_lyrics, start_pct=0.85, end_pct=1.0
-            )
-            intro_segments = await self._get_quiet_segments(
-                next_features, next_lyrics, start_pct=0.0, end_pct=0.15, offset_ms=current_duration
-            )
+            outro_segments = track_timing.as_windows(current_timing.outro_quiet)
+            intro_segments = track_timing.as_windows(next_timing.intro_quiet, offset_ms=current_duration)
 
             all_segments = outro_segments + intro_segments
             best_window = self._find_best_silence_window(all_segments, current_duration)
@@ -397,73 +385,6 @@ class AnnouncerService:
             f"   └─ 🗣️ Announcer: {win_str}"
         )
         log_service.announcer(log_msg)
-
-    @staticmethod
-    async def _get_quiet_segments(
-            audio_features: Dict,
-            lyric_data: Optional[Dict],
-            start_pct: float = 0.0,
-            end_pct: float = 1.0,
-            offset_ms: float = 0.0,
-            loudness_pct: float = 30
-    ) -> List[Dict]:
-        duration = audio_features.get('duration', 0)
-        loudness_segments = audio_features.get('loudness_segments', [])
-        start_time = duration * start_pct
-        end_time = duration * end_pct
-
-        relevant_segments = [s for s in loudness_segments if start_time <= s['start'] < end_time]
-        if not relevant_segments:
-            return []
-
-        all_loudness = [s['loudness'] for s in relevant_segments]
-        if not all_loudness:
-            return []
-
-        loudness_threshold = np.percentile(all_loudness, loudness_pct)
-        min_segment_duration = 1.0
-        quiet_segments = []
-        current_quiet_start = None
-
-        for seg in relevant_segments:
-            if seg['loudness'] < loudness_threshold:
-                if current_quiet_start is None:
-                    current_quiet_start = seg['start']
-            else:
-                if current_quiet_start is not None:
-                    duration_s = seg['start'] - current_quiet_start
-                    if duration_s >= min_segment_duration:
-                        quiet_segments.append({
-                            'start_s': current_quiet_start, 'end_s': seg['start'], 'duration_s': duration_s
-                        })
-                    current_quiet_start = None
-
-        if current_quiet_start is not None:
-            duration_s = end_time - current_quiet_start
-            if duration_s >= min_segment_duration:
-                quiet_segments.append({
-                    'start_s': current_quiet_start, 'end_s': end_time, 'duration_s': duration_s
-                })
-
-        if lyric_data and lyric_data.get('lyrics'):
-            lyric_free_segments = []
-            for seg in quiet_segments:
-                has_lyrics = any(
-                    seg['start_s'] <= line.get('start', 0) < seg['end_s']
-                    for line in lyric_data['lyrics']
-                )
-                if not has_lyrics:
-                    lyric_free_segments.append(seg)
-            quiet_segments = lyric_free_segments
-
-        return [
-            {
-                'start_ms': (s['start_s'] * 1000) + offset_ms,
-                'end_ms': (s['end_s'] * 1000) + offset_ms,
-                'duration_ms': s['duration_s'] * 1000
-            }
-            for s in quiet_segments
-        ]
 
     @staticmethod
     def _find_best_silence_window(segments: List[Dict], track_boundary_ms: float) -> Optional[Dict]:
@@ -558,59 +479,22 @@ class AnnouncerService:
                                                    label="song change"))
         self.session_tasks.setdefault(session_id, []).append(task)
 
-    @staticmethod
-    def _merge_spaces(segments: List[Dict]) -> List[Dict]:
-        merged: List[Dict] = []
-        for seg in sorted(segments, key=lambda s: s['start_ms']):
-            if merged and seg['start_ms'] <= merged[-1]['end_ms']:
-                merged[-1]['end_ms'] = max(merged[-1]['end_ms'], seg['end_ms'])
-                merged[-1]['duration_ms'] = merged[-1]['end_ms'] - merged[-1]['start_ms']
-            else:
-                merged.append(dict(seg))
-        return merged
-
     async def _schedule_song_spaces(self, session_id: str, track_id: str, state: dict):
         if not (settings.STINGS_ENABLED and settings.STINGS_MIDTRACK_ENABLED):
             return
         try:
-            features = await self.orchestrator.features.load_features(track_id)
-            if not features:
+            timing = await track_timing.profile(track_id)
+            if not (timing and timing.has_features):
                 return
-            lyrics = await self.orchestrator.lyrics.load_timestamps(track_id)
-            vocal_spans = self._vocal_spans(lyrics, features.get('duration', 0))
-            if vocal_spans is None and not self._is_instrumental(session_id, track_id):
+            if timing.vocal_spans is None and not self._is_instrumental(session_id, track_id):
                 return
-            quiet = await self._get_quiet_segments(features, None, start_pct=SPACE_START_PCT, end_pct=SPACE_END_PCT,
-                                                   loudness_pct=SPACE_LOUDNESS_PCT)
             earliest = state.get('progress_ms', 0) + settings.STINGS_BUILD_LEAD_MS + 2000
-            spaces = [s for s in self._minus_vocals(self._merge_spaces(quiet), vocal_spans or [])
-                      if s['duration_ms'] >= settings.STINGS_MIDTRACK_MIN_WINDOW_S * 1000 and s['start_ms'] > earliest]
+            spaces = [s for s in track_timing.as_windows(timing.song_spaces) if s['start_ms'] > earliest]
             if spaces:
                 task = asyncio.create_task(self._walk_spaces(session_id, track_id, spaces, state))
                 self.session_tasks.setdefault(session_id, []).append(task)
         except Exception as e:
             log_service.warning(f"Announcer: mapping the song's quiet spaces failed: {type(e).__name__}: {e}")
-
-    @staticmethod
-    def _vocal_spans(lyric_data: Optional[Dict], duration_s: float) -> Optional[List[Tuple[float, float]]]:
-        lines = [l for l in (lyric_data or {}).get('lyrics') or [] if isinstance(l.get('start'), (int, float))]
-        if not lines or not duration_s:
-            return None
-        if (lyric_data.get('alignment_score') or 0) < LYRIC_ALIGNMENT_MIN \
-                or max(l.get('end') or l['start'] for l in lines) < duration_s * LYRIC_SPAN_MIN:
-            return None
-        return [((l['start'] - VOCAL_PAD_S) * 1000, ((l.get('end') or l['start']) + VOCAL_PAD_S) * 1000) for l in lines]
-
-    @staticmethod
-    def _minus_vocals(spaces: List[Dict], vocal_spans: List[Tuple[float, float]]) -> List[Dict]:
-        pieces = []
-        for space in spaces:
-            parts = [(space['start_ms'], space['end_ms'])]
-            for v_start, v_end in vocal_spans:
-                parts = [p for a, b in parts
-                         for p in ((a, min(b, v_start)), (max(a, v_end), b)) if p[1] > p[0]]
-            pieces += [{'start_ms': a, 'end_ms': b, 'duration_ms': b - a} for a, b in parts]
-        return pieces
 
     def _is_instrumental(self, session_id: str, track_id: str) -> bool:
         from services.catalog_vocals import vocals_of

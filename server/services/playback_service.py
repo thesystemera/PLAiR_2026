@@ -294,12 +294,12 @@ class PlaybackService(SingletonService):
 
     @staticmethod
     async def _tune_in_ms(track: Dict) -> int:
-        from services.audio_features_service import AudioFeaturesService
-        features = await AudioFeaturesService().load_features(track["id"]) or {}
-        duration = float(features.get("duration") or 0)
-        low, high = (duration * share for share in TUNE_IN_SPAN)
-        starts = [section["start"] for section in features.get("sections") or []
-                  if low <= (section.get("start") or 0) <= high]
+        from services_radio import track_timing
+        timing = await track_timing.profile(track["id"])
+        if timing is None:
+            return 0
+        low, high = (timing.duration_ms / 1000 * share for share in TUNE_IN_SPAN)
+        starts = [start for start in timing.section_starts if low <= start <= high]
         return int(random.choice(starts) * 1000) if starts else 0
 
     async def _initialize_new_session_unlocked(self, state: PlaybackState, session_id: str,

@@ -8,9 +8,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from config import settings
 from database.models import TalkPace
-from service_registry import services
 from services import log_service
 from services.task_utils import spawn
+from services_radio import track_timing
 
 DEPTHS = tuple(settings.SEGMENT_DEPTHS) or ("standard",)
 DEFAULT_DEPTH = "standard" if "standard" in DEPTHS else DEPTHS[0]
@@ -139,15 +139,8 @@ def room(seconds: float) -> str:
 
 
 async def vocals_at_s(track_id: Optional[str]) -> Optional[float]:
-    orchestrator = services.orchestrator
-    if not track_id or track_id == "N/A" or orchestrator is None:
-        return None
-    timing = await orchestrator.lyrics.load_timestamps(track_id)
-    if not timing or (timing.get("alignment_score") or 0) < settings.TALK_ALIGNMENT_MIN:
-        return None
-    starts = [line.get("start") for line in (timing or {}).get("lyrics") or []
-              if isinstance(line.get("start"), (int, float))]
-    return float(min(starts)) if starts else None
+    timing = await track_timing.profile(track_id)
+    return timing.vocals_start_s if timing else None
 
 
 async def started_note(track_id: Optional[str]) -> dict:

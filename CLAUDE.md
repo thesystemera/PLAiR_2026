@@ -1057,6 +1057,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services_radio/stripe_service.py` - Stripe billing: checkout, customers, subscription sync and webhook handling for PLAiR subscriptions.
 - `server/services_radio/talk_clock.py` - Speaking pace and talk length: measured words per second, word counts for seconds, studio clock notes.
 - `server/services_radio/talking_clock.py` - Talking clock: builds spoken time readings from exact cached parts and checks rendered numbers.
+- `server/services_radio/track_timing.py` - One in-memory timing profile per track (crossfade shape, vocal span and start, quiet stretches around the song change, mid-song spaces, section starts), built once from the features and lyric timing files and rebuilt when either file changes; used by the announcer, talk clock and tune-in.
 - `server/services_radio/tts_broadcast_service.py` - TimelineMixer and audio broadcast: mixes timeline chunks and their intensities for streaming.
 - `server/services_radio/tts_database_migration_service.py` - Re-indexes voice clip files from disk into the embeddings DB at startup using their tags.
 - `server/services_radio/tts_engine_bootstrap.py` - Launches, health-checks and stops the local Chatterbox TTS engine with the backend.

@@ -24,7 +24,7 @@ def _smoothed(db: np.ndarray) -> np.ndarray:
     return np.convolve(padded, np.ones(width) / width, mode='valid')
 
 
-def _shape(features: Dict) -> Optional[Dict[str, float]]:
+def shape(features: Dict) -> Optional[Dict[str, float]]:
     segments = features.get('loudness_segments') or []
     if len(segments) < SMOOTH_SEGMENTS:
         return None
@@ -70,7 +70,12 @@ def _line_end(line: Dict) -> float:
 
 def plan(current_features: Dict, next_features: Dict,
          current_timing: Optional[Dict] = None, next_timing: Optional[Dict] = None) -> Optional[Dict]:
-    out_shape, in_shape = _shape(current_features), _shape(next_features)
+    return plan_from(shape(current_features), shape(next_features),
+                     vocal_span(current_timing)[1], vocal_span(next_timing)[0])
+
+
+def plan_from(out_shape: Optional[Dict[str, float]], in_shape: Optional[Dict[str, float]],
+              out_vocals_end: Optional[float], in_vocals_start: Optional[float]) -> Optional[Dict]:
     if not out_shape or not in_shape:
         return None
 
@@ -79,14 +84,12 @@ def plan(current_features: Dict, next_features: Dict,
     overlap = min(hi, max(lo, out_shape['tail_ms'], in_shape['rise_ms']))
     notes = [f"outro fade {out_shape['tail_ms'] / 1000:.1f}s", f"intro build {in_shape['rise_ms'] / 1000:.1f}s"]
 
-    _, out_vocals_end = vocal_span(current_timing)
     if out_vocals_end is not None:
         vocals_end = min(out_vocals_end, out_shape['body_end_ms'])
         room = last_ms - vocals_end - VOCAL_GUARD_MS
         if room < overlap:
             overlap = max(floor, room)
             notes.append(f"vocals until {(last_ms - vocals_end) / 1000:.1f}s before the end")
-    in_vocals_start, _ = vocal_span(next_timing)
     if in_vocals_start is not None:
         room = in_vocals_start - first_ms - VOCAL_GUARD_MS
         if room < overlap:
