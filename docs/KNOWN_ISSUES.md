@@ -224,20 +224,16 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     track for the announcer, talk clock and tune-in (`track_timing.py`; identical to the old results on all
     2,225 tracks); no announcer slot, LLM call or render when no device is online; `play_events.session_id`
     index (guest history 11.9 -> 0.16 ms); snapshots skip position-only changes (once a minute instead of every
-    15 s); features and lyric timing served from a gzipped in-memory cache with an ETag. Still open, most useful
-    first:
-    - Search rebuilds a 2,050 x 768 matrix per category on every query (`category_store.py`, 63 ms); build the
-      combined matrices for the fixed weight sets once per slot (~0.4 ms per query).
-    - A station fill (genre, mood, artist...) ranks the whole catalog in Python to pick one song
-      (`playback_population_service._station_picks` passes `n_results=len(catalog)`), on the single
-      `_gpu_executor` thread that search and background jobs share; `ANCHOR_SCORES_KEPT` (512) thrashes past ~40
-      station listeners. Rank only the top candidates (`argpartition`), give ranking its own small pool, raise
-      the cache. The load test above only used top-hits stations, so this path was not exercised.
-    - Payloads carry full metadata: catalog pages and search results include lyrics (~38 ms per 60-track page
-      to encode and gzip at level 6), and every `playback_state` carries the current song's lyrics twice
-      (10-30 KB per broadcast). Send summaries; lower the gzip level to 1-3.
-    - Every voice stream starts an ffmpeg process, pre-made stings included (~67 ms each, `Popen` on the event
-      loop); cache the encoded stings and keep a persistent encoder for live voice.
+    15 s); features and lyric timing served from a gzipped in-memory cache with an ETag. Also done that night,
+    each checked against the old code: search ranks without rebuilding the matrix (35 -> 3.3 ms per query);
+    station fills sort in numpy and pick twins from a title index on a 3-thread ranking pool (23.7 -> 10.2 ms,
+    picks identical with the same seed), score cache 8,192; catalog pages, search results and playback updates
+    leave out the lyrics (60-track page 91 -> 46 KB gzipped); stings replay their stored encoding instead of an
+    ffmpeg run (~3 ms vs ~110 ms). Mixed load on the private boot (70% on genre/mood/artist stations, browsing
+    and search, songs changing every ~60 s): 600 listeners at 95% of a core, song start p95 207 ms, search p95
+    197 ms, no errors. With stations spread over the catalog, D: read ~14 MB/s at 600 (top-hits only: < 1 MB/s),
+    so the NVMe move matters more once listeners spread out. Still open:
+    - Live host speech still starts one ffmpeg per stream; a persistent or in-process encoder would remove it.
     - Top-hits cache is skipped once queue + history + bans pass ~90 songs (`playback_lists._top_hits` asks for
       more than the 100 cached), so the fill queries the DB on each song change.
     - The Radio Mode tick awaits sessions one by one; one stuck socket delays every listener's break by 3 s.
