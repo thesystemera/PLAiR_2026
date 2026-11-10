@@ -13,7 +13,7 @@ from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import PACK_SIZES, ensure_pack, pack_path
 from services.normal_map_service import ensure_track_normal
 from services.device_settings_service import settings_for, valid_kind
-from services import log_service, lyric_style_service
+from services import log_service, lyric_style_service, track_asset_stages as stages
 from database import User
 from config import settings
 from service_registry import services
@@ -98,9 +98,12 @@ async def stream_track(
 ):
     assert services.catalog_service is not None
     assert services.media_streaming_service is not None
-    audio_path = services.catalog_service.get_audio_path(track_id)
-    if audio_path is None:
+    assert services.transcoding_service is not None
+    if services.catalog_service.get_audio_path(track_id) is None:
         raise HTTPException(status_code=404, detail="Audio file not found")
+    audio_path = await services.transcoding_service.get_or_create_stream_mp3(track_id)
+    if audio_path is None:
+        raise HTTPException(status_code=404, detail="Audio file not available")
 
     return await services.media_streaming_service.stream_file(
         file_path=audio_path,
@@ -108,7 +111,7 @@ async def stream_track(
         media_type="audio/mpeg",
         extra_headers={
             "X-Audio-Format": "mp3",
-            "X-Audio-Bitrate": "192k"
+            "X-Audio-Bitrate": stages.STREAM_MP3_BITRATE
         }
     )
 

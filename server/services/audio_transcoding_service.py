@@ -24,6 +24,7 @@ class AudioTranscodingService(SingletonService):
         self.libopus_available = False
         self.libmp3lame_available = False
         self.is_windows = platform.system() == "Windows"
+        self._stream_mp3_locks: Dict[str, asyncio.Lock] = {}
         self._initialized = True
 
     async def _windows_safe_rename(self, src: Path, dst: Path, max_retries: int = 5) -> bool:
@@ -536,6 +537,19 @@ class AudioTranscodingService(SingletonService):
 
         log_service.error(f"✗✗✗ COMPLETE FAILURE: No source file available for {track_id} at {bitrate}")
         return None
+
+    async def get_or_create_stream_mp3(self, track_id: str) -> Optional[Path]:
+        master = track_asset_stages.master_wav_path(track_id)
+        output = track_asset_stages.stream_mp3_path(track_id)
+        async with self._stream_mp3_locks.setdefault(track_id, asyncio.Lock()):
+            if not await asyncio.to_thread(master.exists):
+                return None
+            if await asyncio.to_thread(output.exists):
+                if (await asyncio.to_thread(output.stat)).st_mtime >= (await asyncio.to_thread(master.stat)).st_mtime:
+                    return output
+                await self._windows_safe_unlink(output)
+            made = await self.convert_to_mp3(master, output, bitrate=track_asset_stages.STREAM_MP3_BITRATE)
+            return output if made else None
 
     async def transcode_opus_to_webm(
             self,
