@@ -35,6 +35,24 @@ anything else is carried over as written.
   feature lists were not re-counted.
 - **Install screenshots** need recapturing after UI changes (they have no WebGL background); optional iOS splash
   images were never made. Masters and the rebuild script are in `brand/2026-refresh/`.
+- **Find out why DeepSeek occasionally fails, and fix the cause (10 Nov, owner).** DeepSeek is the station's
+  main brain for everything not live: cheaper and smarter, only too slow for the live DJ turn. Falling back to
+  Gemini is a safety net, not the plan. `radio.log` since 30 Sep has 17 failures, all on `LLM_BACKGROUND`:
+  - 3 bad replies from the event harvester (`event_harvest.py`, `PageEvents`): "15 validation errors" (27 Oct),
+    "Expecting ',' delimiter at char 1792" (27 Oct), "2 validation errors" (9 Nov).
+  - 2 read timeouts (2 Oct).
+  - 12 `getaddrinfo failed` in one minute (28 Oct 00:49-00:50), which looks like this PC's DNS or network
+    dropping rather than DeepSeek.
+
+  Likely cause of the bad replies: `llm_router.generate_structured` gives Gemini the schema as an enforced
+  `response_schema`, but gives DeepSeek only `json_object` mode plus the schema written into the system prompt.
+  Nothing makes DeepSeek follow the schema, so a required field can come back missing or null (for example `date`
+  on an undated event) or a quote can go unescaped. The raw reply and the full validation errors are not logged
+  (the error is cut to 300 characters), so the cause can't be confirmed yet.
+
+  First step: log the full reply and errors for every `LLMInvalidOutput`. Then fix the cause in the prompt,
+  schema or call (for example a lenient schema for optional facts, or one repair turn on DeepSeek itself) instead
+  of handing the call to Gemini.
 
 ## 2. DJ turn: bugs and things to watch
 
