@@ -408,7 +408,7 @@ class AssetRepairs:
 
     async def _repair_webm(self, subject: Subject, finding: Finding):
         transcoding = self._svc("transcoding")
-        for bitrate in stages.OPUS_BITRATES:
+        for bitrate in stages.STREAM_BITRATES:
             if bitrate in finding.detail:
                 await self._quarantine(stages.webm_path(subject.id, bitrate))
                 created = await transcoding.get_or_create_webm(

@@ -43,7 +43,7 @@ def relevel_master(path: Path):
 
 async def encode(transcoding: AudioTranscodingService, track_id: str):
     master = stages.master_wav_path(track_id)
-    for bitrate in stages.OPUS_BITRATES:
+    for bitrate in stages.STREAM_BITRATES:
         opus, webm = stages.opus_path(track_id, bitrate), stages.webm_path(track_id, bitrate)
         opus_tmp, webm_tmp = opus.with_name(opus.stem + ".relevel" + opus.suffix), webm.with_name(webm.stem + ".relevel" + webm.suffix)
         if not await transcoding.transcode_to_opus(master, opus_tmp, bitrate):

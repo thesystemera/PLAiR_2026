@@ -302,12 +302,13 @@ export function PlaybackProvider({ children }) {
 
     if (!isOnline) return null
 
-    if (usesProgressiveStreaming()) {
-      return { url: api.getMp3StreamUrl(trackId), isBlobUrl: false, progressive: true, bitrate: '192k', fromCache: false }
-    }
-
     const bitrate = dataSaverMode ? '128k' :
       (requestedBitrate === 'auto' ? getEffectiveBitrateRef.current('auto', !!userRef.current) : requestedBitrate)
+
+    if (usesProgressiveStreaming()) {
+      return { url: api.getMp3StreamUrl(trackId, bitrate), isBlobUrl: false, progressive: true, bitrate, fromCache: false }
+    }
+
     if (trackMetadata) cacheManager.beginTrackStream(trackId, { ...trackMetadata, bitrate })
 
     return { url: api.getStreamUrl(trackId, bitrate), isBlobUrl: false, bitrate, fromCache: false }

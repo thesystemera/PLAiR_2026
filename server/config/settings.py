@@ -45,7 +45,6 @@ class Settings:
     OPUS_128K_DIR: Path = CATALOG_DIR / "opus_128k"
     OPUS_192K_DIR: Path = CATALOG_DIR / "opus_192k"
     OPUS_256K_DIR: Path = CATALOG_DIR / "opus_256k"
-    STREAM_MP3_DIR: Path = CATALOG_DIR / "mp3_256k"
 
     DEMUCS_STEMS_DIR: Path = CATALOG_DIR / "demucs_stems"
     PREMASTER_WAV_DIR: Path = CATALOG_DIR / "premaster_wav"
@@ -821,7 +820,6 @@ class Settings:
         cls.OPUS_128K_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_192K_DIR.mkdir(parents=True, exist_ok=True)
         cls.OPUS_256K_DIR.mkdir(parents=True, exist_ok=True)
-        cls.STREAM_MP3_DIR.mkdir(parents=True, exist_ok=True)
         cls.DEMUCS_STEMS_DIR.mkdir(parents=True, exist_ok=True)
         cls.PREMASTER_WAV_DIR.mkdir(parents=True, exist_ok=True)
         cls.ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)

@@ -167,13 +167,18 @@ export const musicMethods = {
     return `${baseUrl}?${params.toString()}`
   },
 
-  getMp3StreamUrl(trackId, purpose = 'play') {
+  getMp3StreamUrl(trackId, bitrate = null, purpose = 'play') {
     const session = getSessionIds()
     const params = new URLSearchParams({
       guest_id: session.guestId,
       device_id: session.deviceId,
       purpose
     })
+
+    if (STREAM_BITRATES.has(bitrate)) {
+      params.set('bitrate', bitrate)
+    }
+
     return `/api/stream/${trackId}?${params.toString()}`
   },
 

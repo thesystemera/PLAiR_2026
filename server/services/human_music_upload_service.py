@@ -201,7 +201,7 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
             plan.append(("features", "Extracting audio features", 3))
         if self.lyric_timestamp_service:
             plan.append(("lyrics", "Extracting lyric timestamps", 6))
-        for bitrate in stages.OPUS_BITRATES:
+        for bitrate in stages.STREAM_BITRATES:
             plan.append((f"transcode_{bitrate}", f"Transcoding ({bitrate})", 2))
         plan.append(("catalog_mp3", "Creating catalog MP3", 2))
         plan.append(("artwork_embedded", "Extracting embedded artwork", 1))

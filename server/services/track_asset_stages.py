@@ -11,9 +11,9 @@ from services.audio_stage_registry import stems_dir_for
 from config import settings
 from models_global import GPUOutOfMemoryError
 
-OPUS_BITRATES: Tuple[str, ...] = ("128k", "192k", "256k")
+STREAM_BITRATES: Tuple[str, ...] = ("128k", "192k", "256k")
 CATALOG_MP3_BITRATE = "192k"
-STREAM_MP3_BITRATE = "256k"
+MP3_EQUIVALENT: Dict[str, str] = {"128k": "192k", "192k": "256k", "256k": "320k"}
 CATALOG_AUDIO_EXTENSIONS: Tuple[str, ...] = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.webm')
 ORIGINAL_UPLOAD_SUFFIXES: Tuple[str, ...] = (
     '.wav', '.flac', '.mp3', '.ogg', '.m4a', '.aac', '.opus', '.webm', '.mp4', '.mov', '.m4v', '.mkv', '.avi'
@@ -80,8 +80,8 @@ def webm_path(track_id: str, bitrate: str = "192k") -> Path:
     return opus_path(track_id, bitrate).parent / "webm" / f"{track_id}.webm"
 
 
-def stream_mp3_path(track_id: str) -> Path:
-    return settings.STREAM_MP3_DIR / f"{track_id}.mp3"
+def stream_mp3_path(track_id: str, bitrate: str = "192k") -> Path:
+    return settings.CATALOG_DIR / f"mp3_{MP3_EQUIVALENT[bitrate]}" / f"{track_id}.mp3"
 
 
 def demucs_vocal_stem(track_id: str) -> Optional[Path]:
@@ -190,7 +190,7 @@ async def create_opus_variant(transcoding_service, track_id: str, bitrate: str, 
 
 
 async def create_opus_variants(transcoding_service, track_id: str, source: Path,
-                               bitrates: Tuple[str, ...] = OPUS_BITRATES) -> Dict[str, bool]:
+                               bitrates: Tuple[str, ...] = STREAM_BITRATES) -> Dict[str, bool]:
     results = {}
     for bitrate in bitrates:
         results[bitrate] = await create_opus_variant(transcoding_service, track_id, bitrate, source)
@@ -274,9 +274,9 @@ def catalog_output_paths(track_id: str) -> List[Path]:
         artwork_path(track_id),
         settings.ARTWORK_DIR / f"{track_id}.jpg",
         enriched_artwork_path(track_id),
-        stream_mp3_path(track_id),
     ]
-    for bitrate in OPUS_BITRATES:
+    for bitrate in STREAM_BITRATES:
         paths.append(opus_path(track_id, bitrate))
         paths.append(webm_path(track_id, bitrate))
+        paths.append(stream_mp3_path(track_id, bitrate))
     return paths

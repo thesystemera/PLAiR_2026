@@ -202,7 +202,7 @@ class AssetDetection:
                 catalog_mp3 = Finding(BLOCKED, f"{catalog_mp3.detail}: master WAV is shorter than the catalog MP3 (check the master)")
         findings["catalog_mp3"] = catalog_mp3
         webm_problems = []
-        for bitrate in stages.OPUS_BITRATES:
+        for bitrate in stages.STREAM_BITRATES:
             findings[f"opus_{bitrate}"] = self._check_audio_file(stages.opus_path(track_id, bitrate), "opus", reference)
             webm_stat = _file_stat(stages.webm_path(track_id, bitrate))
             if webm_stat is not None:

@@ -69,7 +69,7 @@ def clear_previous_render(track_id: str):
     for folder in (settings.DECODED_WAV_DIR, settings.WAV_DIR, settings.PREMASTER_WAV_DIR, settings.SONIC_WAV_DIR):
         (folder / f"{track_id}.wav").unlink(missing_ok=True)
     shutil.rmtree(settings.DEMUCS_STEMS_DIR / track_id, ignore_errors=True)
-    for bitrate in stages.OPUS_BITRATES:
+    for bitrate in stages.STREAM_BITRATES:
         stages.opus_path(track_id, bitrate).unlink(missing_ok=True)
         stages.webm_path(track_id, bitrate).unlink(missing_ok=True)
 

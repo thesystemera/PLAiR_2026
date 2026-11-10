@@ -267,7 +267,7 @@ def estimate_disk_bytes(plan: Dict[str, Any]) -> float:
 def live_outputs(plan: Dict[str, Any]) -> Dict[str, Path]:
     track_id = plan["track_id"]
     outputs = {"master": stages.master_wav_path(track_id)}
-    for bitrate in stages.OPUS_BITRATES:
+    for bitrate in stages.STREAM_BITRATES:
         outputs[f"opus_{bitrate}"] = stages.opus_path(track_id, bitrate)
         outputs[f"webm_{bitrate}"] = stages.webm_path(track_id, bitrate)
     if plan["is_upload"]:
@@ -436,7 +436,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
 
     if "transcode" not in steps:
         return staged
-    for bitrate in stages.OPUS_BITRATES:
+    for bitrate in stages.STREAM_BITRATES:
         opus = staging / f"opus_{bitrate}.opus"
         webm = staging / f"webm_{bitrate}.webm"
         if not await transcoding.transcode_to_opus(staged["master"], opus, bitrate):

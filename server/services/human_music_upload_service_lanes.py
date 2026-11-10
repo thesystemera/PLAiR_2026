@@ -240,7 +240,7 @@ class UploadLanes:
             except Exception as e:
                 log_service.warning(f"[Upload/Audio] Lyric timestamp extraction failed: {e}")
 
-        for bitrate in stages.OPUS_BITRATES:
+        for bitrate in stages.STREAM_BITRATES:
             await progress.stage(f"transcode_{bitrate}")
             if await stages.create_opus_variant(self.transcoding_service, track_id, bitrate, master_wav_path):
                 log_service.upload(f"[Upload/Audio] Transcoded to Opus {bitrate}")

@@ -19,7 +19,7 @@ from config import settings
 from service_registry import services
 from routers.deps import get_cached_current_user, require_admin
 
-ALLOWED_STREAM_BITRATES = {"128k", "192k", "256k"}
+ALLOWED_STREAM_BITRATES = set(stages.STREAM_BITRATES)
 
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 SAFE_CLIP_NAME = re.compile(r"[A-Za-z0-9_-]{1,160}\.mp4")
@@ -94,14 +94,18 @@ def _log_stream_start(request: Request, track_id: str, bitrate: str, range_heade
 @router.get("/api/stream/{track_id}")
 async def stream_track(
         track_id: str,
-        range_header: Optional[str] = Header(None, alias="range")
+        range_header: Optional[str] = Header(None, alias="range"),
+        bitrate: Optional[str] = None,
+        current_user: Optional[User] = Depends(get_cached_current_user),
 ):
     assert services.catalog_service is not None
     assert services.media_streaming_service is not None
     assert services.transcoding_service is not None
+    if bitrate not in ALLOWED_STREAM_BITRATES:
+        bitrate = services.media_streaming_service.resolve_bitrate(current_user)
     if services.catalog_service.get_audio_path(track_id) is None:
         raise HTTPException(status_code=404, detail="Audio file not found")
-    audio_path = await services.transcoding_service.get_or_create_stream_mp3(track_id)
+    audio_path = await services.transcoding_service.get_or_create_stream_mp3(track_id, bitrate)
     if audio_path is None:
         raise HTTPException(status_code=404, detail="Audio file not available")
 
@@ -111,7 +115,7 @@ async def stream_track(
         media_type="audio/mpeg",
         extra_headers={
             "X-Audio-Format": "mp3",
-            "X-Audio-Bitrate": stages.STREAM_MP3_BITRATE
+            "X-Audio-Bitrate": stages.MP3_EQUIVALENT[bitrate]
         }
     )
 

@@ -332,7 +332,7 @@ class CacheManager {
     await this.ensureSpace(TYPICAL_TRACK_BYTES, [trackId])
 
     const format = downloadFormat()
-    const url = format === 'mp3' ? api.getMp3StreamUrl(trackId, 'download') : api.getStreamUrl(trackId, bitrate, 'download')
+    const url = format === 'mp3' ? api.getMp3StreamUrl(trackId, bitrate, 'download') : api.getStreamUrl(trackId, bitrate, 'download')
 
     const result = await this.downloadChunked(url, { onProgress, signal })
 
