@@ -590,11 +590,16 @@ class AnnouncerService:
                     f"🎙️ [{session_id[:8]}] ❌ Track changed (user action) during wait, cancelling")
                 return False
 
+            time_until_trigger = trigger_time_ms - current_progress
+            track_end_ms = (session_state.current_track or {}).get('track_info', {}).get('duration', 0)
+            if not session_state.active_device_online and (
+                    not is_playing or time_until_trigger <= 0 or 0 < track_end_ms <= current_progress):
+                log_service.playback(f"{log_service.who(session_id)}: no device online, the hosts' slot is dropped")
+                return False
+
             if not is_playing:
                 await asyncio.sleep(1.0)
                 continue
-
-            time_until_trigger = trigger_time_ms - current_progress
 
             current_time = time.time()
             if current_time - last_log_time >= 10.0:
