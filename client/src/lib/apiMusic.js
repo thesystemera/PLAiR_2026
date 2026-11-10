@@ -102,12 +102,9 @@ export const musicMethods = {
     })
   },
 
-  async generate({ type = 'new', userRequest = null, sourceTrackId = null, batchCount = 3 }) {
-    return this._routeRequest('generate', [{ type, userRequest, sourceTrackId, batchCount }], async () => {
-      const body = {
-        generation_type: type,
-        batch_count: batchCount
-      }
+  async generate({ type = 'new', userRequest = null, sourceTrackId = null }) {
+    return this._routeRequest('generate', [{ type, userRequest, sourceTrackId }], async () => {
+      const body = { generation_type: type }
 
       if (type === 'new') {
         body.user_request = userRequest

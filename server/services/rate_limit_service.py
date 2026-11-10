@@ -155,41 +155,28 @@ class RateLimitService(SingletonService):
             "resets_at": self._period_reset(period).isoformat(),
         }
 
-    def _limit_message(self, usage: Dict, cost: int) -> str:
-        remaining = usage["remaining"]
+    def _limit_message(self, usage: Dict) -> str:
         reset = self._period_reset(usage["period"])
         if usage["tier"] == "premium":
-            if remaining > 0:
-                return (f"Only {remaining} of your {usage['limit']} Premium generations are left this month "
-                        f"and this request needs {cost}. Lower the batch count or wait until {reset:%B} {reset.day}.")
             return (f"You've used all {usage['limit']} Premium generations for this month. "
                     f"Your allowance resets on {reset:%B} {reset.day}.")
-        unit = "today" if usage["period"] == "day" else "this month"
-        if remaining > 0:
-            return (f"Only {remaining} of your {usage['limit']} free generations are left {unit} "
-                    f"and this request needs {cost}. Lower the batch count or upgrade to Premium.")
         return (f"Free generation limit reached ({usage['limit']} per {usage['period']}). "
                 f"Try again {'tomorrow' if usage['period'] == 'day' else 'next month'} or upgrade to Premium.")
 
-    async def reserve_generations(
-        self,
-        user_id: Optional[int],
-        session_id: str,
-        user=None,
-        cost: int = 1
-    ) -> Tuple[bool, Optional[str], Dict]:
+    async def reserve_generation(self, user_id: Optional[int], session_id: str,
+                                 user=None) -> Tuple[bool, Optional[str], Dict]:
         usage = self.get_generation_usage(user_id, session_id, user)
-        if cost > usage["remaining"]:
-            return False, self._limit_message(usage, cost), usage
+        if usage["remaining"] < 1:
+            return False, self._limit_message(usage), usage
 
         user_key = self._get_user_key(user_id, session_id)
         entry = self._usage_entry(user_key)
-        entry["day_count"] = int(entry.get("day_count", 0)) + cost
-        entry["month_count"] = int(entry.get("month_count", 0)) + cost
+        entry["day_count"] = int(entry.get("day_count", 0)) + 1
+        entry["month_count"] = int(entry.get("month_count", 0)) + 1
         self._save_usage()
         usage = self.get_generation_usage(user_id, session_id, user)
         log_service.system(
-            f"[RateLimit] {user_key}: Reserved {cost} generation(s). "
+            f"[RateLimit] {user_key}: Reserved 1 generation. "
             f"{usage['used']}/{usage['limit']} used this {usage['period']}"
         )
         return True, None, usage
@@ -197,19 +184,17 @@ class RateLimitService(SingletonService):
     def reservation_stamp(self) -> Dict[str, str]:
         return {"day": self._get_current_day(), "month": self._get_current_month()}
 
-    async def refund_generations(self, user_id: Optional[int], session_id: str, cost: int = 1,
-                                 reserved: Optional[Dict[str, str]] = None) -> bool:
-        if cost <= 0:
-            return False
+    async def refund_generation(self, user_id: Optional[int], session_id: str,
+                                reserved: Optional[Dict[str, str]] = None) -> bool:
         entry = self._usage_entry(self._get_user_key(user_id, session_id))
         refunded = False
         for period in ("day", "month"):
             if reserved and reserved.get(period) != entry.get(period):
                 continue
-            entry[f"{period}_count"] = max(int(entry.get(f"{period}_count", 0)) - cost, 0)
+            entry[f"{period}_count"] = max(int(entry.get(f"{period}_count", 0)) - 1, 0)
             refunded = True
         self._save_usage()
-        log_service.system(f"[RateLimit] {self._get_user_key(user_id, session_id)}: Refunded {cost} generation(s)")
+        log_service.system(f"[RateLimit] {self._get_user_key(user_id, session_id)}: Refunded 1 generation")
         return refunded
 
 rate_limit_service = RateLimitService()

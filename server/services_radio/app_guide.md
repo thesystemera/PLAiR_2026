@@ -96,7 +96,7 @@ In Account under "Artists & Bands" you add the names you release under, with an 
 
 ## Making songs
 Asks: can I make my own song, generate music, create a song, make a remix, make a song like this, can you make one
-With an account you can have PLAiR make new songs: just ask the hosts ("make us a Michael Jackson style track"), type an idea in the Catalog search bar and tap the purple sparkles "Generate tracks", or tap "+" on the Playing panel to remix the current song or make more like its artist or similar artists. Each uses credits; free accounts get a few a month and Premium gets more. New songs go into your queue when they're ready, usually ten minutes or so, and join the catalog for everyone.
+With an account you can have PLAiR make new songs: just ask the hosts ("make us a Michael Jackson style track"), type an idea in the Catalog search bar and tap the purple sparkles "Generate tracks", or tap "+" on the Playing panel to remix the current song or make more like its artist or similar artists. Each request makes two songs for one credit (ask again for more); free accounts get a few a month and Premium gets more. New songs go into your queue when they're ready, usually ten minutes or so, and join the catalog for everyone.
 
 ## Sharing a song
 Asks: how do I share this, send this song to a friend, make a video of this song, share link

@@ -93,7 +93,7 @@ DJ tools today (19): `pulse_search`, `pulse_detail`, `listener_context`, `city_t
 | Devices | List online devices, move playback | `/api/devices`, `/api/devices/activate` -> `playback_service.transfer_playback` (target must be online) | new tool `move_playback` (device by name); rename/remove stay in the app |
 | Radio Mode | On/off, each segment type, reviews, stings, feature interval, music source | `PUT /api/radio-mode` -> `preferences_service.set_radio_settings` + `radio_mode_service.set_user_prefs` (guests: WS `radio_mode_prefs`) | new tool `radio_settings` (one patch of `RadioPrefs` fields) |
 | Sound | DJ voice / pings muted, audio quality | `PUT /api/user/profile` (`tts_muted`, `notifications_muted`), `PUT /api/auth/audio-quality`; both stored server-side | fold into the settings tool (owner decision) |
-| Generation | New song from a request, more like a track, cancel, list jobs | `/api/generate` -> `suno_generation_queue_service.start_generation_job` with `rate_limit_service.reserve_generations` (signed in) | new tool `generate_song` (owner decision on limits) |
+| Generation | New song from a request, more like a track, cancel, list jobs | `/api/generate` -> `suno_generation_queue_service.request_generation` (one request = two songs = one credit, signed in) | done 10 Nov: `generate_song` calls `request_generation`; cancel and list jobs stay in the app |
 | Profile | Clear DJ conversation, reset persona | `/api/manage_user_data` -> `user_profile_service.delete_conversations` / `reset_persona` | owner decision |
 | Stats | One track's analytics, my usage | `/api/analytics/track/{id}`, `/api/usage/me` | track analytics into `pulse_detail` for a track; usage stays in the app |
 

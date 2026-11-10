@@ -28,82 +28,36 @@ async def generate_music(
             detail="You must be logged in to generate music. Please create an account or sign in."
         )
 
-    generation_type = request.generation_type
-    batch_count = request.batch_count
-    source_track_id = request.source_track_id
-
     assert services.catalog_service is not None
     assert services.suno_generation_queue_service is not None
-    if generation_type == 'similar':
+    original_params = None
+    source_track_id = None
+    if request.generation_type == 'similar':
+        source_track_id = request.source_track_id
         if not source_track_id:
             raise HTTPException(status_code=400, detail="source_track_id required for similar generation")
-
         track = services.catalog_service.get_track(source_track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Source track not found")
-
         original_params = track.get("generation_params")
         if not original_params:
             raise HTTPException(status_code=400, detail="Source track has no generation parameters")
-
-        log_service.api(
-            f"Starting 'Similar' generation from track {source_track_id}: "
-            f"{batch_count} batches (~{batch_count * 2} tracks)"
-        )
-
-        job_ids, error_msg, usage = await services.suno_generation_queue_service.request_generation(
-            session_id=session_id,
-            user=user,
-            batch_count=batch_count,
-            source_track_id=source_track_id,
-            original_params=original_params
-        )
-        if error_msg:
-            raise HTTPException(status_code=429, detail=error_msg)
-
-        return {
-            "status": "started",
-            "job_ids": job_ids,
-            "batch_count": batch_count,
-            "expected_tracks": batch_count * 2,
-            "generation_type": "similar",
-            "generation_usage": usage,
-            "source_track": {
-                "id": source_track_id,
-                "title": original_params.get("title")
-            }
-        }
-
+        log_service.api(f"Starting 'Similar' generation from track {source_track_id}")
+    elif not request.user_request:
+        raise HTTPException(status_code=400, detail="user_request required for new generation")
     else:
-        user_request = request.user_request
-        if not user_request:
-            raise HTTPException(status_code=400, detail="user_request required for new generation")
+        log_service.api(f"Starting 'New' generation: {request.user_request}")
 
-        log_service.system("=" * 60)
-        log_service.system(f"USER REQUEST: {user_request}")
-        log_service.system("=" * 60)
-
-        log_service.api(
-            f"Starting 'New' generation: {batch_count} batches (~{batch_count * 2} tracks)"
-        )
-
-        job_ids, error_msg, usage = await services.suno_generation_queue_service.request_generation(
-            session_id=session_id,
-            user=user,
-            batch_count=batch_count,
-            user_request=user_request
-        )
-        if error_msg:
-            raise HTTPException(status_code=429, detail=error_msg)
-
-        return {
-            "status": "started",
-            "job_ids": job_ids,
-            "batch_count": batch_count,
-            "expected_tracks": batch_count * 2,
-            "generation_type": "new",
-            "generation_usage": usage
-        }
+    job_id, error_msg, usage = await services.suno_generation_queue_service.request_generation(
+        session_id=session_id,
+        user=user,
+        user_request=request.user_request if original_params is None else None,
+        source_track_id=source_track_id,
+        original_params=original_params
+    )
+    if error_msg:
+        raise HTTPException(status_code=429, detail=error_msg)
+    return {"status": "started", "job_id": job_id, "generation_usage": usage}
 
 @router.get("/api/generation-jobs/{job_id}")
 async def get_generation_job_status(

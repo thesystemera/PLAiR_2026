@@ -30,7 +30,6 @@ class GenerateRequest(BaseModel):
     user_request: Optional[str] = Field(None, max_length=5000)
     generation_type: str = "new"
     source_track_id: Optional[str] = Field(None, max_length=128)
-    batch_count: int = Field(3, ge=1, le=5)
 
 class RegisterRequest(BaseModel):
     username: str = Field(..., max_length=100)

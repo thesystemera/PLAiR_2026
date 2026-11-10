@@ -176,8 +176,8 @@ class GenerationInflight:
             )
             refunded = False
             if record.get("reservation") and not record.get("refunded"):
-                refunded = await rate_limit_service.refund_generations(
-                    record.get("user_id"), record.get("session_id") or "", 1, record.get("reservation"))
+                refunded = await rate_limit_service.refund_generation(
+                    record.get("user_id"), record.get("session_id") or "", record.get("reservation"))
             updated = {**record, "status": STATUS_UNCONFIRMED, "unconfirmed_at": time.time(),
                        "refunded": bool(record.get("refunded")) or refunded,
                        "error": "restart during submit"}

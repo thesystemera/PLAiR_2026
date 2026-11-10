@@ -639,8 +639,8 @@ function App() {
     try {
       for (const job of jobs) {
         await api.generate(job.type === 'remix'
-          ? { type: 'similar', sourceTrackId: generationModalTrack.id, batchCount: 1 }
-          : { type: 'new', userRequest: job.artistName, batchCount: 1 })
+          ? { type: 'similar', sourceTrackId: generationModalTrack.id }
+          : { type: 'new', userRequest: job.artistName })
       }
 
       setQueueOpen(true)

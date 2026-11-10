@@ -447,11 +447,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
     }
 
     try {
-      await api.generate({
-        type: 'new',
-        userRequest: query,
-        batchCount: 3
-      })
+      await api.generate({ type: 'new', userRequest: query })
     } catch (error) {
       logger.error('Generation failed:', error)
       const errorMsg = error.message || 'Failed to start generation. Please try again.'

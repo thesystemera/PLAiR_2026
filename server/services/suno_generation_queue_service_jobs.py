@@ -5,6 +5,7 @@ from datetime import datetime, UTC
 from config import settings
 
 
+SONGS_PER_BATCH = 2
 SUNO_CREDIT_BREAKER_COOLDOWN_S = 900
 CANCEL_WAIT_TIMEOUT_S = 10
 TERMINAL_BATCH_STATUSES = ("completed", "failed")
@@ -111,8 +112,7 @@ class GenerationJob:
         ]
 
         per_track_total = sum(stage_weights[s] for s in ordered_per_track)
-        tracks_per_batch = 2
-        max_total = (stage_weights["gemini"] if self.user_request else 0) + stage_weights["suno"] + tracks_per_batch * per_track_total
+        max_total = (stage_weights["gemini"] if self.user_request else 0) + stage_weights["suno"] + SONGS_PER_BATCH * per_track_total
 
         batch_progress = 0
 
@@ -192,8 +192,8 @@ class GenerationJob:
             "failed": failed,
             "retrying": retrying,
             "completed_tracks": len(self.completed_track_ids),
-            "total_tracks": self.batch_count * 2,
-            "expected_tracks": self.batch_count * 2,
+            "total_tracks": self.batch_count * SONGS_PER_BATCH,
+            "expected_tracks": self.batch_count * SONGS_PER_BATCH,
             "source_track_id": self.source_track_id,
             "current_stage": current_stage,
             "title": title,

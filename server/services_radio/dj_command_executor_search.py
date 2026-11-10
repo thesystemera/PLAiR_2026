@@ -41,7 +41,6 @@ LOVED_PLAY_NOTE = ("A weighted shuffle of the listener's own tracks: the ones th
                    "one's listens and skips.")
 YOURS_NOTE = ("'yours' is this listener's own history with a track: their rating (like or super_like), listens "
               "(played at least halfway), skips (cut short) and when they last played it.")
-GENERATE_BATCHES = 1
 GENERATE_NOTE = ("Ordered. The songs are written, recorded and mastered in the background, usually ten minutes or so, "
                  "longer when other songs are already being made (being_made_ahead). When they're done they go into "
                  "this listener's queue by themselves and join the catalog for everyone. Tell the listener in your own "
@@ -320,6 +319,7 @@ class ExecutorSearch:
 
     async def execute_generate_song(self, session_dict, request):
         from service_registry import services
+        from services.suno_generation_queue_service_jobs import SONGS_PER_BATCH
         from services.user_data_cache_service import user_data_cache
 
         session_id = session_dict.get('session_id')
@@ -330,10 +330,9 @@ class ExecutorSearch:
         if user is None:
             return {"status": "refused", "reason": "Only signed-in listeners can have new songs made"}
         ahead = generator.active_jobs()
-        _, limit_msg, usage = await generator.request_generation(session_id, user, GENERATE_BATCHES,
-                                                                 user_request=request)
+        _, limit_msg, usage = await generator.request_generation(session_id, user, user_request=request)
         if limit_msg:
             return {"status": "refused", "reason": limit_msg}
         await self._note(session_dict, f"Ordered new songs: {request}")
-        return {"status": "ordered", "request": request, "songs": GENERATE_BATCHES * 2,
+        return {"status": "ordered", "request": request, "songs": SONGS_PER_BATCH,
                 "being_made_ahead": ahead, "credits_left": usage.get("remaining"), "note": GENERATE_NOTE}

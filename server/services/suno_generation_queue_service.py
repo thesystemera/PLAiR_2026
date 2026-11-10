@@ -17,8 +17,9 @@ from services.task_utils import spawn
 from config import settings
 from services.suno_generation_queue_service_inflight import GenerationInflight
 from services.suno_generation_queue_service_jobs import (
-    CANCEL_CLEANUP_POLL_S, CANCEL_CLEANUP_TIMEOUT_S, CANCEL_WAIT_TIMEOUT_S, GenerationJob, STATUS_UNCONFIRMED,
-    SUBMIT_CONFIRM_SETTLE_S, SUNO_CREDIT_BREAKER_COOLDOWN_S, SUNO_INFLIGHT_TASKS_FILE, SunoSubmitNeedsAttention,
+    CANCEL_CLEANUP_POLL_S, CANCEL_CLEANUP_TIMEOUT_S, CANCEL_WAIT_TIMEOUT_S, GenerationJob, SONGS_PER_BATCH,
+    STATUS_UNCONFIRMED, SUBMIT_CONFIRM_SETTLE_S, SUNO_CREDIT_BREAKER_COOLDOWN_S, SUNO_INFLIGHT_TASKS_FILE,
+    SunoSubmitNeedsAttention,
     TERMINAL_BATCH_STATUSES, UNCONFIRMED_MARKER, friendly_generation_error,
 )
 
@@ -163,14 +164,12 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             self,
             session_id: str,
             user,
-            batch_count: int,
             user_request: Optional[str] = None,
             source_track_id: Optional[str] = None,
             original_params: Optional[Dict[str, Any]] = None
     ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
         user_id = int(user.id) if user else None
-        allowed, error_msg, usage = await rate_limit_service.reserve_generations(
-            user_id=user_id, session_id=session_id, user=user, cost=batch_count)
+        allowed, error_msg, usage = await rate_limit_service.reserve_generation(user_id, session_id, user)
         if not allowed:
             log_service.warning(f"[{session_id}] Generation limit reached: {error_msg}")
             return None, error_msg, usage
@@ -179,14 +178,13 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             job_id, _ = await self.start_generation_job(
                 session_id=session_id,
                 original_params=original_params or {},
-                batch_count=batch_count,
                 user_id=user_id,
                 source_track_id=source_track_id,
                 user_request=user_request,
                 reservation=reservation
             )
         except Exception:
-            await rate_limit_service.refund_generations(user_id, session_id, batch_count, reservation)
+            await rate_limit_service.refund_generation(user_id, session_id, reservation)
             raise
         return job_id, None, usage
 
@@ -198,7 +196,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             self,
             session_id: str,
             original_params: Dict[str, Any],
-            batch_count: int = 3,
+            batch_count: int = 1,
             user_id: Optional[int] = None,
             source_track_id: Optional[str] = None,
             user_request: Optional[str] = None,
@@ -207,8 +205,8 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
     ) -> Tuple[str, List[asyncio.Task]]:
 
         log_service.system(
-            f"Creating 1 generation job with {batch_count} batches "
-            f"(~{batch_count * 2} tracks total) for session {session_id}"
+            f"Creating 1 generation job with {batch_count} batch(es) "
+            f"(~{batch_count * SONGS_PER_BATCH} tracks total) for session {session_id}"
         )
 
         job_id = str(uuid.uuid4())
@@ -312,7 +310,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             return False
         batch["refunded"] = True
         try:
-            refunded = await rate_limit_service.refund_generations(job.user_id, job.session_id, 1, job.reservation)
+            refunded = await rate_limit_service.refund_generation(job.user_id, job.session_id, job.reservation)
         except Exception as e:
             log_service.error(f"Job {job.job_id} batch {batch_index}: generation refund failed: {e}")
             return False
@@ -633,7 +631,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
 
                     if audio_url:
                         batch["progress_percent"] = job.calculate_progress(batch_index, "downloading", track_index)
-                        await self._stage(job, batch_index, f"Downloading track {track_index + 1}/2...")
+                        await self._stage(job, batch_index, f"Downloading track {track_index + 1}/{len(tracks)}...")
 
                         audio_path = self.metadata_service.get_audio_path(current_track_unique_id)
                         success = await self.suno_service.download_track(audio_url, audio_path)
@@ -644,7 +642,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             log_service.system(f"Enriching metadata with advanced tags for {current_track_unique_id}")
                             batch["upscaling_stage"] = "MetadataEnrichment"
                             batch["progress_percent"] = job.calculate_progress(batch_index, "metadata_enrichment", track_index)
-                            await self._stage(job, batch_index, f"Track {track_index + 1}/2: Enriching Metadata")
+                            await self._stage(job, batch_index, f"Track {track_index + 1}/{len(tracks)}: Enriching Metadata")
                             try:
                                 if self.enriched_metadata_service is None:
                                     raise Exception("Enriched metadata service not initialized")
@@ -686,7 +684,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                                     info = stage_info.get(stage, {"key": "apollo", "display": stage})
                                     batch["upscaling_stage"] = stage
                                     batch["progress_percent"] = job.calculate_progress(batch_index, info["key"], idx)
-                                    await self._stage(job, batch_index, f"Track {idx + 1}/2: {info['display']}")
+                                    await self._stage(job, batch_index, f"Track {idx + 1}/{len(tracks)}: {info['display']}")
 
                                 return upscaling_progress_callback
 
@@ -742,7 +740,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
 
                     batch["upscaling_stage"] = "Complete"
                     batch["progress_percent"] = job.calculate_progress(batch_index, "finalizing", track_index)
-                    await self._stage(job, batch_index, f"Track {track_index + 1}/2: Finalizing...")
+                    await self._stage(job, batch_index, f"Track {track_index + 1}/{len(tracks)}: Finalizing...")
 
                     master_wav_path = settings.ENHANCED_WAV_DIR / f"{current_track_unique_id}.wav"
                     if master_wav_path.exists():

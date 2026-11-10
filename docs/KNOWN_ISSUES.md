@@ -378,8 +378,11 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
 - Generation jobs appear in the app only from the server's events (the client's own `addJob` never ran: `job_ids` is
   one string), and every generation notice lives in `GenerationQueueContext` (App.jsx had half of them, and its
   "Generated N tracks" counted the expected songs, not the finished ones).
-- Open, owner's call: the Catalog's "Generate tracks" orders 3 batches (6 songs, 3 credits) while the hosts and the
-  Playing panel's "+" order 1 (2 songs, 1 credit).
+- One request = one Suno task = two songs = one credit, wherever a listener asks (the Catalog's "Generate tracks",
+  the Playing panel's "+", the hosts). The old 3-batch / 6-song request is gone: `batch_count` is out of
+  `/api/generate`, and the quota is `reserve_generation` / `refund_generation` (one credit each). Another song like it
+  is simply another request. Multi-batch jobs remain only inside the bulk tool ("Jobs per artist") and when old
+  in-flight jobs resume.
 
 ## Done on 1 Oct 2026 (cleanup)
 
