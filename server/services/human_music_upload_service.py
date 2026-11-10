@@ -285,7 +285,7 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
 
         usage_tracking.bind_session(user_id=user_id)
         upload_id = upload_id if upload_id and UPLOAD_ID_PATTERN.match(upload_id) else uuid.uuid4().hex
-        progress = _UploadProgress(upload_id, progress_callback, self._plan_stages())
+        progress = _UploadProgress(progress_callback, self._plan_stages())
         job: Dict[str, Any] = {"track_id": None, "catalog_added": False, "succeeded": False}
         dedupe_key = None
         result: Tuple[bool, str, Optional[Dict[str, Any]]] = (False, "Upload failed", None)
@@ -348,7 +348,7 @@ class HumanMusicUploadService(UploadLanes, UploadedTracks, SingletonService):
                 await self._rollback_track(user_id, job["track_id"], job["catalog_added"])
             if dedupe_key is not None:
                 self._inflight_uploads.discard(dedupe_key)
-            await progress.finish(job["succeeded"], result[1], job["track_id"] if job["succeeded"] else None)
+            await progress.finish(job["succeeded"])
 
         return result
 

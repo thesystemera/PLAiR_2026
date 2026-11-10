@@ -6,43 +6,11 @@ import { MOTION, PRESETS } from '../lib/motion'
 import { Expandable, Fade, FadeSwap, Pop } from './Motion'
 import { InlineNote } from './Notice'
 
-function getJobTypeIcon(type) {
-  switch (type) {
-    case 'generate':
-      return '✨'
-    case 'similar':
-      return '🔄'
-    case 'similar_style':
-      return '🎨'
-    default:
-      return '🎵'
-  }
-}
-
-function getJobTypeLabel(type) {
-  switch (type) {
-    case 'generate':
-      return 'Generating'
-    case 'similar':
-      return 'Similar Tracks'
-    case 'similar_style':
-      return 'Similar Style'
-    default:
-      return 'Processing'
-  }
-}
-
-function formatStage(job) {
-  return job.current_stage || 'Processing...'
-}
-
 function JobItem({ job, onCancel, onRemove }) {
-  const isActive = job.status === 'pending' || job.status === 'processing' || job.status === 'running'
+  const isActive = job.status === 'processing'
   const isCompleted = job.status === 'completed'
   const isFailed = job.status === 'failed'
-  const progress = job.progress_percent !== undefined
-    ? job.progress_percent
-    : (job.total_tracks > 0 ? (job.completed_tracks / job.total_tracks) * 100 : 0)
+  const progress = job.progress_percent || 0
   const statusIcon = isActive ? 'active' : isCompleted ? 'completed' : isFailed ? 'failed' : null
   const action = isActive ? 'cancel' : (isCompleted || isFailed) ? 'remove' : null
 
@@ -58,14 +26,14 @@ function JobItem({ job, onCancel, onRemove }) {
     >
       <div className="flex items-center gap-3">
         <div className="text-2xl w-8 h-8 flex items-center justify-center flex-shrink-0">
-          {getJobTypeIcon(job.type)}
+          ✨
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-white flex items-center gap-2 mb-1">
-            <span className="truncate">{job.query}</span>
+            <span className="truncate">{job.title || 'Generating tracks...'}</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-white/20 text-white/90 font-medium whitespace-nowrap">
-              {getJobTypeLabel(job.type)}
+              Generating
             </span>
           </div>
 
@@ -82,7 +50,7 @@ function JobItem({ job, onCancel, onRemove }) {
               </FadeSwap>
             </Pop>
 
-            <span className="truncate">{formatStage(job)}</span>
+            <span className="truncate">{job.current_stage || 'Processing...'}</span>
 
             {job.total_tracks > 0 && (
               <span className="ml-auto whitespace-nowrap">
@@ -96,7 +64,7 @@ function JobItem({ job, onCancel, onRemove }) {
           <FadeSwap swapKey={action} preset={PRESETS.iconSwap} mode="wait" className="flex">
             {action === 'cancel' ? (
               <button
-                onClick={() => onCancel(job.id)}
+                onClick={() => onCancel(job.job_id)}
                 className="ui-press p-1.5 hover:bg-red-500/20 rounded transition"
                 title="Cancel generation"
               >
@@ -104,7 +72,7 @@ function JobItem({ job, onCancel, onRemove }) {
               </button>
             ) : (
               <button
-                onClick={() => onRemove(job.id)}
+                onClick={() => onRemove(job.job_id)}
                 className="ui-press p-1.5 hover:bg-white/10 rounded transition"
                 title="Remove from list"
               >
@@ -177,7 +145,7 @@ export function GenerationQueuePanel() {
                 <AnimatePresence>
                   {jobs.map(job => (
                     <JobItem
-                      key={job.id}
+                      key={job.job_id}
                       job={job}
                       onCancel={cancelJob}
                       onRemove={removeJob}

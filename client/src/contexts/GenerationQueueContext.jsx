@@ -7,20 +7,7 @@ import { useUISelector } from './UIStateContext'
 
 const GenerationQueueContext = createContext(null)
 
-const normalizeJobData = (data) => ({
-  id: data.job_id || data.id,
-  type: data.type || 'generate',
-  query: data.title || data.query || data.track_title || 'Generating tracks...',
-  status: data.status || 'pending',
-  total_tracks: data.total_tracks || 0,
-  completed_tracks: data.completed_tracks || 0,
-  current_stage: data.current_stage || 'Processing...',
-  progress_percent: data.progress_percent !== undefined ? data.progress_percent : 0,
-  error: data.error || null,
-  refunded: data.refunded || 0,
-  tracks: data.tracks || [],
-  created_at: Date.now()
-})
+const isActiveJob = (job) => job.status === 'processing'
 
 const refundNote = (count) => {
   if (!count) return ''
@@ -46,95 +33,48 @@ export function GenerationQueueProvider({ children }) {
   const [isOpen, setIsOpen] = useState(false)
   const [hasLoadedInitialJobs, setHasLoadedInitialJobs] = useState(false)
 
-  const updateJobFromStatus = useCallback((jobId, statusData) => {
+  const upsertJob = useCallback((status) => {
     setJobs(prev => {
-      const existingJob = prev.find(job => job.id === jobId)
-
-      if (!existingJob) {
-        const newJob = normalizeJobData({ ...statusData, job_id: jobId })
+      const index = prev.findIndex(job => job.job_id === status.job_id)
+      if (index === -1) {
         setIsOpen(true)
-        return [...prev, newJob]
+        return [...prev, status]
       }
-
-      return prev.map(job =>
-        job.id === jobId
-          ? {
-              ...job,
-              status: statusData.status || job.status,
-              total_tracks: statusData.total_tracks || job.total_tracks,
-              completed_tracks: statusData.completed_tracks || 0,
-              current_stage: statusData.current_stage || job.current_stage,
-              query: statusData.title || job.query,
-              progress_percent: statusData.progress_percent !== undefined ? statusData.progress_percent : job.progress_percent,
-              error: statusData.error || null,
-              refunded: statusData.refunded ?? job.refunded,
-              tracks: statusData.tracks || job.tracks
-            }
-          : job
-      )
+      const next = prev.slice()
+      next[index] = status
+      return next
     })
   }, [])
 
-  const handleGenerationStarted = useCallback((data) => {
-    if (data?.job_id) {
-      updateJobFromStatus(data.job_id, data)
+  const removeJob = useCallback((jobId) => {
+    setJobs(prev => prev.filter(job => job.job_id !== jobId))
+  }, [])
+
+  const handleTaskProgress = useCallback((data) => {
+    if (data?.job_type !== 'generation' || !data.job_id) return
+    const { event, ...job } = data
+    const kind = event?.kind
+    if (job.status === 'cancelled') {
+      removeJob(job.job_id)
+      if (kind === 'finished' && job.refunded > 0) {
+        toastInfo(`Generation cancelled.${refundNote(job.refunded)}`, 5000, 'top', `generation-cancelled-${job.job_id}`)
+      }
+      return
     }
-  }, [updateJobFromStatus])
-
-  const handleGenerationUpdate = useCallback((data) => {
-    if (data?.job_id) {
-      updateJobFromStatus(data.job_id, data.status || data)
+    upsertJob(job)
+    if (kind === 'batch_completed') {
+      const count = event.tracks?.length || 0
+      if (count) toastSuccess(`${count} new song${count > 1 ? 's' : ''} added to your queue!`, 4000, 'top')
+    } else if (kind === 'retrying') {
+      toastInfo(`Generation retry ${event.attempt}/${event.max_attempts}...`, 3000, 'top')
+    } else if (kind === 'batch_failed' && isActiveJob(job)) {
+      toastError(`One song in your batch failed: ${event.error}${refundNote(event.refunded ? 1 : 0)}`, 6000, 'top')
+    } else if (kind === 'finished' && job.status === 'failed') {
+      toastError(`Song generation failed: ${job.error}${refundNote(job.refunded)}`, 8000, 'top', `generation-failed-${job.job_id}`)
     }
-  }, [updateJobFromStatus])
+  }, [upsertJob, removeJob, toastError, toastInfo, toastSuccess])
 
-  const handleGenerationCompleted = useCallback((data) => {
-    if (data?.job_id) {
-      updateJobFromStatus(data.job_id, { ...data, status: 'completed' })
-    }
-  }, [updateJobFromStatus])
-
-  const handleGenerationBatchCompleted = useCallback((data) => {
-    handleGenerationUpdate(data)
-    const count = data?.tracks?.length || 0
-    if (count) toastSuccess(`${count} new song${count > 1 ? 's' : ''} added to your queue!`, 4000, 'top')
-  }, [handleGenerationUpdate, toastSuccess])
-
-  const handleGenerationRetrying = useCallback((data) => {
-    if (data?.attempt) toastInfo(`Generation retry ${data.attempt}/${data.max_attempts ?? '?'}...`, 3000, 'top')
-  }, [toastInfo])
-
-  const handleGenerationBatchFailed = useCallback((data) => {
-    if (!data?.job_id) return
-    const jobStatus = typeof data.status === 'object' && data.status ? data.status : {}
-    updateJobFromStatus(data.job_id, { ...jobStatus, error: data.error })
-    if (data.cancelled || jobStatus.status !== 'processing') return
-    toastError(`One song in your batch failed: ${data.error}${refundNote(data.refunded ? 1 : 0)}`, 6000, 'top')
-  }, [updateJobFromStatus, toastError])
-
-  const handleGenerationJobFailed = useCallback((data) => {
-    if (!data?.job_id) return
-    const reason = data.error || 'Something went wrong while generating this song.'
-    updateJobFromStatus(data.job_id, { ...data, status: 'failed', current_stage: reason, error: reason })
-    toastError(`Song generation failed: ${reason}${refundNote(data.refunded)}`, 8000, 'top', `generation-failed-${data.job_id}`)
-  }, [updateJobFromStatus, toastError])
-
-  const handleGenerationJobCancelled = useCallback((data) => {
-    if (!data?.job_id) return
-    setJobs(prev => prev.filter(job => job.id !== data.job_id))
-    if (data.refunded > 0) {
-      toastInfo(`Generation cancelled.${refundNote(data.refunded)}`, 5000, 'top', `generation-cancelled-${data.job_id}`)
-    }
-  }, [toastInfo])
-
-  useWebSocketSubscribe('generation_started', handleGenerationStarted)
-  useWebSocketSubscribe('generation_stage_update', handleGenerationUpdate)
-  useWebSocketSubscribe('generation_processing', handleGenerationUpdate)
-  useWebSocketSubscribe('generation_job_completed', handleGenerationCompleted)
-  useWebSocketSubscribe('generation_batch_completed', handleGenerationBatchCompleted)
-  useWebSocketSubscribe('generation_retrying', handleGenerationRetrying)
-  useWebSocketSubscribe('generation_batch_failed', handleGenerationBatchFailed)
-  useWebSocketSubscribe('generation_job_failed', handleGenerationJobFailed)
-  useWebSocketSubscribe('generation_job_cancelled', handleGenerationJobCancelled)
+  useWebSocketSubscribe('task_progress', handleTaskProgress)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -152,16 +92,10 @@ export function GenerationQueueProvider({ children }) {
     const loadJobs = async () => {
       try {
         const response = await api.getGenerationJobs()
-        if (response.jobs && response.jobs.length > 0) {
-          const convertedJobs = response.jobs.map(normalizeJobData)
-          setJobs(convertedJobs)
-
-          const hasActiveJobs = convertedJobs.some(job =>
-            job.status === 'pending' || job.status === 'processing' || job.status === 'running'
-          )
-          if (hasActiveJobs) {
-            setIsOpen(true)
-          }
+        const loaded = (response.jobs || []).filter(job => job.status !== 'cancelled')
+        if (loaded.length > 0) {
+          setJobs(loaded)
+          if (loaded.some(isActiveJob)) setIsOpen(true)
         }
         setHasLoadedInitialJobs(true)
       } catch (err) {
@@ -176,27 +110,21 @@ export function GenerationQueueProvider({ children }) {
   const cancelJob = useCallback(async (jobId) => {
     try {
       await api.cancelGenerationJob(jobId)
-      setJobs(prev => prev.filter(job => job.id !== jobId))
+      removeJob(jobId)
     } catch (err) {
       logger.error('[GenerationQueue] Failed to cancel job:', jobId, err)
     }
-  }, [])
-
-  const removeJob = useCallback((jobId) => {
-    setJobs(prev => prev.filter(job => job.id !== jobId))
-  }, [])
+  }, [removeJob])
 
   const clearCompleted = useCallback(() => {
-    setJobs(prev => prev.filter(job => job.status !== 'completed' && job.status !== 'failed'))
+    setJobs(prev => prev.filter(isActiveJob))
   }, [])
 
   const togglePanel = useCallback(() => {
     setIsOpen(prev => !prev)
   }, [])
 
-  const hasActiveJobs = jobs.some(job =>
-    job.status === 'pending' || job.status === 'processing' || job.status === 'running'
-  )
+  const hasActiveJobs = jobs.some(isActiveJob)
 
   useEffect(() => {
     publishQueueState({ hasActiveJobs })

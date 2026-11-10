@@ -11,6 +11,7 @@ from typing import Optional
 from services.track_artwork_service import track_artwork_service
 from services import artist_profile_service as artists
 from services import log_service
+from services import task_progress
 from services.task_utils import spawn
 from database import User
 from config import settings
@@ -134,9 +135,9 @@ async def upload_user_music(
         f"size={upload_size_mb:.1f}MB"
     )
 
-    job = {"upload_id": upload_id, "user_id": int(current_user.id), "filename": filename, "status": "running",  # type: ignore
-           "stage": "Queued", "percent": 0, "started_at": time.time(), "finished_at": None, "result": None,
-           "error": None, "task": None}
+    job = {"job_id": upload_id, "user_id": int(current_user.id), "title": filename, "status": "processing",  # type: ignore
+           "current_stage": "Queued", "progress_percent": 0, "started_at": time.time(), "finished_at": None,
+           "result": None, "error": None, "task": None}
     _prune_jobs()
     UPLOAD_JOBS[upload_id] = job
     job["task"] = spawn(_run_upload_job(job, session_id, staging_path, dict(
@@ -154,8 +155,16 @@ async def upload_user_music(
     return {"status": "processing", "upload_id": upload_id}
 
 
+def _task_status(job: dict) -> dict:
+    track_id = (job["result"] or {}).get("track_id")
+    return task_progress.snapshot(
+        job_id=job["job_id"], job_type="upload", state=job["status"], current_stage=job["current_stage"],
+        progress_percent=job["progress_percent"], title=job["title"], tracks=[track_id] if track_id else [],
+        total_tracks=1, error=job["error"])
+
+
 def _job_view(job: dict) -> dict:
-    return {k: v for k, v in job.items() if k not in ("task", "user_id")}
+    return {**_task_status(job), "result": job["result"]}
 
 
 def _prune_jobs():
@@ -166,41 +175,33 @@ def _prune_jobs():
 
 
 async def _run_upload_job(job: dict, session_id: str, staging_path: Path, upload_args: dict):
-    final_event: dict = {}
-
-    async def announce(event: dict):
+    async def announce(event: Optional[dict] = None):
         if services.websocket_service is not None:
-            await services.websocket_service.broadcast_to_session(session_id, {"type": "upload_progress", "data": event})
+            await services.websocket_service.broadcast_to_session(session_id, task_progress.message(_task_status(job), event))
 
-    async def progress_callback(event: dict):
-        job["stage"], job["percent"] = event.get("stage", job["stage"]), event.get("percent", job["percent"])
-        if event.get("status") in ("done", "failed"):
-            final_event.update(event)
-            return
-        await announce(event)
+    async def progress_callback(update: dict):
+        job["current_stage"], job["progress_percent"] = update["current_stage"], update["progress_percent"]
+        if not update["finished"]:
+            await announce()
 
     try:
         assert services.human_music_upload_service is not None
         success, message, metadata = await services.human_music_upload_service.process_upload(
             progress_callback=progress_callback, **upload_args)
         if success and metadata is not None:
-            job["result"] = await _upload_result(message, metadata, job["upload_id"])
-            job["status"] = "done"
+            job["result"] = await _upload_result(message, metadata, job["job_id"])
+            job["status"] = "completed"
         else:
             job["status"], job["error"] = "failed", message
-        await announce({**final_event, "upload_id": job["upload_id"], "status": job["status"],
-                        "message": message, "track_id": (job["result"] or {}).get("track_id")})
     except asyncio.CancelledError:
-        job["status"], job["error"] = "cancelled", "Upload cancelled"
-        if services.websocket_service is not None:
-            await services.websocket_service.broadcast_to_session(session_id, {"type": "upload_progress", "data": {
-                "upload_id": job["upload_id"], "stage": "Cancelled", "percent": job["percent"], "status": "cancelled"}})
+        job["status"], job["error"], job["current_stage"] = "cancelled", "Upload cancelled", "Cancelled"
     except Exception as e:
-        log_service.error(f"[Upload] Job {job['upload_id']} crashed: {e}")
+        log_service.error(f"[Upload] Job {job['job_id']} crashed: {e}")
         job["status"], job["error"] = "failed", "Upload processing failed unexpectedly - please try again"
     finally:
         job["finished_at"] = time.time()
         staging_path.unlink(missing_ok=True)
+        await announce({"kind": "finished"})
 
 
 @router.get("/api/user/music/uploads")
@@ -226,10 +227,10 @@ async def cancel_upload_job(upload_id: str, current_user: User = Depends(get_cur
     if not current_user or job is None or job["user_id"] != current_user.id:
         raise HTTPException(status_code=404, detail="Upload not found")
     task = job.get("task")
-    if job["status"] == "running" and task is not None and not task.done():
+    if job["status"] == "processing" and task is not None and not task.done():
         task.cancel()
         log_service.upload(f"[Upload] {log_service.who(user_id=current_user.id)} cancelled {upload_id}")
-    return {"status": "cancelling" if job["status"] == "running" else job["status"], "upload_id": upload_id}
+    return {"status": "cancelling" if job["status"] == "processing" else job["status"], "upload_id": upload_id}
 
 
 async def _upload_result(message: str, metadata: dict, upload_id: str) -> dict:

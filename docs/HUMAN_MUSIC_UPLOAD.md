@@ -13,7 +13,7 @@ PLAiR is moving from mostly AI music to mostly human music. Uploading is built a
 1. **Select** (`UploadMusicModal.jsx`): pick or drop a file. One compact row: artist (the user's artist profiles, defaults to the last one used), "Enhance audio" (remembered opt-in, Apollo restoration), and on the first upload only "I made this music or have the rights to share it".
 2. **Send**: XHR with real byte progress and Cancel. Files are refused before the body is read unless the request carries a valid token (`security_middleware.SIGNED_IN_UPLOAD_PATHS`).
 3. **Accept**: `POST /api/user/music/upload` checks format, size and rights, resolves the artist, and answers `{"status": "processing", "upload_id"}` at once.
-4. **Process** in a background job (`UPLOAD_JOBS` in `routers/user_music.py`): progress over the `upload_progress` WebSocket event, `GET /api/user/music/uploads[/{id}]` for status, `DELETE` to cancel (partial files are rolled back). The user can close the window; `UploadNotice` (AppBridges) toasts when the track is live. The final event is sent only after the job's result is stored.
+4. **Process** in a background job (`UPLOAD_JOBS` in `routers/user_music.py`): progress over the `task_progress` WebSocket message (`job_type` upload; the same status shape as `GET /api/user/music/uploads[/{id}]`), `DELETE` to cancel (partial files are rolled back). The user can close the window; `UploadNotice` (AppBridges) toasts when the track is live. The final event is sent only after the job's result is stored.
 5. **Preview / edit**: the result opens in the same editor used from My Uploads.
 
 ## Pipeline (`human_music_upload_service.py`)

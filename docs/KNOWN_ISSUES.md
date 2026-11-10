@@ -291,8 +291,6 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   anything. Candidates: optimistic next/prev and the latest-wins transport in `PlaybackContext.jsx`, the hold
   logic in `audioEngine.js`, the document-level listener in `microMotion.js`, the queue refill before advancing
   in `playback_state.py`, artwork prefetch competing with audio fetches.
-- **Generation progress messages** (`plans/unified_ws_protocol.md`, not started): seven message types and dead
-  `*_stage` fields to fold into one `task_progress`.
 - **UIState still holds some business logic** (`docs/UISTATE_CLEANUP_TODO.md`). The September cleanup was about
   re-renders (slice selectors, `useUIState` removed, one notice store) and did not move these out; checked 1 Oct
   in `UIStateContext.jsx`: the tilt sensor and its animation loop, music ducking, settings and seed-mode writes to
@@ -383,6 +381,13 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
   `/api/generate`, and the quota is `reserve_generation` / `refund_generation` (one credit each). Another song like it
   is simply another request. Multi-batch jobs remain only inside the bulk tool ("Jobs per artist") and when old
   in-flight jobs resume.
+- Generation and uploads report progress through one WebSocket message, `task_progress` (CLAUDE.md section 4), in
+  place of nine `generation_*` types and `upload_progress`; the job status over REST is the same shape, and the dead
+  `gemini_stage` / `suno_stage` / `upscaling_stage` fields are gone. Fixed on the way: during a retry the panel froze
+  on "Initializing..." at 0 % (only a `processing` batch counted as current, and a retrying one is `retrying`), a
+  finished job showed "Initializing..." and an empty bar, a job with some batches done and some failed was listed as
+  still running after a reload, and an upload that crashed sent no message at all. Checked offline (quality gate); a real
+  generation and upload have not been run since.
 
 ## Done on 1 Oct 2026 (cleanup)
 

@@ -6,7 +6,7 @@ import { Fade, FadeSwap, Pop } from '../Motion'
 import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
 import { triggerHaptic } from '../../lib/haptics'
-import { fetchFinishedUploadJob, isUploadFinished, UPLOAD_FINISHED_STATUSES } from '../../lib/uploadJobs'
+import { fetchFinishedUploadJob, isUploadFinished } from '../../lib/uploadJobs'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useWebSocketSubscribe } from '../../contexts/WebSocketContext'
 import { useAuth } from '../../contexts/AuthContext'
@@ -174,7 +174,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       setStage(UploadStage.SELECT)
       return
     }
-    if (job.status === 'done' && job.result) {
+    if (job.status === 'completed' && job.result) {
       setRightsConfirmed(true)
       setProgress(100)
       setMetadata(job.result.metadata)
@@ -206,17 +206,13 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       })
   }, [applyFinishedJob])
 
-  useWebSocketSubscribe('upload_progress', useCallback((data) => {
+  useWebSocketSubscribe('task_progress', useCallback((data) => {
     const uploadId = uploadIdRef.current
-    if (!uploadId || data?.upload_id !== uploadId) return
+    if (data?.job_type !== 'upload' || !uploadId || data.job_id !== uploadId) return
     lastEventAtRef.current = Date.now()
-    if (data.stage && data.percent !== undefined) {
-      setProgress(prev => Math.max(prev, data.percent))
-      setStageText(data.stage)
-    }
-    if (UPLOAD_FINISHED_STATUSES.has(data.status)) {
-      settleUpload(uploadId, data.status === 'done' ? null : { status: data.status, error: data.message })
-    }
+    setProgress(prev => Math.max(prev, data.progress_percent || 0))
+    if (data.current_stage) setStageText(data.current_stage)
+    if (isUploadFinished(data)) settleUpload(uploadId, data.status === 'completed' ? null : data)
   }, [settleUpload]))
 
   useEffect(() => {
@@ -232,8 +228,8 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
             settleUpload(uploadId, job)
             return
           }
-          setProgress(prev => Math.max(prev, job?.percent || 0))
-          if (job?.stage) setStageText(job.stage)
+          setProgress(prev => Math.max(prev, job?.progress_percent || 0))
+          if (job?.current_stage) setStageText(job.current_stage)
         })
         .catch(err => {
           if (err?.status === 404 && uploadIdRef.current === uploadId) {
@@ -252,12 +248,12 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     api.listUploadJobs()
       .then(data => {
         if (cancelled || uploadIdRef.current) return
-        const running = (data?.uploads || []).find(job => job.status === 'running')
-        if (!running?.upload_id) return
-        watchUpload(running.upload_id)
-        setJobName(running.filename || '')
-        setProgress(running.percent || 0)
-        setStageText(running.stage || '')
+        const running = (data?.uploads || []).find(job => job.status === 'processing')
+        if (!running?.job_id) return
+        watchUpload(running.job_id)
+        setJobName(running.title || '')
+        setProgress(running.progress_percent || 0)
+        setStageText(running.current_stage || '')
         setStage(UploadStage.ANALYZING)
       })
       .catch(err => logger.warn('[Upload] Could not check for running uploads:', err))

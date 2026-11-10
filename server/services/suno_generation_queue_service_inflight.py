@@ -207,7 +207,6 @@ class GenerationInflight:
                 "error": f"{UNCONFIRMED_MARKER}: restart during submit",
                 "error_message": friendly_generation_error(UNCONFIRMED_MARKER),
                 "current_stage": None, "title": (record.get("music_params") or {}).get("title"),
-                "gemini_stage": None, "suno_stage": None, "upscaling_stage": None,
                 "current_track_index": 0, "progress_percent": 0, "suno_task_id": None,
                 "suno_paid": True, "refunded": updated["refunded"], "track_ids": []
             }

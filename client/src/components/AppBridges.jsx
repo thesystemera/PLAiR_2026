@@ -3,7 +3,7 @@ import { CloudOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
-import { fetchFinishedUploadJob, uploadJobTitle, UPLOAD_FINISHED_STATUSES } from '../lib/uploadJobs'
+import { fetchFinishedUploadJob, uploadJobTitle } from '../lib/uploadJobs'
 import { useUISelector, useUIStateGetter, uiState } from '../contexts/UIStateContext'
 import { onSettingsChanged, pickValidSettings } from '../lib/settings'
 import { deviceKind } from '../lib/session'
@@ -230,18 +230,19 @@ export function UploadNotice() {
   const getUIState = useUIStateGetter()
   const handledRef = useRef(new Set())
 
-  useWebSocketSubscribe('upload_progress', useCallback((data) => {
-    const uploadId = data?.upload_id
-    const status = data?.status
-    if (!uploadId || !UPLOAD_FINISHED_STATUSES.has(status) || handledRef.current.has(uploadId)) return
+  useWebSocketSubscribe('task_progress', useCallback((data) => {
+    if (data?.job_type !== 'upload' || data.event?.kind !== 'finished') return
+    const uploadId = data.job_id
+    const status = data.status
+    if (!uploadId || handledRef.current.has(uploadId)) return
     handledRef.current.add(uploadId)
-    if (status === 'done') publishContentUpdate('uploads')
+    if (status === 'completed') publishContentUpdate('uploads')
     if (status === 'cancelled') return
     const watched = () => getUIState().uploadWatchId === uploadId
     if (watched()) return
     const key = `upload:${uploadId}`
     if (status === 'failed') {
-      errorToast(data.message || 'Your upload could not be processed', 8000, 'top', key)
+      errorToast(data.error || 'Your upload could not be processed', 8000, 'top', key)
       return
     }
     fetchFinishedUploadJob(uploadId)

@@ -3,9 +3,11 @@ import asyncio
 from typing import Dict, Any, Optional, List
 from datetime import datetime, UTC
 from config import settings
+from services import task_progress
 
 
 SONGS_PER_BATCH = 2
+FINISHED_STAGES = {"completed": "Complete", "cancelled": "Cancelled"}
 SUNO_CREDIT_BREAKER_COOLDOWN_S = 900
 CANCEL_WAIT_TIMEOUT_S = 10
 TERMINAL_BATCH_STATUSES = ("completed", "failed")
@@ -72,9 +74,6 @@ class GenerationJob:
                 "error": None,
                 "current_stage": None,
                 "title": None,
-                "gemini_stage": None,
-                "suno_stage": None,
-                "upscaling_stage": None,
                 "current_track_index": 0,
                 "progress_percent": 0,
                 "suno_task_id": None,
@@ -88,7 +87,7 @@ class GenerationJob:
         self.current_stage = "Initializing..."
         self.completed_tracks = 0
         self.title = original_params.get("title")
-        self._last_broadcast_state: Optional[str] = None
+        self._last_published: Optional[Dict[str, Any]] = None
         self._pregenerated_params: Optional[Dict[str, Any]] = None
         self.cancelled = False
         self.resumed = False
@@ -139,69 +138,35 @@ class GenerationJob:
 
         return min(int(batch_progress / max_total * 100), 99)
 
-    @staticmethod
-    def _serialize_state(state: Dict[str, Any]) -> str:
-        comparison_state = {
-            "status": state.get("status"),
-            "completed_tracks": state.get("completed_tracks"),
-            "current_stage": state.get("current_stage"),
-            "progress_percent": state.get("progress_percent"),
-            "track_count": len(state.get("tracks", []))
-        }
-        return str(comparison_state)
-
-    def _state_changed(self, current_state: Dict[str, Any]) -> bool:
-        if self._last_broadcast_state is None:
-            return True
-        current_serialized = self._serialize_state(current_state)
-        return current_serialized != self._last_broadcast_state
-
     def get_status(self) -> Dict[str, Any]:
-        pending = sum(1 for b in self.batches.values() if b["status"] == "pending")
-        processing = sum(1 for b in self.batches.values() if b["status"] == "processing")
-        completed = sum(1 for b in self.batches.values() if b["status"] == "completed")
-        failed = sum(1 for b in self.batches.values() if b["status"] == "failed")
-        retrying = sum(1 for b in self.batches.values() if b["status"] == "retrying")
+        batches = list(self.batches.values())
+        current = next((b for b in batches if b["status"] in ("processing", "retrying")), None)
+        if self.cancelled:
+            state = "cancelled"
+        elif not all(b["status"] in TERMINAL_BATCH_STATUSES for b in batches):
+            state = "processing"
+        else:
+            state = "completed" if any(b["status"] == "completed" for b in batches) else "failed"
 
-        overall_status = "completed" if completed == self.batch_count else \
-            "failed" if failed == self.batch_count else \
-                "processing"
+        error = next((b.get("error_message") for b in reversed(batches)
+                      if b["status"] == "failed" and b.get("error_message")), None)
+        if current is not None:
+            stage = current.get("current_stage") or self.current_stage
+        elif state == "failed":
+            stage = error or self.current_stage
+        else:
+            stage = FINISHED_STAGES.get(state, self.current_stage)
+        titles = [b.get("title") for b in ([current] if current else []) + batches]
 
-        current_batch = None
-        for batch in self.batches.values():
-            if batch["status"] == "processing":
-                current_batch = batch
-                break
-
-        current_stage = self.current_stage
-        title = self.title
-        progress_percent = 0
-
-        if current_batch:
-            current_stage = current_batch.get("current_stage") or current_stage
-            title = current_batch.get("title") or title
-            progress_percent = current_batch.get("progress_percent", 0)
-
-        return {
-            "job_id": self.job_id,
-            "status": overall_status,
-            "batch_count": self.batch_count,
-            "pending": pending,
-            "processing": processing,
-            "completed": completed,
-            "failed": failed,
-            "retrying": retrying,
-            "completed_tracks": len(self.completed_track_ids),
-            "total_tracks": self.batch_count * SONGS_PER_BATCH,
-            "expected_tracks": self.batch_count * SONGS_PER_BATCH,
-            "source_track_id": self.source_track_id,
-            "current_stage": current_stage,
-            "title": title,
-            "query": self.user_request,
-            "progress_percent": progress_percent,
-            "tracks": self.completed_track_ids,
-            "error": next((b.get("error_message") for b in reversed(list(self.batches.values()))
-                           if b["status"] == "failed" and b.get("error_message")), None),
-            "refunded": self.refunded
-        }
-
+        return task_progress.snapshot(
+            job_id=self.job_id,
+            job_type="generation",
+            state=state,
+            current_stage=stage,
+            progress_percent=100 if state == "completed" else (current or {}).get("progress_percent", 0),
+            title=next((t for t in titles if t), None) or self.title or self.user_request,
+            tracks=self.completed_track_ids,
+            total_tracks=self.batch_count * SONGS_PER_BATCH,
+            error=error,
+            refunded=self.refunded,
+        )

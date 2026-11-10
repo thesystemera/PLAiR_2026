@@ -1,6 +1,6 @@
 import { api } from './api'
 
-export const UPLOAD_FINISHED_STATUSES = new Set(['done', 'failed', 'cancelled'])
+const UPLOAD_FINISHED_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
 const SETTLE_DELAY_MS = 1000
 const SETTLE_TRIES = 15
@@ -18,4 +18,4 @@ export async function fetchFinishedUploadJob(uploadId, { shouldStop } = {}) {
   return job
 }
 
-export const uploadJobTitle = (job) => job?.result?.metadata?.title || job?.filename || 'Your track'
+export const uploadJobTitle = (job) => job?.result?.metadata?.title || job?.title || 'Your track'

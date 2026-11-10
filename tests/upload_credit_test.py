@@ -61,13 +61,13 @@ def main():
         job_id = r.json()["upload_id"]
         while True:
             job = requests.get(f"{base}/api/user/music/uploads/{job_id}", headers=headers, timeout=30).json()
-            if job.get("status") != "running":
+            if job.get("status") != "processing":
                 return 200, job
             time.sleep(5)
 
     started = time.time()
     code, job = upload(args.file)
-    ok = code == 200 and job.get("status") == "done"
+    ok = code == 200 and job.get("status") == "completed"
     results.append(check("upload processed in the background", ok,
                          f"{job.get('status')} in {time.time() - started:.0f}s {job.get('error') or ''}"))
     if not ok:
@@ -98,7 +98,7 @@ def main():
     code, again = upload(args.file)
     dup = (again.get("result") or {})
     results.append(check("same song again returns the existing track",
-                         again.get("status") == "done" and dup.get("duplicate") and dup.get("track_id") == track_id,
+                         again.get("status") == "completed" and dup.get("duplicate") and dup.get("track_id") == track_id,
                          f"{time.time() - started:.0f}s {again.get('error') or dup.get('message')}"))
 
     if args.cancel_file:
@@ -108,7 +108,7 @@ def main():
         for _ in range(60):
             job = requests.get(f"{base}/api/user/music/uploads/{pending['upload_id']}", headers=headers,
                                timeout=30).json()
-            if job.get("status") != "running":
+            if job.get("status") != "processing":
                 break
             time.sleep(2)
         results.append(check("cancel stops a running upload", job.get("status") == "cancelled", job.get("status")))

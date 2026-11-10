@@ -9,6 +9,7 @@ from datetime import datetime, UTC
 from pathlib import Path
 import json
 from services import log_service
+from services import task_progress
 from services import usage_tracking
 from services.base_service import SingletonService
 from services.suno_service import SunoAPIError, SunoSubmitUnconfirmed
@@ -106,30 +107,17 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
     def set_notification_callback(self, callback: Callable):
         self.notification_callback = callback
 
-    async def _notify(self, session_id: str, message: Dict[str, Any]):
-        if self.notification_callback:
-            try:
-                if not isinstance(message, dict):
-                    return
-
-                if message.get("type") in ["generation_started", "generation_stage_update", "generation_processing"]:
-                    status_data = message.get("data", {})
-                    if isinstance(status_data, dict) and "job_id" in status_data:
-                        job_id = status_data.get("job_id")
-                        if job_id is None:
-                            return
-                        job = self.jobs.get(job_id)
-                        if job and hasattr(job, '_state_changed'):
-                            full_status = status_data.get("status") if "status" in status_data else status_data
-
-                            if isinstance(full_status, dict):
-                                if not job._state_changed(full_status):
-                                    return
-                                job._last_broadcast_state = job._serialize_state(full_status)
-
-                await self.notification_callback(session_id, message)
-            except Exception as e:
-                log_service.warning(f"Failed to send notification: {e}")
+    async def _publish(self, job: GenerationJob, event: Optional[Dict[str, Any]] = None):
+        if self.notification_callback is None:
+            return
+        status = job.get_status()
+        if event is None and (job._finalized or job.cancelled or status == job._last_published):
+            return
+        job._last_published = status
+        try:
+            await self.notification_callback(job.session_id, task_progress.message(status, event))
+        except Exception as e:
+            log_service.warning(f"Failed to send generation progress: {e}")
 
     @staticmethod
     async def _log_failed_prompt(music_params: Optional[Dict[str, Any]], error_type: str, error_details: Any,
@@ -189,8 +177,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
         return job_id, None, usage
 
     def active_jobs(self) -> int:
-        return sum(1 for job in self.jobs.values()
-                   if not job.cancelled and job.get_status()["status"] == "processing")
+        return sum(1 for job in self.jobs.values() if job.get_status()["status"] == "processing")
 
     async def start_generation_job(
             self,
@@ -239,10 +226,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             job.tasks.append(task)
             tasks.append(task)
 
-        await self._notify(session_id, {
-            "type": "generation_started",
-            "data": job.get_status()
-        })
+        await self._publish(job)
 
         log_service.system(f"Started job {job_id} with {batch_count} batches")
 
@@ -324,17 +308,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
         batch["error"] = error_msg
         batch["error_message"] = friendly_generation_error(error_msg)
         refunded = await self._refund_batch(job, batch_index) if refund else False
-        await self._notify(job.session_id, {
-            "type": "generation_batch_failed",
-            "data": {
-                "job_id": job.job_id,
-                "batch_index": batch_index,
-                "error": batch["error_message"],
-                "refunded": refunded,
-                "cancelled": job.cancelled,
-                "status": job.get_status()
-            }
-        })
+        await self._publish(job, {"kind": "batch_failed", "error": batch["error_message"], "refunded": refunded})
 
     async def _finalize_job_if_done(self, job: GenerationJob):
         if job._finalized:
@@ -343,42 +317,19 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
             return
         job._finalized = True
         status = job.get_status()
-        if job.cancelled:
+        if status["status"] == "cancelled":
             log_service.system(f"Job {job.job_id} cancelled ({job.refunded} generation(s) refunded)")
-            await self._notify(job.session_id, {
-                "type": "generation_job_cancelled",
-                "data": {**status, "refunded": job.refunded}
-            })
-        elif status["completed"] > 0:
-            log_service.system(f"Job {job.job_id} finished: {status['completed']}/{job.batch_count} batches completed")
-            await self._notify(job.session_id, {
-                "type": "generation_job_completed",
-                "data": {**status, "refunded": job.refunded}
-            })
+        elif status["status"] == "completed":
+            completed = sum(1 for b in job.batches.values() if b["status"] == "completed")
+            log_service.system(f"Job {job.job_id} finished: {completed}/{job.batch_count} batches completed")
         else:
             errors = [b["error"] for b in job.batches.values() if b.get("error")]
             log_service.error(f"Job {job.job_id} failed: all {job.batch_count} batches failed ({errors[-1] if errors else 'unknown'})")
-            await self._notify(job.session_id, {
-                "type": "generation_job_failed",
-                "data": {
-                    **status,
-                    "error": friendly_generation_error(errors[-1] if errors else None),
-                    "refunded": job.refunded,
-                    "refunded_all": job.refunded >= job.batch_count > 0
-                }
-            })
+        await self._publish(job, {"kind": "finished"})
 
     async def _stage(self, job: GenerationJob, batch_index: int, text: str):
         job.batches[batch_index]["current_stage"] = text
-        await self._notify(job.session_id, {
-            "type": "generation_stage_update",
-            "data": {
-                "job_id": job.job_id,
-                "batch_index": batch_index,
-                "current_stage": text,
-                "status": job.get_status()
-            }
-        })
+        await self._publish(job)
 
     async def _fresh_params(self, job: GenerationJob) -> Dict[str, Any]:
         if self.catalog_service is None or self.prompt_service is None:
@@ -457,25 +408,10 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                 log_service.system(
                     f"Job {job_id} batch {batch_index}: Retry attempt {attempt + 1}/{max_retries + 1}"
                 )
-                await self._notify(job.session_id, {
-                    "type": "generation_retrying",
-                    "data": {
-                        "job_id": job_id,
-                        "batch_index": batch_index,
-                        "attempt": attempt + 1,
-                        "max_attempts": max_retries + 1
-                    }
-                })
+                await self._publish(job, {"kind": "retrying", "attempt": attempt + 1, "max_attempts": max_retries + 1})
             else:
                 batch["status"] = "processing"
-                await self._notify(job.session_id, {
-                    "type": "generation_processing",
-                    "data": {
-                        "job_id": job_id,
-                        "batch_index": batch_index,
-                        "status": job.get_status()
-                    }
-                })
+                await self._publish(job)
 
             try:
                 if music_params is None:
@@ -484,11 +420,9 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                         music_params = job._pregenerated_params
                         unique_id = None
                         batch["title"] = music_params.get("title", "Untitled")
-                        batch["gemini_stage"] = "COMPLETE"
                         batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
 
                     elif job.user_request:
-                        batch["gemini_stage"] = "GENERATING"
                         batch["progress_percent"] = job.calculate_progress(batch_index, "gemini", 0)
                         await self._stage(job, batch_index, "Generating song parameters...")
 
@@ -498,7 +432,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                         unique_id = await self._save_params_metadata(job, music_params)
 
                         batch["title"] = music_params.get("title", "Untitled")
-                        batch["gemini_stage"] = "COMPLETE"
                         batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
                         await self._stage(job, batch_index, "Song parameters generated")
                     else:
@@ -518,13 +451,11 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             "Music params have been saved and can be resumed later after topping up credits.")
                         raise SunoAPIError(429, "Suno credits exhausted - circuit breaker open (insufficient credits)")
 
-                    batch["suno_stage"] = "QUEUED"
                     await self._stage(job, batch_index, "Waiting for Suno slot...")
 
                     if self.suno_semaphore is None:
                         raise Exception("Suno semaphore not initialized")
                     async with self.suno_semaphore:
-                        batch["suno_stage"] = "SUBMITTING"
                         await self._stage(job, batch_index, "Submitting to Suno AI...")
 
                         task_id, inflight_record = await self._submit_once(job, batch_index, music_params, unique_id)
@@ -534,12 +465,10 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                         await asyncio.sleep(10)
 
                 batch["suno_task_id"] = task_id
-                batch["suno_stage"] = "PENDING"
                 batch["progress_percent"] = job.calculate_progress(batch_index, "suno", 0)
                 await self._stage(job, batch_index, "Generating with Suno AI...")
 
                 async def suno_status_callback(status):
-                    batch["suno_stage"] = status
                     await self._stage(job, batch_index, f"Suno AI: {status}")
 
                 poll_data = await self.suno_service.await_task(task_id, status_callback=suno_status_callback)
@@ -570,13 +499,11 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             f"Calling Gemini again for fresh params..."
                         )
 
-                        batch["gemini_stage"] = "REGENERATING"
                         await self._stage(job, batch_index, "Regenerating parameters (avoiding sensitive words)...")
                         music_params = await self._fresh_params(job)
 
                         log_service.success("Fresh params generated - retrying with new content")
                         batch["title"] = music_params.get("title", batch.get("title"))
-                        batch["gemini_stage"] = "COMPLETE"
 
                         raise Exception(
                             f"SENSITIVE_WORD_ERROR - retrying with fresh Gemini params (attempt {sensitive_word_attempts})")
@@ -640,7 +567,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                             await self.metadata_service.save_metadata(track_metadata, current_track_unique_id)
 
                             log_service.system(f"Enriching metadata with advanced tags for {current_track_unique_id}")
-                            batch["upscaling_stage"] = "MetadataEnrichment"
                             batch["progress_percent"] = job.calculate_progress(batch_index, "metadata_enrichment", track_index)
                             await self._stage(job, batch_index, f"Track {track_index + 1}/{len(tracks)}: Enriching Metadata")
                             try:
@@ -682,7 +608,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                                         "MetadataEnrichment": {"key": "metadata_enrichment", "display": "Enriching Metadata"},
                                     }
                                     info = stage_info.get(stage, {"key": "apollo", "display": stage})
-                                    batch["upscaling_stage"] = stage
                                     batch["progress_percent"] = job.calculate_progress(batch_index, info["key"], idx)
                                     await self._stage(job, batch_index, f"Track {idx + 1}/{len(tracks)}: {info['display']}")
 
@@ -738,7 +663,6 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
                     log_service.success(f"Orchestrator complete: {track_job.master_wav_path.name}")
                     job.completed_tracks += 1
 
-                    batch["upscaling_stage"] = "Complete"
                     batch["progress_percent"] = job.calculate_progress(batch_index, "finalizing", track_index)
                     await self._stage(job, batch_index, f"Track {track_index + 1}/{len(tracks)}: Finalizing...")
 
@@ -788,15 +712,7 @@ class SunoGenerationQueueService(GenerationInflight, SingletonService):
 
                 await self._update_inflight(task_id, None)
 
-                await self._notify(job.session_id, {
-                    "type": "generation_batch_completed",
-                    "data": {
-                        "job_id": job_id,
-                        "batch_index": batch_index,
-                        "tracks": batch["tracks"],
-                        "status": job.get_status()
-                    }
-                })
+                await self._publish(job, {"kind": "batch_completed", "tracks": list(batch["tracks"])})
 
                 return
 

@@ -111,8 +111,7 @@ class UploadFailed(Exception):
 
 class _UploadProgress:
 
-    def __init__(self, upload_id: str, callback: Optional[Callable[[Dict[str, Any]], Any]], plan: List[Tuple[str, str, float]]):
-        self.upload_id = upload_id
+    def __init__(self, callback: Optional[Callable[[Dict[str, Any]], Any]], plan: List[Tuple[str, str, float]]):
         self.callback = callback
         self.plan = plan
         self.positions = {key: index for index, (key, _label, _weight) in enumerate(plan)}
@@ -124,11 +123,11 @@ class _UploadProgress:
         self.stage_started_at = self.started_at
         self.finished = False
 
-    async def _emit(self, payload: Dict[str, Any]):
+    async def _emit(self, current_stage: str, finished: bool = False):
         if not self.callback:
             return
         try:
-            result = self.callback(payload)
+            result = self.callback({"current_stage": current_stage, "progress_percent": self.percent, "finished": finished})
             if asyncio.iscoroutine(result):
                 await result
         except Exception as e:
@@ -152,25 +151,13 @@ class _UploadProgress:
         log_service.upload(
             f"[Upload] {stage_label}: {self.percent}% | elapsed={elapsed_ms}ms | previous_stage={previous_stage_ms}ms"
         )
-        await self._emit({
-            "upload_id": self.upload_id,
-            "stage": stage_label,
-            "percent": self.percent,
-            "status": "running",
-        })
+        await self._emit(stage_label)
 
-    async def finish(self, success: bool, message: str, track_id: Optional[str] = None):
+    async def finish(self, success: bool):
         if self.finished:
             return
         self.finished = True
         if success:
             self.percent = 100
-        await self._emit({
-            "upload_id": self.upload_id,
-            "stage": "Complete" if success else "Upload failed",
-            "percent": self.percent,
-            "status": "done" if success else "failed",
-            "message": message,
-            "track_id": track_id,
-        })
+        await self._emit("Complete" if success else "Upload failed", finished=True)
 
