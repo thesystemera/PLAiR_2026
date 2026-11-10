@@ -21,7 +21,8 @@ LISTEN_MIN_PCT = 50.0
 RATING_WEIGHTS = {"super_like": 3.0, "like": 1.0}
 RATING_SCORES = {PreferenceType.SUPER_LIKE: RATING_WEIGHTS["super_like"], PreferenceType.LIKE: RATING_WEIGHTS["like"],
                  PreferenceType.BAN: -RATING_WEIGHTS["super_like"]}
-LISTENED = (PlayEvent.event_type != "play") & (PlayEvent.completion_pct >= LISTEN_MIN_PCT)
+LISTENED = ((PlayEvent.event_type != "play") & (PlayEvent.completion_pct >= LISTEN_MIN_PCT)
+            & PlayEvent.device_id.isnot(None))
 SKIPPED = (PlayEvent.event_type == "skip") & (func.coalesce(PlayEvent.completion_pct, 0.0) < LISTEN_MIN_PCT)
 LISTENER = func.coalesce(cast(PlayEvent.user_id, String), PlayEvent.session_id)
 
@@ -40,12 +41,13 @@ def rating_score(likes: int, superlikes: int, bans: int) -> float:
 
 async def engagement(session, track_ids: Optional[Iterable[str]] = None, since: Optional[datetime] = None,
                      region_key: Optional[str] = None) -> Dict[str, Engagement]:
-    """How much listeners engage with each track. Every listener counts once per track, however often it played:
-    +1 when they listen through (past LISTEN_MIN_PCT), -1 when they skip, the share in between when they did both,
-    plus their rating (like, super like, ban). A track that only started counts for nothing. With `since` or
-    `region_key` only that window's plays count, with the ratings of those listeners and ratings made in the window."""
+    """How much the station's account holders engage with each track; guests never shape the station. Every
+    listener counts once per track, however often it played: +1 when they listen through (past LISTEN_MIN_PCT, on a
+    device that played it), -1 when they skip, the share in between when they did both, plus their rating (like,
+    super like, ban). A track that only started counts for nothing. With `since` or `region_key` only that window's
+    plays count, with the ratings of those listeners and ratings made in the window."""
     plays = select(PlayEvent.track_id, LISTENER, func.count().filter(LISTENED), func.count().filter(SKIPPED)) \
-        .group_by(PlayEvent.track_id, LISTENER)
+        .where(PlayEvent.user_id.isnot(None)).group_by(PlayEvent.track_id, LISTENER)
     ratings = select(TrackPreference.track_id, TrackPreference.user_id, TrackPreference.preference_type,
                      TrackPreference.created_at)
     if track_ids is not None:

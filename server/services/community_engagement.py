@@ -51,7 +51,7 @@ class CommunityEngagement:
                     select(PlayEvent.track_id,
                            func.sum(case((PlayEvent.event_type == "play", 1), else_=0)),
                            func.sum(case((PlayEvent.event_type == "skip", 1), else_=0)))
-                    .where(PlayEvent.track_id.in_(missing))
+                    .where(PlayEvent.track_id.in_(missing), PlayEvent.user_id.isnot(None))
                     .group_by(PlayEvent.track_id)
                 )
                 for sid, play_count, skip_count in plays.all():

@@ -21,12 +21,13 @@ class TrackPlays:
     skips: int = 0
     last_played: Optional[datetime] = None
 
-    def add(self, event_type: str, completion_pct: Optional[float], at: Optional[datetime]) -> None:
+    def add(self, event_type: str, completion_pct: Optional[float], at: Optional[datetime],
+            device_id: Optional[str]) -> None:
         if event_type == "play":
             self.plays += 1
             if at is not None and (self.last_played is None or at > self.last_played):
                 self.last_played = at
-        elif (completion_pct or 0.0) >= LISTEN_MIN_PCT:
+        elif (completion_pct or 0.0) >= LISTEN_MIN_PCT and device_id:
             self.listens += 1
         elif event_type == "skip":
             self.skips += 1
@@ -72,7 +73,8 @@ async def track_plays(user_id: Optional[int], session_id: Optional[str],
         if wanted is not None and event["track_id"] not in wanted:
             continue
         stats.setdefault(event["track_id"], TrackPlays()).add(
-            event["event_type"], event.get("completion_pct"), datetime.fromisoformat(event["started_at"]))
+            event["event_type"], event.get("completion_pct"), datetime.fromisoformat(event["started_at"]),
+            event.get("device_id"))
     return stats
 
 

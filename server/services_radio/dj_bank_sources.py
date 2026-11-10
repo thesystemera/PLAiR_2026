@@ -11,6 +11,7 @@ from sqlalchemy import String, cast, func, select
 from config.settings import settings
 from database.models import PlayEvent, PreferenceType, TrackPreference
 from services import log_service
+from services.analytics_service import engagement, ranked
 from services_radio.dj_content_bank import TalkingPoint, clip, fact_sentences
 from services_radio.regional_knowledge import Taste
 from services_radio.talking_clock import clock_time
@@ -286,13 +287,9 @@ async def _station_stat_points(async_session_maker, catalog_service) -> list[Tal
     listener = func.coalesce(cast(PlayEvent.user_id, String), PlayEvent.session_id)
     try:
         async with async_session_maker() as db:
-            top = (await db.execute(
-                select(PlayEvent.track_id, func.count().label("plays"))
-                .where(PlayEvent.event_type == "play", PlayEvent.started_at >= since)
-                .group_by(PlayEvent.track_id)
-                .order_by(func.count().desc())
-                .limit(1)
-            )).first()
+            scored = await engagement(db, since=since)
+            top = next(((track_id, scored[track_id]) for track_id in ranked(scored, 5)
+                        if track_id not in getattr(catalog_service, "hidden_ids", set())), None)
             listeners = (await db.execute(
                 select(func.count(func.distinct(listener)))
                 .where(PlayEvent.event_type == "play", PlayEvent.started_at >= since)
@@ -303,14 +300,13 @@ async def _station_stat_points(async_session_maker, catalog_service) -> list[Tal
 
     points = []
     week = datetime.now(timezone.utc).strftime("%G%V")
-    if top and top[0] in getattr(catalog_service, "hidden_ids", set()):
-        top = None
     if top:
         title, artist, _ = _track_facts(catalog_service, top[0])
         if title:
             credit = f" (credited to {artist})" if artist else ""
             points.append(TalkingPoint(f"station:top:{top[0]}:{week}", "station",
-                                       f"Most-played track on the station this week: '{title}'{credit}, {top[1]} plays.", 0.35))
+                                       f"Top track on the station's chart this week: '{title}'{credit}, played through "
+                                       f"{top[1].listens} times by listeners with accounts.", 0.35))
     if listeners >= MIN_STATION_LISTENERS:
         points.append(TalkingPoint(f"station:listeners:{week}", "station",
                                    f"{listeners} different listeners tuned in to the station this week.", 0.25))

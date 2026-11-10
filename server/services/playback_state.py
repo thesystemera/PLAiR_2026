@@ -50,6 +50,7 @@ class PlaybackState(PlaybackDevices, PlaybackQueue, PlaybackStations):
 
         self._current_play_start_time = None
         self._current_play_track_id = None
+        self._current_play_from_ms = 0
 
         self.latency_samples = []
         self.average_latency_ms = 0
@@ -166,6 +167,7 @@ class PlaybackState(PlaybackDevices, PlaybackQueue, PlaybackStations):
     def _log_play_start(self, track_id: str, user_id: Optional[int] = None):
         self._current_play_track_id = track_id
         self._current_play_start_time = datetime.now(timezone.utc)
+        self._current_play_from_ms = self.progress_ms
         self._spawn_play_event(
             user_id=user_id,
             track_id=track_id,
@@ -186,7 +188,9 @@ class PlaybackState(PlaybackDevices, PlaybackQueue, PlaybackStations):
         duration_ms = int((datetime.now(timezone.utc) - self._current_play_start_time).total_seconds() * 1000)
         track_duration = track.get("track_info", {}).get("duration", 0)
         progress = self.get_simulated_progress()
-        completion_pct = min(100.0, (progress / track_duration * 100)) if track_duration else 0.0
+        heard_of = track_duration - self._current_play_from_ms
+        completion_pct = (min(100.0, max(0.0, (progress - self._current_play_from_ms) / heard_of * 100))
+                          if heard_of > 0 else 0.0)
 
         self._spawn_play_event(
             user_id=user_id,
