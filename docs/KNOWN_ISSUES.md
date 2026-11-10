@@ -35,6 +35,11 @@ anything else is carried over as written.
   feature lists were not re-counted.
 - **Install screenshots** need recapturing after UI changes (they have no WebGL background); optional iOS splash
   images were never made. Masters and the rebuild script are in `brand/2026-refresh/`.
+- **WebSocket disconnect race logs two false errors (10 Nov):** when a client closes while its ping is being
+  answered, the `except Exception` around message handling in `routers/ws.py` catches the
+  `WebSocketDisconnect` from the pong send and loops back to `receive_text()` on the dead socket, which raises
+  `WebSocket is not connected. Need to call "accept" first`. Harmless (cleanup still runs), but it shows in
+  production's `radio.log` and gets louder with more listeners. Let `WebSocketDisconnect` leave the loop.
 
 ## 2. DJ turn: bugs and things to watch
 
@@ -158,6 +163,53 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   topped up (no errors on 30 Sep); everything is committed and pushed.
 
 ## 6. Medium jobs
+
+- **Capacity for a few hundred listeners (audit 10 Nov).** Measured on a private boot (:8011, all outbound calls
+  and TTS blocked) with up to 1,000 simulated guests that stream, preload, fetch covers and change songs about
+  every 60 s (~4x a normal listener). Harness and raw numbers: `E:\scratch\plair\loadtest` (`loadgen.py`,
+  `loadtest_boot_v2.py`, `run_levels.sh`). What gives way, in order, and the fixes ranked by impact for effort:
+  - **Hard wall: nginx for Windows handles at most 1,024 sockets**, whatever `worker_connections` says (it only
+    has `select()`). A test nginx with `worker_connections 4096` refused new connections at 511 WebSockets
+    ("maximum number of descriptors supported by select() is 1024"). Each listener holds about 3 (WebSocket in
+    and out, the HTTP/2 connection kept alive 65 s) plus one per request in flight, and the other sites share the
+    same 1,024, so PLAiR tops out around **250-300 concurrent listeners** and then new connections fail for every
+    site. Fix (owner's call, it fronts all sites): a reverse proxy without that cap (Caddy for Windows, or nginx
+    on Linux/WSL2). Interim: `keepalive_timeout 15` in the plair.live block frees idle connections (estimate, not
+    measured: ~350-400 listeners).
+  - **Backend stalls from Python's garbage collector:** each full collection walks ~900K long-lived objects
+    loaded at startup (catalog, vectors) and freezes the event loop for ~640 ms (max 880 ms), every ~12 s under
+    load. `gc.collect(); gc.freeze()` at the end of the lifespan startup took it to 92 ms. Together with reading
+    stream files in 1 MB pieces instead of 64 KB (`media_streaming_service.stream_file`), 600 stress listeners
+    went from collapse (2 MB range p50 7.9 s, p99 26 s, connection errors) to clean (p50 0.12 s, p99 0.77 s,
+    488 Mbps served, no errors); at 300 the worst loop stall fell from 589 to 137 ms. Two small code changes.
+    Without them the backend is fine at 300 (p95 song start ~1.1 s) and saturates at ~600 (one core, ~400 Mbps).
+  - **The hosts' voice is the first thing to degrade, estimated ~100 listeners (not load-tested).** Chatterbox
+    renders ~6.4 s of audio per second at 8 slots (README); CVSR upscaling is serial (`voice_upscale` lock) on the
+    same P6000. Production renders 100-150 s of fresh host audio per listener-hour with only between-song talk
+    (deano, 10 Nov) and 150-380 s with Radio Mode and chat (owner), so the engine is full at ~90-150 listeners;
+    past that, lines arrive late and are skipped (music unaffected). Next step: a saturation test that replays
+    cached announcer scripts into the engine with zero LLM calls, on the GPU, when the owner isn't listening.
+  - **Upload bandwidth:** per listener ~0.29 Mbps signed in (Opus 256k = 261 kbps + covers ~18 + DJ voice ~14),
+    ~0.23 for guests (192k), ~0.35 on iPhone (MP3 320k), +10-30% for heavy skippers (preloads). About 33
+    listeners per 10 Mbps of upload; 300 listeners ~90-105 Mbps sustained. Check the new plan's upload figure.
+  - **The D: HDD is not the bottleneck while files are in RAM:** the streamed hot set (WebM 32.7 GB + iPhone MP3
+    tiers 42.2 GB + `artwork_thumbs/pack_xy` 1.6 GB + JSON ~0.9 GB = ~77 GB) mostly fits Windows' file cache (128
+    GB RAM, ~72 GB standby); D: read < 1 MB/s during the 1,000-listener tests. Uncached, a 2 MB range takes 0.38 s
+    on its own and the drive saturates at ~15 ranges/s (~32 MB/s; p50 1 s, p99 2.6 s at 16 at once), against ~2 ms
+    and ~1,000 ranges/s on the 960 PRO. A normal listener needs ~0.02 ranges/s, so even fully cold it carries
+    ~300 with 1 s waits. Moving the hot set to NVMe (NTFS junctions, no code change) is insurance after reboots,
+    cache eviction or renders. Note: the two 970 EVOs are not unused; they are the striped `O:` volume (1.86 TB,
+    623 GB free) with the owner's files. `E:` has 128 GB free. `artwork_thumbs/pack` (1.6 GB) is unused.
+  - **LLM cost per listener-hour (production, 10 Nov):** DeepSeek ~$0.006/h with between-song talk only (12
+    announcements, $0.00065 each), ~$0.01-0.02/h with Radio Mode; Gemini only when listeners talk to the DJs
+    ($0.01-0.05/h for the owner's chatty hours); new-guest welcome $0.0007 once. 300 listeners ≈ $2-3/h DeepSeek.
+    Risk: when DeepSeek fails, `LLM_ANNOUNCE`/`LLM_BACKGROUND` fall back to Gemini (seen in this test), so a
+    DeepSeek outage at scale would put thousands of announcer calls an hour on the live DJ's Gemini quota (the
+    1 Oct 429). Cap or drop the Gemini fallback for bulk roles.
+  - **Not limiting:** Postgres (≤ 23 connections from the test boot at 1,000 sessions, ≤ 30 in total of 100);
+    RAM (backend 7.9 GB idle, ~0.65 MB per session); per-session work (~5.5 asyncio tasks per listener, snapshot
+    upserts batched). Restarts: one process, ~2-3 min to serve after PLAiR Start, so every deploy drops all
+    listeners; plan deploys around that once there are many.
 
 - **Reference EQ target may be wrong in the highs (7 Oct, owner: "something is amiss"):** chain v5 masters lose
   treble the owner hears. Measured on 4 super-likes (`upscale_ab/treble_stages`): SonicMaster 50% with the Feb
