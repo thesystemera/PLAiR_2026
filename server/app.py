@@ -640,7 +640,7 @@ async def lifespan(_app: FastAPI):
 
     log_service.system("Shutting down...")
 
-    await playback_service.save_snapshots()
+    await playback_service.save_snapshots(final=True)
     await announcer_service.stop()
     await radio_mode_service.stop()
     await sting_service.stop()

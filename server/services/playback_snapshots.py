@@ -28,6 +28,10 @@ def snapshot(state) -> Optional[Dict[str, Any]]:
     }
 
 
+def same_station(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    return {k: v for k, v in a.items() if k != "progress_ms"} == {k: v for k, v in b.items() if k != "progress_ms"}
+
+
 def restore(state, saved: Dict[str, Any], catalog) -> bool:
     def tracks(ids):
         return [t for t in (catalog.get_track(tid) for tid in ids or []) if t]

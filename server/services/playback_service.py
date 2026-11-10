@@ -27,6 +27,7 @@ class PlaybackService(SingletonService):
         self._eviction_task: Optional[asyncio.Task] = None
         self._snapshot_task: Optional[asyncio.Task] = None
         self._saved_snapshots: Dict[str, Dict[str, Any]] = {}
+        self._snapshot_saved_at: Dict[str, float] = {}
 
         self._initialized = True
 
@@ -60,21 +61,28 @@ class PlaybackService(SingletonService):
             await asyncio.sleep(settings.PLAYBACK_SNAPSHOT_INTERVAL_S)
             await self.save_snapshots()
 
-    async def save_snapshots(self):
+    async def save_snapshots(self, final: bool = False):
         changed = {}
+        now = time.monotonic()
         for session_id, state in list(self.sessions.items()):
             snap = playback_snapshots.snapshot(state)
-            if snap is not None and snap != self._saved_snapshots.get(session_id):
-                changed[session_id] = snap
+            saved = self._saved_snapshots.get(session_id)
+            if snap is None or snap == saved:
+                continue
+            if not final and saved is not None and playback_snapshots.same_station(snap, saved)                     and now - self._snapshot_saved_at.get(session_id, 0.0) < settings.PLAYBACK_SNAPSHOT_POSITION_S:
+                continue
+            changed[session_id] = snap
         try:
             await playback_snapshots.save(changed)
             self._saved_snapshots.update(changed)
+            self._snapshot_saved_at.update(dict.fromkeys(changed, now))
         except Exception as e:
             log_service.throttled("playback_snapshot_save", f"[PlaybackService] Saving stations failed: {e}")
 
     def drop_session(self, session_id: str) -> None:
         state = self.sessions.pop(session_id, None)
         self._saved_snapshots.pop(session_id, None)
+        self._snapshot_saved_at.pop(session_id, None)
         self._last_access.pop(session_id, None)
         self.session_callbacks.pop(session_id, None)
         self._broadcast_callbacks.pop(session_id, None)
