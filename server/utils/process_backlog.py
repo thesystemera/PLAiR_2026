@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-intermediates", action="store_true", help="Keep the decoded, Apollo, premaster and SonicMaster WAVs")
     parser.add_argument("--track", action="append", default=[], help="Render only these track ids (repeatable)")
     parser.add_argument("--rerender", action="store_true",
-                        help="After the missing tracks, re-render masters made by an older chain version")
+                        help="After the missing tracks, re-render masters made by an older chain version, oldest chain first")
     return parser.parse_args()
 
 
@@ -43,7 +43,7 @@ from services import lyric_style_service, track_asset_stages as stages  # noqa: 
 def backlog():
     mp3_dir = settings.CATALOG_DIR / "mp3"
     masters = {p.stem for p in settings.ENHANCED_WAV_DIR.glob("*.wav")}
-    ids, stale = [], []
+    ids, stale, version = [], [], {}
     for p in mp3_dir.glob("*.mp3"):
         meta_path = settings.CATALOG_DIR / "metadata" / f"{p.stem}.json"
         if not meta_path.exists():
@@ -52,7 +52,8 @@ def backlog():
             ids.append(p.stem)
         elif ARGS.rerender:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("uploaded_by_user_id") is None and (meta.get("master_chain_version") or 0) < settings.MASTER_CHAIN_VERSION:
+            version[p.stem] = meta.get("master_chain_version") or 0
+            if meta.get("uploaded_by_user_id") is None and version[p.stem] < settings.MASTER_CHAIN_VERSION:
                 stale.append(p.stem)
     with psycopg2.connect(settings.DATABASE_URL.replace("+asyncpg", "")) as conn, conn.cursor() as cur:
         cur.execute("select track_id, preference_type::text from track_preferences "
@@ -61,7 +62,7 @@ def backlog():
         for track_id, kind in cur.fetchall():
             rank[track_id] = min(rank.get(track_id, 2), 0 if kind == "SUPER_LIKE" else 1)
     ids.sort(key=lambda t: (rank.get(t, 2), t))
-    stale.sort(key=lambda t: (rank.get(t, 2), t))
+    stale.sort(key=lambda t: (version[t], rank.get(t, 2), t))
     return ids + stale, rank, set(ids)
 
 
