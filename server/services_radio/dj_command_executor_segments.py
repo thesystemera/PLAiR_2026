@@ -4,7 +4,7 @@ import asyncio
 import datetime
 import time
 from sqlalchemy import select
-from services_radio.conversation_service import conversation_service, save_conversation_to_database
+from services_radio.conversation_service import conversation_service, post_to_chat
 from services_radio import listener_location as location_resolver, talk_clock
 from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
@@ -104,28 +104,16 @@ class ExecutorSegments:
         script = str(gpt_response)
 
         if feedback_msg:
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(user_id, db, message_type=message_type,
-                                                    **{feedback_key: feedback_msg})
-            if session_id:
-                await self.sio.emit('conversation_update', {feedback_key: feedback_msg, 'message_type': message_type},
-                                    room=session_id)
+            await post_to_chat(session_id, user_id, message_type, **{feedback_key: feedback_msg})
 
         if not spoken_text(script):
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(user_id, db, bot_response=script, message_type=message_type)
-            if session_id:
-                await self.sio.emit('conversation_update', {'bot_response': script, 'message_type': message_type},
-                                    room=session_id)
+            await post_to_chat(session_id, user_id, message_type, bot_response=script)
             return
         await self.tts_queue_manager.add_tts_request(script, user_id, message_type, is_broadcast=True,
                                                      is_temp_user=not user_id, session_id=session_id)
         if not isinstance(gpt_response, UnavailableSegment):
             content_bank.record_airing(session_id, script)
-        async with self.async_session_maker() as db:
-            await save_conversation_to_database(user_id, db, bot_response=script, message_type=message_type)
-        await self.sio.emit('conversation_update', {'bot_response': script, 'message_type': message_type},
-                            room=session_id)
+        await post_to_chat(session_id, user_id, message_type, bot_response=script)
 
     async def resolve_lyrics_track(self, session_dict, target, query):
         session_id = session_dict.get('session_id')
@@ -235,30 +223,13 @@ class ExecutorSegments:
         )
         await self._await_gate(gate)
 
-        async with self.async_session_maker() as db:
-            if not gpt_response:
-                feedback_msg = "No shoutouts found"
-                if specific_query:
-                    feedback_msg = f"No shoutouts found for '{specific_query}'"
+        if not gpt_response:
+            feedback_msg = f"No shoutouts found for '{specific_query}'" if specific_query else "No shoutouts found"
+            await post_to_chat(session_id, user_id, 'shoutouts', warning=feedback_msg)
+            return
 
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    warning=feedback_msg,
-                    message_type='shoutouts'
-                )
-                if session_id:
-                    await self.sio.emit('conversation_update', {
-                        'warning': feedback_msg,
-                        'message_type': 'shoutouts'
-                    }, room=session_id)
-                return
-
-            await self.tts_queue_manager.add_tts_request(
-                gpt_response, user_id, "shoutouts",
-                is_broadcast=True, is_temp_user=not user_id, session_id=session_id
-            )
-
-            await save_conversation_to_database(user_id, db, bot_response=gpt_response, message_type='shoutouts')
-            await self.sio.emit('conversation_update', {'bot_response': gpt_response, 'message_type': 'shoutouts'},
-                                room=session_id)
+        await self.tts_queue_manager.add_tts_request(
+            gpt_response, user_id, "shoutouts",
+            is_broadcast=True, is_temp_user=not user_id, session_id=session_id
+        )
+        await post_to_chat(session_id, user_id, 'shoutouts', bot_response=gpt_response)

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { History, LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle } from 'lucide-react'
+import { History, LayoutGrid, Music, Megaphone, Reply, Star, Newspaper, MessageCircle, Sparkles } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { PRESETS } from '../lib/motion'
 import { api } from '../lib/api'
@@ -27,6 +27,7 @@ const KIND_META = {
   review: { icon: Star, name: 'Review', plural: 'reviews', color: 'text-amber-400' },
   segment: { icon: Newspaper, name: 'Segment', plural: 'segments and talk breaks', color: 'text-sky-400' },
   talk: { icon: MessageCircle, name: 'DJ talk', plural: 'DJ chat and between-track talk', color: 'text-violet-400' },
+  activity: { icon: Sparkles, name: 'Activity', plural: 'requests and uploads', color: 'text-teal-400' },
 }
 
 const FILTERS = ['all', ...Object.keys(KIND_META)]

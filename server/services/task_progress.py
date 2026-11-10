@@ -26,13 +26,14 @@ def message(status: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> D
 
 async def post_outcome(session_id: str, user_id: Optional[int], status: Dict[str, Any], label: str) -> None:
     from service_registry import services
-    from services_radio.conversation_service import post_to_chat
+    from services.catalog_credit import listener_label
+    from services_radio.conversation_service import post_activity
     if status["status"] == "completed":
         catalog = services.catalog_service
-        titles = [((catalog.get_track(track_id) or {}).get("generation_params") or {}).get("title")
-                  for track_id in status["tracks"]] if catalog is not None else []
-        names = ", ".join(f'"{title}"' for title in titles if title)
-        await post_to_chat(session_id, user_id, info=f"{label} done" + (f": {names}" if names else ""))
+        tracks = [catalog.get_track(track_id) for track_id in status["tracks"]] if catalog is not None else []
+        names = ", ".join(listener_label(track) for track in tracks if track)
+        await post_activity(session_id, user_id, f"{label} ready" + (f": {names}" if names else ""))
     elif status["status"] == "failed":
         refund = " Your credit was refunded." if status.get("refunded") else ""
-        await post_to_chat(session_id, user_id, error=f"{label} failed: {status.get('error') or 'unknown error'}{refund}")
+        await post_activity(session_id, user_id, f"{label} failed: {status.get('error') or 'unknown error'}{refund}",
+                            ok=False)

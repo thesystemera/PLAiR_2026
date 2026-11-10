@@ -362,6 +362,17 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
   lossless storage and a bitrate that follows the listener's music quality were proposed.
 - **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
 
+## Done on 11 Nov 2026 (Suno refusals, chat and activity)
+
+- What Suno refuses: 129 of 130 logged refusals were artist names (52 different, from Michael Jackson to "bratty"
+  and "skank", which are band names too). 108 of the 129 named the artist plainly; for the same names, welded
+  forms ("Slowdive-esque", "IDLES-ish") passed 30 times and failed 4 (all multi-word names). The prompt now
+  welds names, avoids multi-word names Suno has refused, checks the style before sending (catches 120 of the 129
+  logged refusals) and gives Gemini Suno's reason on a retry.
+- `post_to_chat` / `post_activity` (CLAUDE.md section 5): every chat line goes through one function; outcomes of
+  songs, uploads and posts are activity the hosts and the Timeline read.
+- Not checked live yet: one generation with a name Suno refuses, and an upload, to see the activity lines.
+
 ## Done on 10 Nov 2026 (song generation)
 
 - Song generation was broken for every request: the prompt's Gemini tool loop (`ai_service.call_gemini_with_tools`)

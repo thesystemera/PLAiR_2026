@@ -1,4 +1,6 @@
 import json
+import re
+import unicodedata
 from typing import Dict, Any, Optional, Set
 from google.genai import types
 from services import log_service
@@ -8,6 +10,12 @@ from services.suno_service import blocked_artist, rejection_reason
 from config import settings
 
 REJECTION_LOG_GLOB = "SENSITIVE_WORD_ERROR_*.json"
+NAME_SUFFIXES = ("esque", "ish", "style")
+PRECHECK_ASKS = 1
+
+
+def _plain(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
 
 
 class MusicPromptService(SingletonService):
@@ -39,7 +47,20 @@ class MusicPromptService(SingletonService):
         name = blocked_artist(reason)
         if name and name not in self.blocked_artists():
             self._blocked_artists.add(name)
-            log_service.system(f"Suno refuses the artist name '{name}': left out of song prompts from now on")
+            log_service.system(f"Suno refuses the artist name '{name}': song prompts weld or avoid it from now on")
+
+    def refused_name_in(self, style: str) -> Optional[str]:
+        text = _plain(style)
+        welded = "|".join(NAME_SUFFIXES)
+        for name in sorted(self.blocked_artists()):
+            words = name.split()
+            if len(words) > 1:
+                pattern = r"(?<![\w])" + r"[\s-]+".join(map(re.escape, words)) + r"(?![\w])"
+            else:
+                pattern = rf"(?<![\w-]){re.escape(name)}(?![\w])(?!-(?:{welded})\b)"
+            if re.search(pattern, text):
+                return name
+        return None
 
     def _build_system_prompt(self, overused_words: Optional[list] = None, overused_phrases: Optional[list] = None,
                              repeated_titles: Optional[list] = None) -> str:
@@ -152,7 +173,7 @@ Examples of specificity:
 ARTIST REFERENCES (CRITICAL):
 To avoid copyright flags, use "Contextual Associations" to trigger the vibe without naming the artist:
 - Reference iconic Studios, Labels, or Album titles: "Recorded at Abbey Road", "Factory Records production", "Sounds like 'Loveless'", "Sun Studio slapback".
-- Use adjectivized names: "-esque", "-ish", "-style" (e.g., "Portishead-ish", "NIN-esque").
+- Use adjectivized names, welded to the suffix as one word: "-esque", "-ish", "-style" (e.g., "Portishead-ish", "NIN-esque", "Slowdive-esque"). Never write a plain artist name ("in the style of Slowdive", "reminiscent of Slowdive", "like Slowdive"): the music service checks the style for artist names and blocks plain ones, while a welded name usually gets through.
 - If the name is common, use phonetic alterations: "Radiohd-esque", "Pavement-ish".
 - Focus on production approach, era, and sonic signature.
 {self._refused_names_section()}
@@ -213,9 +234,11 @@ Create something that sounds genuinely real - like it actually came from that ar
         if not names:
             return ""
         return f"""
-NAMES THE MUSIC SERVICE REFUSES:
-The music service rejects any song whose style names one of these artists, in any form ("-esque", "-ish", "-style", initials, respellings or nicknames): {", ".join(names)}.
-When a request involves one of them (as the artist or as a producer or collaborator), name no one in the style: describe the era, sound, production and vocal delivery in plain words instead. Still put the requested artist in 'artist_name'.
+NAMES THE MUSIC SERVICE HAS REFUSED:
+The music service has refused songs whose style named these artists: {", ".join(names)}.
+- A one-word name from this list may only appear welded ("Pixies-esque", "Slowdive-ish"), never on its own, and not as an ordinary word either (some are words, like "bratty").
+- A name of two or more words from this list must not appear in any form (welding only hides the last word): describe the era, sound, production and vocal delivery in plain words instead.
+Still put the requested artist in 'artist_name'.
 """
 
     @staticmethod
@@ -231,7 +254,7 @@ Create a complete authentic song. Write real lyrics that capture the essence of 
 CRITICAL STYLE INSTRUCTION:
 If the user mentions a specific artist or band (e.g. "Nine Inch Nails", "Drake"):
 1. Extract that name into the 'artist_name' field.
-2. In the 'style' field, you MUST include a reference to them using "-esque", "-ish", or phonetic spellings (e.g. "NIN-esque", "Drake-style", "Radiohd-ish") to capture the vibe without triggering copyright filters, unless the music service refuses that name (see the system instructions).
+2. In the 'style' field, you MUST include a reference to them welded to "-esque", "-ish" or "-style" as one word, or a phonetic spelling (e.g. "NIN-esque", "Drake-style", "Radiohd-ish"), never the plain name, to capture the vibe without triggering copyright filters. Follow the system instructions for names the music service has refused.
 
 Describe the sound with technical specificity. Make it feel genuine.
 
@@ -296,36 +319,42 @@ Generate all required JSON fields:
             "get_artist_catalog": catalog_service.get_tracks_by_artist
         }
 
-        self.note_rejection(rejected)
-        system_prompt = self._build_system_prompt(
-            overused_words=overused_words,
-            overused_phrases=overused_phrases,
-            repeated_titles=repeated_titles
-        )
-
-        user_prompt = self._build_user_prompt(user_request, rejected)
-
-        if log_prompt:
-            log_service.system("\n" + "=" * 80)
-            log_service.system("GPT PROMPT WITH TOOLS BEING SENT TO GEMINI")
-            log_service.system("=" * 80)
-            log_service.system(f"{system_prompt}\n\n{user_prompt}")
-            log_service.system("=" * 80 + "\n")
-
         try:
-            result = await self.ai_service.call_gemini_with_tools(
-                prompt=user_prompt,
-                tools=tools,
-                tool_handlers=tool_handlers,
-                response_schema=MusicGenerationParams,
-                system_instruction=system_prompt,
-                model=model,
-                temperature=temperature
-            )
+            for ask in range(PRECHECK_ASKS + 1):
+                self.note_rejection(rejected)
+                system_prompt = self._build_system_prompt(
+                    overused_words=overused_words,
+                    overused_phrases=overused_phrases,
+                    repeated_titles=repeated_titles
+                )
+                user_prompt = self._build_user_prompt(user_request, rejected)
 
-            if not result:
-                log_service.error("Failed to generate music parameters")
-                return None
+                if log_prompt:
+                    log_service.system("\n" + "=" * 80)
+                    log_service.system("GPT PROMPT WITH TOOLS BEING SENT TO GEMINI")
+                    log_service.system("=" * 80)
+                    log_service.system(f"{system_prompt}\n\n{user_prompt}")
+                    log_service.system("=" * 80 + "\n")
+
+                result = await self.ai_service.call_gemini_with_tools(
+                    prompt=user_prompt,
+                    tools=tools,
+                    tool_handlers=tool_handlers,
+                    response_schema=MusicGenerationParams,
+                    system_instruction=system_prompt,
+                    model=model,
+                    temperature=temperature
+                )
+
+                if not result:
+                    log_service.error("Failed to generate music parameters")
+                    return None
+                refused = self.refused_name_in(result.get("style") or "")
+                if refused is None or ask == PRECHECK_ASKS:
+                    break
+                rejected = (f"Your style names {refused}, a name the music service has refused in that form. "
+                            f"Follow the rule for refused names.")
+                log_service.warning(f"Song style names '{refused}' in a form Suno refuses - asking again before sending")
 
             prompt_len = len(result.get("prompt", ""))
             style_len = len(result.get("style", ""))

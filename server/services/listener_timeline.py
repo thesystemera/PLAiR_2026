@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 
 from config.settings import settings
 from database import AsyncSessionLocal, PlayEvent
-from database.models import AiredTalk
+from database.models import AiredTalk, Conversation
 from services import log_service
 from services.catalog_credit import listener_label
 from services.analytics_service import analytics_service
@@ -17,9 +17,10 @@ from services.user_content_database_service import kind_of, KINDS
 KIND_TRACK = "track"
 KIND_SEGMENT = "segment"
 KIND_TALK = "talk"
+KIND_ACTIVITY = "activity"
 PLAYED_KINDS = (KIND_TRACK,) + tuple(KINDS)
-TIMELINE_KINDS = PLAYED_KINDS + (KIND_SEGMENT, KIND_TALK)
-DEFAULT_KINDS = PLAYED_KINDS + (KIND_SEGMENT,)
+TIMELINE_KINDS = PLAYED_KINDS + (KIND_SEGMENT, KIND_TALK, KIND_ACTIVITY)
+DEFAULT_KINDS = PLAYED_KINDS + (KIND_SEGMENT, KIND_ACTIVITY)
 START_EVENT = "play"
 OUTCOMES = {"complete": "played through", "skip": "skipped"}
 ROWS_PER_ENTRY = 3
@@ -205,6 +206,21 @@ async def _talked(user_id: Optional[int], session_id: Optional[str], span: Windo
         for row_id, at, kind, label, text in rows]
 
 
+async def _acted(user_id: Optional[int], span: Window, wanted: set) -> List[TimelineEntry]:
+    from services_radio.conversation_service import ACTIVITY
+    if KIND_ACTIVITY not in wanted or not user_id:
+        return []
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(Conversation.id, Conversation.timestamp, Conversation.info_message, Conversation.error_message)
+            .where(Conversation.user_id == int(user_id), Conversation.message_type == ACTIVITY,
+                   Conversation.timestamp >= span.since, Conversation.timestamp <= span.until)
+            .order_by(Conversation.timestamp.desc()).limit(CANDIDATES))).all()
+    return [TimelineEntry(at, KIND_ACTIVITY, f"activity:{row_id}", (error or info or "")[:TALK_TEXT_CHARS], at,
+                          outcome="didn't work out" if error else None)
+            for row_id, at, info, error in rows]
+
+
 async def timeline(user_id: Optional[int], session_id: Optional[str], kinds: Optional[Iterable[str]] = None,
                    span: Optional[Window] = None, limit: int = 10) -> Tuple[List[TimelineEntry], int]:
     if not user_id and not session_id:
@@ -212,7 +228,7 @@ async def timeline(user_id: Optional[int], session_id: Optional[str], kinds: Opt
     now = datetime.now(timezone.utc)
     span = span or window(now)
     wanted = set(kinds or DEFAULT_KINDS)
-    entries = await _talked(user_id, session_id, span, wanted)
+    entries = await _talked(user_id, session_id, span, wanted) + await _acted(user_id, span, wanted)
     if wanted & set(PLAYED_KINDS):
         from service_registry import services
         playback = services.playback_service

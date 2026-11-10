@@ -12,6 +12,7 @@ from services import log_service
 from services import usage_tracking
 from services import listener_timeline
 from services.task_utils import spawn
+from services_radio.conversation_service import post_to_chat
 from services_radio import radio_schedule as schedule
 from services_radio import radio_segments
 from services_radio import talk_clock
@@ -660,12 +661,7 @@ class RadioModeService:
                 except Exception as e:
                     log_service.warning(f"[RADIO] on-air hook failed: {type(e).__name__}: {e}")
             log_service.announcer(f"[RADIO] [{session_id[:8]}] ON AIR: {plan.label} ({plan.words} words)")
-            if self.broadcast is not None:
-                await self.broadcast(session_id, {"type": "conversation_update", "data": {
-                    "bot_response": plan.script,
-                    "message_type": "announcer",
-                    "segment": plan.label,
-                }})
+            await post_to_chat(session_id, None, "announcer", bot_response=plan.script, segment=plan.label)
             await self._publish(sess)
         elif event == "talk_break_end":
             reason = str(data.get("reason") or "done")[:40]

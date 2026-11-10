@@ -1,6 +1,6 @@
 """Ratings and listener posts for the DJs: liking or banning tracks and shoutouts, and saving the listener's own
 shoutouts, replies and reviews."""
-from services_radio.conversation_service import save_conversation_to_database
+from services_radio.conversation_service import post_activity
 
 
 
@@ -105,11 +105,7 @@ class ExecutorCommunity:
 
         what = f"{labels.get(kind, kind)}" + (f" on {track['title']}" if track else "")
         if item:
-            message = {'info': f"{what} saved: \"{item.get('full_transcription', '')}\""}
+            await post_activity(session_id, user_id, f"{what} posted: \"{item.get('full_transcription', '')}\"")
         else:
-            message = {'error': f"Couldn't save that {kind.lower()}"}
-        async with self.async_session_maker() as db:
-            await save_conversation_to_database(user_id=user_id, db=db, message_type='shoutouts', **message)
-        if session_id:
-            await self.sio.emit('conversation_update', {**message, 'message_type': 'shoutouts'}, room=session_id)
+            await post_activity(session_id, user_id, f"Couldn't save that {kind.lower()}", ok=False)
         return {"status": "ok" if item else "error", "id": (item or {}).get("id")}

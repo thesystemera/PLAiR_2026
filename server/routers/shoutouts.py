@@ -15,6 +15,7 @@ from services import log_service
 from services.user_content_database_service import (public_shoutout, public_shoutouts, track_ref, kind_of,
                                                      KIND_SHOUTOUT, KIND_REPLY, KIND_REVIEW)
 from services.community_engagement import community_engagement
+from services_radio.conversation_service import post_activity
 from database import get_db, User
 from config import settings
 from service_registry import services
@@ -193,10 +194,14 @@ async def _save_item(user: User, kind: str, *, audio: Optional[str] = None, text
     parent = content.get_shoutout(parent_id) if parent_id else None
     verdict = await judge(services.ai_service, kind, words, post_context(track=track, parent=parent))
     target = f" to {parent_id}" if parent_id else (f" on {track.get('title')}" if track else "")
+    about = f' on "{track.get("title")}"' if track else ""
     if verdict and not verdict.get("keep"):
         if webm_path:
             await asyncio.to_thread(content._remove_files, [webm_path, webm_path.with_suffix(".json")])
         log_service.listener(f"{log_service.who(user_id=user.id)}: {kind}{target} scrapped by the editor")
+        await post_activity(str(user.id), int(user.id),  # type: ignore
+                            f"Your {kind}{about} wasn't posted: {verdict.get('feedback') or 'the editor turned it down'}",
+                            ok=False)
         return {"status": "scrapped", "kind": kind, "feedback": verdict.get("feedback")}
     if webm_path:
         item = await content.create_voice_item(int(user.id), kind, webm_path, **common)  # type: ignore
@@ -206,6 +211,8 @@ async def _save_item(user: User, kind: str, *, audio: Optional[str] = None, text
         raise HTTPException(status_code=400, detail=f"Couldn't save that {kind}")
     log_service.listener(
         f"{log_service.who(user_id=user.id)}: {'recorded' if audio is not None else 'typed'} a {kind}{target}")
+    await post_activity(str(user.id), int(user.id),  # type: ignore
+                        f"Your {kind}{about} is posted: \"{item.get('full_transcription', '')}\"")
     return {"status": "success", "id": item["id"], "kind": kind, "transcription": item.get("full_transcription", ""),
             "feedback": (verdict or {}).get("feedback")}
 

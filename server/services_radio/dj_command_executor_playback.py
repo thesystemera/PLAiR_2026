@@ -1,7 +1,6 @@
 """Playback and stations for the DJs: transport, seed radio (one aspect or a weighted blend), playlists, moving playback
 to another device and Radio Mode settings."""
 import re
-from services_radio.conversation_service import save_conversation_to_database
 from database.models import User
 from services import log_service
 from services.catalog_names import spelled_alike, track_names
@@ -130,21 +129,7 @@ class ExecutorPlayback:
                 await self.broadcast_playback_state_callback(session_id, self.playback_service.get_state(session_id))
             return {"status": "error", "reason": "Couldn't build a station from the current track"}
 
-        feedback_msg = f"Seeding radio based on {track_name} ({mode_display})"
-
-        if user_id:
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    info=feedback_msg,
-                    message_type='interactive'
-                )
-
-        await self.sio.emit('conversation_update', {
-            'info': feedback_msg,
-            'message_type': 'interactive'
-        }, room=session_id)
+        await self._note(session_dict, f"Seeding radio based on {track_name} ({mode_display})")
 
         return {
             "status": "ok",
@@ -242,21 +227,7 @@ class ExecutorPlayback:
 
         await self.playback_service.seed_radio(session_id, category=mode, user_id=user_id)
 
-        feedback_msg = f"Playing {mode_display}"
-
-        if user_id:
-            async with self.async_session_maker() as db:
-                await save_conversation_to_database(
-                    user_id=user_id,
-                    db=db,
-                    info=feedback_msg,
-                    message_type='interactive'
-                )
-
-        await self.sio.emit('conversation_update', {
-            'info': feedback_msg,
-            'message_type': 'interactive'
-        }, room=session_id)
+        await self._note(session_dict, f"Playing {mode_display}")
 
         return {
             "status": "ok",

@@ -7,6 +7,7 @@ from services import log_service
 from services import usage_tracking
 from services.task_utils import spawn
 from services_radio import crossfade_plan, track_timing
+from services_radio.conversation_service import post_to_chat
 from services_radio.dj_content_bank import content_bank
 from services_radio.sting_service import midtrack_max_len
 from config.settings import settings
@@ -720,10 +721,7 @@ class AnnouncerService:
                 f"Target: {target_ms}ms | GPT: {gpt_elapsed:.2f}s | Chars: {actual_chars}"
             )
 
-            await self.sio.emit('conversation_update', {
-                'bot_response': announcement_text,
-                'message_type': 'announcer'
-            }, room=session_id)
+            await post_to_chat(session_id, None, 'announcer', bot_response=announcement_text)
 
             self._cleanup_scheduled(session_id)
 

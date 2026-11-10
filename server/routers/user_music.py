@@ -202,7 +202,7 @@ async def _run_upload_job(job: dict, session_id: str, staging_path: Path, upload
         job["finished_at"] = time.time()
         staging_path.unlink(missing_ok=True)
         await announce({"kind": "finished"})
-        await task_progress.post_outcome(session_id, job["user_id"], _task_status(job), f'Upload "{job["title"] or "your track"}"')
+        await task_progress.post_outcome(session_id, job["user_id"], _task_status(job), 'Your upload')
 
 
 @router.get("/api/user/music/uploads")

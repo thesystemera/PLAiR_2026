@@ -2,7 +2,7 @@
 tracks, candidates to choose from, and queueing what was found."""
 import re
 import numpy as np
-from services_radio.conversation_service import save_conversation_to_database
+from services_radio.conversation_service import post_to_chat
 from services.catalog_names import spelled_alike
 from services.catalog_vocals import vocals_of
 from services import listener_plays
@@ -234,8 +234,8 @@ class ExecutorSearch:
             log_service.detail(f"[COMMAND EXECUTOR] Found {len(track_ids)} tracks for: {query}", "commands")
 
             if session_id and track_ids:
-                feedback_msg = f"Found {len(track_ids)} track{'s' if len(track_ids) != 1 else ''} for '{query}'"
-                await self.sio.emit('conversation_update', {'info': feedback_msg, 'message_type': 'interactive'}, room=session_id)
+                await post_to_chat(session_id, None,
+                                   info=f"Found {len(track_ids)} track{'s' if len(track_ids) != 1 else ''} for '{query}'")
 
         return await self._queue_tracks(session_dict, tracks_to_add, play_first, per_query, missing, only_ids, within)
 
@@ -286,18 +286,7 @@ class ExecutorSearch:
                 feedback_type = 'error'
 
             if feedback_msg:
-                if user_id:
-                    async with self.async_session_maker() as db:
-                        await save_conversation_to_database(
-                            user_id=user_id,
-                            db=db,
-                            **{f'{feedback_type}': feedback_msg},
-                            message_type='interactive'
-                        )
-                await self.sio.emit('conversation_update', {
-                    feedback_type: feedback_msg,
-                    'message_type': 'interactive'
-                }, room=session_id)
+                await self._note(session_dict, feedback_msg, feedback_type)
 
         queued = [label for label in (self._track_label(track_id) for track_id in tracks_to_add[:5]) if label]
         result = {

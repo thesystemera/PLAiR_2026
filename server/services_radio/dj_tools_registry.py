@@ -94,7 +94,7 @@ SEGMENT_NOTE = ("A dedicated segment with the full details airs right after your
                 "[TASK]. Do not invent the details.")
 _PARENT_ID = re.compile(r"^\d+_\d+$")
 _TRACK_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-AIRED_KINDS = ["track", "shoutout", "reply", "review", "segment", "talk"]
+AIRED_KINDS = ["track", "shoutout", "reply", "review", "segment", "talk", "activity"]
 AIRED_NOTE = ("What played for this listener, newest first. Work out which one they mean from what they said and pass "
               "its id on: a track's id as track_id (rate_track, seed_radio, save_review, explain_lyrics), a post's id "
               "as shoutout_id (rate_track) or parent_id (save_shoutout_reply). A segment or talk entry only shows "
@@ -181,16 +181,20 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "summary": "what this listener has heard lately: tracks, listener posts, segments and what you said",
         "description": "This listener's own listening history, newest first: the tracks that played (and whether "
                        "they were skipped), the listener shoutouts, replies and reviews that aired for them, the "
-                       "segments you aired (news, weather, gig guide, places, artist story, lyrics, talk breaks) and, "
-                       "when asked for, your own chat replies and between-track talk. Use it when the listener "
+                       "segments you aired (news, weather, gig guide, places, artist story, lyrics, talk breaks), what the "
+                       "listener did in the app and how it turned out (songs they had made, their uploads, their "
+                       "posts, and anything that was turned down and why) and, when asked for, your own chat replies "
+                       "and between-track talk. Use it when the listener "
                        "points back at something that already aired and current / previous / next doesn't cover it: "
                        "\"like that shoutout\", \"the song before the last one\", \"what was that gig you "
-                       "mentioned\", \"say that headline again\", \"what were you two on about earlier\". Tracks "
+                       "mentioned\", \"say that headline again\", \"what were you two on about earlier\", \"did my song "
+                       "come through\". Tracks "
                        "and posts have ids the action tools accept; pass a segment or talk id back here to read all "
                        "of it.",
         "parameters": _schema({
             "kinds": {"type": "array", "items": _enum(AIRED_KINDS, "Kind of entry."),
-                      "description": "Optional: only these kinds. segment = produced segments and talk breaks; "
+                      "description": "Optional: only these kinds. activity = what the listener did and how it turned "
+                                     "out; segment = produced segments and talk breaks; "
                                      "talk = your chat replies and between-track lines, only listed when asked "
                                      "for here. Left out: everything except talk."},
             "id": _string("The id of one segment or talk entry from an earlier what_aired, to read everything "

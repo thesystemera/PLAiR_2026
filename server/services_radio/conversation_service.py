@@ -23,6 +23,7 @@ FILLER_CONTEXT_TURNS = 2
 FILLER_CONTEXT_CHARS = 200
 TEMP_CONVERSATION_MAX_SESSIONS = 1000
 TEMP_CONVERSATION_TTL_S = 6 * 3600
+ACTIVITY = "activity"
 FAILED_TURN_LINES = (
     "[BROADCAST] [LEO] &0.2& ~groans~ Ah, the desk just ate that one. &0.1& Hit us again?",
     "[BROADCAST] [JESS] &0.2& ~sighs~ Lost you in the static there. &0.1& Say that again for us?",
@@ -140,6 +141,9 @@ async def save_conversation_to_database(
     else:
         log_service.conversation("User not authenticated. Cannot save conversation.")
         return None
+
+async def post_activity(session_id: Optional[str], user_id: Optional[int], text: str, ok: bool = True):
+    await post_to_chat(session_id, user_id, ACTIVITY, **{"info" if ok else "error": text})
 
 async def post_to_chat(session_id: Optional[str], user_id: Optional[int], message_type: str = 'interactive', **fields):
     if user_id:
