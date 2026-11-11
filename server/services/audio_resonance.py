@@ -62,7 +62,13 @@ def suppress_resonances(audio: np.ndarray, rate: int, amount: float = 1.0) -> Tu
     cut[:, ~loud] = 0.0
     cut = _octave_average(cut, freqs, RESONANCE_FINE_OCTAVES) * float(np.clip(amount, 0.0, RESONANCE_MAX_AMOUNT))
 
-    _, y = signal.istft(spec * (10.0 ** (-cut / 20.0))[np.newaxis], rate, nperseg=RESONANCE_FFT, noverlap=RESONANCE_FFT - RESONANCE_HOP)
+    gain = 10.0 ** (-cut / 20.0)
+    before = _octave_average(power.mean(axis=1)[:, np.newaxis], freqs, RESONANCE_BROAD_OCTAVES)[:, 0]
+    after = _octave_average((power * gain ** 2).mean(axis=1)[:, np.newaxis], freqs, RESONANCE_BROAD_OCTAVES)[:, 0]
+    makeup = np.sqrt(np.maximum(before, RESONANCE_POWER_FLOOR) / np.maximum(after, RESONANCE_POWER_FLOOR))
+    gain *= makeup[:, np.newaxis]
+
+    _, y = signal.istft(spec * gain[np.newaxis], rate, nperseg=RESONANCE_FFT, noverlap=RESONANCE_FFT - RESONANCE_HOP)
     y = y[:, :x.shape[1]]
     if y.shape[1] < x.shape[1]:
         y = np.pad(y, ((0, 0), (0, x.shape[1] - y.shape[1])))
@@ -80,5 +86,6 @@ def suppress_resonances(audio: np.ndarray, rate: int, amount: float = 1.0) -> Tu
         "cut_over_3db_percent": float(np.mean(touched > 3.0) * 100.0),
         "max_cut_db": float(cut.max()) if cut.size else 0.0,
         "mean_cut_by_band_db": bands,
+        "makeup_max_db": float(20.0 * np.log10(makeup.max())),
         "removed_db": float(10.0 * np.log10((removed ** 2).mean() / ((x ** 2).mean() + 1e-20) + 1e-20)),
     }

@@ -46,7 +46,7 @@ def flip(a, b, rate):
     return out
 
 
-async def render(track_id, engines):
+async def render(track_id, engines, tag=""):
     from services.audio_headroom import mix_stems_to_file
     from services.audio_stage_registry import resolve_bandwidth_stage, resolve_separation_model
     from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
@@ -108,8 +108,9 @@ async def render(track_id, engines):
     n = min(len(old), len(new))
     label = f"version {version}" if version else "unstamped, before 3 Oct"
     write_mp3(f"{title} - 1 - before today ({label})", old, rate)
-    write_mp3(f"{title} - 2 - now (version {settings.MASTER_CHAIN_VERSION})", new, rate)
-    write_mp3(f"{title} - flip before and now every {FLIP_S} s (low beep before, high beep now)", flip(old, new, rate), rate)
+    now_label = f"version {settings.MASTER_CHAIN_VERSION}" + (f", {tag}" if tag else "")
+    write_mp3(f"{title} - 2 - now ({now_label})", new, rate)
+    write_mp3(f"{title} - flip before and now ({now_label}) every {FLIP_S} s (low beep before, high beep now)", flip(old, new, rate), rate)
     print(f"{title}: done in {time.monotonic() - started:.0f} s | before = {label}")
     print("  now minus before by band: " + " ".join(f"{lo}-{hi} Hz {v:+.2f} dB;" for (lo, hi), v in zip(BANDS, band_db(new[:n], rate) - band_db(old[:n], rate))), flush=True)
     now_wav.unlink(missing_ok=True)
@@ -118,16 +119,18 @@ async def render(track_id, engines):
     work.rmdir()
 
 
-async def main(ids):
+async def main(ids, tag):
     from services.audio_master_service import AudioMasterService
     engines = {"master": AudioMasterService()}
     for track_id in ids:
         try:
-            await render(track_id, engines)
+            await render(track_id, engines, tag)
         except Exception as error:
             print(f"{track_id}: FAILED: {error}", flush=True)
 
 
 parser = argparse.ArgumentParser(description="The master on file against the current chain, rendered from the Suno MP3 into upscale_ab (never the catalog)")
 parser.add_argument("ids", nargs="+")
-asyncio.run(main(parser.parse_args().ids))
+parser.add_argument("--tag", default="", help="added to the name of the new files")
+args = parser.parse_args()
+asyncio.run(main(args.ids, args.tag))
