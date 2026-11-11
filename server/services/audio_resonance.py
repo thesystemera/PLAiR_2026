@@ -21,6 +21,7 @@ RESONANCE_TIME_FRAMES = 3
 RESONANCE_LOUD_RANGE_DB = 30.0
 RESONANCE_BAND_RANGE_DB = 25.0
 RESONANCE_REPORT_HZ = ((1000, 2000), (2000, 4000), (4000, 8000), (8000, 12000))
+RESONANCE_POWER_FLOOR = 1e-20
 
 
 def _octave_average(values: np.ndarray, freqs: np.ndarray, octaves: float) -> np.ndarray:
@@ -28,7 +29,7 @@ def _octave_average(values: np.ndarray, freqs: np.ndarray, octaves: float) -> np
     low = np.searchsorted(freqs, freqs / half, side="left")
     high = np.maximum(np.searchsorted(freqs, freqs * half, side="right"), low + 1)
     total = np.concatenate([np.zeros((1, values.shape[1])), np.cumsum(values, axis=0)], axis=0)
-    return (total[high] - total[low]) / (high - low)[:, np.newaxis]
+    return np.maximum((total[high] - total[low]) / (high - low)[:, np.newaxis], 0.0)
 
 
 def _working_range(freqs: np.ndarray) -> np.ndarray:
@@ -41,9 +42,9 @@ def _working_range(freqs: np.ndarray) -> np.ndarray:
 def suppress_resonances(audio: np.ndarray, rate: int, amount: float = 1.0) -> Tuple[np.ndarray, Dict[str, Any]]:
     x = as_channels_first(np.asarray(audio, dtype=np.float64))
     freqs, _, spec = signal.stft(x, rate, nperseg=RESONANCE_FFT, noverlap=RESONANCE_FFT - RESONANCE_HOP)
-    power = (np.abs(spec) ** 2).mean(axis=0) + 1e-20
-    fine = _octave_average(power, freqs, RESONANCE_FINE_OCTAVES)
-    broad = _octave_average(power, freqs, RESONANCE_BROAD_OCTAVES)
+    power = (np.abs(spec) ** 2).mean(axis=0) + RESONANCE_POWER_FLOOR
+    fine = np.maximum(_octave_average(power, freqs, RESONANCE_FINE_OCTAVES), RESONANCE_POWER_FLOOR)
+    broad = np.maximum(_octave_average(power, freqs, RESONANCE_BROAD_OCTAVES), RESONANCE_POWER_FLOOR)
     excess = uniform_filter1d(10.0 * np.log10(fine / broad), RESONANCE_TIME_FRAMES, axis=1, mode="nearest")
 
     weight = _working_range(freqs)
