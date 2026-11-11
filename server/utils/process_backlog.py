@@ -17,13 +17,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--track", action="append", default=[], help="Render only these track ids (repeatable)")
     parser.add_argument("--rerender", action="store_true",
                         help="After the missing tracks, re-render masters made by an older chain version, oldest chain first")
+    parser.add_argument("--shard", default="", help="I/N: take every Nth track starting at I, so N processes on N GPUs split one list")
     return parser.parse_args()
 
 
 ARGS = parse_args()
+LOG_SUFFIX = "" if ARGS.gpu == 0 else f"_gpu{ARGS.gpu}"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = str(ARGS.gpu)
-os.environ["LOG_FILE_NAME"] = "backlog.log"
+os.environ["LOG_FILE_NAME"] = f"backlog{LOG_SUFFIX}.log"
 os.environ["ASSET_DOCTOR_ENABLED"] = "false"
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -90,7 +92,7 @@ def mark_added(track_id: str):
     os.replace(tmp, path)
 
 
-CRASH_LOG = open(Path(__file__).parent.parent.parent / "data" / "logs" / "backlog_crash.log", "a", encoding="utf-8")
+CRASH_LOG = open(Path(__file__).parent.parent.parent / "data" / "logs" / f"backlog_crash{LOG_SUFFIX}.log", "a", encoding="utf-8")
 faulthandler.enable(file=CRASH_LOG, all_threads=True)
 
 
@@ -98,6 +100,9 @@ async def main():
     ids, rank, missing = backlog()
     if ARGS.track:
         ids = list(ARGS.track)
+    if ARGS.shard:
+        index, count = (int(part) for part in ARGS.shard.split("/"))
+        ids = ids[index::count]
     if ARGS.limit:
         ids = ids[:ARGS.limit]
     print(f"Backlog: {len(ids)} tracks (super-liked {sum(rank.get(t) == 0 for t in ids)}, "
