@@ -11,7 +11,7 @@
 
 ## Chain version 6 (11 Nov)
 
-Two changes on top of version 5, both described in CLAUDE.md section 18: SonicMaster's 30 s windows are averaged inside the sampler and decoded once (no audio crossfade any more), and the old notch finder is replaced by a resonance filter after SonicMaster (`services/audio_resonance.py`, strength `MASTER_RESONANCE_AMOUNT`). Everything else below still describes the chain.
+Three changes on top of version 5, all described in CLAUDE.md section 18: SonicMaster's 30 s windows are averaged inside the sampler and decoded once (no audio crossfade any more), SonicMaster is blended with its input frequency by frequency instead of as waveforms (no more cancelling, no compensation EQ), and the old notch finder is replaced by a resonance filter after SonicMaster (`services/audio_resonance.py`, strength `MASTER_RESONANCE_AMOUNT`). Everything else below still describes the chain.
 
 ## Locked chain (master chain version 4, 5 Oct)
 

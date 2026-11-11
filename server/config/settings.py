@@ -616,7 +616,6 @@ class Settings:
     SONIC_MASTER_VAE_MARGIN_S: float = float(os.getenv("SONIC_MASTER_VAE_MARGIN_S", "2"))
     SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "40"))
     SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, clean and dynamic with rich full harmonics")
-    SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
     MASTER_TAPE_HISS_DBFS: float = float(os.getenv("MASTER_TAPE_HISS_DBFS", "-80"))

@@ -201,7 +201,36 @@ def spectrally_balanced_blend(
     return filtered[:, delay:delay + length], info
 
 
-TAPE_HISS_SHAPE = ((0.0, -12.0), (200.0, -9.0), (1000.0, -5.0), (4000.0, 0.0), (16000.0, 0.0), (19000.0, -4.0))
+FREQUENCY_BLEND_FFT = 2048
+FREQUENCY_BLEND_HOP = 512
+
+
+def frequency_blend(wet: np.ndarray, dry: np.ndarray, wet_mix: float, rate: int) -> np.ndarray:
+    w = float(np.clip(wet_mix, 0.0, 1.0))
+    wet = as_channels_first(np.asarray(wet, dtype=np.float64))
+    dry = as_channels_first(np.asarray(dry, dtype=np.float64))
+    length = min(wet.shape[1], dry.shape[1])
+    wet, dry = wet[:, :length], dry[:, :length]
+    if w <= 0.001:
+        return dry.copy()
+    if w >= 0.999:
+        return wet.copy()
+    out = np.zeros_like(dry)
+    for channel in range(dry.shape[0]):
+        _, _, wet_spec = signal.stft(wet[channel].astype(np.float32), rate, nperseg=FREQUENCY_BLEND_FFT,
+                                     noverlap=FREQUENCY_BLEND_FFT - FREQUENCY_BLEND_HOP)
+        _, _, dry_spec = signal.stft(dry[channel].astype(np.float32), rate, nperseg=FREQUENCY_BLEND_FFT,
+                                     noverlap=FREQUENCY_BLEND_FFT - FREQUENCY_BLEND_HOP)
+        level = np.sqrt(w * np.abs(wet_spec) ** 2 + (1.0 - w) * np.abs(dry_spec) ** 2)
+        lead = w * np.abs(wet_spec) * wet_spec + (1.0 - w) * np.abs(dry_spec) * dry_spec
+        _, y = signal.istft(level * lead / (np.abs(lead) + 1e-12), rate, nperseg=FREQUENCY_BLEND_FFT,
+                            noverlap=FREQUENCY_BLEND_FFT - FREQUENCY_BLEND_HOP)
+        out[channel] = y[:length] if y.shape[0] >= length else np.pad(y, (0, length - y.shape[0]))
+        del wet_spec, dry_spec, level, lead
+    return out
+
+
+TAPE_HISS_SHAPE =((0.0, -12.0), (200.0, -9.0), (1000.0, -5.0), (4000.0, 0.0), (16000.0, 0.0), (19000.0, -4.0))
 TAPE_HISS_TAPS = 4097
 
 

@@ -1,4 +1,4 @@
-import argparse, asyncio, json, os, shutil, subprocess, sys, time
+import argparse, asyncio, json, os, subprocess, sys, time
 from pathlib import Path
 
 os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
@@ -10,6 +10,7 @@ from config import settings  # noqa: E402
 
 OUT = Path(os.environ.get("CHAIN_AB_OUT", r"E:\AI_RADIO\upscale_ab\chain_ab")); OUT.mkdir(parents=True, exist_ok=True)
 BANDS = ((60, 250), (250, 1000), (1000, 2000), (2000, 6000), (6000, 16000))
+FLIP_S = 5
 
 
 def levelled(path):
@@ -29,21 +30,40 @@ def write_mp3(name, x, rate):
     wav.unlink()
 
 
+def flip(a, b, rate):
+    n = min(len(a), len(b))
+    seg, fade = FLIP_S * rate, int(0.010 * rate)
+    gain = np.zeros(n)
+    for k in range(0, n, seg):
+        if (k // seg) % 2 == 1:
+            gain[k:k + seg] = 1.0
+    kernel = np.hanning(2 * fade + 1)
+    gain = np.convolve(gain, kernel / kernel.sum(), mode="same")[:, None]
+    out = a[:n] * (1 - gain) + b[:n] * gain
+    t = np.arange(int(0.07 * rate)) / rate
+    for k in range(0, n - len(t), seg):
+        out[k:k + len(t)] += (0.04 * np.hanning(len(t)) * np.sin(2 * np.pi * (1760.0 if (k // seg) % 2 == 1 else 440.0) * t))[:, None]
+    return out
+
+
 async def render(track_id, engines):
     from services.audio_headroom import mix_stems_to_file
-    from services.audio_resonance import suppress_resonances
     from services.audio_stage_registry import resolve_bandwidth_stage, resolve_separation_model
     from services.audio_sonic_master_service import SonicMasterService, SUNO_SONIC_SETTINGS
     from services.audio_vocal_enhance_service import AudioVocalEnhanceService
     meta = json.loads((settings.CATALOG_DIR / "metadata" / f"{track_id}.json").read_text(encoding="utf-8"))
     params = meta.get("generation_params") or {}
     title = "".join(c if c.isalnum() or c in " &'" else " " for c in params.get("title", track_id)).strip()
+    before = settings.ENHANCED_WAV_DIR / f"{track_id}.wav"
+    version = meta.get("master_chain_version")
+    if not before.exists():
+        raise RuntimeError("no master on file to compare with")
     work = OUT / "_work" / track_id[:8]
     work.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     master = engines["master"]
 
-    sonic_wav = OUT / "_sonic" / f"{track_id}.wav"
+    sonic_wav = OUT / "_sonic" / f"{track_id}_v{settings.MASTER_CHAIN_VERSION}.wav"
     sonic_wav.parent.mkdir(parents=True, exist_ok=True)
     if not sonic_wav.exists():
         decoded = work / "decoded.wav"
@@ -58,8 +78,6 @@ async def render(track_id, engines):
             if not restored:
                 raise RuntimeError("Apollo failed")
             source = restored
-        print(f"  {title}: Apollo done at {time.monotonic() - started:.0f} s", flush=True)
-
         if settings.ENABLE_VOCAL_ENHANCEMENT and not params.get("instrumental", False):
             separation, _ = resolve_separation_model()
             await separation.initialize()
@@ -73,8 +91,6 @@ async def render(track_id, engines):
                 mixed = work / "stems" / "vocal_mix.wav"
                 await asyncio.to_thread(mix_stems_to_file, better, stems["no_vocals"], mixed)
                 source = mixed
-        print(f"  {title}: vocal path done at {time.monotonic() - started:.0f} s", flush=True)
-
         premaster = work / "premaster.wav"
         if not await master.correct_audio(source, premaster):
             raise RuntimeError("corrective EQ failed")
@@ -84,35 +100,22 @@ async def render(track_id, engines):
             await engines["sonic"].initialize()
         if not await engines["sonic"].enhance_audio(premaster, sonic_wav):
             raise RuntimeError("SonicMaster failed")
-        print(f"  {title}: SonicMaster done at {time.monotonic() - started:.0f} s", flush=True)
 
-    off_wav, on_wav = work / "off.wav", work / "on.wav"
-    await master.master_audio_with_report(sonic_wav, off_wav, target_lufs=-16.0, correct=False, tone=True, hiss=True, resonance=False)
-    _, info = await master.master_audio_with_report(sonic_wav, on_wav, target_lufs=-16.0, correct=False, tone=True, hiss=True, resonance=True)
-    a, rate = levelled(off_wav)
-    b, _ = levelled(on_wav)
-    n = min(len(a), len(b))
-    write_mp3(f"{title} - A - new chain, filter OFF", a, rate)
-    write_mp3(f"{title} - C - new chain, resonance filter ON", b, rate)
-    before, _ = sf.read(str(sonic_wav), dtype="float64", always_2d=True)
-    after, _ = suppress_resonances(before.T, rate)
-    removed = (before - after.T) * 10 ** ((-16 - pyln.Meter(rate).integrated_loudness(before)) / 20)
-    write_mp3(f"{title} - difference C (what the resonance filter removed, +12 dB)", removed * 4.0, rate)
-    old_master = settings.ENHANCED_WAV_DIR / f"{track_id}.wav"
-    old = None
-    if old_master.exists():
-        old, old_rate = levelled(old_master)
-        write_mp3(f"{title} - 0 - master before today (version {meta.get('master_chain_version') or 'unknown'})", old, old_rate)
-
-    ring = info.get("resonance") or {}
-    print(f"{title}: done in {time.monotonic() - started:.0f} s | old master chain v{meta.get('master_chain_version')} | resonance filter: average cut "
-          f"{ring.get('mean_cut_db', 0):.2f} dB at 2-8 kHz, over 1 dB in {ring.get('cut_over_1db_percent', 0):.1f}% of it, deepest {ring.get('max_cut_db', 0):.1f} dB, "
-          f"removed {ring.get('removed_db', 0):.1f} dB under the music | by band " + ", ".join(f"{k} {v:.2f}" for k, v in (ring.get('mean_cut_by_band_db') or {}).items()))
-    print("  C (resonance filter ON) minus A (OFF): " + " ".join(f"{lo}-{hi} Hz {v:+.2f} dB;" for (lo, hi), v in zip(BANDS, band_db(b[:n], rate) - band_db(a[:n], rate))))
-    if old is not None:
-        m = min(len(old), n)
-        print("  A (new chain, OFF) minus old master: " + " ".join(f"{lo}-{hi} Hz {v:+.2f} dB;" for (lo, hi), v in zip(BANDS, band_db(a[:m], rate) - band_db(old[:m], rate))), flush=True)
-    shutil.rmtree(work, ignore_errors=True)
+    now_wav = work / "now.wav"
+    await master.master_audio_with_report(sonic_wav, now_wav, target_lufs=-16.0, correct=False, tone=True, hiss=True, resonance=True)
+    old, rate = levelled(before)
+    new, _ = levelled(now_wav)
+    n = min(len(old), len(new))
+    label = f"version {version}" if version else "unstamped, before 3 Oct"
+    write_mp3(f"{title} - 1 - before today ({label})", old, rate)
+    write_mp3(f"{title} - 2 - now (version {settings.MASTER_CHAIN_VERSION})", new, rate)
+    write_mp3(f"{title} - flip before and now every {FLIP_S} s (low beep before, high beep now)", flip(old, new, rate), rate)
+    print(f"{title}: done in {time.monotonic() - started:.0f} s | before = {label}")
+    print("  now minus before by band: " + " ".join(f"{lo}-{hi} Hz {v:+.2f} dB;" for (lo, hi), v in zip(BANDS, band_db(new[:n], rate) - band_db(old[:n], rate))), flush=True)
+    now_wav.unlink(missing_ok=True)
+    for leftover in sorted(work.rglob("*"), reverse=True):
+        leftover.unlink() if leftover.is_file() else leftover.rmdir()
+    work.rmdir()
 
 
 async def main(ids):
@@ -125,6 +128,6 @@ async def main(ids):
             print(f"{track_id}: FAILED: {error}", flush=True)
 
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(description="The master on file against the current chain, rendered from the Suno MP3 into upscale_ab (never the catalog)")
 parser.add_argument("ids", nargs="+")
 asyncio.run(main(parser.parse_args().ids))

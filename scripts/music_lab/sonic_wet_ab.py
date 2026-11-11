@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np, soundfile as sf, pyloudnorm as pyln  # noqa: E402
 from scipy import signal  # noqa: E402
 from config import settings  # noqa: E402
-from services.audio_headroom import spectrally_balanced_blend, write_float_wav  # noqa: E402
+from services.audio_headroom import frequency_blend, write_float_wav  # noqa: E402
 import decoder_lock  # noqa: E402
 
 OUT = Path(os.environ.get("SONIC_AB_OUT", r"E:\AI_RADIO\upscale_ab\sonic_wet")); OUT.mkdir(parents=True, exist_ok=True)
@@ -64,7 +64,7 @@ async def main(ids, prompt, wets, tag, steps, order):
         os.system(f'ffmpeg -loglevel error -y -i "{settings.CATALOG_DIR / "mp3" / (tid + ".mp3")}" -ar 44100 -c:a pcm_f32le "{suno_wav}"')
         files = [(f"{name}_0_Suno_raw.flac", suno_wav)] if not order or order == 1 else []
         for i, w in enumerate(wets, 1):
-            blended, _ = spectrally_balanced_blend(wet, dry, w, r, max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0)
+            blended = frequency_blend(wet, dry, w, r)
             mix = OUT / f"_{tid}_{int(w * 100)}.wav"
             write_float_wav(mix, blended, r)
             done = OUT / f"_{tid}_{int(w * 100)}_master.wav"

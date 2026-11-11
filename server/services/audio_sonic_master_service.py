@@ -14,7 +14,7 @@ from services import log_service
 from services.base_service import SingletonService
 from config import settings
 from models_global import gpu_lease, raise_if_cuda_oom
-from services.audio_headroom import spectrally_balanced_blend, write_float_wav
+from services.audio_headroom import frequency_blend, write_float_wav
 
 BASE_DIR = Path(__file__).parent.parent.parent
 SONIC_MASTER_DIR = BASE_DIR / "SonicMaster"
@@ -342,15 +342,8 @@ class SonicMasterService(SingletonService):
             wav = torch.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
             output = self._match_rms(self._match_level_windows(wav, audio), audio)
 
-            final, blend_info = spectrally_balanced_blend(
-                output.numpy(), audio.numpy(), wet_mix, self.fs,
-                max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0
-            )
-            if blend_info["compensation_max_db"] > 0.05:
-                log_service.upscaling(
-                    f"SonicMaster: Blend power compensation up to {blend_info['compensation_max_db']:+.1f}dB "
-                    f"(HF avg {blend_info['compensation_hf_db']:+.1f}dB)"
-                )
+            final = frequency_blend(output.numpy(), audio.numpy(), wet_mix, self.fs)
+            log_service.upscaling(f"SonicMaster: {wet_mix:.0%} wet, blended frequency by frequency with its input")
 
             write_float_wav(output_path, final, self.fs)
 
