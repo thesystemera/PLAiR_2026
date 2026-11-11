@@ -9,6 +9,10 @@
 - Render on the **P6000** (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=0`; since 5 Oct the RTX 6000 is the owner's DeepPBR card), one model at a time, full songs. Profile a new model on 5 s first.
 - Test environment, open problems and next leads: `docs/HANDOVER_2026-10-06_SUNO_ARTIFACTS.md`.
 
+## Chain version 6 (11 Nov)
+
+Two changes on top of version 5, both described in CLAUDE.md section 18: SonicMaster's 30 s windows are averaged inside the sampler and decoded once (no audio crossfade any more), and the old notch finder is replaced by a resonance filter after SonicMaster (`services/audio_resonance.py`, strength `MASTER_RESONANCE_AMOUNT`). Everything else below still describes the chain.
+
 ## Locked chain (master chain version 4, 5 Oct)
 
 Suno MP3 -> decode -> **Apollo** on the decoded MP3 (what it was trained on), keeping Suno's own signal below its MP3 cutoff (`audio_headroom.keep_source_below_cutoff`: Apollo only fills above it; on the full mix it had pulled 16.5-17.5 kHz down 4-5 dB) -> RoFormer split of the restored mix -> Lew's vocal Apollo on the vocal (no crossover) -> remix -> notches (`correct_audio`: 25 Hz rumble cut, stationary resonances only, 20 kHz safety roll-off) -> SonicMaster (50% wet, 40 steps, prompt "give the mix more shine and sparkle, clean and dynamic with rich full harmonics" (the 24 Feb wording), blend compensation on; chain v5, 7 Oct) -> **reference EQ + -80 dBFS tape hiss + final leveler** (lane 6) at **-16 LUFS** (Apple Music standard; true-peak -1.5 dBTP, limiter up to 6 dB). `SONIC_MASTER_PRECISION=auto` (default since 5 Oct): fp16 on the RTX (1.7x faster, a slightly different take), fp32 on the P6000. SonicMaster parks on the CPU between runs and tiles its VAE, so a render no longer spills out of a shared card (CLAUDE.md section 18).
@@ -21,9 +25,9 @@ What changed from version 3 (5 Oct, measured on Digital Dollhouse, Faded Signal,
 
 Station level -16 LUFS everywhere: masters, uploads, shoutouts; stings -18, station voice -20, beds -22; DJ hosts `DJ_VOICE_LEVEL_DB` -2 dB to keep the voice/music balance. `utils/relevel_catalog.py` moves older masters to -16 by gain only.
 
-Lanes: 1 decode, 1b Apollo, 2 separation, 3 vocals + remix + notches, 4 SonicMaster (`SONIC_MASTER_ENABLED`), 5 Whisper (skipped when lyric timings exist), 6 reference EQ + leveler + transcode. Every master gets `master_chain_version` + `master_rendered_at` in its metadata.
+Lanes: 1 decode, 1b Apollo, 2 separation, 3 vocals + remix + rumble cut, 4 SonicMaster (`SONIC_MASTER_ENABLED`), 5 Whisper (skipped when lyric timings exist), 6 resonance filter + reference EQ + leveler + transcode. Every master gets `master_chain_version` + `master_rendered_at` in its metadata.
 
-Master chain versions: 1 = Nov 2025 (Apollo first, Demucs, ClearVoice SE/SR chain, SonicMaster 50%, master -14 with the notch bug); 2 = the earlier 3 Oct renders (-14, 25%); 3 = 3 Oct night (Apollo after the remix, Elowsson tone before SonicMaster); 4 = 5 Oct (SonicMaster 33%, 20 steps, stereo/breathe prompt; the owner heard it as flangey); 5 = above (7 Oct: the 24 Feb prompt at 50%, 40 steps, everything else as v4). Bump `MASTER_CHAIN_VERSION` whenever the sound changes.
+Master chain versions: 1 = Nov 2025 (Apollo first, Demucs, ClearVoice SE/SR chain, SonicMaster 50%, master -14 with the notch bug); 2 = the earlier 3 Oct renders (-14, 25%); 3 = 3 Oct night (Apollo after the remix, Elowsson tone before SonicMaster); 4 = 5 Oct (SonicMaster 33%, 20 steps, stereo/breathe prompt; the owner heard it as flangey); 5 = above (7 Oct: the 24 Feb prompt at 50%, 40 steps, everything else as v4); 6 = 11 Nov (SonicMaster windows joined in the sampler, resonance filter after SonicMaster in place of the notch finder). Bump `MASTER_CHAIN_VERSION` whenever the sound changes.
 
 Backlog: `server/utils/process_backlog.py [--rerender]` runs on the P6000 (`--gpu 0`) in its own process (log `data/logs/backlog.log`): Suno tracks without a master first, then (with `--rerender`) masters below the current version; super-likes, likes, then the rest; ~2.5 min per song (GPU-bound). The live backend picks finished songs up within a minute (`CATALOG_WATCH_INTERVAL_S`), and "Recent" sorts by `catalog_added_at`.
 

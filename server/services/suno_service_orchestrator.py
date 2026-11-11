@@ -5,13 +5,14 @@ This orchestrator manages a 6-lane concurrent pipeline from mp3+metadata → cat
 
 ┌─────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────────────────┐
 │  Lane 1     │  Lane 1b     │  Lane 2      │  Lane 3      │  Lane 4      │  Lane 5      │       Lane 6             │
-│  DECODE     │  APOLLO      │  SEPARATION  │  VOCAL+NOTCH │  SONICMASTER │  WHISPER     │   CPU POOL               │
+│  DECODE     │  APOLLO      │  SEPARATION  │  VOCAL+CLEAN │  SONICMASTER │  WHISPER     │   CPU POOL               │
 │  (CPU)      │  (GPU/VRAM)  │  (GPU/VRAM)  │  (GPU/VRAM)  │  (GPU/VRAM)  │  (GPU/VRAM)  │   (CPU: 16-32 workers)   │
 └─────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────┴──────────────────────────┘
 
 Apollo restores the decoded MP3 first (what it was trained on), keeping the source below its own cutoff.
-The restored mix is separated, Lew's vocal Apollo repairs the vocal, the remix gets its notches and goes
-to SonicMaster. Instrumentals skip separation. Lane 6 masters with the modern-master reference EQ.
+The restored mix is separated, Lew's vocal Apollo repairs the vocal, the remix gets a rumble cut and goes
+to SonicMaster. Instrumentals skip separation. Lane 6 turns down resonances that poke out, then masters with the
+modern-master reference EQ.
 
 All GPU lanes (1-5) run in parallel with 1 concurrent job each (services have internal locks).
 Lane 6 runs up to N concurrent CPU jobs (configurable via settings.MAX_PARALLEL_CPU_WORKERS).
@@ -587,7 +588,7 @@ class SunoServiceOrchestrator(SingletonService):
         assert self.lane3_queue is not None
         lane3_queue = self.lane3_queue
         lane4_queue = self.lane4_queue
-        log_service.suno("Lane 3 (Vocal restoration + notches) consumer started")
+        log_service.suno("Lane 3 (Vocal restoration + rumble cut) consumer started")
         while self.running:
             job: Optional[TrackJob] = None
             try:
@@ -827,7 +828,7 @@ class SunoServiceOrchestrator(SingletonService):
             if job.progress_callback:
                 await job.progress_callback("Mastering")
             final_path = settings.ENHANCED_WAV_DIR / f"{job.track_id}.wav"
-            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False, tone=True, hiss=True)
+            result = await self.master.master_audio(job.sonic_wav_path, final_path, target_lufs=MASTER_TARGET_LUFS, correct=False, tone=True, hiss=True, resonance=True)
             if result:
                 job.master_wav_path = result
                 await asyncio.to_thread(stages.stamp_master_version, job.track_id)

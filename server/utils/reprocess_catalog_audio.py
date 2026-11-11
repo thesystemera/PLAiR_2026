@@ -79,19 +79,18 @@ SUNO_MASTER_WET = 1.0
 LOUD_SOURCE_LUFS = -12.0
 LOUD_SOURCE_MASTERING_BLEND_MAX = 35
 DEFAULT_STATE_PATH = settings.LOGS_DIR.parent / "reprocess_catalog_state.json"
-LEGACY_SONIC = {"precision": "fp16", "steps": 50, "align": False, "conditioning": False, "rms_match": True,
-                "templates": False, "prompt": "give the mix more shine and sparkle, clean and dynamic with rich full harmonics"}
+LEGACY_SONIC = {"precision": "fp16", "steps": 50, "templates": False, "prompt": "give the mix more shine and sparkle, clean and dynamic with rich full harmonics"}
 AB_VARIANTS = {
     "current": {"description": "Current catalog master, unchanged", "copy_current": True},
     "fixed_master": {"description": "Existing SonicMaster WAV through the fixed mastering chain (CPU)", "from": "master"},
-    "full_default": {"description": "Full chain with the new defaults (fp32, 20 steps, aligned + conditioned chunks, "
-                                    "template prompt, compensated blend, true-peak master)", "from": "source"},
+    "full_default": {"description": "Full chain with the current defaults (sampler-blended SonicMaster, compensated blend, "
+                                    "resonance filter, true-peak master)", "from": "source"},
     "owner_prompt": {"description": "New defaults with the original free-text SonicMaster prompt (no template)",
                      "from": "source", "sonic": {"templates": False, "prompt": LEGACY_SONIC["prompt"]}},
     "steps_10": {"description": "New defaults with 10 SonicMaster steps", "from": "source", "sonic": {"steps": 10}},
     "steps_50": {"description": "New defaults with 50 SonicMaster steps", "from": "source", "sonic": {"steps": 50}},
-    "legacy_sonic": {"description": "Old SonicMaster settings (fp16, 50 steps, old prompt, per-chunk RMS match) with the "
-                                    "fixed float/blend/master chain", "from": "source", "sonic": LEGACY_SONIC},
+    "legacy_sonic": {"description": "Old SonicMaster settings (fp16, 50 steps, old prompt) with the "
+                                    "current float/blend/master chain", "from": "source", "sonic": LEGACY_SONIC},
     "bandwidth_off": {"description": "New defaults without a bandwidth-extension stage", "from": "source", "bandwidth": "off"},
     "bandwidth_flashsr": {"description": "New defaults with FlashSR bandwidth extension", "from": "source", "bandwidth": "flashsr"},
     "separation_roformer": {"description": "New defaults with RoFormer vocal separation", "from": "source",
@@ -422,7 +421,7 @@ async def render(plan: Dict[str, Any], staging: Path, engines: Engines,
     staged["master"] = staging / "master.wav"
     result, info = await asyncio.to_thread(
         engines.master._master_audio_sync, source, staged["master"], MASTER_TARGET_LUFS, plan["wet_mix"],
-        plan["is_upload"], not plan["is_upload"], not plan["is_upload"]
+        plan["is_upload"], not plan["is_upload"], not plan["is_upload"], not plan["is_upload"]
     )
     if not result:
         raise RuntimeError(f"mastering failed: {info.get('error')}")
@@ -457,12 +456,7 @@ def apply_sonic_variant(engines: Engines, overrides: Optional[Dict[str, Any]]):
     if not overrides:
         return lambda: None
     from services.audio_sonic_master_service import SUNO_SONIC_SETTINGS
-    flags = {
-        "align": "SONIC_MASTER_ALIGN_CHUNKS",
-        "conditioning": "SONIC_MASTER_CHUNK_CONDITIONING",
-        "rms_match": "SONIC_MASTER_CHUNK_RMS_MATCH",
-        "templates": "SONIC_MASTER_TEMPLATE_PROMPTS",
-    }
+    flags = {"templates": "SONIC_MASTER_TEMPLATE_PROMPTS"}
     saved = {attr: getattr(settings, attr) for attr in flags.values()}
     saved_precision = engines.sonic.precision
     for key, attr in flags.items():

@@ -27,7 +27,7 @@ SUNO_SONIC_SETTINGS = {
 }
 VAE_HOP_SAMPLES = 2048
 FAST_FP16_MIN_CAPABILITY = 7
-CONDITIONING_SECONDS = 10
+WINDOW_WEIGHT_FLOOR = 1e-4
 PROMPT_TEMPLATES = (
     (("shine", "sparkle", "bright", "treble", "dull"), "Give the mix more shine and sparkle."),
     (("air", "open", "breath", "airy"), "Add more air and openness to the sound."),
@@ -257,6 +257,61 @@ class SonicMasterService(SingletonService):
             return source * scale
         return source
 
+    @torch.no_grad()
+    def _flow_whole_song(self, latents: torch.Tensor, prompt: str) -> tuple[torch.Tensor, int]:
+        model = self.model
+        if model is None:
+            raise RuntimeError("Model not initialized")
+        device = model.transformer.device
+        length, total = model.audio_seq_len, latents.shape[1]
+        last = max(total - length, 0)
+        starts = list(range(0, last + 1, length // 2))
+        if starts[-1] != last:
+            starts.append(last)
+
+        states, mask = model.encode_text([prompt])
+        masked = torch.where(mask.unsqueeze(-1).expand_as(states), states,
+                             torch.full((), float("nan"), device=states.device, dtype=states.dtype))
+        pooled_text = model.fc_text(torch.nanmean(masked, dim=1))
+        pooled = model.fc_text_audio(torch.cat([pooled_text, torch.zeros_like(pooled_text)], dim=1))
+        states = torch.cat([states, model.encode_duration(torch.tensor([self.chunk_duration], device=device))], dim=1)
+        text_ids = torch.zeros(states.shape[1], 3, device=device)
+        audio_ids = torch.arange(length).unsqueeze(-1).repeat(1, 3).to(device)
+        weight = (torch.hann_window(length, device=device) + WINDOW_WEIGHT_FLOOR).view(1, length, 1).to(latents.dtype)
+
+        timesteps = torch.linspace(1.0, 0.0, self.num_inference_steps + 1)
+        step = float(timesteps[0] - timesteps[1])
+        for t in timesteps[:-1]:
+            velocity = torch.zeros_like(latents)
+            cover = torch.zeros(1, total, 1, device=device, dtype=latents.dtype)
+            for start in starts:
+                predicted = model.transformer(
+                    hidden_states=latents[:, start:start + length],
+                    timestep=t.reshape(1).to(device),
+                    guidance=None,
+                    pooled_projections=pooled,
+                    encoder_hidden_states=states,
+                    txt_ids=text_ids,
+                    img_ids=audio_ids,
+                    return_dict=False,
+                )[0]
+                velocity[:, start:start + length] += predicted * weight
+                cover[:, start:start + length] += weight
+            latents = latents + step * velocity / cover
+        return latents, len(starts)
+
+    def _match_level_windows(self, wet: torch.Tensor, dry: torch.Tensor) -> torch.Tensor:
+        size = self.chunk_duration * self.fs
+        weight = torch.hann_window(size) + WINDOW_WEIGHT_FLOOR
+        gain, cover = torch.zeros(wet.shape[1]), torch.zeros(wet.shape[1])
+        for start in range(0, wet.shape[1], size // 2):
+            w, d = wet[:, start:start + size], dry[:, start:start + size]
+            power = float((w ** 2).mean())
+            level = float(torch.sqrt((d ** 2).mean() / power)) if power > 1e-12 else 1.0
+            gain[start:start + w.shape[1]] += level * weight[:w.shape[1]]
+            cover[start:start + w.shape[1]] += weight[:w.shape[1]]
+        return wet * (gain / cover)
+
     def _enhance_audio_sync(self, input_path: Path, output_path: Path, prompt: str, wet_mix: float) -> bool:
         try:
             audio, sr = torchaudio.load(str(input_path))
@@ -269,123 +324,26 @@ class SonicMasterService(SingletonService):
             if sr != self.fs:
                 audio = torchaudio.functional.resample(audio, sr, self.fs)
 
-            original_audio = audio.clone()
+            if self.model is None or self.vae is None:
+                raise RuntimeError("SonicMaster not initialized")
             total_samples = audio.shape[1]
-
-            chunk_samples = self.chunk_duration * self.fs
-            if settings.SONIC_MASTER_ALIGN_CHUNKS:
-                chunk_samples = (chunk_samples // VAE_HOP_SAMPLES) * VAE_HOP_SAMPLES
-            overlap_samples = min(int(settings.SONIC_MASTER_CHUNK_OVERLAP_S * self.fs), chunk_samples // 2)
-            stride_samples = chunk_samples - overlap_samples
+            window_samples = self.model.audio_seq_len * VAE_HOP_SAMPLES
+            padded_samples = max(-(-total_samples // VAE_HOP_SAMPLES) * VAE_HOP_SAMPLES, window_samples)
+            padded = torch.nn.functional.pad(audio, (0, padded_samples - total_samples))
             model_dtype = torch.float16 if self._half else torch.float32
-            conditioning_samples = min(CONDITIONING_SECONDS * self.fs, chunk_samples)
-            prev_cond_latent = None
 
-            output_buffer = torch.zeros_like(audio)
-            weight_buffer = torch.zeros_like(audio)
+            with torch.no_grad():
+                z = vae_encode_tiled(self.vae, padded.unsqueeze(0).to(self.device, dtype=model_dtype), self.fs)
+                latents, windows = self._flow_whole_song(z.transpose(1, 2), prompt)
+                wav = vae_decode_tiled(self.vae, latents.transpose(2, 1), self.fs).float().cpu().squeeze(0)[:, :total_samples]
+                del z, latents
 
-            if overlap_samples * 2 >= chunk_samples:
-                window = torch.hann_window(chunk_samples)
-            else:
-                ramp = 0.5 * (1 - torch.cos(torch.pi * (torch.arange(overlap_samples) + 0.5) / overlap_samples))
-                window = torch.ones(chunk_samples)
-                window[:overlap_samples] = ramp
-                window[-overlap_samples:] = ramp.flip(0)
-            window = window.to(audio.device).unsqueeze(0).repeat(2, 1)
-
-            num_chunks = int(np.ceil(total_samples / stride_samples))
-
-            log_service.upscaling(f"SonicMaster: Processing {num_chunks} chunks, {overlap_samples / self.fs:.1f}s crossfade")
-
-            for chunk_idx in range(num_chunks):
-                start_idx = chunk_idx * stride_samples
-                end_idx = start_idx + chunk_samples
-
-                input_slice = audio[:, start_idx:end_idx]
-
-                current_slice_len = input_slice.shape[1]
-                pad_amount = chunk_samples - current_slice_len
-
-                if pad_amount > 0:
-                    chunk = torch.nn.functional.pad(input_slice, (0, pad_amount))
-                else:
-                    chunk = input_slice
-
-                chunk_gpu = chunk.unsqueeze(0).to(self.device, dtype=model_dtype)
-
-                with torch.no_grad():
-                    if self.vae is None:
-                        raise RuntimeError("VAE not initialized")
-                    z = vae_encode_tiled(self.vae, chunk_gpu, self.fs)
-
-                z_in = z.transpose(1, 2)
-
-                with torch.no_grad():
-                    if self.model is None:
-                        raise RuntimeError("Model not initialized")
-                    result_latent = self.model.inference_flow(
-                        z_in,
-                        prompt,
-                        audiocond_latents=prev_cond_latent,
-                        num_inference_steps=self.num_inference_steps,
-                        timesteps=None,
-                        guidance_scale=1.0,
-                        duration=self.chunk_duration,
-                        seed=0,
-                        disable_progress=True,
-                        num_samples_per_prompt=1,
-                        callback_on_step_end=None,
-                        solver="Euler",
-                    )
-
-                    decoded = vae_decode_tiled(self.vae, result_latent.transpose(2, 1), self.fs)
-                    if settings.SONIC_MASTER_CHUNK_CONDITIONING:
-                        tail = decoded[:, :, -conditioning_samples:]
-                        prev_cond_latent = vae_encode_tiled(self.vae, tail, self.fs).transpose(1, 2)
-                    wav = decoded.float().cpu()
-                    del decoded
-
-                wav = torch.nan_to_num(wav.squeeze(0), nan=0.0, posinf=0.0, neginf=0.0)
-
-                valid_end_idx = min(end_idx, total_samples)
-                dest_slice = output_buffer[:, start_idx:valid_end_idx]
-                actual_dest_len = dest_slice.shape[1]
-
-                wav_len = wav.shape[1]
-
-                if wav_len < actual_dest_len:
-                    diff = actual_dest_len - wav_len
-                    wav_fitted = torch.nn.functional.pad(wav, (0, diff))
-                elif wav_len > actual_dest_len:
-                    wav_fitted = wav[:, :actual_dest_len]
-                else:
-                    wav_fitted = wav
-
-                ref_slice = input_slice[:, :actual_dest_len]
-
-                if settings.SONIC_MASTER_CHUNK_RMS_MATCH and ref_slice.shape[1] == wav_fitted.shape[1]:
-                    wav_fitted = self._match_rms(wav_fitted, ref_slice)
-
-                win_cropped = window[:, :actual_dest_len]
-
-                try:
-                    dest_slice += wav_fitted * win_cropped
-                    weight_buffer[:, start_idx:valid_end_idx] += win_cropped
-                except RuntimeError as e:
-                    log_service.error(f"SonicMaster: Stitching error at chunk {chunk_idx + 1}/{num_chunks}")
-                    raise e
-
-                del chunk_gpu, z, z_in, result_latent, wav, wav_fitted, win_cropped
-                _clear_cuda_cache()
-
-            mask = weight_buffer > 1e-6
-            output_buffer[mask] /= weight_buffer[mask]
-            output_buffer[~mask] = original_audio[~mask]
-
-            output_buffer = self._match_rms(output_buffer, original_audio)
+            log_service.upscaling(f"SonicMaster: {windows} windows of {self.chunk_duration} s blended in the sampler, decoded once")
+            wav = torch.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
+            output = self._match_rms(self._match_level_windows(wav, audio), audio)
 
             final, blend_info = spectrally_balanced_blend(
-                output_buffer.numpy(), original_audio.numpy(), wet_mix, self.fs,
+                output.numpy(), audio.numpy(), wet_mix, self.fs,
                 max_boost_db=3.5 if settings.SONIC_MASTER_BLEND_COMPENSATION else 0.0
             )
             if blend_info["compensation_max_db"] > 0.05:
@@ -396,7 +354,7 @@ class SonicMasterService(SingletonService):
 
             write_float_wav(output_path, final, self.fs)
 
-            del audio, original_audio, final, output_buffer, weight_buffer, window
+            del audio, padded, wav, output, final
             _clear_cuda_cache()
 
             return True

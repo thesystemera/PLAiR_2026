@@ -19,9 +19,9 @@ def cents(f):
 
 
 def current_gate(x):
-    from services.audio_master_service import AudioMasterService
-    _, info = AudioMasterService()._apply_adaptive_notch_filter(np.stack([x, x]), R, 1.0, notch=True, tone=False)
-    return info["debug"]["candidates"], info["notches"]
+    from services.audio_resonance import suppress_resonances
+    _, info = suppress_resonances(np.stack([x, x]), R)
+    return info
 
 
 def scan(x):
@@ -75,14 +75,10 @@ if __name__ == "__main__":
         meta = json.loads((META / f"{tid}.json").read_text(encoding="utf-8"))
         title = (meta.get("generation_params") or {}).get("title", tid)
         x = decode(MP3 / f"{tid}.mp3")
-        cands, notches = current_gate(x)
+        cands = current_gate(x)
         found, nwin = scan(x)
         print(f"\n== {title} ({tid[:8]}), {nwin} windows of {WINDOW_S:.0f} s")
-        print("   current notch stage, top candidates (needs >= 6 dB in the song average AND >= 90% of loud frames):")
-        for c in cands:
-            why = [w for w, bad in (("average too low", c["prom"] < 6), ("not steady enough", c["presence"] < 0.9),
-                                    ("outside 50-15k", not 50 <= c["fc"] <= 15000)) if bad]
-            print(f"     {c['fc']:8.1f} Hz  {c['prom']:4.1f} dB avg  present {100 * c['presence']:3.0f}%  -> {'NOTCHED' if not why else ', '.join(why)}")
+        print(f"   resonance filter (production stage): average cut {cands['mean_cut_db']:.2f} dB at 2-8 kHz, deepest {cands['max_cut_db']:.1f} dB")
         print(f"   time-resolved scan: narrow peaks >= {MIN_PROM_DB:.0f} dB holding a fixed frequency in >= {100 * MIN_PERSIST:.0f}% of windows:")
         for r in found[:8]:
             tag = "on a note" if abs(r["cents"]) <= 20 else "OFF-NOTE"

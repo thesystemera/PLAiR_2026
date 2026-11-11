@@ -603,7 +603,7 @@ class Settings:
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
-    MASTER_CHAIN_VERSION: int = 5
+    MASTER_CHAIN_VERSION: int = 6
     LYRIC_STYLE_VERSION: int = int(os.getenv("LYRIC_STYLE_VERSION", "1"))
     LYRIC_STYLE_MAX_TOKENS: int = int(os.getenv("LYRIC_STYLE_MAX_TOKENS", "16000"))
     LYRIC_STYLE_TIMEOUT_S: float = float(os.getenv("LYRIC_STYLE_TIMEOUT_S", "300"))
@@ -616,14 +616,11 @@ class Settings:
     SONIC_MASTER_VAE_MARGIN_S: float = float(os.getenv("SONIC_MASTER_VAE_MARGIN_S", "2"))
     SONIC_MASTER_STEPS: int = int(os.getenv("SONIC_MASTER_STEPS", "40"))
     SONIC_MASTER_SUNO_PROMPT: str = os.getenv("SONIC_MASTER_SUNO_PROMPT", "give the mix more shine and sparkle, clean and dynamic with rich full harmonics")
-    SONIC_MASTER_ALIGN_CHUNKS: bool = os.getenv("SONIC_MASTER_ALIGN_CHUNKS", "false").lower() == "true"
-    SONIC_MASTER_CHUNK_CONDITIONING: bool = os.getenv("SONIC_MASTER_CHUNK_CONDITIONING", "false").lower() == "true"
-    SONIC_MASTER_CHUNK_RMS_MATCH: bool = os.getenv("SONIC_MASTER_CHUNK_RMS_MATCH", "true").lower() == "true"
-    SONIC_MASTER_CHUNK_OVERLAP_S: float = float(os.getenv("SONIC_MASTER_CHUNK_OVERLAP_S", "15"))
     SONIC_MASTER_BLEND_COMPENSATION: bool = os.getenv("SONIC_MASTER_BLEND_COMPENSATION", "true").lower() == "true"
     SONIC_MASTER_TEMPLATE_PROMPTS: bool = os.getenv("SONIC_MASTER_TEMPLATE_PROMPTS", "false").lower() == "true"
     MASTER_SAFETY_ROLLOFF_HZ: float = float(os.getenv("MASTER_SAFETY_ROLLOFF_HZ", "20000"))
     MASTER_TAPE_HISS_DBFS: float = float(os.getenv("MASTER_TAPE_HISS_DBFS", "-80"))
+    MASTER_RESONANCE_AMOUNT: float = float(os.getenv("MASTER_RESONANCE_AMOUNT", "1.0"))
     BANDWIDTH_STAGE: str = os.getenv("BANDWIDTH_STAGE", "apollo").lower()
     SEPARATION_MODEL: str = os.getenv("SEPARATION_MODEL", "roformer").lower()
     QUALITY_SCORER: str = os.getenv("QUALITY_SCORER", "").lower()
