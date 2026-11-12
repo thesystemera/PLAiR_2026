@@ -41,7 +41,7 @@ Device IDs live in local storage and change whenever a browser's site data is cl
 ## Server-side readers
 
 The server reads settings only through `services/device_settings_service.py`:
-- DJ voice mute (`ttsMuted`) for the session is the setting of the device kind that is playing (Radio Mode talk breaks and the voice queue).
+- DJ voice mute (`ttsMuted`) is read with `dj_voice_muted(session_id, user_id)`: for an account, the setting of the device kind that is playing; for a guest, the value its device sends with `radio_mode_prefs` (held in memory, `guest_settings`). Muted means the station does nothing the listener didn't ask for (12 Nov): no hosts between songs (no LLM call), no Radio Mode breaks, no stings or reviews (the sting gate), and nothing reaches the voice queue. The listener's own turns still run; the hosts answer in the chat.
 - The video clips route reads `videoClipsEnabled` for the requesting kind.
 - Stream bitrate: the client sends the bitrate it wants; `auto` is 256k for accounts, 192k for guests.
 

@@ -32,16 +32,18 @@ class Gate:
     radio_blocked: bool = False
     conversing: bool = False
     tts_busy: bool = False
+    muted: bool = False
 
     def allowed(self) -> bool:
-        if not (settings.STINGS_ENABLED and self.enabled and self.stings_pref):
+        if not (settings.STINGS_ENABLED and self.enabled and self.stings_pref) or self.muted:
             return False
         if not self.radio_mode and not settings.STINGS_OUTSIDE_RADIO_MODE:
             return False
         return not (self.radio_blocked or self.conversing or self.tts_busy)
 
     def held_by(self) -> str:
-        reasons = [name for name, on in (("the listener is talking to the hosts", self.conversing),
+        reasons = [name for name, on in (("the DJ voice is muted", self.muted),
+                                         ("the listener is talking to the hosts", self.conversing),
                                          ("the hosts are on air", self.tts_busy),
                                          ("a Radio Mode break takes it", self.radio_blocked),
                                          ("stings are switched off", not (self.enabled and self.stings_pref)))

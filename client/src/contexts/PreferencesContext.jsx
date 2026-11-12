@@ -219,7 +219,7 @@ export function PreferencesProvider({ children }) {
     if (isAuthenticated || !wsConnected || !wsSend) return
     void wsSend({
       type: 'radio_mode_prefs',
-      data: { ...radioMode, enabled: radioMode.enabled && !ttsMuted }
+      data: { ...radioMode, ttsMuted }
     })
   }, [isAuthenticated, wsConnected, wsSend, radioMode, ttsMuted])
 

@@ -9,7 +9,7 @@ from services import log_service
 from services import auth_service
 from security_middleware import is_valid_guest_id
 from database import AsyncSessionLocal
-from services.device_settings_service import device_kinds
+from services.device_settings_service import device_kinds, guest_settings
 from service_registry import services
 from services.task_utils import spawn
 from services import usage_tracking
@@ -195,8 +195,10 @@ async def handle_playback_message(session_id: str, device_id: str, user_id: Opti
             update_guest_location(session_id, message_data)
 
     elif message_type == 'radio_mode_prefs':
-        if user_id is None and services.radio_mode_service is not None:
-            await services.radio_mode_service.set_guest_prefs(session_id, message_data)
+        if user_id is None and isinstance(message_data, dict):
+            guest_settings.note(session_id, {"ttsMuted": message_data.get("ttsMuted")})
+            if services.radio_mode_service is not None:
+                await services.radio_mode_service.set_guest_prefs(session_id, message_data)
 
     elif message_type == 'playback_heartbeat':
         await playback_state.handle_playback_heartbeat(

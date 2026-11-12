@@ -341,15 +341,12 @@ class TTSQueueManager:
                 self._process_session_queue(key, queue), name=f"tts_session_worker:{key}"
             )
 
-    async def _tts_allowed(self, user_id: int, is_broadcast: bool, is_temp_user: bool) -> bool:
-        if is_broadcast and not is_temp_user and user_id:
-            from services.user_data_cache_service import user_data_cache
-            from services.device_settings_service import playing_setting
-            user = await user_data_cache.get_user(user_id)
-            if user and playing_setting(user, str(user_id), 'ttsMuted'):
-                log_service.tts_queue_manager(
-                    f"DJ voice: skipped for {log_service.who(user_id=user_id)} (DJ voice muted)")
-                return False
+    async def _tts_allowed(self, session_id: Optional[str], user_id: int, is_broadcast: bool) -> bool:
+        from services.device_settings_service import dj_voice_muted
+        if is_broadcast and await dj_voice_muted(session_id, user_id):
+            log_service.tts_queue_manager(
+                f"DJ voice: skipped for {log_service.who(session_id, user_id=user_id or None)} (DJ voice muted)")
+            return False
         return True
 
     async def add_tts_request(
@@ -363,7 +360,7 @@ class TTSQueueManager:
             stream_id: Optional[str] = None,
             lead_in: Optional[PrerenderedClip] = None
     ) -> bool:
-        if not await self._tts_allowed(user_id, is_broadcast, is_temp_user):
+        if not await self._tts_allowed(session_id, user_id, is_broadcast):
             return False
         self._enqueue((text, user_id, tts_type, is_broadcast, is_temp_user, session_id, stream_id, lead_in))
         log_service.detail(f"TTS Request: queued {tts_type} for {log_service.who(session_id, user_id=user_id)}",
@@ -379,7 +376,7 @@ class TTSQueueManager:
             session_id: Optional[str] = None,
             stream_id: Optional[str] = None
     ) -> bool:
-        if len(clip.audio) == 0 or not await self._tts_allowed(user_id, True, is_temp_user):
+        if len(clip.audio) == 0 or not await self._tts_allowed(session_id, user_id, True):
             return False
         self._enqueue((clip, user_id, tts_type, True, is_temp_user, session_id, stream_id, None))
         log_service.detail(

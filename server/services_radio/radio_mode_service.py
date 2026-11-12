@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 from config.settings import settings
-from services.device_settings_service import playing_setting
+from services.device_settings_service import guest_settings, playing_setting
 from services import log_service
 from services import usage_tracking
 from services import listener_timeline
@@ -214,7 +214,8 @@ class RadioModeService:
 
     async def set_guest_prefs(self, session_id: str, raw: Any) -> dict:
         prefs = schedule.normalize_prefs(raw)
-        sess = self._apply_prefs(session_id, None, prefs, location_resolver.session_timezone(session_id), False)
+        sess = self._apply_prefs(session_id, None, prefs, location_resolver.session_timezone(session_id),
+                                 bool(guest_settings.get(session_id, "ttsMuted")))
         await self._refresh_after_prefs(sess)
         return prefs.to_dict()
 

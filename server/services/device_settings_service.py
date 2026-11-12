@@ -70,5 +70,32 @@ class DeviceKinds:
 device_kinds = DeviceKinds()
 
 
+class GuestSettings:
+    def __init__(self):
+        self._values: Dict[str, Dict[str, Any]] = {}
+
+    def note(self, session_id: Optional[str], values: Optional[Dict[str, Any]]) -> None:
+        changes = pick_valid(values)
+        if not session_id or not changes:
+            return
+        self._values[session_id] = {**self._values.pop(session_id, {}), **changes}
+        while len(self._values) > settings.DEVICE_KIND_MEMORY:
+            self._values.pop(next(iter(self._values)))
+
+    def get(self, session_id: Optional[str], key: str) -> Any:
+        return self._values.get(session_id or "", {}).get(key, DEFAULTS[key])
+
+
+guest_settings = GuestSettings()
+
+
 def playing_setting(user, session_id: str, key: str) -> Any:
     return settings_for(user, device_kinds.playing_kind(session_id))[key]
+
+
+async def dj_voice_muted(session_id: Optional[str], user_id: Optional[int]) -> bool:
+    if user_id:
+        from services.user_data_cache_service import user_data_cache
+        user = await user_data_cache.get_user(user_id)
+        return bool(user is not None and playing_setting(user, session_id or str(user_id), "ttsMuted"))
+    return bool(guest_settings.get(session_id, "ttsMuted"))

@@ -12,6 +12,7 @@ from pydub import AudioSegment
 from config.settings import settings
 from services import log_service
 from services import usage_tracking
+from services.device_settings_service import dj_voice_muted
 from services_radio import radio_schedule, station_ids, sting_schedule, sting_types, talking_clock
 from services_radio.station_voice import StationClipStore, StationRenderer
 from services_radio.sting_library import StingLibrary, sting_library
@@ -228,8 +229,8 @@ class StingService:
         from service_registry import services
         return services.radio_mode_service
 
-    def _gate(self, session_id: str, user_id: Optional[int], for_break: bool = False,
-              at_change: bool = False) -> sting_schedule.Gate:
+    async def _gate(self, session_id: str, user_id: Optional[int], for_break: bool = False,
+                    at_change: bool = False) -> sting_schedule.Gate:
         radio = self._radio()
         radio_sess = radio.sessions.get(session_id) if radio is not None else None
         radio_mode = bool(radio_sess is not None and radio_sess.prefs.enabled and settings.RADIO_MODE_ENABLED)
@@ -248,7 +249,14 @@ class StingService:
         state = self.playback_service.sessions.get(session_id) if self.playback_service is not None else None
         device_ok = for_break or bool(state is not None and state.active_device_id and state.active_device_online)
         return sting_schedule.Gate(enabled=device_ok, radio_mode=radio_mode, stings_pref=pref,
-                                   radio_blocked=blocked, conversing=conversing, tts_busy=busy)
+                                   radio_blocked=blocked, conversing=conversing, tts_busy=busy,
+                                   muted=await dj_voice_muted(session_id, user_id))
+
+    async def _review_gate(self, session_id: str, user_id: Optional[int]) -> sting_schedule.Gate:
+        gate = await self._gate(session_id, user_id)
+        return sting_schedule.Gate(enabled=gate.enabled, radio_mode=gate.radio_mode, stings_pref=True,
+                                   radio_blocked=gate.radio_blocked, conversing=gate.conversing,
+                                   tts_busy=gate.tts_busy, muted=gate.muted)
 
     def _local(self, tz_name: Optional[str], at: float):
         if not tz_name:
@@ -272,7 +280,7 @@ class StingService:
         if not settings.STINGS_ENABLED or (midtrack and not settings.STINGS_MIDTRACK_ENABLED):
             return None
         who = log_service.who(session_id, user_id=user_id)
-        gate = self._gate(session_id, user_id, at_change=not midtrack)
+        gate = await self._gate(session_id, user_id, at_change=not midtrack)
         if not gate.allowed():
             log_service.playback(f"{who}: {label} ({space_s:.1f}s) -> nothing ({gate.held_by()})")
             return None
@@ -303,11 +311,13 @@ class StingService:
         return [r for r in store.reviews_for_track(track_id, with_audio=True)
                 if (r.get("sting") or {}).get("file") and r.get("sting_url")]
 
-    def review_sting_possible(self, session_id: str, track_id: str) -> bool:
+    async def review_sting_possible(self, session_id: str, user_id: Optional[int], track_id: str) -> bool:
         if not (settings.STINGS_ENABLED and settings.REVIEW_STINGS_ENABLED):
             return False
         radio = self._radio()
         if radio is not None and not radio.reviews_pref(session_id):
+            return False
+        if not (await self._review_gate(session_id, user_id)).allowed():
             return False
         entry = self._session(session_id)
         return any(self._review_fresh(entry, r["id"]) for r in self._review_candidates(track_id))
@@ -358,9 +368,7 @@ class StingService:
         radio = self._radio()
         if radio is not None and not radio.reviews_pref(session_id):
             return False
-        gate = self._gate(session_id, user_id)
-        gate = sting_schedule.Gate(enabled=gate.enabled, radio_mode=gate.radio_mode, stings_pref=True,
-                                   radio_blocked=gate.radio_blocked, conversing=gate.conversing, tts_busy=gate.tts_busy)
+        gate = await self._review_gate(session_id, user_id)
         if not gate.allowed():
             log_service.announcer(f"[STINGS] [{session_id[:8]}] review sting dropped at air time (gate closed)")
             return False
@@ -393,7 +401,7 @@ class StingService:
 
     async def play(self, session_id: str, user_id: Optional[int], render: sting_types.StingRender,
                    midtrack: bool = False) -> bool:
-        gate = self._gate(session_id, user_id)
+        gate = await self._gate(session_id, user_id)
         if not gate.allowed():
             log_service.announcer(f"[STINGS] [{session_id[:8]}] {render.kind} dropped at air time (gate closed)")
             return False
@@ -416,7 +424,7 @@ class StingService:
     async def lead_in_for_break(self, session_id: str, user_id: Optional[int]) -> Optional[PrerenderedClip]:
         if not settings.STINGS_ENABLED or self.rng.random() >= settings.STINGS_BREAK_LEAD_IN_PROBABILITY:
             return None
-        gate = self._gate(session_id, user_id, for_break=True)
+        gate = await self._gate(session_id, user_id, for_break=True)
         if not gate.allowed():
             return None
         kind = "station_id" if self.rng.random() < 0.6 else "logo_id"

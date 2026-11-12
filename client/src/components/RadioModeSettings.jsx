@@ -130,7 +130,7 @@ export const RadioModeSettings = memo(function RadioModeSettings({ className = '
           Everything that makes PLAiR sound like real radio: talk breaks, stings and time checks, and listener reviews over songs. One switch for all of it, or pick below.
         </div>
         <Fade show={djMuted && !!radioMode.enabled} className="mt-1">
-          <InlineNote tone="warning">DJ voice is muted, so breaks are paused.</InlineNote>
+          <InlineNote tone="warning">DJ voice is muted, so the hosts, breaks and stings are paused.</InlineNote>
         </Fade>
         <Fade show={!!offlineMode} className="mt-1">
           <InlineNote tone="warning">{"You're offline, so talk breaks are paused. Your downloads keep playing and breaks come back when PLAiR is reachable."}</InlineNote>

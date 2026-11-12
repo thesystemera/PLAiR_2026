@@ -5,6 +5,7 @@ from typing import Dict, Optional, List, Tuple
 from collections import deque
 from services import log_service
 from services import usage_tracking
+from services.device_settings_service import dj_voice_muted
 from services.task_utils import spawn
 from services_radio import crossfade_plan, track_timing
 from services_radio.conversation_service import post_to_chat
@@ -556,7 +557,7 @@ class AnnouncerService:
                             user_id: Optional[int]) -> bool:
         stings = self._sting_service()
         need_ms = 2000 + settings.REVIEW_STINGS_DUCK_S * 1000
-        if window['duration_ms'] < need_ms or not stings.review_sting_possible(session_id, track_id) \
+        if window['duration_ms'] < need_ms or not await stings.review_sting_possible(session_id, user_id, track_id) \
                 or stings.station_quiet_s(session_id, user_id) < settings.STATION_QUIET_TARGET_S:
             return False
         max_len_s = min(settings.REVIEW_STINGS_MAX_LEN_S, window['duration_ms'] / 1000.0 - 0.5)
@@ -670,16 +671,16 @@ class AnnouncerService:
                 self._cleanup_scheduled(session_id)
                 return
 
+            user_id = self._state_user_id(session_id, state)
+            if await dj_voice_muted(session_id, user_id):
+                log_service.playback(f"{log_service.who(session_id)}: song change -> nothing (the DJ voice is muted)")
+                self._cleanup_scheduled(session_id)
+                return
+
             self.active_announcements[session_id] = current_track_id
 
             gpt_start = time.time()
             transition_duration_ms = int(transition_window['duration_ms'])
-            user_id = state.get('user_id')
-            if user_id is None:
-                try:
-                    user_id = int(session_id)
-                except ValueError:
-                    user_id = None
 
             session_dict = {"session_id": session_id, "user_id": user_id}
 
