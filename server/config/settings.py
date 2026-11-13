@@ -603,7 +603,7 @@ class Settings:
     AUDIOBOX_DEVICE: str = os.getenv("AUDIOBOX_DEVICE", "cpu").lower()
     AUDIOBOX_BATCH_SIZE: int = int(os.getenv("AUDIOBOX_BATCH_SIZE", "4"))
 
-    MASTER_CHAIN_VERSION: int = 6
+    MASTER_CHAIN_VERSION: int = 7
     LYRIC_STYLE_VERSION: int = int(os.getenv("LYRIC_STYLE_VERSION", "1"))
     LYRIC_STYLE_MAX_TOKENS: int = int(os.getenv("LYRIC_STYLE_MAX_TOKENS", "16000"))
     LYRIC_STYLE_TIMEOUT_S: float = float(os.getenv("LYRIC_STYLE_TIMEOUT_S", "300"))
