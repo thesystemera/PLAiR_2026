@@ -129,8 +129,9 @@ async def main(ids, tag):
             print(f"{track_id}: FAILED: {error}", flush=True)
 
 
-parser = argparse.ArgumentParser(description="The master on file against the current chain, rendered from the Suno MP3 into upscale_ab (never the catalog)")
-parser.add_argument("ids", nargs="+")
-parser.add_argument("--tag", default="", help="added to the name of the new files")
-args = parser.parse_args()
-asyncio.run(main(args.ids, args.tag))
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="The master on file against the current chain, rendered from the Suno MP3 into upscale_ab (never the catalog)")
+    parser.add_argument("ids", nargs="+")
+    parser.add_argument("--tag", default="", help="added to the name of the new files")
+    args = parser.parse_args()
+    asyncio.run(main(args.ids, args.tag))

@@ -61,8 +61,8 @@ Chatterbox renders 24 kHz. Three post-processors were A/B'd on long takes and on
   `server/services_radio/voice_upscale.py`.
 - **Resemble Enhance (MIT):** 1.5 s at full quality, 0.6 s at its fastest (floor is its 44.1 kHz vocoder).
   On its own a small improvement; Resemble then CVSR sounded "like medium to high quality" against CVSR alone,
-  and in a full mix the difference barely shows. Not worth the time live. Might suit the music remaster chain's
-  vocal stems (offline). Painful official install (deepspeed, old torch pin, POSIX paths in its weights' config).
+  and in a full mix the difference barely shows. Not worth the time live. Tried on the music remaster chain's
+  vocal stems on 13 Nov and rejected: it gates soft singing, harmonies and choruses (`docs/KNOWN_ISSUES.md`). Painful official install (deepspeed, old torch pin, POSIX paths in its weights' config).
 - **Sidon (MIT):** fastest (0.17-0.28 s), drier and more studio-like, but artifacts; owner: sounded worse.
   It is built to clean noisy recordings, and our takes are already clean.
 - No model added or dropped words (Whisper check) or shifted pitch.

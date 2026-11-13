@@ -271,9 +271,17 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   - `suno_generation_queue_service._run_batch` (432 lines after the 10 Nov cleanup): needs a real Suno generation
     to test.
 
-- **Resemble Enhance on music vocal stems (owner, 3 Oct, parked):** it gave the DJ voices only a small lift
-  over CVSR, too slow to run live, but it may help vocals in the music remaster chain (offline). Runner and setup:
-  `scripts/voice_restoration/`, findings in `docs/TTS_ENGINE_RESEARCH.md`.
+- **Resemble Enhance on music vocal stems: tried 13 Nov, rejected (owner).** It gates: on The Low Hum it took
+  the soft singing down 3-4 dB and the tails and breaths 6 dB at 500 Hz-2 kHz against the current vocal (Lew's
+  vocal Apollo), and the owner remembered why it was parked: it takes away harmonies and choruses. The owner's
+  idea for later: use only what it adds (the top end) on top of the current vocal, never the vocal itself. Two
+  traps found on the way. Its own chunk joins slide each chunk up to half a second to line up with the last
+  one, which in a quiet overlap is a guess and put a sound 30 dB loud into a gap (the runner now joins with a
+  plain crossfade). ClearVoice after it (the DJ "one-two punch") turns a window of digital silence into hiss at
+  -12 dBFS and keeps only the input below a cutoff it picks per file (where 99% of the energy is), so a short
+  piece gets a low cutoff and comes back mostly invented, 20 dB loud. Feed it whole sung passages with one
+  cutoff per song (`scripts/music_lab/vocal_ab.py` does the passages; the one cutoff is not done yet). Setup:
+  `scripts/voice_restoration/`.
 - **Between-track talk and stings (owner, 1 Oct):** the station clock doesn't come in as often as it could,
   some transitions have nothing between the tracks, and the cool-offs between announcer, stings and Radio Mode
   breaks are tangled. Look at it as one schedule. The announcer's window still assumes the next song starts when

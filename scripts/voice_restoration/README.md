@@ -7,11 +7,19 @@ backend. Findings are in `docs/TTS_ENGINE_RESEARCH.md` ("Restoration after the e
 | Model | 3 s take on the P6000 | Verdict |
 |---|---|---|
 | CVSR (live) | 0.56 s | Kept: clear, sparkly, fast enough |
-| Resemble Enhance, quality (midpoint, 64 steps) | 1.5 s | Small gain; after CVSR in a full mix it barely shows. Maybe for music vocal stems |
+| Resemble Enhance, quality (midpoint, 64 steps) | 1.5 s | Small gain; after CVSR in a full mix it barely shows. Music vocal stems (13 Nov): gates soft singing, harmonies and choruses, rejected |
 | Resemble Enhance, fast (euler, 8 steps, no denoiser) | 0.6 s | Same, slightly less |
 | Sidon | 0.17-0.28 s | Drier, more studio-like, but artifacts; sounded worse |
 
-## Setup (own venv each, never the production venv)
+## Setup
+
+Found on 13 Nov: `resemble-enhance` 0.0.1 and `deepspeed` 0.12.6 are installed in the production venv, and the
+runner uses that package when `--repo` is left out. Its weights are in `E:\scratch\plair\resemble_enhance`
+(`hparams.yaml` already fixed for Windows). The runner skips the package's model summary (it needs a newer
+`tabulate` than the venv has), takes `--chunk` (GPU memory grows about 3 GB per 10 s; 10 s next to the live
+station) and joins chunks with a plain crossfade unless `--shift-joins` is given.
+
+For a clean install elsewhere (own venv each, never the production venv):
 
 Python 3.11, PyTorch 2.6 cu124 (Pascal needs a CUDA 12.x wheel), fp32. Always pin the P6000:
 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0`.
