@@ -1,6 +1,5 @@
 import json
 import random
-import subprocess
 import sys
 from pathlib import Path
 
