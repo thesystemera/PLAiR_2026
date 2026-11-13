@@ -79,8 +79,9 @@ function createCatalogScrollLabel(tracks, sortMode, options = {}) {
       const endGenre = endTrack.derived_tags?.primary_genre || 'Unknown'
       return startGenre === endGenre ? startGenre : `${startGenre} - ${endGenre}`
     } else {
-      const startDate = formatDateShort(startTrack.created_at)
-      const endDate = formatDateShort(endTrack.created_at)
+      const dateField = sortMode === 'remastered' ? 'master_rendered_at' : 'created_at'
+      const startDate = formatDateShort(startTrack[dateField])
+      const endDate = formatDateShort(endTrack[dateField])
       return startDate === endDate ? startDate : `${startDate} - ${endDate}`
     }
   }
@@ -332,6 +333,7 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
 
   const getSortParams = useCallback((mode) => {
     if (mode === 'recent') return { sort_by: 'created_at', order: 'desc' }
+    if (mode === 'remastered') return { sort_by: 'mastered_at', order: 'desc' }
     if (mode === 'alphabetical') return { sort_by: 'title', order: 'asc' }
     if (mode === 'genre') return { sort_by: 'genre', order: 'asc' }
     return { sort_by: 'created_at', order: 'desc' }
@@ -494,7 +496,8 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       const lastGenre = lastTrack.derived_tags?.primary_genre || 'Unknown'
       return firstGenre === lastGenre ? firstGenre : `${firstGenre} - ${lastGenre}`
     } else {
-      return `${formatDateShort(lastTrack.created_at)} - ${formatDateShort(firstTrack.created_at)}`
+      const dateField = sortMode === 'remastered' ? 'master_rendered_at' : 'created_at'
+      return `${formatDateShort(lastTrack[dateField])} - ${formatDateShort(firstTrack[dateField])}`
     }
   }, [displayTracks, sortMode])
 

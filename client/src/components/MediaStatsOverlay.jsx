@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Music, List, Clock } from 'lucide-react'
-import { useDynamicTheme, CATALOG_HEADER, TRANSITIONS, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, CATALOG_HEADER, TRANSITIONS, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
 import { Fade, FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
@@ -151,6 +151,14 @@ export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = n
                     title="Recent"
                   >
                     <RecentIcon className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => onSortChange('remastered')}
+                    className={`ui-press p-2 rounded transition-colors ${sortMode === 'remastered' ? 'bg-purple-500/30 text-purple-300' : 'hover:bg-white/10'}`}
+                    style={sortMode !== 'remastered' ? { color: getGrey400() } : {}}
+                    title="Remastered"
+                  >
+                    <RemasteredIcon className="w-5 h-5" />
                   </button>
                   <button
                     onClick={() => onSortChange('alphabetical')}

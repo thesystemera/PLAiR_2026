@@ -102,6 +102,8 @@ export const libraryMethods = {
         switch (sortBy) {
           case 'created_at':
             return new Date(track.created_at || track._addedAt || 0).getTime()
+          case 'mastered_at':
+            return new Date(track.master_rendered_at || 0).getTime()
           case 'title':
             return (track.title || '').toLowerCase()
           case 'genre':

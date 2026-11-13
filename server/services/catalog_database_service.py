@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import numpy as np
 from collections import Counter
 from pathlib import Path
@@ -386,6 +387,9 @@ class CatalogDatabaseService(SingletonService):
             ids = sorted(ids,
                          key=lambda tid: (self.tracks[tid].get("derived_tags", {}).get("primary_genre") or "zzz").lower(),
                          reverse=reverse)
+        elif sort_by == "mastered_at":
+            ids = sorted(ids, key=lambda tid: (self.tracks[tid].get("master_rendered_at") or "",
+                                               station_recency(self.tracks[tid])), reverse=reverse)
         elif sort_by != "created_at":
             ids = sorted(ids, key=lambda tid: station_recency(self.tracks[tid]), reverse=reverse)
 
@@ -426,13 +430,34 @@ class CatalogDatabaseService(SingletonService):
         masters = {p.stem for p in settings.ENHANCED_WAV_DIR.glob("*.wav")}
         return [tid for tid in masters - set(self.tracks) if self.is_ready(tid)]
 
+    def _remastered_outside_catalog(self, since: float, waiting: set) -> List[str]:
+        with os.scandir(self.metadata_dir) as entries:
+            for entry in entries:
+                track_id = entry.name[:-5]
+                if not entry.name.endswith(".json") or track_id not in self.tracks or entry.stat().st_mtime < since:
+                    continue
+                try:
+                    rendered_at = json.loads(Path(entry.path).read_text(encoding="utf-8")).get("master_rendered_at")
+                except (OSError, ValueError):
+                    continue
+                if rendered_at and rendered_at != self.tracks[track_id].get("master_rendered_at"):
+                    waiting.add(track_id)
+        ready = [tid for tid in waiting if self.is_ready(tid)]
+        waiting.difference_update(ready)
+        return ready
+
     async def watch_for_finished_tracks(self, interval_s: float):
+        since, remastering = time.time(), set()
         while True:
             await asyncio.sleep(interval_s)
             try:
                 for track_id in await self._in_scan_thread(self._finished_outside_catalog):
                     if track_id not in self.tracks:
                         await self.add_finished_track(track_id)
+                checked_at = time.time()
+                for track_id in await self._in_scan_thread(self._remastered_outside_catalog, since, remastering):
+                    await self.add_finished_track(track_id)
+                since = checked_at
             except Exception as e:
                 log_service.throttled("catalog_watch", f"[Catalog] Watch for finished tracks failed: {e}")
 

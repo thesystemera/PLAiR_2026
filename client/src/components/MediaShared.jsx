@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { memo, useState, useCallback } from 'react'
-import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { Play, Pause } from 'lucide-react'
 import { formatDuration } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
@@ -25,7 +25,7 @@ export const isCardEntering = (index, shouldAnimate) => shouldAnimate && index <
 
 export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
   type = 'track', // 'track' or 'shoutout'
-  sortMode = null, // 'recent', 'alphabetical', 'genre' (for track type)
+  sortMode = null, // 'recent', 'remastered', 'alphabetical', 'genre' (for track type)
   offsetHeader = false // Set to true to offset by header height (matches InteractiveEngagementButton positioning)
 }) {
   const { getLoadingSpinner, getCardBackground } = useDynamicTheme()
@@ -34,6 +34,7 @@ export const MediaLoadingSpinner = memo(function MediaLoadingSpinner({
     if (type === 'shoutout') return ShoutoutsIcon
     // For tracks, use sortMode-specific icons
     if (sortMode === 'recent') return RecentIcon
+    if (sortMode === 'remastered') return RemasteredIcon
     if (sortMode === 'alphabetical') return AlphabeticalIcon
     if (sortMode === 'genre') return GenreIcon
     // Default to CatalogIcon for tracks
