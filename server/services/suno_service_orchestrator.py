@@ -93,6 +93,7 @@ class TrackJob:
     lane6_finished: bool = False
     lyrics_queued: bool = False
     catalog_ready: bool = False
+    registering: bool = False
     cancelled: bool = False
 
     decoded_wav_path: Optional[Path] = None
@@ -118,7 +119,7 @@ class TrackJob:
         return self.is_complete() or self.failed or (self.lane6_finished and lyrics_done)
 
     def is_settled(self) -> bool:
-        if not self.is_finished():
+        if self.registering or not self.is_finished():
             return False
         if self.lyrics_queued and not self.lyrics_complete:
             return False
@@ -723,7 +724,7 @@ class SunoServiceOrchestrator(SingletonService):
                     lane5_queue.task_done()
                     continue
                 if timing_is_current(settings.LYRIC_TIMESTAMPS_DIR / f"{job.track_id}.json"):
-                    job.lyrics_complete = True
+                    await self._lyrics_done(job)
                     self._notify_asset_doctor(job)
                     lane5_queue.task_done()
                     continue
@@ -740,17 +741,12 @@ class SunoServiceOrchestrator(SingletonService):
                         metadata=job.metadata,
                         save=True
                     )
-                    if result:
-                        job.lyrics_complete = True
-                    else:
+                    if not result:
                         log_service.suno(f"[Lane 5] [{job.track_id[:8]}] No lyrics detected")
-                        job.lyrics_complete = True
                 except Exception as e:
                     log_service.error(f"[Lane 5] [{job.track_id[:8]}] Whisper error: {str(e)}")
-                    job.lyrics_complete = True
 
-                if job.lane6_finished and job.is_complete() and not job.catalog_ready:
-                    await self._register_to_catalog(job)
+                await self._lyrics_done(job)
                 self._notify_asset_doctor(job)
                 _clear_cuda_cache()
                 lane5_queue.task_done()
@@ -925,7 +921,13 @@ class SunoServiceOrchestrator(SingletonService):
             log_service.error(f"[Lane 6 → Artwork] [{job.track_id[:8]}] Error: {str(e)}")
             raise
 
+    async def _lyrics_done(self, job: TrackJob):
+        job.lyrics_complete = True
+        if job.lane6_finished and job.is_complete() and not job.catalog_ready:
+            await self._register_to_catalog(job)
+
     async def _register_to_catalog(self, job: TrackJob):
+        job.registering = True
         try:
             if self.catalog is None:
                 raise RuntimeError("catalog service not initialized")
@@ -936,3 +938,5 @@ class SunoServiceOrchestrator(SingletonService):
             job.catalog_ready = await self.catalog.add_finished_track(job.track_id)
         except Exception as e:
             log_service.error(f"[Catalog] [{job.track_id[:8]}] Registration error: {str(e)}")
+        finally:
+            job.registering = False
