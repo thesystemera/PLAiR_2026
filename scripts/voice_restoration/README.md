@@ -33,6 +33,17 @@ the weights' `hparams.yaml`: its three `!!python/object/apply:pathlib.PosixPath`
 python scripts/voice_restoration/resemble_enhance_dir.py <folder> --repo <clone> --weights <weights> --setting quality
 ```
 
+**Seed-VC** (GPL-3.0; called as a separate process, never copied into our code), for re-singing music vocals:
+a clone of https://github.com/Plachtaa/seed-vc in `E:\scratch\plair\seedvc\seed-vc`, run with the production
+venv's Python. The only package it lacks there, `munch`, sits in `E:\scratch\plair\seedvc\extra` with a stand-in
+for `dac` (Descript's codec, imported but never built by the 44.1 kHz singing model); both go on `PYTHONPATH`.
+Its models download on first use (`Plachta/Seed-VC` singing model, `openai/whisper-small`, RMVPE, CAM++; BigVGAN
+44 kHz) with `HF_HOME=E:\scratch\plair\hf`. The runner forces fp32 (Pascal) and loads the models once per folder.
+
+```bash
+HF_HOME='E:\scratch\plair\hf' PYTHONPATH='E:\scratch\plair\seedvc\extra' python scripts/voice_restoration/seedvc_dir.py <folder> --repo E:/scratch/plair/seedvc/seed-vc --reference <voice.wav>
+```
+
 **Sidon** (MIT): only torch, torchaudio, transformers and huggingface_hub. Weights `sarulab-speech/sidon-v0.1`
 (TorchScript, 1 GB) plus the `facebook/w2v-bert-2.0` feature-extractor config. It also loads in the production
 venv's torch 2.5.1.

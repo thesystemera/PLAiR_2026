@@ -38,6 +38,7 @@ LOG = OUT / "vocal_ab.log"
 RATE = 44100
 NOW = "vocal now (Lew's vocal Apollo)"
 PUNCH = "vocal one-two punch (Resemble Enhance then ClearVoice)"
+PUNCH_VOCAL = "one-two punch (Resemble Enhance then ClearVoice)"
 VOCAL_BANDS = ((100, 500), (500, 2000), (2000, 6000), (6000, 12000), (12000, 16000), (16000, 20000))
 BUCKETS = (("loud", 0, 6), ("soft", 6, 20), ("tails and breaths", 20, 40))
 MAX_LAG_S = 0.05
@@ -243,11 +244,11 @@ def band_power_db(x, rate, frames):
     return np.array(values)
 
 
-def compare_vocals(track_id):
+def compare_vocals(track_id, b_name="vocals_punch.wav"):
     folder = stem_dir(track_id)
     raw, rate = sf.read(str(folder / "vocals.wav"), dtype="float64", always_2d=True)
     lew, _ = sf.read(str(folder / "vocals_lew.wav"), dtype="float64", always_2d=True)
-    punch, _ = sf.read(str(folder / "vocals_punch.wav"), dtype="float64", always_2d=True)
+    punch, _ = sf.read(str(folder / b_name), dtype="float64", always_2d=True)
     n = min(len(raw), len(lew), len(punch))
     raw, lew, punch = to_mono(raw[:n]), to_mono(lew[:n]), to_mono(punch[:n])
     hop = rate // 10
@@ -265,10 +266,10 @@ def compare_vocals(track_id):
     return rate, lew, punch
 
 
-def sung_parts(track_id):
+def sung_parts(track_id, b_name="vocals_punch.wav"):
     folder = stem_dir(track_id)
     a, rate = sf.read(str(folder / "vocals_lew.wav"), dtype="float64", always_2d=True)
-    b, rate_b = sf.read(str(folder / "vocals_punch.wav"), dtype="float64", always_2d=True)
+    b, rate_b = sf.read(str(folder / b_name), dtype="float64", always_2d=True)
     if rate != rate_b:
         raise RuntimeError(f"vocal rates differ: {rate} and {rate_b}")
     n = min(len(a), len(b))
@@ -287,10 +288,10 @@ def sung_parts(track_id):
     return rate, lufs_levelled(np.concatenate(parts["a"]), rate), lufs_levelled(np.concatenate(parts["b"]), rate), kept, n / rate
 
 
-def write_vocals(track_id, title):
-    rate, a, b, kept, total = sung_parts(track_id)
+def write_vocals(track_id, title, b_name="vocals_punch.wav", b_label=PUNCH_VOCAL):
+    rate, a, b, kept, total = sung_parts(track_id, b_name)
     write_mp3(f"{title} - vocal A - now (Lew's vocal Apollo)", a, rate)
-    write_mp3(f"{title} - vocal B - one-two punch (Resemble Enhance then ClearVoice)", b, rate)
+    write_mp3(f"{title} - vocal B - {b_label}", b, rate)
     write_mp3(f"{title} - vocal flip A and B every 5 s (low beep A, high beep B)", flip(a, b, rate), rate)
     say(f"  vocal files: the sung parts only, {kept:.0f} s of {total:.0f} s, both at the same loudness")
 

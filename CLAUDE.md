@@ -878,6 +878,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `scripts/voice_restoration/README.md` - Notes on parked offline voice restoration models (Resemble Enhance, Sidon) versus the live CVSR.
 - `scripts/voice_restoration/resemble_enhance_dir.py` - Runs Resemble Enhance over a folder of voice takes offline (parked experiment).
 - `scripts/voice_restoration/sidon_dir.py` - Runs the Sidon speech restoration model over a folder of voice takes offline (parked experiment).
+- `scripts/voice_restoration/seedvc_dir.py` - Re-sings a folder of vocal phrases into a reference voice with Seed-VC's 44.1 kHz singing model (separate clone, models loaded once; lab only).
 
 #### external_components
 

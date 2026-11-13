@@ -282,6 +282,17 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   piece gets a low cutoff and comes back mostly invented, 20 dB loud. Feed it whole sung passages with one
   cutoff per song (`scripts/music_lab/vocal_ab.py` does the passages; the one cutoff is not done yet). Setup:
   `scripts/voice_restoration/`.
+- **Re-singing the lead vocal into its own voice (13 Nov, waiting on the owner's ear):** the vocal stem is split
+  into lead and backing (Mel-Roformer karaoke by aufr33/viperx), Seed-VC's 44.1 kHz singing model re-sings the
+  lead's middle phrase by phrase with a 10 s cut of the same lead as the voice, the lead's loudness contour is put
+  back at 50 ms (as RVC's volume envelope does), and Lew's vocal Apollo runs on the result as today. The lead's
+  sides, the backing vocals and the pauses stay as they were. Suno's decoder lock on the vocal: The Low Hum 0.203
+  -> 0.065, Specimen Days 0.105 -> 0.039 (chance 0.02-0.04); levels within about 2 dB of today's vocal in loud,
+  soft and quiet moments (no gating), pitch a median 13-15 cents from the original. Costs: some consonants blur
+  (Whisper hears "pain" as "fan", "bloom" as "blue"; 13-17% of words differ from today's vocal, against 5% for
+  the original lead), and without the loudness contour Seed-VC sang notes into quiet moments and murmured in
+  the pauses 25 dB over the original. About 3.5 min of P6000 time per song (2.9 GB). Not yet heard in a full mix.
+  `scripts/music_lab/resing_ab.py`, runner `scripts/voice_restoration/seedvc_dir.py`.
 - **Between-track talk and stings (owner, 1 Oct):** the station clock doesn't come in as often as it could,
   some transitions have nothing between the tracks, and the cool-offs between announcer, stings and Radio Mode
   breaks are tangled. Look at it as one schedule. The announcer's window still assumes the next song starts when
