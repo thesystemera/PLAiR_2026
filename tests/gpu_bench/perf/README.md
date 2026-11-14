@@ -14,7 +14,14 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `gpucaps.mjs` - the phone GPU's float render-target support and whether the coarse cover targets are complete.
 - `surfaces.mjs [panel]` - on-screen elements whose CSS makes Chrome draw through an off-screen texture (mask, backdrop-filter, filter, opacity, rounded clips over a canvas).
 - `vizframe.mjs [panel]` - one compositor frame: render passes with their rectangles, and the layers.
-- `cdp.mjs` - shared helper: attach to the plair.live tab, `send`, `evaluate`, `sleep`.
+- `cssab.mjs <panel> '<json {label: css rules}>' [rounds] [extra]` - GPU cost of page styling: the frame is loaded so it is GPU-bound, each set of CSS rules is injected in turn and the frame time compared with "as is".
+- `toggle.mjs [button title] [rounds] [panel]` - opens and closes a player panel (default "Manage devices") and prints frames drawn, average and worst frame and long frames.
+- `touchfps.mjs [panel] [seconds] [x,y]` - frames per second without and with a synthetic finger moving on the screen (Chrome holds page frames to 60 Hz unless the screen is touched).
+- `copycost.mjs [size] [rounds] [targets]` - cost of WebGL-to-2D-canvas copies, the way covers reach the screen (10 small covers: about 0.7 ms a frame).
+- `scenecopy.mjs [rounds]` - cost of copying out of the live background canvas (about 1.7 ms a frame for the first copy; why edge-fade strips fed from the scene were rejected).
+- `fillcheck.mjs <out dir> [dark]` + `fillcheck_diff.py <dir>` - pixel check on the phone of the mask-free fills against the masked originals; the diff script compares any `*_old.png` / `*_new.png` pair.
+- `tab.mjs open <url> | front <part> | close <part> | list` - tabs in the phone's Chrome. The owner runs PLAiR as an installed app, so a second tab is confusing for them: prefer deploying.
+- `cdp.mjs` - shared helper: attach to the plair.live tab (`PAGE=<part of another address>`), `send`, `evaluate`, `sleep`, and `openPanel`, which never taps the tab that is already open (that toggles Radio between Talk and Text and the Catalog between tracks and shoutouts; a script did exactly that to the owner's setting on 14 Nov).
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.
 - `slope.mjs <panel> '<variants json>' [reload]` - slope method (extra passes) for GPU cost per stage.

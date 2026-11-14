@@ -152,6 +152,39 @@ GPU milliseconds, everything forced every frame (`budget.mjs`, `frame.mjs`, tilt
   under 40 fps, at Chrome's 60 Hz) and restores it under 1.11. This phone sits at 44-51 fps on Catalog and Now Playing,
   so coarse covers never came on (the stored step was 0); my forced tests pushed it on. Not changed yet.
 
+## 3f. What was done on 14 Nov, and what was rejected
+
+Corrections to 3e: the scene's capture pass costs nothing (skipping it or running it four times gives the same frame;
+the 5.5 ms was the readPixels sync itself). A `Keep It Smooth` change was dropped: the owner does not want art
+resolution used as a lever. 120 Hz is the benchmark, not 60; a moving synthetic touch lifts Chrome's 60 Hz limit
+(`touchfps.mjs`: Radio 66 fps, because the fixed part of a frame was about 11 ms).
+
+Shipped (all checked on the phone):
+
+- Compositing: header backdrops and the tab bar are fills instead of masks, the notice pill, scroll indicator, count
+  pills and text composer lost their backdrop blur, Now Playing's origin badge uses a blurred copy of the cover.
+  Render passes per frame 4 -> 2 on every panel. Pixel checks: within 1-6 levels of the masked originals on a dark
+  pattern (`fillcheck.mjs`).
+- Player panels (Devices, stream quality, Rendering) opening and closing (`toggle.mjs`, frames in 900 ms):
+  14-26 frames, worst 100-184 ms at the start of the day. Three causes, fixed in turn: the player's height went through
+  UIState on every frame (now `lib/playerInset.js`; 31-39 frames); the virtual lists recomputed rows and re-decoded
+  covers on every frame of the resize (108 JPEG decodes in 5 s; 38-48 frames); the tab bar and transport bar were
+  re-rasterised inside their parents' layers (own layers now; 45-53 frames on Radio, Queue and Now Playing).
+  The Catalog stays at 31-36 frames: every visible cover's scroll tilt changes as the viewport shrinks, so all of them
+  run the full parallax pass each frame.
+- The share video renders in a worker as a background job (section in `CLAUDE.md`).
+
+Rejected, with the number:
+
+- Edge-fade strips copied from the scene instead of the scroller's CSS mask: 41.8 ms against 40.7 ms for the mask under
+  the same load. The first copy out of the live WebGL canvas costs about 1.7 ms a frame, a whole-canvas copy 3.5
+  (`scenecopy.mjs`). Copies between small off-screen canvases are cheap (`copycost.mjs`), the live scene canvas is not.
+- Drawing Now Playing's cover straight into its own canvas: the copy is about 0.7 ms per megapixel, not worth a second
+  path.
+
+Still the biggest costs, untouched: the cover pass (12.7 ms on Now Playing, 18.7 on the Catalog), the scene's main
+pass (4-5 ms) and the scroller's mask (2.5-2.9 ms).
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
