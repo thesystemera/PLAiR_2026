@@ -325,7 +325,7 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
   )
 })
 
-export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal, onOpenShareModal }) {
+export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal }) {
   const [analyticsState, setAnalyticsState] = useState(null)
   const artBoxRef = useRef(null)
 
@@ -338,6 +338,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
     playerHeight,
     isFullscreen,
     track,
+    openShareModal,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     lyricTimestamps: state.lyricTimestamps,
@@ -346,6 +347,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
     playerHeight: state.interfaceState.playerHeight,
     isFullscreen: state.interfaceState.isFullscreenVisuals,
     track: state.engineState.currentTrack,
+    openShareModal: state.openShareModal,
   }))
   const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
   const isSplit = isMobile && isLandscape
@@ -452,7 +454,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                onOpenShareModal?.(track)
+                openShareModal(track)
               }}
               disabled={!track}
               className={`${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`}

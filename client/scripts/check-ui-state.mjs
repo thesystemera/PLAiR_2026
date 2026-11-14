@@ -15,6 +15,7 @@ const NESTED = {
   downloadState: { init: 'downloadState', publish: 'publishDownloadState' },
   settingsState: { init: 'settingsState', publish: 'publishSettings' },
   interfaceState: { init: 'interfaceState', publish: 'reportInterfaceState' },
+  shareVideoState: { init: 'shareVideoState', publish: 'publishShareVideoState' },
 }
 
 function sourceFiles(dir) {

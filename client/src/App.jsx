@@ -44,7 +44,7 @@ import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
-import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, TrackDataLoader, UploadNotice} from './components/AppBridges'
+import {ConnectionNotice, DeviceLinkBridge, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, ShareVideoNotice, TrackDataLoader, UploadNotice} from './components/AppBridges'
 import {DepthArtBridge, ProfileArt} from './components/DepthArt'
 import {noteLayoutMotion} from './lib/lightProbe'
 import {finalPanelWidths, panelRevealEnabled, watchPanelSlide} from './lib/panelReveal'
@@ -161,8 +161,6 @@ function App() {
   const [generationModalTrack, setGenerationModalTrack] = useState(null)
   const [compatibilityWarningDismissed, setCompatibilityWarningDismissed] = useState(() => !!safeStorage.get('plair_compatibility_warning_dismissed'))
   const [demoModalDismissed, setDemoModalDismissed] = useState(() => !!safeStorage.get('plair_demo_mode_modal_seen'))
-  const [showShareModal, setShowShareModal] = useState(false)
-  const [shareModalTrack, setShareModalTrack] = useState(null)
   const [isPanelAnimating, setIsPanelAnimating] = useState(false)
   const [panelStates, setPanelStates] = useState({
     queue: true,
@@ -181,6 +179,7 @@ function App() {
     updateShaderRegions, updateShaderRadioButtonPos, fpsEnabled, costTickerEnabled,
     toastSuccess, toastInfo, toastError, catalogView, mobilePanel, playerHeight, isFullscreenVisuals, showUIControls,
     interfaceRef, reportInterfaceState, shoutoutModalState, closeShoutoutModal, reviewModalState, closeReviewModal, hasActiveJobs,
+    shareModalState, closeShareModal,
     uploadModalOpen, uploadEditTrackId, closeUploadModal, usageModalOpen, closeUsageModal, toggleCatalogView, toggleRadioInput, radioInput, setMobilePanel,
     tracksUpdateCount, shoutoutsUpdateCount, publishContentUpdate,
   } = useUISelector(state => ({
@@ -203,6 +202,8 @@ function App() {
     reviewModalState: state.reviewModalState,
     closeReviewModal: state.closeReviewModal,
     hasActiveJobs: state.queueState.hasActiveJobs,
+    shareModalState: state.shareModalState,
+    closeShareModal: state.closeShareModal,
     uploadModalOpen: state.uploadModalOpen,
     uploadEditTrackId: state.uploadEditTrackId,
     closeUploadModal: state.closeUploadModal,
@@ -612,14 +613,6 @@ function App() {
     })
   }, [])
 
-  const handleOpenShareModal = useCallback((track) => {
-    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
-    startTransition(() => {
-      setShareModalTrack(track)
-      setShowShareModal(true)
-    })
-  }, [])
-
   const handleSeedRadioSelect = useCallback(async (category) => {
     await seedRadio(category)
     handleCloseSeedModal()
@@ -676,9 +669,8 @@ function App() {
     <NowPlaying
       onToggleFullscreen={handleToggleFullscreenVisuals}
       onOpenGenerationModal={handleOpenGenerationModal}
-      onOpenShareModal={handleOpenShareModal}
     />
-  ), [handleToggleFullscreenVisuals, handleOpenGenerationModal, handleOpenShareModal])
+  ), [handleToggleFullscreenVisuals, handleOpenGenerationModal])
 
   const UserPanel = useMemo(() => (
     <User
@@ -734,6 +726,7 @@ function App() {
         <ConnectionNotice />
         <OfflineNotice />
         <UploadNotice />
+        <ShareVideoNotice />
         <DeviceLinkBridge />
         <OnAirNotice />
         <DJActivityBridge />
@@ -1035,11 +1028,11 @@ function App() {
           />
         </LazyMount>
 
-        <LazyMount when={showShareModal}>
+        <LazyMount when={shareModalState.isOpen}>
           <ShareModal
-            isOpen={showShareModal}
-            onClose={() => setShowShareModal(false)}
-            track={shareModalTrack}
+            isOpen={shareModalState.isOpen}
+            onClose={closeShareModal}
+            track={shareModalState.track}
           />
         </LazyMount>
 

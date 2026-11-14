@@ -11,6 +11,7 @@ import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive, Mo
 import { GLASS } from '../lib/themeManager'
 import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { Expandable, Fade, FadeSwap, Pop } from './Motion'
+import { NoticeAction, NoticeClose } from './Notice'
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
@@ -284,21 +285,13 @@ export function DeviceNotice({ showInactive, bannerDismissed, actionLoading, han
       text: activeDeviceOnline ? 'Playing on another device' : 'Your other device is offline',
       content: (
         <>
-          <button
-            onClick={() => handlersRef.current.handleActivateDevice()}
-            disabled={actionLoading}
-            className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
-          >
+          <NoticeAction onClick={() => handlersRef.current.handleActivateDevice()} disabled={actionLoading}>
             {actionLoading ? '…' : 'Play here'}
-          </button>
-          <button
+          </NoticeAction>
+          <NoticeClose
             onClick={() => handlersRef.current.handleDismissBanner()}
-            className="ui-tap text-white/60 hover:text-white"
             title="Hide (comes back on a device change)"
-            aria-label="Hide"
-          >
-            <X size={14} />
-          </button>
+          />
         </>
       ),
     })

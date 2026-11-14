@@ -1,6 +1,19 @@
-import { logger } from './logger'
 import { decodePack } from './packImage'
-import * as THREE from 'three'
+import {
+  CanvasTexture,
+  DataTexture,
+  DoubleSide,
+  LinearFilter,
+  Mesh,
+  OrthographicCamera,
+  PlaneGeometry,
+  RGBAFormat,
+  Scene,
+  ShaderMaterial,
+  Vector2,
+  VideoFrameTexture,
+  WebGLRenderer,
+} from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader } from './sceneShaders'
 import {
@@ -47,10 +60,8 @@ async function waitForEncoderQueue(encoder, maxQueueSize, getError) {
   }
 }
 
-async function encodeAudio(audioEncoder, audioData, getError) {
-  const left = audioData.getChannelData(0)
-  const right = audioData.numberOfChannels > 1 ? audioData.getChannelData(1) : left
-  const sampleRate = audioData.sampleRate
+async function encodeAudio(audioEncoder, pcm, getError) {
+  const { left, right, sampleRate } = pcm
   const samplesPerChunk = sampleRate * AUDIO_CHUNK_SECONDS
 
   for (let i = 0; i < left.length; i += samplesPerChunk) {
@@ -85,49 +96,19 @@ async function encodeAudio(audioEncoder, audioData, getError) {
   }
 }
 
-async function decodeRenderAudio(audioUrl, durationMs, onStatus) {
-  onStatus?.('Loading audio...')
-  const audioResponse = await fetch(audioUrl, { cache: 'no-store' })
-
-  if (!audioResponse.ok) {
-    throw new Error(`Unable to load audio for video (${audioResponse.status})`)
-  }
-
-  const contentType = audioResponse.headers.get('content-type') || 'unknown'
-  const audioArrayBuffer = await audioResponse.arrayBuffer()
-
-  if (!audioArrayBuffer.byteLength) {
-    throw new Error('Unable to load audio for video: empty audio response')
-  }
-
-  onStatus?.('Decoding audio...')
-  const audioCtx = new OfflineAudioContext(2, 44100 * Math.ceil(durationMs / 1000), 44100)
-
-  try {
-    return await audioCtx.decodeAudioData(audioArrayBuffer.slice(0))
-  } catch (err) {
-    logger.error('[OfflineVideoRenderer] Audio decode failed:', {
-      url: audioUrl,
-      contentType,
-      bytes: audioArrayBuffer.byteLength,
-      error: err
-    })
-    throw new Error(`Unable to decode audio data (${contentType})`)
-  }
-}
-
 export async function renderVideo({
   artworkBlob,
-  audioUrl,
+  pcm,
   audioFeatures,
   lyricTimestamps,
-  videoClips = [],
+  clipDurations = [],
+  requestClipFrame,
   durationMs,
   width = 720,
   height = 1280,
   fps = 30,
   onProgress,
-  onStatus
+  onStatus,
 }) {
   onStatus?.('Initializing renderer...')
 
@@ -141,8 +122,10 @@ export async function renderVideo({
     videoEncoder: null,
     audioEncoder: null,
     clipTextures: [],
-    clipVideos: [],
+    clipFrame: null,
   }
+  const spent = { effects: 0, clips: 0, lyrics: 0, draw: 0, encode: 0 }
+  const sampleRate = pcm.sampleRate
 
   try {
     const canvas = new OffscreenCanvas(width, height)
@@ -156,7 +139,7 @@ export async function renderVideo({
       throw new Error('WebGL2 not supported')
     }
 
-    const renderer = new THREE.WebGLRenderer({
+    const renderer = new WebGLRenderer({
       canvas,
       context: gl,
       antialias: false,
@@ -167,15 +150,15 @@ export async function renderVideo({
     renderer.setPixelRatio(1)
     resources.renderer = renderer
 
-  const scene = new THREE.Scene()
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+  const scene = new Scene()
+  const camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1)
 
   const styledLyrics = prepareLyricStyle(lyricTimestamps)
   const lyricsStyled = !!styledLyrics && await loadLyricFonts(styledLyrics.uses, styledLyrics.text)
   const lyricSize = lyricsStyled ? lyricCanvasSize(width / height) : { width: 1024, height: 512 }
   const lyricCanvas = new OffscreenCanvas(lyricSize.width, lyricSize.height)
   const lyricCtx = lyricCanvas.getContext('2d')
-  const lyricTexture = new THREE.CanvasTexture(lyricCanvas)
+  const lyricTexture = new CanvasTexture(lyricCanvas)
   lyricTexture.flipY = false
   resources.lyricTexture = lyricTexture
 
@@ -185,15 +168,15 @@ export async function renderVideo({
   const texWidth = artworkTexture.image.width
   const texHeight = artworkTexture.image.height
 
-  const transparentPixel = new THREE.DataTexture(
-    new Uint8Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat
+  const transparentPixel = new DataTexture(
+    new Uint8Array([0, 0, 0, 0]), 1, 1, RGBAFormat
   )
   resources.transparentPixel = transparentPixel
 
-  const material = new THREE.ShaderMaterial({
+  const material = new ShaderMaterial({
     vertexShader: backgroundVertexShader,
     fragmentShader: backgroundFragmentShader,
-    side: THREE.DoubleSide,
+    side: DoubleSide,
     uniforms: {
       u_texture: { value: artworkTexture },
       u_texture_prev: { value: artworkTexture },
@@ -202,13 +185,13 @@ export async function renderVideo({
       u_video_clip: { value: transparentPixel },
       u_video_clip_blend: { value: 0.0 },
       u_transition: { value: 1.0 },
-      u_tex_resolution: { value: new THREE.Vector2(texWidth, texHeight) },
-      u_canvas_resolution: { value: new THREE.Vector2(width, height) },
-      u_parallax: { value: new THREE.Vector2(0, 0) },
-      u_glitch: { value: new THREE.Vector2(0, 0) },
+      u_tex_resolution: { value: new Vector2(texWidth, texHeight) },
+      u_canvas_resolution: { value: new Vector2(width, height) },
+      u_parallax: { value: new Vector2(0, 0) },
+      u_glitch: { value: new Vector2(0, 0) },
       u_time: { value: 0.0 },
       u_scale: { value: 1.0 },
-      u_frame_offset: { value: new THREE.Vector2(0, 0) },
+      u_frame_offset: { value: new Vector2(0, 0) },
       u_frame_scale: { value: 1.0 },
       u_rotation: { value: 0.0 },
       u_brightness: { value: 0.6 },
@@ -225,13 +208,11 @@ export async function renderVideo({
     }
   })
 
-  const geometry = new THREE.PlaneGeometry(2, 2).scale(1, -1, 1)
+  const geometry = new PlaneGeometry(2, 2).scale(1, -1, 1)
   resources.geometry = geometry
-  const mesh = new THREE.Mesh(geometry, material)
+  const mesh = new Mesh(geometry, material)
   scene.add(mesh)
   resources.material = material
-
-  const audioData = await decodeRenderAudio(audioUrl, durationMs, onStatus)
 
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
@@ -246,7 +227,7 @@ export async function renderVideo({
     audio: {
       codec: 'aac',
       numberOfChannels: 2,
-      sampleRate: 44100,
+      sampleRate,
     },
     firstTimestampBehavior: 'offset',
     fastStart: 'in-memory',
@@ -257,7 +238,6 @@ export async function renderVideo({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => {
       videoEncoderError = e
-      logger.error('VideoEncoder error:', e)
     },
   })
   resources.videoEncoder = videoEncoder
@@ -275,7 +255,6 @@ export async function renderVideo({
     output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
     error: (e) => {
       audioEncoderError = e
-      logger.error('AudioEncoder error:', e)
     },
   })
   resources.audioEncoder = audioEncoder
@@ -283,7 +262,7 @@ export async function renderVideo({
   audioEncoder.configure({
     codec: 'mp4a.40.2',
     numberOfChannels: 2,
-    sampleRate: 44100,
+    sampleRate,
     bitrate: 128000,
   })
 
@@ -299,46 +278,26 @@ export async function renderVideo({
   )
 
   let audioFailure = null
-  const audioDone = encodeAudio(audioEncoder, audioData, audioError)
+  const audioDone = encodeAudio(audioEncoder, pcm, audioError)
   audioDone.catch(err => { audioFailure = err })
+  pcm = null
 
   const effects = createInitialEffects()
 
   const beats = audioFeatures?.beats || []
   const visualCueMap = buildVisualCueMap(beats)
 
-  if (videoClips.length > 0) {
-    onStatus?.('Loading video clips...')
-    for (const clip of videoClips) {
-      try {
-        const video = document.createElement('video')
-        video.crossOrigin = 'anonymous'
-        video.muted = true
-        video.preload = 'auto'
-        video.src = clip.url
-
-        await new Promise((resolve, reject) => {
-          video.onloadeddata = resolve
-          video.onerror = reject
-          video.load()
-        })
-
-        const clipTexture = new THREE.VideoTexture(video)
-        clipTexture.minFilter = THREE.LinearFilter
-        clipTexture.magFilter = THREE.LinearFilter
-        clipTexture.flipY = false
-        resources.clipTextures.push(clipTexture)
-        resources.clipVideos.push(video)
-      } catch (e) {
-        logger.warn('Failed to load video clip:', clip.url, e)
-      }
-    }
-    onStatus?.(`Loaded ${resources.clipTextures.length} video clips`)
+  for (let index = 0; index < clipDurations.length; index++) {
+    const clipTexture = new VideoFrameTexture()
+    clipTexture.minFilter = LinearFilter
+    clipTexture.magFilter = LinearFilter
+    clipTexture.flipY = false
+    resources.clipTextures.push(clipTexture)
   }
 
   let currentClipIndex = 0
   let videoClipBlend = 0
-  const clipVirtualTime = new Array(resources.clipVideos.length).fill(0)
+  const clipVirtualTime = new Array(clipDurations.length).fill(0)
 
   const trackingState = {
     lastSegmentIndex: 0,
@@ -366,6 +325,7 @@ export async function renderVideo({
       throw audioFailure
     }
 
+    const frameStart = performance.now()
     const timeMs = (frame / fps) * 1000
     const currentTime = timeMs / 1000
 
@@ -385,6 +345,7 @@ export async function renderVideo({
     })
 
     effects.blur *= 0.9
+    const effectsDone = performance.now()
 
     material.uniforms.u_time.value = currentTime
     material.uniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
@@ -408,27 +369,20 @@ export async function renderVideo({
       const playbackRate = 0.6 + (rawEnergy * 1.2)
       clipVirtualTime[currentClipIndex] += delta * playbackRate
 
-      const clipVideo = resources.clipVideos[currentClipIndex]
-      if (clipVideo && clipVideo.duration) {
-        const seekTime = clipVirtualTime[currentClipIndex] % clipVideo.duration
-
-        if (Math.abs(clipVideo.currentTime - seekTime) > 0.001) {
-          clipVideo.currentTime = seekTime
-
-          await new Promise(resolve => {
-            const onSeeked = () => {
-              clipVideo.removeEventListener('seeked', onSeeked)
-              resolve()
-            }
-            clipVideo.addEventListener('seeked', onSeeked)
-          })
+      const clipDuration = clipDurations[currentClipIndex]
+      if (clipDuration) {
+        const clipFrame = await requestClipFrame(currentClipIndex, clipVirtualTime[currentClipIndex] % clipDuration)
+        if (clipFrame) {
+          resources.clipFrame?.close()
+          resources.clipFrame = clipFrame
+          resources.clipTextures[currentClipIndex].setFrame(clipFrame)
         }
       }
 
       material.uniforms.u_video_clip.value = resources.clipTextures[currentClipIndex]
-      material.uniforms.u_video_clip_blend.value = videoClipBlend
-      resources.clipTextures[currentClipIndex].needsUpdate = true
+      material.uniforms.u_video_clip_blend.value = resources.clipFrame ? videoClipBlend : 0
     }
+    const clipsDone = performance.now()
 
     const lyricFrame = lyricsStyled ? lyricFrameAt(styledLyrics, timeMs / 1000) : null
     const currentLyric = lyricsStyled ? (lyricFrame && `${lyricFrame.index}:${lyricFrame.count}`) : getLyricAt(lyricData, timeMs, lyricIndex)
@@ -445,6 +399,7 @@ export async function renderVideo({
       lyricTexture.needsUpdate = true
       lastLyricText = currentLyric
     }
+    const lyricsDone = performance.now()
 
     renderer.render(scene, camera)
 
@@ -454,16 +409,19 @@ export async function renderVideo({
     })
     videoEncoder.encode(videoFrame, { keyFrame: frame % 30 === 0 })
     videoFrame.close()
+    const drawDone = performance.now()
 
     await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
 
     const now = performance.now()
+    spent.effects += effectsDone - frameStart
+    spent.clips += clipsDone - effectsDone
+    spent.lyrics += lyricsDone - clipsDone
+    spent.draw += drawDone - lyricsDone
+    spent.encode += now - drawDone
     if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
       lastProgressAt = now
       onProgress?.(frame / totalFrames)
-    }
-
-    if (frame % 10 === 0) {
       await new Promise(r => setTimeout(r, 0))
     }
   }
@@ -479,19 +437,21 @@ export async function renderVideo({
   await audioDone
 
   const renderSeconds = (performance.now() - renderStart) / 1000
-  logger.info(`[OfflineVideoRenderer] ${totalFrames} frames in ${renderSeconds.toFixed(1)} s (${(durationMs / 1000 / renderSeconds).toFixed(2)}x realtime)`)
+  const stats = {
+    frames: totalFrames,
+    seconds: +renderSeconds.toFixed(1),
+    speed: +(durationMs / 1000 / renderSeconds).toFixed(2),
+    msPerFrame: Object.fromEntries(Object.entries(spent).map(([stage, ms]) => [stage, +(ms / totalFrames).toFixed(2)])),
+  }
 
   onStatus?.('Building MP4 file...')
   muxer.finalize()
 
   onProgress?.(1)
 
-  const { buffer } = muxer.target
-  return new Blob([buffer], { type: 'video/mp4' })
+  return { buffer: muxer.target.buffer, stats }
 
   } finally {
-    onStatus?.('Cleaning up...')
-
     try {
       if (resources.videoEncoder) {
         resources.videoEncoder.close()
@@ -531,25 +491,18 @@ export async function renderVideo({
       if (resources.transparentPixel) resources.transparentPixel.dispose()
     } catch { /* ignore */ }
 
-    // Cleanup video clips
     for (const tex of resources.clipTextures) {
       try { tex.dispose() } catch { /* ignore */ }
     }
-    for (const video of resources.clipVideos) {
-      try {
-        video.pause()
-        video.src = ''
-        video.load()
-      } catch { /* ignore */ }
-    }
-
-    await new Promise(r => setTimeout(r, 100))
+    try {
+      resources.clipFrame?.close()
+    } catch { /* ignore */ }
   }
 }
 
 async function loadTexture(packBlob) {
   const { color } = await decodePack(packBlob, { map: false })
-  const texture = new THREE.CanvasTexture(color)
+  const texture = new CanvasTexture(color)
   texture.image = color
   texture.flipY = false
   return texture

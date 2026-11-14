@@ -71,6 +71,7 @@ import { safeStorage } from '../lib/safeStorage'
 import { UI_FULLSCREEN, getOnAirSegment } from '../lib/themeManager'
 import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
+import { shareVideoJob } from '../lib/shareVideoJob'
 import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
 
 const INITIAL_SETTINGS = loadLocalSettings()
@@ -351,7 +352,33 @@ export function UIStateProvider({ children }) {
   const [uploadWatchId, setUploadWatchId] = useState(null)
   const [usageModalOpen, setUsageModalOpen] = useState(false)
 
-  const [isOfflineRendering, setIsOfflineRendering] = useState(false)
+  const [shareModalState, setShareModalState] = useState({
+    isOpen: false,
+    track: null
+  })
+
+  const [shareVideoState, setShareVideoState] = useState({
+    status: 'idle',
+    track: null,
+    title: '',
+    stage: '',
+    progress: 0,
+    url: null,
+    sizeBytes: 0,
+    publishedUrl: null,
+    error: null,
+    note: null,
+  })
+  const shareVideoIdleRef = useRef(shareVideoState)
+
+  const publishShareVideoState = useCallback((updates) => {
+    setShareVideoState(prev => (updates ? { ...prev, ...updates } : shareVideoIdleRef.current))
+  }, [])
+
+  useEffect(() => {
+    shareVideoJob.connect(publishShareVideoState)
+    return () => shareVideoJob.connect(null)
+  }, [publishShareVideoState])
 
   const [isScreenVisible, setIsScreenVisible] = useState(!document.hidden)
 
@@ -1016,6 +1043,15 @@ export function UIStateProvider({ children }) {
     setUploadModalOpen(false)
   }, [])
 
+  const openShareModal = useCallback((track = null) => {
+    pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
+    startTransition(() => setShareModalState({ isOpen: true, track }))
+  }, [])
+
+  const closeShareModal = useCallback(() => {
+    setShareModalState(prev => ({ ...prev, isOpen: false }))
+  }, [])
+
   const openUsageModal = useCallback(() => {
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
     startTransition(() => setUsageModalOpen(true))
@@ -1126,8 +1162,10 @@ export function UIStateProvider({ children }) {
     openUsageModal,
     closeUsageModal,
 
-    isOfflineRendering,
-    setIsOfflineRendering,
+    shareModalState,
+    openShareModal,
+    closeShareModal,
+    shareVideoState,
 
     isScreenVisible,
 
@@ -1146,7 +1184,8 @@ export function UIStateProvider({ children }) {
     reviewModalState, openReviewModal, closeReviewModal,
     uploadModalOpen, uploadEditTrackId, uploadWatchId, openUploadModal, openEditTrack, closeUploadModal,
     usageModalOpen, openUsageModal, closeUsageModal,
-    isOfflineRendering, isScreenVisible, setVideoPreviewPlaying,
+    shareModalState, openShareModal, closeShareModal, shareVideoState,
+    isScreenVisible, setVideoPreviewPlaying,
   ])
 
   const storeRef = useRef(null)

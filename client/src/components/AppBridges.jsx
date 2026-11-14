@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CloudOff } from 'lucide-react'
+import { CloudOff, Video } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 import { artistCredit } from '../lib/utils'
+import { NoticeAction, NoticeClose } from './Notice'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -261,6 +262,54 @@ export function UploadNotice() {
         if (!watched()) success('Your upload is live', 6000, 'top', key)
       })
   }, [getUIState, publishContentUpdate, errorToast, info, success]))
+
+  return null
+}
+
+const SHARE_VIDEO_NOTICE = 'share-video'
+
+export function ShareVideoNotice() {
+  const { status, modalOpen, showNotice, hideNotice, toastError } = useUISelector(state => ({
+    status: state.shareVideoState.status,
+    modalOpen: state.shareModalState.isOpen,
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+    toastError: state.toastError,
+  }))
+  const getUIState = useUIStateGetter()
+  const lastStatusRef = useRef(status)
+
+  useEffect(() => {
+    if (modalOpen) hideNotice(SHARE_VIDEO_NOTICE)
+  }, [modalOpen, hideNotice])
+
+  useEffect(() => {
+    if (lastStatusRef.current === status) return
+    lastStatusRef.current = status
+    const { shareVideoState: job, shareModalState, openShareModal } = getUIState()
+    if (shareModalState.isOpen || (status !== 'complete' && status !== 'error')) {
+      hideNotice(SHARE_VIDEO_NOTICE)
+      return
+    }
+    if (status === 'error') {
+      toastError(`The video of “${job.title}” could not be made: ${job.error}`, 8000, 'top', SHARE_VIDEO_NOTICE)
+      return
+    }
+    showNotice({
+      key: SHARE_VIDEO_NOTICE,
+      sticky: true,
+      dismissible: false,
+      tone: 'success',
+      icon: Video,
+      text: `Video ready: “${job.title}”`,
+      content: (
+        <>
+          <NoticeAction onClick={() => openShareModal(job.track)}>Open</NoticeAction>
+          <NoticeClose onClick={() => hideNotice(SHARE_VIDEO_NOTICE)} />
+        </>
+      ),
+    })
+  }, [status, getUIState, showNotice, hideNotice, toastError])
 
   return null
 }

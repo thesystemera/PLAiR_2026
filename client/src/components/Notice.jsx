@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
 
 const NOTICE_TONES = {
   success: { border: 'border-emerald-400/45', iconColor: 'text-emerald-300', icon: CheckCircle2 },
@@ -22,6 +22,26 @@ export const InlineNote = memo(function InlineNote({ tone = 'neutral', children,
       <Icon className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />
       <span>{children}</span>
     </p>
+  )
+})
+
+export const NoticeAction = memo(function NoticeAction({ onClick, disabled = false, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="ui-press ml-1 rounded-full bg-white/90 px-2.5 py-0.5 text-[11px] font-bold text-zinc-900 disabled:opacity-50"
+    >
+      {children}
+    </button>
+  )
+})
+
+export const NoticeClose = memo(function NoticeClose({ onClick, title = 'Hide' }) {
+  return (
+    <button onClick={onClick} className="ui-tap text-white/60 hover:text-white" title={title} aria-label="Hide">
+      <X size={14} />
+    </button>
   )
 })
 

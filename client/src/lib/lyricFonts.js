@@ -3,6 +3,7 @@ import registry from './lyricFonts.json'
 const FONT_DIR = '/fonts/lyrics/'
 const fonts = new Map(registry.fonts.map(font => [font.id, font]))
 const faces = new Map()
+const fontSet = globalThis.document?.fonts || globalThis.fonts
 
 function family(id) {
   return `plair-lyric-${id}`
@@ -25,7 +26,7 @@ function facesFor(id) {
   const list = (font?.files || []).map(file => {
     const face = new FontFace(family(id), `url(${FONT_DIR}${file.file}) format('woff2')`,
       { style: file.style, weight: file.weight, unicodeRange: file.range, display: 'block' })
-    document.fonts.add(face)
+    fontSet.add(face)
     return { face, ranges: parseRange(file.range), style: file.style }
   })
   faces.set(id, list)
@@ -33,7 +34,7 @@ function facesFor(id) {
 }
 
 export function loadLyricFonts(uses, text) {
-  if (typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) return Promise.resolve(false)
+  if (typeof FontFace === 'undefined' || !fontSet) return Promise.resolve(false)
   const codes = [...new Set([...text.join('')].map(char => char.codePointAt(0)))]
   const wanted = []
   for (const [id, styles] of uses) {

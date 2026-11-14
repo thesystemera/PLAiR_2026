@@ -88,7 +88,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     currentTrackId: state.engineState.currentTrack?.id,
     currentTrackHasArtwork: state.engineState.currentTrack?.has_artwork,
     isPlaying: !!state.engineState.is_playing,
-    isOfflineRendering: state.isOfflineRendering,
     isScreenVisible: state.isScreenVisible,
     panelRegionsRef: state.shaderPanelRegions,
     panelOpacitiesRef: state.shaderPanelOpacities,
@@ -442,8 +441,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     }
     return () => { delete window.__plairScene }
   }, [send])
-
-  if (ui.isOfflineRendering) return null
 
   return (
     <>
