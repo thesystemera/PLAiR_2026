@@ -103,6 +103,7 @@ export function useDevicePicker() {
       toastSuccess('Device removed')
     } catch (err) {
       logger.error('[DevicePicker] Failed to remove device:', err)
+      toastError?.('Could not remove that device')
     } finally {
       setActionLoading(false)
     }
@@ -138,6 +139,7 @@ export function useDevicePicker() {
       toastSuccess('Device renamed')
     } catch (err) {
       logger.error('[DevicePicker] Failed to rename device:', err)
+      toastError?.('Could not rename that device')
     } finally {
       setActionLoading(false)
     }

@@ -79,14 +79,8 @@ export const musicMethods = {
   },
 
   async seedRadio(category = 'all', trackId = null) {
-    return this._routeRequest('seedRadio', [category, trackId], async () => {
-      const res = await this._fetch(`${API_BASE}/queue/seed`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ category, track_id: trackId })
-      })
-      return res.json()
-    })
+    return this._routeRequest('seedRadio', [category, trackId],
+      () => this._jsonRequest('/queue/seed', 'POST', { category, track_id: trackId }, "Couldn't switch the station"))
   },
 
   async searchSemantic(query, nResults = 50, useAiAnalysis = false, fillQueue = false) {

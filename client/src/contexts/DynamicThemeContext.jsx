@@ -161,7 +161,7 @@ export function useThemeArtwork() {
   return useContext(ThemeArtworkContext)
 }
 
-function getCategoryMetadata(key) {
+export function getCategoryMetadata(key) {
   const k = key?.toLowerCase() || 'general'
 
   if (k === 'favorites') return { ...CATEGORY_IDENTITY.favorites, id: key }

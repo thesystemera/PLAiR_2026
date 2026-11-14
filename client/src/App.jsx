@@ -634,8 +634,8 @@ function App() {
     const trackId = seedModalTrack?.id
     const startSong = trackId && trackId !== getUIState().engineState.currentTrack?.id
     handleCloseSeedModal()
-    await seedRadio(category, trackId)
-    if (startSong) await playTrack(trackId)
+    const seeded = await seedRadio(category, seedModalTrack)
+    if (seeded && startSong) await playTrack(trackId)
   }, [seedModalTrack, getUIState, seedRadio, playTrack, handleCloseSeedModal])
 
   const handleListSelect = useCallback(async (category) => {

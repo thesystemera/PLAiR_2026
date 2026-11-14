@@ -43,6 +43,10 @@ export function isWebGL2Available() {
   }
 }
 
+export function trackTitle(track) {
+  return track?.generation_params?.title || track?.title || track?.track_info?.title || null
+}
+
 function trackArtist(track) {
   return track?.generation_params?.artist_name || track?.track_info?.artist || track?.artist_name || track?.artist || track?.derived_tags?.inspired_artist || null
 }

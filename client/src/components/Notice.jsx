@@ -48,7 +48,7 @@ export const NoticeClose = memo(function NoticeClose({ onClick, title = 'Hide' }
 const NOTICE_BACKGROUND = { backgroundColor: 'rgba(10, 10, 12, 0.82)' }
 const WRAP_AFTER_CHARS = 52
 
-export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', icon, iconClass, borderClass, borderColor, text, content, title, onClick }) {
+export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', icon, iconClass, iconColor, borderClass, borderColor, text, content, title, onClick }) {
   const palette = NOTICE_TONES[tone] || NOTICE_TONES.neutral
   const Icon = icon === undefined ? palette.icon : icon
   const wraps = typeof text === 'string' && text.length > WRAP_AFTER_CHARS
@@ -64,7 +64,7 @@ export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', icon, ico
       } ${borderClass || palette.border} ${onClick ? 'ui-press cursor-pointer' : ''}`}
       style={borderColor ? { ...NOTICE_BACKGROUND, borderColor } : NOTICE_BACKGROUND}
     >
-      {Icon && <Icon className={`w-3.5 h-3.5 shrink-0 ${iconClass || palette.iconColor}`} aria-hidden="true" />}
+      {Icon && <Icon className={`w-3.5 h-3.5 shrink-0 ${iconClass || (iconColor ? '' : palette.iconColor)}`} style={iconColor ? { color: iconColor } : undefined} aria-hidden="true" />}
       {text !== undefined && <span className={`font-semibold text-white/90 ${wraps ? 'leading-snug' : 'truncate'}`}>{text}</span>}
       {content}
     </Tag>

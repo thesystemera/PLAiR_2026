@@ -137,12 +137,14 @@ async def seed_radio(
         )
 
     assert services.playback_service is not None
-    await services.playback_service.seed_radio(
+    seeded = await services.playback_service.seed_radio(
         session_id=session_id,
         category=category,
         track_id=track_id,
         user_id=user_id
     )
+    if not seeded:
+        raise HTTPException(status_code=409, detail="Couldn't find a song to build that station from")
 
     log_service.api(f"[{session_id}] Seeded radio with category: {category}")
     state = services.playback_service.get_state(session_id)  # type: ignore

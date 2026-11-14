@@ -15,6 +15,8 @@ import { MusicBed } from '../lib/musicBed'
 import { canPlayCachedBlob, usesProgressiveStreaming } from '../lib/mediaSupport'
 import { reportClientEvent } from '../lib/errorReporter'
 import { splashReady } from '../lib/splash'
+import { trackTitle } from '../lib/utils'
+import { getCategoryMetadata } from './DynamicThemeContext'
 import {
   NO_PENDING,
   PENDING_ACK_TIMEOUT_MS,
@@ -119,7 +121,7 @@ export function PlaybackProvider({ children }) {
   const progressMsRef = useRef(0)
   const { user } = useAuth()
   const {
-    reportEngineStatus, publishAudioState, publishRadioState, dataSaverMode, audioQuality, toastInfo, offlineMode, buffering, isActiveDevice,
+    reportEngineStatus, publishAudioState, publishRadioState, dataSaverMode, audioQuality, toastInfo, showNotice, offlineMode, buffering, isActiveDevice,
   } = useUISelector(state => ({
     reportEngineStatus: state.reportEngineStatus,
     publishAudioState: state.publishAudioState,
@@ -127,6 +129,7 @@ export function PlaybackProvider({ children }) {
     dataSaverMode: state.settingsState.dataSaverMode,
     audioQuality: state.settingsState.audioQuality,
     toastInfo: state.toastInfo,
+    showNotice: state.showNotice,
     offlineMode: state.audioState.offlineMode,
     buffering: state.audioState.buffering,
     isActiveDevice: state.engineState.isActiveDevice,
@@ -149,6 +152,8 @@ export function PlaybackProvider({ children }) {
 
   const toastInfoRef = useRef(toastInfo)
   useEffect(() => { toastInfoRef.current = toastInfo }, [toastInfo])
+  const showNoticeRef = useRef(showNotice)
+  useEffect(() => { showNoticeRef.current = showNotice }, [showNotice])
 
   const localRef = useRef(null)
   const enteringLocalRef = useRef(false)
@@ -1429,9 +1434,9 @@ export function PlaybackProvider({ children }) {
     if (response?.offline && response.state && localRef.current) applyLocalState(response.state)
   }, [applyLocalState])
 
-  const seedRadio = useCallback(async (category = 'all', trackId = null) => {
+  const seedRadio = useCallback(async (category = 'all', seedTrack = null) => {
     const currentId = stateRef.current.current_track?.id
-    const seedTrackId = trackId || currentId
+    const seedTrackId = seedTrack?.id || currentId
 
     if (seedTrackId && seedTrackId !== currentId) {
       manualSwitchRef.current = true
@@ -1455,11 +1460,25 @@ export function PlaybackProvider({ children }) {
         localRef.current.used = true
         applyLocalState(response.state, { manual: true })
       }
+
+      const station = getCategoryMetadata(category)
+      const from = trackTitle(seedTrack)
+      showNoticeRef.current?.({
+        key: 'station',
+        tone: 'success',
+        icon: station?.icon,
+        iconColor: station?.color,
+        borderColor: station?.color,
+        text: from ? `${station?.label || 'Seed'} radio · from ${from}` : station?.label || 'Station switched',
+      })
+      return true
     } catch (error) {
       logger.error('[PlaybackContext.seedRadio] Failed to seed radio:', error)
       if (publishRadioState) {
         publishRadioState({ activeSeedMode: null })
       }
+      showNoticeRef.current?.({ key: 'station', tone: 'error', text: error?.message || "Couldn't switch the station" })
+      return false
     }
   }, [applyLocalState, publishRadioState])
 
