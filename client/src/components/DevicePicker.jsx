@@ -7,7 +7,7 @@ import { useUISelector } from '../contexts/UIStateContext'
 import { useStorage } from '../contexts/StorageContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { useNetwork } from '../contexts/NetworkContext'
-import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive, MonitorSpeaker } from 'lucide-react'
+import { X, Loader2, Edit2, Check, X as XIcon, WifiOff, ServerOff, HardDrive, MonitorSpeaker, Play, Pause } from 'lucide-react'
 import { GLASS } from '../lib/themeManager'
 import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { Expandable, Fade, FadeSwap, Pop } from './Motion'
@@ -391,7 +391,7 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-white flex items-center gap-2 mb-1">
-                            <FadeSwap swapKey={editingDeviceId === device.device_id ? 'edit' : 'name'} preset={PRESETS.fade} mode="wait" className="flex items-center gap-2 flex-1">
+                            <FadeSwap swapKey={editingDeviceId === device.device_id ? 'edit' : 'name'} preset={PRESETS.fade} mode="wait" className="flex items-center gap-2 flex-1 min-w-0">
                               {editingDeviceId === device.device_id ? (
                                 <>
                                   <input
@@ -435,24 +435,27 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                                 </>
                               ) : (
                                 <>
-                                  <span className="truncate">{device.device_name}</span>
+                                  <span className="truncate min-w-0">{device.device_name}</span>
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       handleStartEdit(device.device_id, device.device_name)
                                     }}
-                                    className="ui-press p-1 hover:bg-white/10 rounded transition opacity-50 hover:opacity-100"
+                                    className="ui-press p-1 hover:bg-white/10 rounded transition opacity-50 hover:opacity-100 flex-shrink-0"
                                     title="Rename device"
                                   >
                                     <Edit2 size={14} />
                                   </button>
-                                  {device.is_current && <span className="text-xs px-2 py-0.5 rounded-full bg-white/20 text-white/90 font-medium whitespace-nowrap">Current device</span>}
-                                  <Pop show={!!device.is_active} className="flex">
+                                  <Pop show={!!device.is_active} className="flex flex-shrink-0">
                                     <FadeSwap swapKey={isPlaying ? 'playing' : 'paused'} preset={PRESETS.badgeSwap} mode="wait" className="flex">
                                       {isPlaying ? (
-                                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-500 text-white font-medium whitespace-nowrap">▶️ Playing</span>
+                                        <span className="w-5 h-5 rounded-full bg-green-500 text-white flex items-center justify-center" title="Playing" aria-label="Playing">
+                                          <Play size={10} fill="currentColor" className="ml-px" />
+                                        </span>
                                       ) : (
-                                        <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500 text-white font-medium whitespace-nowrap">⏸️ Paused</span>
+                                        <span className="w-5 h-5 rounded-full bg-yellow-500 text-white flex items-center justify-center" title="Paused" aria-label="Paused">
+                                          <Pause size={10} fill="currentColor" />
+                                        </span>
                                       )}
                                     </FadeSwap>
                                   </Pop>
@@ -461,9 +464,11 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                             </FadeSwap>
                           </div>
                           <div className="text-xs text-white/40">
-                            {device.last_active
-                              ? new Date(device.last_active).toLocaleString()
-                              : 'Never used'}
+                            {device.is_current
+                              ? 'This device'
+                              : device.last_active
+                                ? new Date(device.last_active).toLocaleString()
+                                : 'Never used'}
                           </div>
                         </div>
                         {!device.is_current && (
