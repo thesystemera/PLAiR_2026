@@ -101,7 +101,7 @@ const MOBILE_NAV_FADE = '4px'
 const MOBILE_NAV_FILL = { backgroundImage: VERTICAL_EDGE_FADE_FILL('rgba(0, 0, 0, 0.25)', MOBILE_NAV_FADE), backgroundOrigin: 'border-box' }
 const MOBILE_NAV_STYLE = { ...MOBILE_NAV_FILL, borderTopColor: 'rgba(31, 41, 55, 0.043)' }
 const MOBILE_RAIL_STYLE = { ...MOBILE_NAV_FILL, width: 'calc(4.5rem + var(--safe-left))', paddingLeft: 'var(--safe-left)' }
-const MOBILE_NAV_CLASS = 'flex-shrink-0 border-t flex justify-around items-center h-16 z-20'
+const MOBILE_NAV_CLASS = 'flex-shrink-0 border-t flex justify-around items-center h-16 z-20 will-change-transform'
 const MOBILE_RAIL_CLASS = 'order-first flex-shrink-0 border-r border-gray-800/50 flex flex-col justify-around items-stretch h-full py-1 z-20'
 const FULLSCREEN_EXIT_STYLE = { top: 'max(1.5rem, calc(var(--safe-top) + 0.75rem))', right: 'max(1.5rem, calc(var(--safe-right) + 0.75rem))' }
 

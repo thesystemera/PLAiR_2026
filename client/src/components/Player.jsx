@@ -836,7 +836,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
             isAuthenticated={bitratePicker.isAuthenticated}
           />
           <GenerationQueuePanel />
-          <div className={compact ? 'px-3 py-1.5' : 'px-3 py-2 md:px-4 md:py-3'}>
+          <div className={`will-change-transform ${compact ? 'px-3 py-1.5' : 'px-3 py-2 md:px-4 md:py-3'}`}>
             <div className="max-w-screen-2xl mx-auto">
               {!currentTrack ? (
                 <div className="ui-fade-in flex items-center justify-center text-gray-500 py-2">
