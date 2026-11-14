@@ -13,7 +13,7 @@ import {useUISelector, useUIStateGetter} from './contexts/UIStateContext'
 import {useProfilePicture} from './hooks/useProfilePicture'
 import {usePlaybackActions} from './contexts/PlaybackContext'
 import {useAuth} from './contexts/AuthContext'
-import {TRANSITIONS, UI_FULLSCREEN, getCategoryMetadata} from './contexts/DynamicThemeContext'
+import {TRANSITIONS, UI_FULLSCREEN} from './contexts/DynamicThemeContext'
 import {useWebSocketSubscribe} from './contexts/WebSocketContext'
 import {VoiceRecordingProvider} from './contexts/VoiceRecordingContext'
 import {DJVoiceEngine} from './hooks/useDJAudioStream'
@@ -576,14 +576,6 @@ function App() {
     await seek(positionMs)
   }, [seek])
 
-  const handleSeedFromTrack = useCallback(async (trackId, seedMode) => {
-    const metadata = getCategoryMetadata(seedMode)
-    const modeLabel = metadata?.label || 'All Categories'
-
-    await seedRadio(seedMode, trackId)
-    success(`Seeded ${modeLabel} playlist from track`)
-  }, [seedRadio, success])
-
   const handleCloseLogin = useCallback(() => setShowLogin(false), [])
   const handleCloseRegister = useCallback(() => setShowRegister(false), [])
   const handleCloseSeedModal = useCallback(() => setShowSeedModal(false), [])
@@ -599,12 +591,12 @@ function App() {
     setDemoModalDismissed(true)
   }, [])
 
-  const handleOpenSeedModal = useCallback(() => {
+  const handleOpenSeedModal = useCallback((track) => {
     const { engineState } = getUIState()
-    const currentTrack = engineState.queue.find(t => t.id === engineState.currentTrack?.id)
+    const seedTrack = track || engineState.queue.find(t => t.id === engineState.currentTrack?.id)
     pauseSceneRendering(MODAL_OPEN_PAUSE_MS)
     startTransition(() => {
-      setSeedModalTrack(currentTrack)
+      setSeedModalTrack(seedTrack)
       setShowSeedModal(true)
     })
   }, [getUIState])
@@ -623,9 +615,12 @@ function App() {
   }, [])
 
   const handleSeedRadioSelect = useCallback(async (category) => {
-    await seedRadio(category)
+    const trackId = seedModalTrack?.id
+    const startSong = trackId && trackId !== getUIState().engineState.currentTrack?.id
     handleCloseSeedModal()
-  }, [seedRadio, handleCloseSeedModal])
+    await seedRadio(category, trackId)
+    if (startSong) await playTrack(trackId)
+  }, [seedModalTrack, getUIState, seedRadio, playTrack, handleCloseSeedModal])
 
   const handleListSelect = useCallback(async (category) => {
     await seedRadio(category)
@@ -670,9 +665,9 @@ function App() {
   const LibraryPanel = useMemo(() => (
     <Catalog
       onPlayNow={handlePlayNow}
-      onSeedFromTrack={handleSeedFromTrack}
+      onPickSeed={handleOpenSeedModal}
     />
-  ), [handlePlayNow, handleSeedFromTrack])
+  ), [handlePlayNow, handleOpenSeedModal])
 
   const NowPlayingPanel = useMemo(() => (
     <NowPlaying

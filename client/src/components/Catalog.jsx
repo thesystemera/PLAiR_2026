@@ -1,4 +1,4 @@
-import { ListPlus } from 'lucide-react'
+import { Sprout } from 'lucide-react'
 import { memo, useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { formatDateShort } from '../lib/utils'
 import { FALLBACK_GRADIENTS, CARD_TRANSITION } from '../lib/themeManager'
@@ -9,7 +9,7 @@ import { useDynamicTheme, GenreIcon, CatalogIcon } from '../contexts/DynamicThem
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { MediaSearchMatchBadge } from './MediaSearchMatchBadge'
-import { useRadioState, useUISelector, uiState } from '../contexts/UIStateContext'
+import { useUISelector, uiState } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { MediaSearch } from './MediaSearch'
 import { Scroller } from './Scroller'
@@ -87,9 +87,8 @@ function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   }
 }
 
-const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNow, onSeedFromTrack, index, shouldAnimate, selectedGenre = null }) {
+const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null }) {
   const { getWhite, triggerEffect } = useDynamicTheme()
-  const radioState = useRadioState()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
   const [isLoading, setIsLoading] = useState(false)
@@ -126,14 +125,13 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
     onPlayNow(track.id)
   }, [track.id, onPlayNow, cardInteraction, triggerEffect])
 
-  const handleSeedFromTrack = useCallback((e) => {
+  const handlePickSeed = useCallback((e) => {
     e?.stopPropagation()
     e?.preventDefault()
     if (!cardInteraction.shouldTrigger()) return
-    const seedMode = radioState.activeSeedMode || 'all'
-    triggerHaptic('success')
-    onSeedFromTrack(track.id, seedMode)
-  }, [track.id, radioState.activeSeedMode, onSeedFromTrack, cardInteraction])
+    triggerHaptic('medium')
+    onPickSeed(track)
+  }, [track, onPickSeed, cardInteraction])
 
   return (
     <MediaCardAnimation
@@ -161,9 +159,9 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
 
         <div className="absolute top-2 right-2 z-30 flex items-center gap-2 pointer-events-none">
           <MediaCardActionButton
-            icon={ListPlus}
-            onClick={handleSeedFromTrack}
-            title={radioState.activeSeedMode ? `Seed ${radioState.activeSeedMode} playlist from this track` : "Seed playlist from this track"}
+            icon={Sprout}
+            onClick={handlePickSeed}
+            title="Start radio from this song"
             variant="seed"
             className="pointer-events-auto"
           />
@@ -246,7 +244,7 @@ const GenreCard = memo(function GenreCard({ genre, count, subGenres, onSelectGen
 
 const getTrackArtworkId = (track) => (track.has_artwork === false ? null : track.id)
 
-function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
+function CatalogComponent({ onPlayNow, onPickSeed }) {
   const playback = usePlaybackActions()
   const {
     currentTrackId, queue, contentUpdateCounter, toastInfo, toastError,
@@ -573,12 +571,12 @@ function CatalogComponent({ onPlayNow, onSeedFromTrack }) {
       isPlaying={track.id === currentTrackId}
       isQueued={queuedTrackSet.has(track.id)}
       onPlayNow={onPlayNow}
-      onSeedFromTrack={onSeedFromTrack}
+      onPickSeed={onPickSeed}
       index={absoluteIndex}
       shouldAnimate={cardsEntering}
       selectedGenre={selectedGenre}
     />
-  ), [currentTrackId, queuedTrackSet, onPlayNow, onSeedFromTrack, selectedGenre, cardsEntering])
+  ), [currentTrackId, queuedTrackSet, onPlayNow, onPickSeed, selectedGenre, cardsEntering])
 
   const renderPlaceholder = useCallback((absoluteIndex) => (
     <div

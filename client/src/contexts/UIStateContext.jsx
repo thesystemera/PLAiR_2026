@@ -173,7 +173,6 @@ const DJ_DUCK_RELEASE_HOLD_MS = 350
 const UIStateContext = createContext(null)
 const RadioButtonContext = createContext(null)
 const UIActionsContext = createContext(null)
-const RadioStateContext = createContext(null)
 const UIStoreContext = createContext(null)
 const EMPTY_CLIPS = []
 const NO_SELECTION = Symbol('no-selection')
@@ -1218,11 +1217,9 @@ export function UIStateProvider({ children }) {
     <UIStoreContext.Provider value={store}>
     <UIStateContext.Provider value={value}>
       <UIActionsContext.Provider value={actionsValue}>
-        <RadioStateContext.Provider value={radioState}>
-          <RadioButtonContext.Provider value={radioButtonValue}>
-            {children}
-          </RadioButtonContext.Provider>
-        </RadioStateContext.Provider>
+        <RadioButtonContext.Provider value={radioButtonValue}>
+          {children}
+        </RadioButtonContext.Provider>
       </UIActionsContext.Provider>
     </UIStateContext.Provider>
     </UIStoreContext.Provider>
@@ -1254,12 +1251,6 @@ export function useUIStateGetter() {
 export function useUIActions() {
   const context = useContext(UIActionsContext)
   if (!context) throw new Error('useUIActions must be used within UIStateProvider')
-  return context
-}
-
-export function useRadioState() {
-  const context = useContext(RadioStateContext)
-  if (!context) throw new Error('useRadioState must be used within UIStateProvider')
   return context
 }
 

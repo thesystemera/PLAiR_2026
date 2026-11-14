@@ -321,6 +321,7 @@ export const MediaCardActionButton = memo(function MediaCardActionButton({
 
   return (
     <button
+      onPointerUp={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation()
         onClick(e)
