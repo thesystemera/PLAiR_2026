@@ -8,6 +8,7 @@ import { InlineNote } from './Notice'
 import { MediaEmptyState } from './MediaShared'
 import { useUISelector } from '../contexts/UIStateContext'
 import { SHARE_JOB_ID, shareJobView, shareVideoJob } from '../lib/shareVideoJob'
+import { formatTimeLeft } from '../lib/utils'
 
 const JOB_KINDS = {
   generation: { badge: 'Generating', fallbackTitle: 'Generating tracks...', cancelTitle: 'Cancel generation' },
@@ -68,6 +69,10 @@ function JobItem({ job, onCancel, onRemove, onOpen }) {
                 {job.completed_tracks} / {job.total_tracks} tracks
               </span>
             )}
+
+            <Fade as="span" show={isActive && job.eta_seconds > 0} className="ml-auto whitespace-nowrap">
+              {formatTimeLeft(job.eta_seconds)}
+            </Fade>
           </div>
         </div>
 
@@ -127,16 +132,17 @@ function JobItem({ job, onCancel, onRemove, onOpen }) {
 
 export function GenerationQueuePanel() {
   const { jobs: generationJobs, isOpen, setIsOpen, cancelJob, removeJob, clearCompleted } = useGenerationQueue()
-  const { status, title, stage, progress, error, shareTrack, openShareModal } = useUISelector(state => ({
+  const { status, title, stage, progress, etaSeconds, error, shareTrack, openShareModal } = useUISelector(state => ({
     status: state.shareVideoState.status,
     title: state.shareVideoState.title,
     stage: state.shareVideoState.stage,
     progress: state.shareVideoState.progress,
+    etaSeconds: state.shareVideoState.etaSeconds,
     error: state.shareVideoState.error,
     shareTrack: state.shareVideoState.track,
     openShareModal: state.openShareModal,
   }))
-  const shareJob = shareJobView({ status, title, stage, progress, error })
+  const shareJob = shareJobView({ status, title, stage, progress, etaSeconds, error })
   const jobs = shareJob ? [...generationJobs, shareJob] : generationJobs
 
   const completedJobs = jobs.filter(j => j.status === 'completed' || j.status === 'failed')

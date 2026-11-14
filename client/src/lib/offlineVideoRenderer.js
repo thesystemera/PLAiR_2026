@@ -107,6 +107,7 @@ export async function renderVideo({
   width = 720,
   height = 1280,
   fps = 30,
+  bench = {},
   onProgress,
   onStatus,
 }) {
@@ -208,6 +209,10 @@ export async function renderVideo({
     }
   })
 
+  if (bench.flatShader) {
+    material.fragmentShader = backgroundFragmentShader.slice(0, backgroundFragmentShader.lastIndexOf('void main()')) + 'void main() { gl_FragColor = vec4(vUv, 0.5, 1.0); }'
+  }
+
   const geometry = new PlaneGeometry(2, 2).scale(1, -1, 1)
   resources.geometry = geometry
   const mesh = new Mesh(geometry, material)
@@ -248,7 +253,10 @@ export async function renderVideo({
     height,
     bitrate: 1_000_000,
     framerate: fps,
+    ...bench.encoder,
   })
+  const keyFrameEvery = bench.keyFrameEvery || 30
+  const syncPixel = new Uint8Array(4)
 
   let audioEncoderError = null
   const audioEncoder = new AudioEncoder({
@@ -401,14 +409,18 @@ export async function renderVideo({
     }
     const lyricsDone = performance.now()
 
-    renderer.render(scene, camera)
+    if (!bench.noRender || frame === 0) renderer.render(scene, camera)
 
-    const videoFrame = new VideoFrame(canvas, {
-      timestamp: Math.round((frame / fps) * 1_000_000),
-      duration: frameDuration,
-    })
-    videoEncoder.encode(videoFrame, { keyFrame: frame % 30 === 0 })
-    videoFrame.close()
+    if (bench.noEncode) {
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, syncPixel)
+    } else {
+      const videoFrame = new VideoFrame(canvas, {
+        timestamp: Math.round((frame / fps) * 1_000_000),
+        duration: frameDuration,
+      })
+      videoEncoder.encode(videoFrame, { keyFrame: frame % keyFrameEvery === 0 })
+      videoFrame.close()
+    }
     const drawDone = performance.now()
 
     await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
@@ -443,6 +455,8 @@ export async function renderVideo({
     speed: +(durationMs / 1000 / renderSeconds).toFixed(2),
     msPerFrame: Object.fromEntries(Object.entries(spent).map(([stage, ms]) => [stage, +(ms / totalFrames).toFixed(2)])),
   }
+
+  if (bench.noEncode) return { buffer: new ArrayBuffer(0), stats }
 
   onStatus?.('Building MP4 file...')
   muxer.finalize()

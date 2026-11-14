@@ -23,6 +23,12 @@ export function formatTimeAgo(dateStr) {
   return unit ? `${Math.floor(seconds / unit[0])}${unit[1]} ago` : 'just now'
 }
 
+export function formatTimeLeft(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  if (seconds < 60) return `${Math.round(seconds)} s left`
+  return `about ${Math.round(seconds / 60)} min left`
+}
+
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

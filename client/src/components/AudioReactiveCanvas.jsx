@@ -18,11 +18,15 @@ import {renderLyricToCanvas} from '../lib/sceneEffects'
 import {drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle} from '../lib/lyricStyle'
 import {loadLyricFonts} from '../lib/lyricFonts'
 import {usePlaybackActions} from '../contexts/PlaybackContext'
+import {shareVideoRendering} from '../lib/shareVideoJob'
 
 const VOICE_GAIN = 2.2
 const VOICE_STEADY = 0.4
 const LYRIC_WIDTH = 1024
 const LYRIC_HEIGHT = 512
+const RENDERING_LABEL_SIZE = 0.16
+const RENDERING_PERCENT_SIZE = 0.3
+const RENDERING_TEXT_WIDTH = 0.84
 const LYRIC_PROBE_DIVISOR = 16
 const LYRIC_LEAD_MS = 16
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
@@ -60,12 +64,27 @@ function releaseVideo(video) {
   video.load()
 }
 
+function drawRenderingVideo(ctx, percent, width, height) {
+  ctx.clearRect(0, 0, width, height)
+  ctx.fillStyle = 'white'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const unit = Math.min(width, height)
+  const label = 'RENDERING VIDEO'
+  ctx.font = `900 ${RENDERING_LABEL_SIZE * unit}px Inter, sans-serif`
+  const labelSize = RENDERING_LABEL_SIZE * unit * Math.min(1, (width * RENDERING_TEXT_WIDTH) / ctx.measureText(label).width)
+  ctx.font = `900 ${labelSize}px Inter, sans-serif`
+  ctx.fillText(label, width / 2, height / 2 - labelSize * 0.9)
+  ctx.font = `900 ${RENDERING_PERCENT_SIZE * unit}px Inter, sans-serif`
+  ctx.fillText(`${percent}%`, width / 2, height / 2 + RENDERING_PERCENT_SIZE * unit * 0.55)
+}
+
 function syncVideoClipPlayback(clipState) {
   const count = clipState.videos.length
   if (count === 0) return
   const nextIndex = (clipState.currentIndex + 1) % count
   clipState.videos.forEach((video, index) => {
-    if (index === clipState.currentIndex || index === nextIndex) {
+    if (!clipState.resting && (index === clipState.currentIndex || index === nextIndex)) {
       if (!video.getAttribute('src')) {
         video.src = video.dataset.clipUrl
         video.load()
@@ -88,6 +107,8 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     currentTrackId: state.engineState.currentTrack?.id,
     currentTrackHasArtwork: state.engineState.currentTrack?.has_artwork,
     isPlaying: !!state.engineState.is_playing,
+    visualsResting: shareVideoRendering(state.shareVideoState.status),
+    videoPercent: Math.round(state.shareVideoState.progress * 100),
     isScreenVisible: state.isScreenVisible,
     panelRegionsRef: state.shaderPanelRegions,
     panelOpacitiesRef: state.shaderPanelOpacities,
@@ -119,7 +140,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const channelRef = useRef(null)
   const latestRef = useRef(null)
   const glowRef = useRef(new Float32Array(11))
-  const clipsRef = useRef({ videos: [], currentIndex: 0 })
+  const clipsRef = useRef({ videos: [], currentIndex: 0, resting: false })
   const lyricRef = useRef({ canvas: null, words: null, styled: null, key: null })
   const aspectRef = useRef(LYRIC_WIDTH / LYRIC_HEIGHT)
   const evalsRef = useRef(new Map())
@@ -276,7 +297,15 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     return () => { cancelled = true }
   }, [send, ui.lyricTimestamps])
 
-  const isPlaying = ui.isPlaying
+  const visualsResting = ui.visualsResting
+  const videoPercent = visualsResting ? ui.videoPercent : 0
+  const isPlaying = ui.isPlaying && !visualsResting
+  useEffect(() => {
+    const clips = clipsRef.current
+    clips.resting = visualsResting
+    syncVideoClipPlayback(clips)
+  }, [visualsResting])
+
   useEffect(() => {
     if (!ui.isScreenVisible) return undefined
     const lyric = lyricRef.current
@@ -291,7 +320,11 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       let key = null
       let draw = null
       let size = { width: LYRIC_WIDTH, height: LYRIC_HEIGHT }
-      if (lyric.styled) {
+      if (visualsResting) {
+        size = lyricCanvasSize(aspect)
+        key = `rendering:${videoPercent}:${aspect.toFixed(3)}`
+        draw = (ctx, width, height) => drawRenderingVideo(ctx, videoPercent, width, height)
+      } else if (lyric.styled) {
         size = lyricCanvasSize(aspect)
         const frame = lyricFrameAt(lyric.styled, seconds)
         key = frame ? `${frame.index}:${frame.count}:${aspect.toFixed(3)}` : 'none'
@@ -302,7 +335,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
         key = `${index}`
         if (text) draw = (ctx, width, height) => renderLyricToCanvas(ctx, text, width, height)
       } else {
-        return
+        key = 'none'
       }
       if (key === lyric.key) return
       lyric.key = key
@@ -328,7 +361,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [send, isPlaying, ui.isScreenVisible, ui.lyricTimestamps])
+  }, [send, isPlaying, visualsResting, videoPercent, ui.isScreenVisible, ui.lyricTimestamps])
 
   useEffect(() => {
     const clips = clipsRef.current
@@ -395,7 +428,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       send({
         type: 'state',
         state: {
-          isPlaying: !!engine.is_playing,
+          isPlaying: !!engine.is_playing && !latest.ui.visualsResting,
           progressMs: state.engineRef?.current?.progress_ms || 0,
           durationMs: engine.currentTrack?.duration_ms || 0,
           talkBreak: engine.talkBreak ? { paused: !!engine.talkBreak.paused } : null,

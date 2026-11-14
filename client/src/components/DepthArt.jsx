@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { useUISelector } from '../contexts/UIStateContext'
 import { useQuality } from '../contexts/QualityContext'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
+import { shareVideoRendering } from '../lib/shareVideoJob'
 import { useDepthMap } from '../hooks/useDepthMap'
 import { getFallbackGradientClass } from '../lib/themeManager'
 import { DURATION } from '../lib/motion'
@@ -22,18 +23,20 @@ export function DepthArtBridge() {
   const { gyroscopeRef, mouseRef } = useUISelector(state => ({ gyroscopeRef: state.gyroscopeRef, mouseRef: state.mouseRef }))
   const { parallaxDpr, parallaxStepPx, coarseCovers, reduceMotion } = useQuality()
   const litArtwork = useUISelector(state => state.settingsState.litArtwork)
+  const visualsResting = useUISelector(state => shareVideoRendering(state.shareVideoState.status))
+  const still = reduceMotion || visualsResting
 
   useEffect(() => {
     depthArtRenderer.configure({
       dpr: parallaxDpr,
       stepPx: parallaxStepPx,
-      reduceMotion,
+      reduceMotion: still,
       coarse: coarseCovers,
       lit: litArtwork !== false,
       gyroRef: gyroscopeRef,
       mouseRef,
     })
-  }, [parallaxDpr, parallaxStepPx, coarseCovers, reduceMotion, litArtwork, gyroscopeRef, mouseRef])
+  }, [parallaxDpr, parallaxStepPx, coarseCovers, still, litArtwork, gyroscopeRef, mouseRef])
 
   return null
 }
