@@ -20,7 +20,7 @@ import { formatDateShort } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex, CARD_TRANSITION } from '../lib/themeManager'
 import { FadeSwap, Pop } from './Motion'
 import { PRESETS } from '../lib/motion'
-import { MediaLoadingSpinner, MediaEmptyState, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata, useMediaGridColumns } from './MediaShared'
+import { MediaLoadingSpinner, MediaEmptyState, MediaLoadError, MediaOfflineState, MediaPlayingOverlay, MediaStatusSlot, MediaCardAnimation, MediaGrid, useMediaSearch, getCategoryLabel, MediaCardDurationBar, MediaCardPlayOverlay, MediaCardActionButton, MediaCardCategoryBadge, MediaCardTags, MediaCardMetadata, useMediaGridColumns } from './MediaShared'
 import { ProfileArt } from './DepthArt'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { useEntranceWindow } from '../hooks/useEntranceWindow'
@@ -240,6 +240,8 @@ export function Shoutouts() {
   const [sortMode, setSortMode] = useState('recent')
   const [selectedCategory, setSelectedCategory] = useState(null)
   const [stats, setStats] = useState(null)
+  const [discoveryFailed, setDiscoveryFailed] = useState(false)
+  const [searchFailed, setSearchFailed] = useState(false)
 
   const { user } = useAuth()
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
@@ -269,7 +271,13 @@ export function Shoutouts() {
     handleClearSearch: clearSearch
   } = useMediaSearch(
     useCallback(async (query, isManual = false) => {
-      return await api.searchShoutouts(query, 50, isManual)
+      setSearchFailed(false)
+      try {
+        return await api.searchShoutouts(query, 50, isManual)
+      } catch (error) {
+        setSearchFailed(true)
+        throw error
+      }
     }, []),
     {
       onError: (error) => {
@@ -310,13 +318,14 @@ export function Shoutouts() {
       const discoveredShoutouts = result?.results || []
 
       setShoutouts(discoveredShoutouts)
+      setDiscoveryFailed(false)
     } catch (err) {
-      errorToast('Failed to load shoutouts')
+      setDiscoveryFailed(true)
       logger.error('Error fetching shoutouts:', err)
     } finally {
       setLoading(false)
     }
-  }, [shoutoutInterests, errorToast])
+  }, [shoutoutInterests])
 
   useEffect(() => {
     void fetchShoutouts()
@@ -563,6 +572,10 @@ export function Shoutouts() {
               />
               {offlineMode ? (
                 <MediaOfflineState icon={ShoutoutsIcon} title="Shoutouts need a connection" />
+              ) : isSearchMode && searchFailed ? (
+                <MediaLoadError what="the search results" />
+              ) : !isSearchMode && discoveryFailed ? (
+                <MediaLoadError what="the shoutouts" onRetry={fetchShoutouts} />
               ) : (
                 <MediaEmptyState
                   icon={ShoutoutsIcon}

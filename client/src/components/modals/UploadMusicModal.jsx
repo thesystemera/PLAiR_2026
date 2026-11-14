@@ -13,8 +13,9 @@ import { useAuth } from '../../contexts/AuthContext'
 import { useUISelector } from '../../contexts/UIStateContext'
 import { useDialog } from '../../contexts/DialogContext'
 import { ToggleChip } from '../SettingRow'
+import { InlineNote } from '../Notice'
 import { Modal, ModalSection, ModalButton, ModalFooter, ModalCard, ModalProgress, ModalErrorState, ModalSuccessBanner, ModalTagList } from './Modal'
-import { cleanText, FieldLabel, MetadataField, TagEditor, VisibilityControl, DescriptionField, SettingToggle, ArtistChooser, QualityBadge, ArtworkSection, AudioFeaturesDisplay } from './UploadMusicModalFields'
+import { cleanText, FieldLabel, MetadataField, TagEditor, VisibilityControl, DescriptionField, SettingToggle, ArtistChooser, QualityBadge, ArtworkSection, AudioFeaturesDisplay, UnsavedDraftsProvider } from './UploadMusicModalFields'
 
 const STEP_MOTION = { variants: VARIANTS.stepSwap, initial: 'hidden', animate: 'show', exit: 'exit' }
 const AUDIO_FORMATS = ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'opus', 'webm']
@@ -89,8 +90,9 @@ const trackToMetadata = (track) => {
 export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose, onUploadComplete, onLogin, editTrackId = null }) {
   const { getCategoryMetadata, getWhite, getGrey400 } = useDynamicTheme()
   const { isAuthenticated, user } = useAuth()
-  const { toastError, setUploadWatchId } = useUISelector(state => ({
+  const { toastError, toastSuccess, setUploadWatchId } = useUISelector(state => ({
     toastError: state.toastError,
+    toastSuccess: state.toastSuccess,
     setUploadWatchId: state.setUploadWatchId,
   }))
   const { showConfirm } = useDialog()
@@ -114,6 +116,12 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const [savingArtist, setSavingArtist] = useState(false)
   const [rightsConfirmed, setRightsConfirmed] = useState(null)
   const [rightsTicked, setRightsTicked] = useState(false)
+  const [setupFailed, setSetupFailed] = useState(false)
+  const openDraftsRef = useRef(new Set())
+  const reportDraft = useCallback((label, open) => {
+    if (open) openDraftsRef.current.add(label)
+    else openDraftsRef.current.delete(label)
+  }, [])
 
   const isEditing = !!editTrackId
   const needsRights = rightsConfirmed === false && !rightsTicked
@@ -130,6 +138,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
 
   const applySetup = useCallback((data) => {
     const list = data?.artists || []
+    setSetupFailed(false)
     setArtists(list)
     setSelectedArtistId(pickDefaultArtist(list, data?.last_artist_profile_id))
     if (!data?.offline) {
@@ -141,7 +150,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
   const loadSetup = useCallback(() => {
     api.getUploadSetup()
       .then(applySetup)
-      .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
+      .catch(err => {
+        logger.warn('[Upload] Could not load upload setup:', err)
+        setSetupFailed(true)
+      })
   }, [applySetup])
 
   const watchUpload = useCallback((uploadId) => {
@@ -265,7 +277,10 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     let cancelled = false
     api.getUploadSetup()
       .then(data => { if (!cancelled) applySetup(data) })
-      .catch(err => logger.warn('[Upload] Could not load upload setup:', err))
+      .catch(err => {
+        logger.warn('[Upload] Could not load upload setup:', err)
+        if (!cancelled) setSetupFailed(true)
+      })
     return () => { cancelled = true }
   }, [isOpen, isAuthenticated, applySetup])
 
@@ -319,12 +334,15 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       if (uploadAbortRef.current) {
         uploadAbortRef.current.abort()
       } else if (uploadIdRef.current) {
-        api.cancelUploadJob(uploadIdRef.current).catch(err => logger.warn('[Upload] Could not cancel the upload:', err))
+        api.cancelUploadJob(uploadIdRef.current).catch(err => {
+          logger.warn('[Upload] Could not cancel the upload:', err)
+          toastError("Couldn't stop the upload. It may still finish.")
+        })
       }
     }
     resetState()
     onClose()
-  }, [onClose, resetState, showConfirm])
+  }, [onClose, resetState, showConfirm, toastError])
 
   const handleLoginRequired = useCallback(() => {
     void handleClose()
@@ -471,9 +489,28 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
     }
   }
 
-  const handleSaveAndClose = () => {
+  const confirmUnsavedDrafts = useCallback(async () => {
+    const open = [...openDraftsRef.current]
+    if (!open.length) return true
+    return showConfirm({
+      title: 'Unsaved changes',
+      message: `${open.join(', ')} ${open.length > 1 ? 'have' : 'has'} changes you haven't saved. Close without saving them?`,
+      confirmText: 'Discard changes',
+      cancelText: 'Keep editing',
+      variant: 'danger'
+    })
+  }, [showConfirm])
+
+  const handleSaveAndClose = async () => {
+    if (!await confirmUnsavedDrafts()) return
     triggerHaptic('success')
     onUploadComplete?.(trackId, metadata)
+    toastSuccess('Saved to your library')
+    void handleClose()
+  }
+
+  const handleDoneEditing = async () => {
+    if (!await confirmUnsavedDrafts()) return
     void handleClose()
   }
 
@@ -574,6 +611,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
       maxWidth="max-w-lg"
       categoryOverride="all"
     >
+      <UnsavedDraftsProvider value={reportDraft}>
       <AnimatePresence mode="wait">
         {!isAuthenticated && (
           <motion.div
@@ -696,6 +734,11 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 </div>
               </div>
               <p className="mt-1.5 text-xs text-right" style={{ color: getGrey400() }}>{ENHANCE_HINT}</p>
+              <Fade show={setupFailed}>
+                <InlineNote tone="warning" className="mt-2">
+                  {`Couldn't load your artists, so this upload will be credited to ${ownName}.`}
+                </InlineNote>
+              </Fade>
               <Fade show={rightsConfirmed === false}>
                 <label className="mt-2 flex items-center gap-2 py-1 cursor-pointer select-none">
                   <input
@@ -1049,7 +1092,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
 
             <ModalFooter>
               {isEditing ? (
-                <ModalButton onClick={handleClose} variant="primary" className="ml-auto">
+                <ModalButton onClick={handleDoneEditing} variant="primary" className="ml-auto">
                   <Check size={16} className="mr-2" />
                   Done
                 </ModalButton>
@@ -1083,6 +1126,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
           </motion.div>
         )}
       </AnimatePresence>
+      </UnsavedDraftsProvider>
     </Modal>
   )
 })

@@ -13,6 +13,7 @@ export function useBitratePicker(onReloadTrackQuality) {
   const { isAuthenticated } = useAuth()
   const {
     toastError,
+    toastInfo,
     actualBitrate,
     isOnline,
     networkQuality,
@@ -22,6 +23,7 @@ export function useBitratePicker(onReloadTrackQuality) {
     publishSettings,
   } = useUISelector(state => ({
     toastError: state.toastError,
+    toastInfo: state.toastInfo,
     actualBitrate: state.audioState?.bitrate,
     isOnline: state.audioState?.isOnline ?? true,
     networkQuality: state.audioState?.networkQuality,
@@ -37,6 +39,7 @@ export function useBitratePicker(onReloadTrackQuality) {
   } = useNetwork()
 
   const showError = toastError
+  const showInfo = toastInfo
   const [isOpen, setIsOpen] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
@@ -60,9 +63,11 @@ export function useBitratePicker(onReloadTrackQuality) {
 
   const detectQuality = async () => {
     try {
-      await networkDetectQuality()
+      const result = await networkDetectQuality()
+      if (result?.quality) showInfo(`Network checked: ${result.quality}${result.bitrate ? `, ${result.bitrate} suits it` : ''}`)
     } catch (error) {
       logger.error('[BitratePicker] Failed to detect quality:', error)
+      showError("Couldn't test the network")
     }
   }
 
@@ -80,10 +85,9 @@ export function useBitratePicker(onReloadTrackQuality) {
     try {
       setActionLoading(true)
       publishSettings({ audioQuality: bitrate })
-      if (onReloadTrackQuality) {
-        await onReloadTrackQuality()
-      }
+      const reloaded = onReloadTrackQuality ? await onReloadTrackQuality() : true
       setIsOpen(false)
+      if (reloaded === false) showInfo('Quality saved. It applies from the next song.')
     } catch (err) {
       logger.error('[BitratePicker] Failed to reload the track at the new quality:', err)
       showError('Failed to switch audio quality. Please try again.')

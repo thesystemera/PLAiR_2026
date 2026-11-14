@@ -335,6 +335,14 @@ export function PlaybackProvider({ children }) {
     }
   }, [])
 
+  const pickRef = useRef(null)
+  const settlePick = useCallback((failure = null) => {
+    if (!pickRef.current) return
+    pickRef.current = null
+    reportEngineStatus({ pendingTrackId: null })
+    if (failure) showNoticeRef.current?.({ key: 'transport', tone: 'error', text: failure })
+  }, [reportEngineStatus])
+
   const armDeferTimerRef = useRef(null)
   const armDeferTimer = useCallback(() => {
     if (deferTimerRef.current) return
@@ -350,9 +358,11 @@ export function PlaybackProvider({ children }) {
       pendingRef.current = NO_PENDING
       optimisticTrackRef.current = false
       deferredRef.current = null
+      settlePick()
+      showNoticeRef.current?.({ key: 'transport', tone: 'error', text: "Couldn't reach PLAiR, so that didn't go through. Try again." })
       if (deferred) handlePlaybackStateRef.current?.(deferred, { replay: true })
     }, PENDING_ACK_TIMEOUT_MS + 100)
-  }, [])
+  }, [settlePick])
 
   useEffect(() => { armDeferTimerRef.current = armDeferTimer }, [armDeferTimer])
 
@@ -504,6 +514,11 @@ export function PlaybackProvider({ children }) {
       publishRadioState({ activeSeedMode: data.activeSeedMode })
     }
 
+    const pick = pickRef.current
+    if (pick && ackedSeq(data, deviceId) >= pick.seq) {
+      settlePick(data.current_track?.id === pick.trackId ? null : "Couldn't play that track")
+    }
+
     const verdict = classifySnapshot(data, deviceId, pendingRef.current, Date.now())
     if (verdict !== 'apply') {
       deferredRef.current = data
@@ -521,7 +536,7 @@ export function PlaybackProvider({ children }) {
     deferredRef.current = null
     clearDeferTimer()
     applySnapshot(data)
-  }, [audio, deviceId, reportEngineStatus, publishRadioState, armDeferTimer, clearDeferTimer, applySnapshot, scheduleReconcile, publishTalkBreak, talkBreak])
+  }, [audio, deviceId, reportEngineStatus, publishRadioState, armDeferTimer, clearDeferTimer, applySnapshot, scheduleReconcile, publishTalkBreak, talkBreak, settlePick])
 
   useEffect(() => { handlePlaybackStateRef.current = handlePlaybackState }, [handlePlaybackState])
 
@@ -681,6 +696,8 @@ export function PlaybackProvider({ children }) {
       setTimeout(() => {
         if (desiredRef.current.track?.id === trackId) scheduleReconcile()
       }, 1500 * attempts)
+    } else if (attempts === 3) {
+      showNoticeRef.current?.({ key: 'track-load', tone: 'error', text: "Couldn't load this song. Tap Next to skip it." })
     }
   }, [scheduleReconcile])
 
@@ -938,6 +955,7 @@ export function PlaybackProvider({ children }) {
       optimisticTrackRef.current = false
       deferredRef.current = null
       clearDeferTimer()
+      settlePick()
       forceSeekRef.current = false
 
       if (wasActive) talkBreak.onServerState(null, { currentTrackId: track?.id ?? null, isPlaying })
@@ -980,7 +998,7 @@ export function PlaybackProvider({ children }) {
     } finally {
       enteringLocalRef.current = false
     }
-  }, [audio, applyLocalState, clearDeferTimer, currentPositionMs, deviceId, publishTalkBreak, reportEngineStatus, talkBreak])
+  }, [audio, applyLocalState, clearDeferTimer, currentPositionMs, deviceId, publishTalkBreak, reportEngineStatus, talkBreak, settlePick])
 
   const localStep = useCallback(async (direction, { manual = true } = {}) => {
     const local = localRef.current
@@ -996,9 +1014,12 @@ export function PlaybackProvider({ children }) {
         desiredRef.current = { ...desiredRef.current, isPlaying: false, receivedAt: Date.now() }
         setState(prev => ({ ...prev, is_playing: false }))
         audio.pause()
+      } else if (manual) {
+        toastInfoRef.current?.(direction > 0 ? 'No more downloaded songs after this one' : 'This is the first downloaded song')
       }
     } catch (err) {
       logger.error('[PlaybackContext] Local step failed:', err)
+      toastInfoRef.current?.("Couldn't change song from your downloads")
     }
     return true
   }, [applyLocalState, audio, clearStarvedTimer])
@@ -1012,6 +1033,7 @@ export function PlaybackProvider({ children }) {
       local.skips = 0
       desiredRef.current = { ...desiredRef.current, isPlaying: false, receivedAt: Date.now() }
       setState(prev => ({ ...prev, is_playing: false }))
+      toastInfoRef.current?.("Your downloads aren't loading, so playback paused")
       return
     }
     logger.warn(`[PlaybackContext] 🔌 Skipping to the next download (${reason})`)
@@ -1263,8 +1285,12 @@ export function PlaybackProvider({ children }) {
 
     talkBreak.onUserTransport('play')
     manualSwitchRef.current = true
-    sendCommand('play', { track_id: trackId })
-  }, [applyLocalState, sendCommand, takeOverFromYield, talkBreak])
+    const seq = sendCommand('play', { track_id: trackId })
+    if (trackId && trackId !== stateRef.current.current_track?.id && wsSendRef.current) {
+      pickRef.current = { trackId, seq }
+      reportEngineStatus({ pendingTrackId: trackId })
+    }
+  }, [applyLocalState, sendCommand, takeOverFromYield, talkBreak, reportEngineStatus])
 
   useEffect(() => { playTrackRef.current = playTrack }, [playTrack])
 
@@ -1507,8 +1533,10 @@ export function PlaybackProvider({ children }) {
       if (result?.status === 'loaded') {
         publishAudioStateRef.current({ isCached: source.fromCache, bitrate: source.bitrate })
       }
+      return true
     } catch (error) {
       logger.error('[PlaybackContext] Failed to reload track quality:', error)
+      return false
     }
   }, [audio, getTrackSource])
 

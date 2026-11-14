@@ -12,6 +12,8 @@ import { GLASS } from '../lib/themeManager'
 import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { Expandable, Fade, FadeSwap, Pop } from './Motion'
 import { NoticeAction, NoticeClose } from './Notice'
+import { MediaLoadError } from './MediaShared'
+import { useDialog } from '../contexts/DialogContext'
 
 export function useDevicePicker() {
   const { isAuthenticated } = useAuth()
@@ -26,9 +28,11 @@ export function useDevicePicker() {
   const connected = usePlaybackConnected()
   const { storageInfo } = useStorage()
   const { connectionMode, isOnline } = useNetwork()
+  const { showConfirm } = useDialog()
   const [deviceList, setDeviceList] = useState([])
   const [isOpen, setIsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
   const [editingDeviceId, setEditingDeviceId] = useState(null)
   const [editingName, setEditingName] = useState('')
@@ -45,8 +49,10 @@ export function useDevicePicker() {
       const response = await api.getDevices()
       logger.info('[DevicePicker] Loaded devices:', response.devices)
       setDeviceList(response.devices || [])
+      setLoadFailed(false)
     } catch (err) {
       logger.error('[DevicePicker] Failed to load devices:', err)
+      setLoadFailed(true)
     } finally {
       loadingDevicesRef.current = false
       setLoading(false)
@@ -94,7 +100,15 @@ export function useDevicePicker() {
   }
 
   const handleRemoveDevice = async (deviceId) => {
-    if (!confirm('Remove this device?')) return
+    const device = deviceList.find(d => d.device_id === deviceId)
+    const confirmed = await showConfirm({
+      title: `Remove ${device?.device_name || 'this device'}?`,
+      message: 'It is taken off your device list.',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'danger',
+    })
+    if (!confirmed) return
 
     try {
       setActionLoading(true)
@@ -170,6 +184,8 @@ export function useDevicePicker() {
     bannerDismissed,
     handleDismissBanner,
     loading,
+    loadFailed,
+    loadDevices,
     actionLoading,
     activeDevice,
     currentDevice,
@@ -308,12 +324,12 @@ export function DeviceNotice({ showInactive, bannerDismissed, actionLoading, han
   return null
 }
 
-export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIsOpen, devices, loading, actionLoading, handleActivateDevice, handleRemoveDevice, getDeviceIcon, editingDeviceId, editingName, setEditingName, handleStartEdit, handleCancelEdit, handleSaveEdit, connectionMode, storageInfo, isPlaying }) {
+export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIsOpen, devices, loading, loadFailed, loadDevices, actionLoading, handleActivateDevice, handleRemoveDevice, getDeviceIcon, editingDeviceId, editingName, setEditingName, handleStartEdit, handleCancelEdit, handleSaveEdit, connectionMode, storageInfo, isPlaying }) {
   const isFullMode = connectionMode === 'full'
   const isOffline = connectionMode === 'offline'
   const isDegraded = connectionMode === 'degraded'
   const heading = isOffline ? 'Offline Mode' : isDegraded ? 'Server Unavailable' : 'Devices'
-  const bodyState = !isFullMode ? connectionMode : loading ? 'loading' : devices.length === 0 ? 'empty' : 'list'
+  const bodyState = !isFullMode ? connectionMode : loading ? 'loading' : devices.length === 0 ? (loadFailed ? 'failed' : 'empty') : 'list'
 
   return (
     <Expandable open={isOpen} className={GLASS.expandPanel}>
@@ -376,6 +392,8 @@ export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIs
                     <Loader2 size={16} className="animate-spin" />
                     Loading...
                   </div>
+                ) : devices.length === 0 && loadFailed ? (
+                  <MediaLoadError what="your devices" onRetry={() => void loadDevices()} compact />
                 ) : devices.length === 0 ? (
                   <div className="p-8 text-center text-white/50 text-sm">No devices online</div>
                 ) : (

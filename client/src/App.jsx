@@ -300,22 +300,12 @@ function App() {
 
       logger.info(`[App] Shared track URL detected: ${trackId}`)
 
-      const playSharedTrack = async () => {
-        try {
-          await playTrack(trackId)
-          logger.info(`[App] Started playing shared track: ${trackId}`)
-
-          window.history.replaceState({}, '', '/')
-        } catch (err) {
-          logger.error(`[App] Failed to play shared track: ${err.message}`)
-          toastError('Could not play shared track')
-          window.history.replaceState({}, '', '/')
-        }
-      }
-
-      setTimeout(playSharedTrack, 500)
+      setTimeout(() => {
+        void playTrack(trackId)
+        window.history.replaceState({}, '', '/')
+      }, 500)
     }
-  }, [playTrack, toastError])
+  }, [playTrack])
 
   const billingReturnHandled = useRef(false)
   useEffect(() => {
@@ -644,27 +634,37 @@ function App() {
   }, [seedRadio, handleCloseListModal])
 
   const handleGenerateJobs = useCallback(async (jobs) => {
-    if (!generationModalTrack || hasActiveJobs || jobs.length === 0) {
+    if (!generationModalTrack || jobs.length === 0) {
+      handleCloseGenerationModal()
+      return
+    }
+    if (hasActiveJobs) {
+      info('A song is already being made. Start more once it finishes.', 4000)
       handleCloseGenerationModal()
       return
     }
 
+    let started = 0
     try {
       for (const job of jobs) {
         await api.generate(job.type === 'remix'
           ? { type: 'similar', sourceTrackId: generationModalTrack.id }
           : { type: 'new', userRequest: job.artistName })
+        started++
       }
 
       setQueueOpen(true)
       success(`Started ${jobs.length} generation job${jobs.length > 1 ? 's' : ''}!`, 3000)
     } catch (error) {
       logger.error('[App] Error generating tracks:', error)
-      errorToast(`Failed to start generation: ${error.message}`, 5000)
+      if (started) setQueueOpen(true)
+      errorToast(started
+        ? `Started ${started} of ${jobs.length}. The rest didn't start: ${error.message}`
+        : `Failed to start generation: ${error.message}`, 5000)
     }
 
     handleCloseGenerationModal()
-  }, [generationModalTrack, hasActiveJobs, setQueueOpen, success, errorToast, handleCloseGenerationModal])
+  }, [generationModalTrack, hasActiveJobs, setQueueOpen, success, info, errorToast, handleCloseGenerationModal])
 
   useWebSocketSubscribe('content_updated', (data) => {
     const normalizedType = CONTENT_UPDATE_TYPES[data?.content_type]

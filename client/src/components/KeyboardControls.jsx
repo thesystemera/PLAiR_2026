@@ -21,9 +21,15 @@ export function KeyboardControls({
   const {
     isFullscreenVisuals,
     reportInterfaceState,
+    engineRef,
+    muted,
+    durationMs,
   } = useUISelector(state => ({
     isFullscreenVisuals: state.interfaceState.isFullscreenVisuals,
     reportInterfaceState: state.reportInterfaceState,
+    engineRef: state.engineRef,
+    muted: state.audioState.muted,
+    durationMs: state.engineState.currentTrack?.duration_ms || state.engineState.currentTrack?.track_info?.duration || 0,
   }))
   const uiSound = useUISound()
 
@@ -41,6 +47,9 @@ export function KeyboardControls({
       onCloseRegister,
       isFullscreenVisuals,
       reportInterfaceState,
+      engineRef,
+      muted,
+      durationMs,
     }
   })
 
@@ -106,10 +115,7 @@ export function KeyboardControls({
         case 'm':
         case 'M':
           e.preventDefault()
-          if (s.playback?.audio?.setMuted) {
-            const el = s.playback.audio.getCurrentElement()
-            if (el) s.playback.audio.setMuted(!el.muted)
-          }
+          s.playback?.audio?.setMuted?.(!s.muted)
           break
 
         case '=':
@@ -128,22 +134,13 @@ export function KeyboardControls({
           }
           break
 
-        case 'ArrowLeft': {
-          e.preventDefault()
-          const el = s.playback?.audio?.getCurrentElement()
-          if (el && s.playback?.seek) {
-            s.playback.seek(Math.max(0, el.currentTime * 1000 - 5000))
-          }
-          break
-        }
-
+        case 'ArrowLeft':
         case 'ArrowRight': {
           e.preventDefault()
-          const el = s.playback?.audio?.getCurrentElement()
-          if (el && s.playback?.seek) {
-            const durationMs = (el.duration || Infinity) * 1000
-            s.playback.seek(Math.min(durationMs, el.currentTime * 1000 + 5000))
-          }
+          const position = s.engineRef?.current?.progress_ms
+          if (typeof position !== 'number' || !s.playback?.seek) break
+          const step = e.key === 'ArrowLeft' ? -5000 : 5000
+          s.playback.seek(Math.max(0, Math.min(s.durationMs || Infinity, position + step)))
           break
         }
 

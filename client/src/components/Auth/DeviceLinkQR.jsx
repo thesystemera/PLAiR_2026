@@ -4,8 +4,10 @@ import { api } from '../../lib/api'
 import { logger } from '../../lib/logger'
 import { PRESETS } from '../../lib/motion'
 import { Fade, FadeSwap } from '../Motion'
+import { InlineNote } from '../Notice'
 
 const POLL_MS = 2000
+const POLL_FAILURES_BEFORE_LOST = 5
 
 const formatCode = (code) => (code ? `${code.slice(0, 3)} ${code.slice(3)}` : '')
 
@@ -13,6 +15,7 @@ export default function DeviceLinkQR({ onApproved }) {
   const [link, setLink] = useState(null)
   const [qr, setQr] = useState(null)
   const [expired, setExpired] = useState(false)
+  const [lost, setLost] = useState(false)
   const [error, setError] = useState('')
   const onApprovedRef = useRef(onApproved)
 
@@ -20,6 +23,7 @@ export default function DeviceLinkQR({ onApproved }) {
 
   const start = useCallback(async () => {
     setExpired(false)
+    setLost(false)
     setError('')
     setQr(null)
     try {
@@ -37,13 +41,15 @@ export default function DeviceLinkQR({ onApproved }) {
   useEffect(() => { void start() }, [start])
 
   useEffect(() => {
-    if (!link || expired) return undefined
+    if (!link || expired || lost) return undefined
     let stopped = false
     let timer = null
+    let failures = 0
     const tick = async () => {
       try {
         const result = await api.pollDeviceLink(link.code, link.poll_key)
         if (stopped) return
+        failures = 0
         if (result.status === 'approved') {
           onApprovedRef.current?.(result)
           return
@@ -54,6 +60,12 @@ export default function DeviceLinkQR({ onApproved }) {
         }
       } catch (err) {
         logger.warn('[DeviceLink] Poll failed:', err.message)
+        if (stopped) return
+        failures += 1
+        if (err.status === 404 || err.status === 410 || failures >= POLL_FAILURES_BEFORE_LOST) {
+          setLost(true)
+          return
+        }
       }
       if (!stopped) timer = setTimeout(tick, POLL_MS)
     }
@@ -62,7 +74,9 @@ export default function DeviceLinkQR({ onApproved }) {
       stopped = true
       clearTimeout(timer)
     }
-  }, [link, expired])
+  }, [link, expired, lost])
+
+  const stale = expired || lost
 
   return (
     <FadeSwap swapKey={error ? 'error' : 'code'} preset={PRESETS.fade} mode="wait">
@@ -76,19 +90,22 @@ export default function DeviceLinkQR({ onApproved }) {
           <div className="relative w-52 h-52 rounded-xl bg-white p-2 flex items-center justify-center">
             <FadeSwap swapKey={qr ? 'qr' : 'loading'} preset={PRESETS.fade} className="w-full h-full flex items-center justify-center">
               {qr ? (
-                <img src={qr} alt="Sign-in QR code" className={`w-full h-full ${expired ? 'opacity-15' : ''}`} />
+                <img src={qr} alt="Sign-in QR code" className={`w-full h-full ${stale ? 'opacity-15' : ''}`} />
               ) : (
                 <Loader2 size={28} className="animate-spin text-zinc-400" />
               )}
             </FadeSwap>
-            <Fade show={expired} className="absolute inset-0 flex">
+            <Fade show={stale} className="absolute inset-0 flex">
               <button type="button" onClick={start} className="ui-press flex-1 flex flex-col items-center justify-center gap-2 text-zinc-900 font-semibold">
                 <RefreshCw size={24} />
                 New code
               </button>
             </Fade>
           </div>
-          <Fade show={!!link && !expired} className="font-mono text-xl tracking-[0.3em] text-zinc-100">{formatCode(link?.code)}</Fade>
+          <Fade show={lost}>
+            <InlineNote tone="error">Lost touch with PLAiR. Tap New code to try again.</InlineNote>
+          </Fade>
+          <Fade show={!!link && !stale} className="font-mono text-xl tracking-[0.3em] text-zinc-100">{formatCode(link?.code)}</Fade>
           <p className="text-sm text-zinc-400 text-center max-w-xs">
             Scan with your phone&apos;s camera where you&apos;re already signed in to PLAiR, or enter the code in Account → Sign in another device.
           </p>

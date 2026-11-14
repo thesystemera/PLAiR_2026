@@ -180,15 +180,8 @@ export const accountMethods = {
   },
 
   async updateUsername(username) {
-    return this._routeRequest('updateUsername', [username], async () => {
-      const res = await this._fetch(`${API_BASE}/auth/update-username`, {
-        method: 'POST',
-        headers: this.getHeaders(true),
-        body: JSON.stringify({ username }),
-      })
-      if (!res.ok) throw new Error('Failed to update username')
-      return res.json()
-    })
+    return this._routeRequest('updateUsername', [username],
+      () => this._jsonRequest('/auth/update-username', 'POST', { username }, 'Failed to update username'))
   },
 
   async uploadProfilePicture(file) {

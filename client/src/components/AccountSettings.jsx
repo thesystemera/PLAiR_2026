@@ -13,6 +13,7 @@ import { formatTimeAgo } from '../lib/utils'
 import { PRESETS } from '../lib/motion'
 import { ExpandSection, Fade, FadeSwap, Pop } from './Motion'
 import { SettingRow } from './SettingRow'
+import { InlineNote } from './Notice'
 
 const INPUT_CLASS = 'flex-1 min-w-0 px-3 py-2 bg-dark-hover border border-gray-700 rounded-lg text-sm focus:outline-none focus:border-purple-500 transition'
 const SMALL_BUTTON = 'ui-press px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 transition disabled:opacity-50'
@@ -32,6 +33,7 @@ export function AccountSettings({ onLogout }) {
 
   const [expanded, setExpanded] = useState(() => safeStorage.get('userPanel_account') === 'true')
   const [passkeys, setPasskeys] = useState(null)
+  const [passkeysFailed, setPasskeysFailed] = useState(false)
   const [busy, setBusy] = useState(null)
   const [linkCode, setLinkCode] = useState('')
   const [editingPassword, setEditingPassword] = useState(false)
@@ -43,9 +45,11 @@ export function AccountSettings({ onLogout }) {
     try {
       const data = await api.getPasskeys()
       setPasskeys(data.passkeys || [])
+      setPasskeysFailed(false)
     } catch (err) {
       logger.warn('Failed to load passkeys:', err)
       setPasskeys([])
+      setPasskeysFailed(true)
     }
   }, [])
 
@@ -123,7 +127,7 @@ export function AccountSettings({ onLogout }) {
       await api.deleteConversationHistory()
       toastSuccess('Conversation history deleted')
     } catch (err) {
-      toastError('Failed to delete conversation history')
+      toastError(err?.message || 'Failed to delete conversation history')
       logger.error('Failed to delete conversation history:', err)
     }
   })
@@ -142,7 +146,7 @@ export function AccountSettings({ onLogout }) {
       await refreshUser()
       toastSuccess('Persona reset')
     } catch (err) {
-      toastError('Failed to reset persona')
+      toastError(err?.message || 'Failed to reset persona')
       logger.error('Failed to reset persona:', err)
     }
   })
@@ -189,9 +193,14 @@ export function AccountSettings({ onLogout }) {
     >
       <SettingRow icon={Fingerprint} label="Passkeys" color="text-amber-400">
         <p className="text-xs text-gray-400 mb-2">Sign in with Windows Hello, Face ID or your fingerprint. No password needed.</p>
-        <FadeSwap swapKey={passkeys === null ? 'loading' : 'list'} preset={PRESETS.fade} mode="wait">
+        <FadeSwap swapKey={passkeys === null ? 'loading' : passkeysFailed ? 'failed' : 'list'} preset={PRESETS.fade} mode="wait">
           {passkeys === null ? (
             <Loader2 size={16} className="animate-spin text-gray-400" />
+          ) : passkeysFailed ? (
+            <InlineNote tone="error">
+              Couldn&apos;t load your passkeys.
+              <button type="button" onClick={() => void loadPasskeys()} className="ui-press ml-1.5 underline underline-offset-2">Retry</button>
+            </InlineNote>
           ) : (
             <div className="space-y-1">
               {passkeys.map(passkey => (

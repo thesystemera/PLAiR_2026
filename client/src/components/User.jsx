@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, memo, useCallback, useMemo, useSyncExternalStore } from 'react'
 import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
@@ -28,6 +28,21 @@ import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
 import { InlineNote } from './Notice'
+import { MediaLoadError, MediaOfflineState } from './MediaShared'
+import { backgroundDownloader } from '../lib/backgroundDownloader'
+
+const DOWNLOAD_PAUSE_NOTES = {
+  signedOut: { tone: 'info', text: 'Sign in to download your liked songs.' },
+  offline: { tone: 'warning', text: 'Paused: PLAiR is offline.' },
+  noStorage: { tone: 'warning', text: "Paused: this browser won't store downloads." },
+  dataSaver: { tone: 'warning', text: 'Paused: Data Saver is on.' },
+  slow: { tone: 'warning', text: 'Paused: the connection is too slow right now.' },
+  cellular: { tone: 'warning', text: 'Paused on mobile data. Downloads run on Wi-Fi.' },
+  dailyLimit: { tone: 'info', text: "Paused: today's download limit is reached." },
+  full: { tone: 'warning', text: 'Paused: download space is full of liked songs.' },
+  error: { tone: 'error', text: "Downloads hit a problem. They'll try again shortly." },
+  done: { tone: 'success', text: 'All your liked songs are downloaded.' },
+}
 
 const SOUND_MODE_ACTIVE_CLASS = {
   both: 'bg-green-500/30 text-green-300 border border-green-500/50',
@@ -37,6 +52,7 @@ const SOUND_MODE_ACTIVE_CLASS = {
 }
 
 const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
+  const toastError = useUISelector(state => state.toastError)
   const [isTesting, setIsTesting] = useState(false)
   const meterRef = useRef(null)
   const audioContextRef = useRef(null)
@@ -128,8 +144,11 @@ const DeviceTester = memo(function DeviceTester({ deviceId, type = 'mic' }) {
     } catch (err) {
       logger.error('[DeviceTester] Test failed:', err)
       stopTest()
+      toastError(err?.name === 'NotAllowedError'
+        ? 'Microphone access was blocked. Allow it in your browser settings.'
+        : "Couldn't test this device")
     }
-  }, [deviceId, isTesting, stopTest, type])
+  }, [deviceId, isTesting, stopTest, type, toastError])
 
   useEffect(() => () => stopTest(), [stopTest])
 
@@ -624,6 +643,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     toastSuccess,
     toastError,
     toastInfo,
+    toastWarning,
     openUploadModal,
     openEditTrack,
     uploadModalOpen,
@@ -633,8 +653,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     shoutoutUpdates,
     reviewUpdates,
     uploadUpdates,
+    offlineMode,
   } = useUISelector(state => ({
     isOnline: state.audioState.isOnline,
+    offlineMode: state.audioState.offlineMode,
     networkQuality: state.audioState.networkQuality,
     currentTrackTitle: state.downloadState.currentTrackTitle,
     dailyDownloadedBytes: state.downloadState.dailyDownloadedBytes,
@@ -657,6 +679,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
     toastInfo: state.toastInfo,
+    toastWarning: state.toastWarning,
     openUploadModal: state.openUploadModal,
     openEditTrack: state.openEditTrack,
     uploadModalOpen: state.uploadModalOpen,
@@ -670,6 +693,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const success = toastSuccess
   const error = toastError
 
+  const downloadPauseReason = useSyncExternalStore(backgroundDownloader.subscribePause, backgroundDownloader.getPauseReason)
   const { devices, selectedMicrophone, selectedSpeaker, selectMicrophone, selectSpeaker, requestPermissions } = useDeviceSelector()
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
   const { showConfirm } = useDialog()
@@ -703,14 +727,20 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const [expandedMyShoutouts, setExpandedMyShoutouts] = useState(false)
   const [expandedMyReviews, setExpandedMyReviews] = useState(false)
   const [myPosts, setMyPosts] = useState({ shoutouts: [], reviews: [] })
+  const [postsFailed, setPostsFailed] = useState(false)
+  const [postsAttempt, setPostsAttempt] = useState(0)
   const [deletingPostId, setDeletingPostId] = useState(null)
+  const [artistsFailed, setArtistsFailed] = useState(false)
 
   const [userUploads, setUserUploads] = useState([])
   const [loadingUploads, setLoadingUploads] = useState(false)
+  const [uploadsFailed, setUploadsFailed] = useState(false)
   const [deletingUploadId, setDeletingUploadId] = useState(null)
 
   const [uploadingProfilePicture, setUploadingProfilePicture] = useState(false)
   const [billingStatus, setBillingStatus] = useState(null)
+  const [billingFailed, setBillingFailed] = useState(false)
+  const [billingAttempt, setBillingAttempt] = useState(0)
   const [billingBusy, setBillingBusy] = useState(false)
   const fileInputRef = useRef(null)
   const profilePictureUrl = useProfilePicture(user?.id, !!user?.profile_picture)
@@ -739,10 +769,17 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     if (!isAuthenticated) return
     let cancelled = false
     api.getBillingStatus()
-      .then(status => { if (!cancelled) setBillingStatus(status) })
-      .catch(err => logger.warn('Failed to load billing status:', err))
+      .then(status => {
+        if (cancelled) return
+        setBillingStatus(status)
+        setBillingFailed(false)
+      })
+      .catch(err => {
+        logger.warn('Failed to load billing status:', err)
+        if (!cancelled) setBillingFailed(true)
+      })
     return () => { cancelled = true }
-  }, [isAuthenticated, user?.tier])
+  }, [isAuthenticated, user?.tier, billingAttempt])
 
   useEffect(() => {
     safeStorage.set('userPanel_profilePersona', String(profilePersonaExpanded))
@@ -767,10 +804,14 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
         const shoutoutsAndReplies = [...(data.shoutouts || []), ...(data.replies || [])]
           .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
         setMyPosts({ shoutouts: shoutoutsAndReplies, reviews: data.reviews || [] })
+        setPostsFailed(false)
       })
-      .catch(err => logger.warn('Failed to load your posts:', err))
+      .catch(err => {
+        logger.warn('Failed to load your posts:', err)
+        if (!cancelled) setPostsFailed(true)
+      })
     return () => { cancelled = true }
-  }, [isAuthenticated, user?.id, shoutoutUpdates, reviewUpdates])
+  }, [isAuthenticated, user?.id, shoutoutUpdates, reviewUpdates, postsAttempt])
 
   const handleDeletePost = useCallback(async (post) => {
     if (!post?.id) return
@@ -792,8 +833,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     try {
       const data = await api.getUserUploads()
       setUserUploads(data.tracks || [])
+      setUploadsFailed(false)
     } catch (err) {
       logger.error('Failed to fetch user uploads:', err)
+      setUploadsFailed(true)
     } finally {
       setLoadingUploads(false)
     }
@@ -827,8 +870,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
     try {
       const data = await api.getUploadSetup()
       setMyArtists(data?.artists || [])
+      setArtistsFailed(false)
     } catch (err) {
       logger.error('Failed to fetch your artists:', err)
+      setArtistsFailed(true)
     } finally {
       setLoadingArtists(false)
     }
@@ -966,8 +1011,8 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
 
   const handleAudioQualityChange = async (newQuality) => {
     publishSettings({ audioQuality: newQuality })
-    if (onReloadTrackQuality) await onReloadTrackQuality()
-    success(`Quality set to ${newQuality}`)
+    const reloaded = onReloadTrackQuality ? await onReloadTrackQuality() : true
+    success(reloaded === false ? `Quality set to ${newQuality}. It applies from the next song.` : `Quality set to ${newQuality}`)
   }
 
   const handleToggleFpsEnabled = () => {
@@ -977,7 +1022,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
   const handleToggleLitArtwork = () => {
     const newVal = !litArtwork
     publishSettings({ litArtwork: newVal })
-    if (newVal && tiltNeedsPermission) void requestMotionAccess()
+    if (newVal && tiltNeedsPermission) {
+      void requestMotionAccess().then(granted => {
+        if (!granted) toastWarning('Motion access was refused, so covers stay still. Allow Motion & Orientation for this site to tilt them.')
+      })
+    }
   }
 
   const handleToggleVideoClips = () => {
@@ -1026,9 +1075,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
       await refreshUser()
       setIsEditingUsername(false)
       success('Username updated successfully')
-    } catch (_err) {
-      error('Failed to update username')
-      logger.error('Failed to update username:', _err)
+    } catch (err) {
+      error(err?.message || 'Failed to update username')
+      logger.error('Failed to update username:', err)
     }
   }
 
@@ -1212,7 +1261,12 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               {devices.microphones.map(mic => <option key={mic.id} value={mic.id}>{mic.label}</option>)}
             </select>
             <Fade show={devices.microphones.length === 0}>
-              <button onClick={requestPermissions} className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1">
+              <button
+                onClick={async () => {
+                  if (!await requestPermissions()) toastWarning('Microphone access was blocked. Allow it in your browser settings.')
+                }}
+                className="ui-press text-xs text-purple-400 hover:text-purple-300 mt-1"
+              >
                 Grant microphone access
               </button>
             </Fade>
@@ -1224,8 +1278,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               value={selectedSpeaker}
               onChange={async (e) => {
                 try {
-                  await selectSpeaker(e.target.value)
-                  success('Speakers updated')
+                  const outcome = await selectSpeaker(e.target.value)
+                  if (outcome === 'pending') toastInfo('Speakers saved. PLAiR switches to them when audio starts.')
+                  else success('Speakers updated')
                 } catch (_err) {
                   error('Failed to change speakers')
                   logger.error('Failed to change speakers:', _err)
@@ -1459,6 +1514,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
                 <span>Today: {formatBytes(dailyDownloadedBytes)} / {formatBytes(dailyLimit)}</span>
                 <Fade as="span" show={downloadedCount > 0}>{downloadedCount} tracks downloaded</Fade>
               </div>
+              <FadeSwap swapKey={!isDownloading && DOWNLOAD_PAUSE_NOTES[downloadPauseReason] ? downloadPauseReason : 'none'} preset={PRESETS.fade}>
+                {!isDownloading && DOWNLOAD_PAUSE_NOTES[downloadPauseReason] && (
+                  <InlineNote tone={DOWNLOAD_PAUSE_NOTES[downloadPauseReason].tone}>{DOWNLOAD_PAUSE_NOTES[downloadPauseReason].text}</InlineNote>
+                )}
+              </FadeSwap>
             </Fade>
           </SettingRow>
 
@@ -1560,11 +1620,19 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             meta={<span className="text-xs text-gray-400">({myPosts.shoutouts.length + myPosts.reviews.length})</span>}
             contentClassName="space-y-6 pl-2"
           >
-            <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} scrollRef={panelScrollRef} emptyMessage="You haven't posted a shoutout yet"
-              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+            {myPosts.shoutouts.length + myPosts.reviews.length === 0 && (offlineMode || postsFailed) ? (
+              offlineMode
+                ? <MediaOfflineState icon={Megaphone} title="Your posts need a connection" compact />
+                : <MediaLoadError what="your posts" onRetry={() => setPostsAttempt(count => count + 1)} compact />
+            ) : (
+              <>
+                <PreferenceList title="Your Shoutouts & Replies" items={myPosts.shoutouts} icon={Megaphone} iconColor="text-purple-400" expanded={expandedMyShoutouts} onToggleExpand={setExpandedMyShoutouts} scrollRef={panelScrollRef} emptyMessage="You haven't posted a shoutout yet"
+                  renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={Megaphone} iconColor="text-purple-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
 
-            <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} scrollRef={panelScrollRef} emptyMessage="You haven't reviewed a song yet"
-              renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+                <PreferenceList title="Your Reviews" items={myPosts.reviews} icon={MessageSquareText} iconColor="text-pink-400" expanded={expandedMyReviews} onToggleExpand={setExpandedMyReviews} scrollRef={panelScrollRef} emptyMessage="You haven't reviewed a song yet"
+                  renderItem={(post) => <OwnPostItem key={post.id} post={post} icon={MessageSquareText} iconColor="text-pink-400" onPlay={handlePlayShoutout} onDelete={handleDeletePost} isDeleting={deletingPostId === post.id} isPlaying={playingShoutout?.id === post.id} />} />
+              </>
+            )}
           </ExpandSection>
         )}
 
@@ -1612,6 +1680,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <div className="ui-fade-in flex items-center justify-center py-6">
                 <Loader2 size={20} className="animate-spin text-gray-400" />
               </div>
+            ) : myArtists.length === 0 && offlineMode ? (
+              <MediaOfflineState icon={Mic2} title="Your artists need a connection" compact />
+            ) : myArtists.length === 0 && artistsFailed ? (
+              <MediaLoadError what="your artists" onRetry={() => void fetchMyArtists()} compact />
             ) : myArtists.length === 0 ? (
               <p className="ui-fade-in text-sm text-gray-400">No artists yet. Uploads use your username until you add one.</p>
             ) : (
@@ -1656,6 +1728,10 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             <div className="ui-fade-in flex items-center justify-center py-8">
               <Loader2 size={24} className="animate-spin text-gray-400" />
             </div>
+          ) : userUploads.length === 0 && offlineMode ? (
+            <MediaOfflineState icon={Music} title="Your uploads need a connection" compact />
+          ) : userUploads.length === 0 && uploadsFailed ? (
+            <MediaLoadError what="your uploads" onRetry={() => void fetchUserUploads()} compact />
           ) : userUploads.length === 0 ? (
             <div className="ui-fade-in text-center py-6">
               <Music size={32} className="mx-auto text-gray-600 mb-2" />
@@ -1694,6 +1770,14 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               <Fade as="p" show={!!periodEnd && !Number.isNaN(periodEnd.getTime())} className="text-xs text-gray-400 mb-1">Current period ends {periodEnd?.toLocaleDateString()}</Fade>
               <Fade show={billingStatus?.status === 'past_due'} className="mb-1">
                 <InlineNote tone="error">Your last payment failed. Update your payment method to keep Premium.</InlineNote>
+              </Fade>
+              <Fade show={billingFailed && !billingStatus} className="mb-1">
+                <InlineNote tone={offlineMode ? 'info' : 'error'}>
+                  {offlineMode ? 'Your subscription details need a connection.' : "Couldn't load your subscription."}
+                  {!offlineMode && (
+                    <button type="button" onClick={() => setBillingAttempt(count => count + 1)} className="ui-press ml-1.5 underline underline-offset-2">Retry</button>
+                  )}
+                </InlineNote>
               </Fade>
               <Fade show={!!billingStatus?.has_billing_account}>
                 <button onClick={handleManageSubscription} disabled={billingBusy} className="ui-press-soft w-full mt-3 px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg flex items-center justify-center gap-2 transition text-sm disabled:opacity-60">

@@ -212,14 +212,16 @@ export function useAudio() {
     if (engineRef.current && isInitializedRef.current) {
       engineRef.current.setVolume(value)
     }
+    publishAudioStateRef.current({ volume: value })
   }, [])
 
-  const getVolume = useCallback(() => engineRef.current?.getVolume() || 1, [])
+  const getVolume = useCallback(() => engineRef.current?.getVolume() ?? 1, [])
 
   const setMuted = useCallback((muted) => {
     if (engineRef.current && isInitializedRef.current) {
       engineRef.current.setMuted(muted)
     }
+    publishAudioStateRef.current({ muted })
   }, [])
 
   const stopImmediately = useCallback(() => {

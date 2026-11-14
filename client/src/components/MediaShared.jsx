@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { memo, useState, useCallback } from 'react'
 import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
-import { Play, Pause } from 'lucide-react'
+import { Play, Pause, AlertCircle, RotateCw } from 'lucide-react'
 import { formatDuration } from '../lib/utils'
 import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeManager'
 import { MOTION, PRESETS, staggerDelay } from '../lib/motion'
@@ -72,7 +72,8 @@ export const MediaEmptyState = memo(function MediaEmptyState({
   icon: Icon = null,
   title = 'Nothing here',
   subtitle = 'Try adjusting your search',
-  compact = false
+  compact = false,
+  action = null
 }) {
   const { getGrey400, getGrey300 } = useDynamicTheme()
 
@@ -89,7 +90,29 @@ export const MediaEmptyState = memo(function MediaEmptyState({
           {subtitle}
         </div>
       )}
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="ui-press mt-4 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-sm text-white/90 transition-colors"
+        >
+          {action.icon && <action.icon className="w-3.5 h-3.5" aria-hidden="true" />}
+          {action.label}
+        </button>
+      )}
     </motion.div>
+  )
+})
+
+export const MediaLoadError = memo(function MediaLoadError({ what, onRetry, compact = false }) {
+  return (
+    <MediaEmptyState
+      icon={AlertCircle}
+      title={`Couldn't load ${what}`}
+      subtitle="Check your connection and try again."
+      compact={compact}
+      action={onRetry ? { label: 'Retry', icon: RotateCw, onClick: onRetry } : null}
+    />
   )
 })
 

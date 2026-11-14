@@ -8,6 +8,7 @@ import { useRadioButton, uiState, useUISelector } from '../contexts/UIStateConte
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { useUISound } from '../hooks/useUISound'
 import { api } from '../lib/api'
+import { blobToBase64 } from '../lib/utils'
 import { useWebSocketEmit } from '../contexts/WebSocketContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { Conversation } from './Conversation'
@@ -127,16 +128,17 @@ export function Radio() {
 
   const sendToDJ = useCallback(async (audioBlob) => {
     if (!audioBlob) return
+    let audio = null
     try {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        void talkToDJ({ audio: reader.result.split(',')[1] }, '🎤 Voice message (not sent, you are offline)')
-      }
-      reader.readAsDataURL(audioBlob)
+      audio = await blobToBase64(audioBlob)
     } catch (err) {
       logger.error('[Radio] Failed to process audio:', err)
-      errorToast('Failed to process audio', 3000)
     }
+    if (!audio || audio === 'null') {
+      errorToast('Failed to process audio', 3000)
+      return
+    }
+    void talkToDJ({ audio }, '🎤 Voice message (not sent, you are offline)')
   }, [talkToDJ, errorToast])
 
   const sendTextToDJ = useCallback((text) => talkToDJ({ text }, `💬 ${text} (not sent, you are offline)`), [talkToDJ])

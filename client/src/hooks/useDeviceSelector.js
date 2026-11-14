@@ -65,7 +65,7 @@ export function useDeviceSelector() {
         window.removeEventListener('audio-output-device-response', handleResponse)
 
         if (e.detail.success) {
-          resolve()
+          resolve('applied')
         } else {
           reject(new Error(e.detail.error || 'Failed to set output device'))
         }
@@ -79,7 +79,7 @@ export function useDeviceSelector() {
 
       setTimeout(() => {
         window.removeEventListener('audio-output-device-response', handleResponse)
-        resolve()
+        resolve('pending')
       }, 2000)
     })
   }
@@ -89,8 +89,10 @@ export function useDeviceSelector() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       stream.getTracks().forEach(track => track.stop())
       await loadDevices()
+      return true
     } catch (error) {
       logger.error('Failed to get media permissions:', error)
+      return false
     }
   }
 

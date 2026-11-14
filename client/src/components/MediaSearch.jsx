@@ -100,6 +100,8 @@ export const MediaSearch = memo(function MediaSearch({
         setQuery(result.text.trim())
         inputRef.current?.blur()
         onSearch(result.text.trim(), true)
+      } else {
+        toastInfo("Didn't catch that, try again", 3000, 'bottom', 'search')
       }
     } catch (_err) {
       showError('Voice transcription failed. Please try again.')

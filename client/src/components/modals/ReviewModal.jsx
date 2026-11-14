@@ -13,6 +13,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { artistCredit, blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
+import { MediaLoadError, MediaOfflineState } from '../MediaShared'
 import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection } from './Modal'
 import { MOTION, PRESETS } from '../../lib/motion'
@@ -118,6 +119,8 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
   const [reviews, setReviews] = useState([])
   const [loadedTrackId, setLoadedTrackId] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [text, setText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { playingShoutout, playShoutout, stopShoutout } = usePlaybackShoutout()
@@ -128,8 +131,10 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
     toastSuccess,
     toastError,
     toastWarning,
+    offlineMode,
   } = useUISelector(state => ({
     reviewsUpdateCount: state.contentUpdates.reviews,
+    offlineMode: state.audioState.offlineMode,
     currentTrack: state.engineState.currentTrack?.id === trackId ? state.engineState.currentTrack : null,
     toastSuccess: state.toastSuccess,
     toastError: state.toastError,
@@ -157,24 +162,31 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
         if (cancelled) return
         setReviews(list)
         setLoadedTrackId(trackId)
+        setLoadFailed(false)
       })
       .catch(error => {
         logger.error('[ReviewModal] Failed to fetch reviews:', error)
-        if (!cancelled) setReviews([])
+        if (cancelled) return
+        setReviews([])
+        setLoadFailed(true)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [isOpen, trackId, reviewsUpdateCount, loadReviews])
+  }, [isOpen, trackId, reviewsUpdateCount, loadReviews, loadAttempt])
+
+  const retryReviews = useCallback(() => setLoadAttempt(attempt => attempt + 1), [])
 
   const refresh = useCallback(async () => {
     try {
       setReviews(await loadReviews(trackId))
+      setLoadFailed(false)
     } catch (error) {
       logger.error('[ReviewModal] Failed to refresh reviews:', error)
+      toastWarning("Couldn't refresh the reviews")
     }
-  }, [trackId, loadReviews])
+  }, [trackId, loadReviews, toastWarning])
 
   const handleStartRecording = useCallback(async () => {
     if (isRecording || isSubmitting) return
@@ -402,7 +414,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
           </div>
         }>
           <FadeSwap
-            swapKey={loading && shownReviews.length === 0 ? 'loading' : shownReviews.length === 0 ? 'empty' : 'list'}
+            swapKey={loading && shownReviews.length === 0 ? 'loading' : loadFailed ? 'failed' : shownReviews.length === 0 ? (offlineMode ? 'offline' : 'empty') : 'list'}
             mode="wait"
             preset={PRESETS.fade}
           >
@@ -410,6 +422,10 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
               <div className="flex items-center justify-center py-6">
                 <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
               </div>
+            ) : loadFailed ? (
+              <MediaLoadError what="the reviews" onRetry={retryReviews} compact />
+            ) : shownReviews.length === 0 && offlineMode ? (
+              <MediaOfflineState icon={MessageSquareText} title="Reviews need a connection" compact />
             ) : shownReviews.length === 0 ? (
               <div className="text-center py-6">
                 <MessageSquareText size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />

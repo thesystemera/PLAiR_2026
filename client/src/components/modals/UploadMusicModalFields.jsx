@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, memo } from 'react'
+import { useState, useRef, useMemo, memo, createContext, useContext, useEffect } from 'react'
 import { Upload, Loader2, Check, X, Edit2, Sparkles, Image, Gauge, Plus, Globe, EyeOff, Lock } from 'lucide-react'
 import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
@@ -12,6 +12,18 @@ import { Fade, FadeSwap, Pop } from '../Motion'
 import { PRESETS } from '../../lib/motion'
 
 const DESCRIPTION_MAX = 2000
+
+const UnsavedDraftsContext = createContext(null)
+export const UnsavedDraftsProvider = UnsavedDraftsContext.Provider
+
+function useReportDraft(label, dirty) {
+  const report = useContext(UnsavedDraftsContext)
+  useEffect(() => {
+    if (!report || !dirty) return
+    report(label, true)
+    return () => report(label, false)
+  }, [report, label, dirty])
+}
 
 const VISIBILITY_OPTIONS = [
   { value: 'public', label: 'Public', icon: Globe, hint: 'Plays on the station and shows everywhere.' },
@@ -86,6 +98,7 @@ export const MetadataField = memo(function MetadataField({
   const [editing, setEditing] = useState(startEditing)
   const [draft, setDraft] = useState(startEditing ? (value || '') : '')
   const [saving, setSaving] = useState(false)
+  useReportDraft(label, editing && draft !== (value || ''))
 
   const startEdit = () => {
     setDraft(value || '')
@@ -172,6 +185,7 @@ export const TagEditor = memo(function TagEditor({ label, tags, color, onSave, p
   const [input, setInput] = useState('')
   const [saving, setSaving] = useState(false)
   const current = useMemo(() => tags || [], [tags])
+  useReportDraft(label, editing && (input.trim() !== '' || !sameTags(draftTags, current)))
 
   const startEdit = () => {
     setDraftTags(current)

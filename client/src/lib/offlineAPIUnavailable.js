@@ -154,12 +154,7 @@ export const unavailableMethods = {
   },
 
   async updateUsername(_username) {
-    logger.warn('[OfflineBackend] Username updates require an internet connection')
-    return {
-      status: 'error',
-      error: 'Username updates require an internet connection',
-      offline: true
-    }
+    throw new Error('Changing your username needs a connection')
   },
 
   async register(_username, _password) {
@@ -171,21 +166,11 @@ export const unavailableMethods = {
   },
 
   async generate(_params) {
-    logger.warn('[OfflineBackend] Music generation requires an internet connection')
-    return {
-      status: 'error',
-      error: '🎵 Music generation requires an internet connection',
-      offline: true
-    }
+    throw new Error('Making new songs needs a connection')
   },
 
   async cancelGenerationJob(_jobId) {
-    logger.warn('[OfflineBackend] Generation job cancellation requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Generation job cancellation requires an internet connection',
-      offline: true
-    }
+    throw new Error('Cancelling a generation needs a connection')
   },
 
   async getGenerationJobs() {
@@ -224,21 +209,11 @@ export const unavailableMethods = {
   },
 
   async deleteConversationHistory() {
-    logger.warn('[OfflineBackend] Conversation management requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Conversation management requires an internet connection',
-      offline: true
-    }
+    throw new Error('Deleting conversation history needs a connection')
   },
 
   async resetPersona() {
-    logger.warn('[OfflineBackend] Persona reset requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Persona reset requires an internet connection',
-      offline: true
-    }
+    throw new Error('Resetting your persona needs a connection')
   },
 
   async getDevices() {
@@ -251,29 +226,14 @@ export const unavailableMethods = {
   },
 
   async activateDevice(_deviceId) {
-    logger.warn('[OfflineBackend] Device activation requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Device activation requires an internet connection',
-      offline: true
-    }
+    throw new Error('Moving playback to another device needs a connection')
   },
 
   async renameDevice(_deviceId, _newName) {
-    logger.warn('[OfflineBackend] Device management requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Device management requires an internet connection',
-      offline: true
-    }
+    throw new Error('Renaming a device needs a connection')
   },
 
   async removeDevice(_deviceId) {
-    logger.warn('[OfflineBackend] Device management requires an internet connection')
-    return {
-      status: 'error',
-      error: 'Device management requires an internet connection',
-      offline: true
-    }
+    throw new Error('Removing a device needs a connection')
   },
 }

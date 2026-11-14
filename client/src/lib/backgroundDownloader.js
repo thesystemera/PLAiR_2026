@@ -17,6 +17,8 @@ class BackgroundDownloader {
     this.abortController = null
     this.wakeSleep = null
     this.slowUntil = 0
+    this.pauseReason = null
+    this.pauseListeners = new Set()
     this.dailyDownloadedBytes = parseInt((() => { try { return localStorage.getItem('dailyDownloadedBytes') } catch { return null } })() || '0', 10)
     this.lastResetDate = (() => { try { return localStorage.getItem('lastResetDate') } catch { return null } })() || new Date().toDateString()
 
@@ -63,8 +65,22 @@ class BackgroundDownloader {
     await this.run()
   }
 
+  getPauseReason = () => this.pauseReason
+
+  subscribePause = (listener) => {
+    this.pauseListeners.add(listener)
+    return () => this.pauseListeners.delete(listener)
+  }
+
+  setPause(reason) {
+    if (reason === this.pauseReason) return
+    this.pauseReason = reason
+    for (const listener of this.pauseListeners) listener()
+  }
+
   stop() {
     logger.info('[BackgroundDownloader] Stopping background download service')
+    this.setPause(null)
     this.isRunning = false
     if (this.abortController) {
       this.abortController.abort()
@@ -80,44 +96,31 @@ class BackgroundDownloader {
     }
   }
 
-  shouldDownload() {
+  blockedReason() {
     const { audioState, settingsState } = uiState
 
-    if (!safeStorage.get('cached_user')) {
-      return false
-    }
-
-    if (!settingsState.backgroundDownloads) {
-      return false
-    }
-
-    if (!audioState.isOnline || audioState.offlineMode || !cacheManager.isAvailable) {
-      return false
-    }
-
-    if (settingsState.dataSaverMode) {
-      return false
-    }
-
-    if (Date.now() < this.slowUntil) {
-      return false
-    }
+    if (!safeStorage.get('cached_user')) return 'signedOut'
+    if (!settingsState.backgroundDownloads) return 'off'
+    if (!audioState.isOnline || audioState.offlineMode) return 'offline'
+    if (!cacheManager.isAvailable) return 'noStorage'
+    if (settingsState.dataSaverMode) return 'dataSaver'
+    if (Date.now() < this.slowUntil) return 'slow'
 
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
     if (connection) {
-      if (connection.saveData) return false
-      if (connection.type === 'cellular') return false
-      if (connection.effectiveType && SLOW_CONNECTIONS.has(connection.effectiveType)) return false
+      if (connection.saveData) return 'dataSaver'
+      if (connection.type === 'cellular') return 'cellular'
+      if (connection.effectiveType && SLOW_CONNECTIONS.has(connection.effectiveType)) return 'slow'
     }
 
     this.resetDailyLimitIfNeeded()
 
     if (this.dailyDownloadedBytes >= uiState.downloadState.dailyLimit) {
       logger.info('[BackgroundDownloader] Daily download limit reached')
-      return false
+      return 'dailyLimit'
     }
 
-    return true
+    return null
   }
 
   async buildPriorityQueue() {
@@ -144,6 +147,7 @@ class BackgroundDownloader {
       logger.info(`[BackgroundDownloader] Built priority queue: ${superLiked.length} super-likes, ${liked.length} likes`)
     } catch (error) {
       logger.error('[BackgroundDownloader] Failed to build priority queue:', error)
+      return null
     }
 
     queue.sort((a, b) => b.priority - a.priority)
@@ -154,10 +158,11 @@ class BackgroundDownloader {
   async run() {
     while (this.isRunning) {
       try {
-        if (!this.shouldDownload()) {
-          this.resetDailyLimitIfNeeded()
+        const blocked = this.blockedReason()
+        if (blocked) {
+          this.setPause(blocked)
 
-          if (this.dailyDownloadedBytes >= uiState.downloadState.dailyLimit) {
+          if (blocked === 'dailyLimit') {
             const eightHours = 8 * 60 * 60 * 1000
             logger.info(`[BackgroundDownloader] Daily limit reached. Sleeping for 8 hours`)
             await this.sleep(eightHours)
@@ -169,10 +174,19 @@ class BackgroundDownloader {
         }
 
         if (this.downloadQueue.length === 0) {
-          this.downloadQueue = await this.buildPriorityQueue()
+          const queue = await this.buildPriorityQueue()
+
+          if (!queue) {
+            this.setPause('error')
+            await this.sleep(60000)
+            continue
+          }
+
+          this.downloadQueue = queue
 
           if (this.downloadQueue.length === 0) {
             logger.info('[BackgroundDownloader] No tracks to download')
+            this.setPause('done')
             await this.sleep(60000)
             continue
           }
@@ -184,18 +198,21 @@ class BackgroundDownloader {
 
         if (!(await cacheManager.canMakeRoomFor())) {
           logger.info('[BackgroundDownloader] Download space is full of liked tracks - pausing downloads')
+          this.setPause('full')
           this.downloadQueue = []
           await this.sleep(NO_ROOM_SLEEP_MS)
           continue
         }
 
         const item = this.downloadQueue.shift()
+        if (this.pauseReason !== 'error') this.setPause(null)
         await this.downloadTrack(item.track)
 
         await this.sleep(2000)
 
       } catch (error) {
         logger.error('[BackgroundDownloader] Error in run loop:', error)
+        this.setPause('error')
         await this.sleep(5000)
       }
     }
@@ -250,6 +267,7 @@ class BackgroundDownloader {
       })
 
       triggerStorageRefresh()
+      this.setPause(null)
 
       logger.info(`[BackgroundDownloader] Successfully downloaded: ${title} (${(downloadedBytes / 1024 / 1024).toFixed(2)} MB)`)
 
@@ -258,6 +276,7 @@ class BackgroundDownloader {
         logger.info('[BackgroundDownloader] Download aborted')
       } else {
         logger.error('[BackgroundDownloader] Failed to download track:', error)
+        this.setPause('error')
       }
 
       updateDownloadState({

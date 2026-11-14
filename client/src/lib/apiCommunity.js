@@ -33,12 +33,8 @@ export const communityMethods = {
     return this._routeRequest('searchShoutouts', [query, nResults], async () => {
       const mode = useAiAnalysis ? '🤖 AI-powered' : '⚡ Fast keyword'
       logger.info(`[API] 🔍 ${mode} shoutout search for "${query}"`)
-      const res = await this._fetch(`${API_BASE}/user_content/shoutouts/search`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis }),
-      })
-      return res.json()
+      return this._jsonRequest('/user_content/shoutouts/search', 'POST',
+        { query, n_results: nResults, use_ai_analysis: useAiAnalysis }, 'Search failed')
     })
   },
 
@@ -148,12 +144,8 @@ export const communityMethods = {
 
   async getShoutoutStats(category = null) {
     return this._routeRequest('getShoutoutStats', [category], async () => {
-      let url = `${API_BASE}/user_content/stats`
-      if (category) {
-        url += `?category=${encodeURIComponent(category)}`
-      }
-      const res = await this._fetch(url)
-      return res.json()
+      const query = category ? `?category=${encodeURIComponent(category)}` : ''
+      return this._jsonRequest(`/user_content/stats${query}`, 'GET', undefined, "Couldn't load the shoutout stats")
     })
   },
 

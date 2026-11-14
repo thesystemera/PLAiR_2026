@@ -30,17 +30,6 @@ if (PRODUCTION_MODE) {
   logger.info('[Main] Production mode')
 }
 
-window.addEventListener('unhandledrejection', (event) => {
-  logger.error('[Global] Unhandled promise rejection:', event.reason)
-  logger.error('[Global] Promise:', event.promise)
-})
-
-window.addEventListener('error', (event) => {
-  logger.error('[Global] Uncaught error:', event.error || event.message)
-  logger.error('[Global] Source:', event.filename, 'Line:', event.lineno, 'Column:', event.colno)
-
-})
-
 function readChunkReloadMark() {
   try {
     return Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0)

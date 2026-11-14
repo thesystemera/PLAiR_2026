@@ -7,33 +7,22 @@ export const musicMethods = {
   async getTracks(skip = 0, limit = 100, sortBy = 'created_at', order = 'desc', genre = null) {
     return this._routeRequest('getTracks', [skip, limit, sortBy, order, genre], async () => {
       logger.info('[API] 🌐 ONLINE MODE - Fetching tracks from server')
-      let url = `${API_BASE}/catalog/tracks?skip=${skip}&limit=${limit}&sort_by=${sortBy}&order=${order}`
-      if (genre) {
-        url += `&genre=${encodeURIComponent(genre)}`
-      }
-      const res = await this._fetch(url, {
-        headers: this.getHeaders(),
-      })
-      return res.json()
+      const genreQuery = genre ? `&genre=${encodeURIComponent(genre)}` : ''
+      const path = `/catalog/tracks?skip=${skip}&limit=${limit}&sort_by=${sortBy}&order=${order}${genreQuery}`
+      return this._jsonRequest(path, 'GET', undefined, "Couldn't load the catalog")
     })
   },
 
   async getStats(genre = null) {
     return this._routeRequest('getStats', [genre], async () => {
-      let url = `${API_BASE}/catalog/stats`
-      if (genre) {
-        url += `?genre=${encodeURIComponent(genre)}`
-      }
-      const res = await this._fetch(url)
-      return res.json()
+      const query = genre ? `?genre=${encodeURIComponent(genre)}` : ''
+      return this._jsonRequest(`/catalog/stats${query}`, 'GET', undefined, "Couldn't load the catalog stats")
     })
   },
 
   async getGenres() {
-    return this._routeRequest('getGenres', [], async () => {
-      const res = await this._fetch(`${API_BASE}/catalog/genres`)
-      return res.json()
-    })
+    return this._routeRequest('getGenres', [],
+      () => this._jsonRequest('/catalog/genres', 'GET', undefined, "Couldn't load the genres"))
   },
 
   async getTrack(trackId) {
@@ -47,35 +36,18 @@ export const musicMethods = {
   },
 
   async play(trackId = null) {
-    return this._routeRequest('play', [trackId], async () => {
-      const res = await this._fetch(`${API_BASE}/playback/play`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ track_id: trackId }),
-      })
-      return res.json()
-    })
+    return this._routeRequest('play', [trackId],
+      () => this._jsonRequest('/playback/play', 'POST', { track_id: trackId }, "Couldn't play that track"))
   },
 
   async addToQueue(trackIds) {
-    return this._routeRequest('addToQueue', [trackIds], async () => {
-      const res = await this._fetch(`${API_BASE}/queue/add`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ track_ids: trackIds }),
-      })
-      return res.json()
-    })
+    return this._routeRequest('addToQueue', [trackIds],
+      () => this._jsonRequest('/queue/add', 'POST', { track_ids: trackIds }, "Couldn't add to the queue"))
   },
 
   async removeFromQueue(trackId) {
-    return this._routeRequest('removeFromQueue', [trackId], async () => {
-      const res = await this._fetch(`${API_BASE}/queue/remove/${trackId}`, {
-        method: 'DELETE',
-        headers: this.getHeaders(),
-      })
-      return res.json()
-    })
+    return this._routeRequest('removeFromQueue', [trackId],
+      () => this._jsonRequest(`/queue/remove/${trackId}`, 'DELETE', undefined, "Couldn't remove that track"))
   },
 
   async seedRadio(category = 'all', trackId = null) {
@@ -87,12 +59,8 @@ export const musicMethods = {
     return this._routeRequest('searchSemantic', [query, nResults], async () => {
       const mode = useAiAnalysis ? '🤖 AI-powered' : '⚡ Fast keyword'
       logger.info(`[API] 🌐 ONLINE MODE - ${mode} semantic search for "${query}"`)
-      const res = await this._fetch(`${API_BASE}/search/semantic`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ query, n_results: nResults, use_ai_analysis: useAiAnalysis, queue: fillQueue }),
-      })
-      return res.json()
+      return this._jsonRequest('/search/semantic', 'POST',
+        { query, n_results: nResults, use_ai_analysis: useAiAnalysis, queue: fillQueue }, 'Search failed')
     })
   },
 

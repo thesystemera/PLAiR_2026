@@ -91,13 +91,9 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
   const { getWhite, triggerEffect } = useDynamicTheme()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
-  const [isLoading, setIsLoading] = useState(false)
+  const { isLoading } = useUISelector(state => ({ isLoading: state.engineState.pendingTrackId === track.id }))
   const cardInteraction = usePointerInteraction()
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
-
-  useEffect(() => {
-    if (isPlaying) queueMicrotask(() => setIsLoading(false))
-  }, [isPlaying])
 
   const isNew = useCallback(() => {
     if (!track.created_at) return false
@@ -121,7 +117,6 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
     }
 
     triggerHaptic('strong')
-    setIsLoading(true)
     onPlayNow(track.id)
   }, [track.id, onPlayNow, cardInteraction, triggerEffect])
 
@@ -414,8 +409,10 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
         ])
         setStats(statsData)
       }
+      return true
     } catch (error) {
       logger.error('[Catalog] Failed to reload catalog after retries:', error)
+      return false
     }
   }, [resetWindow])
 
@@ -435,10 +432,13 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
     }
   }, [performSearch])
 
-  const handleClearSearch = useCallback(() => {
+  const handleClearSearch = useCallback(async () => {
     clearSearch()
-    void reloadCatalog()
-  }, [clearSearch, reloadCatalog])
+    const reloaded = await reloadCatalog()
+    if (!reloaded && !uiState.audioState.offlineMode) {
+      errorToast('Failed to load tracks. Please check your connection and try again.', 5000, 'top', 'catalog-load')
+    }
+  }, [clearSearch, reloadCatalog, errorToast])
 
   const handleGenerate = useCallback(async (query) => {
     if (hasActiveJobs) {
@@ -448,16 +448,10 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
 
     try {
       await api.generate({ type: 'new', userRequest: query })
+      info(`Making songs for "${query}"…`, 3000)
     } catch (error) {
       logger.error('Generation failed:', error)
-      const errorMsg = error.message || 'Failed to start generation. Please try again.'
-      if (error.status === 429) {
-        errorToast(errorMsg, 7000, 'bottom')
-      } else if (errorMsg.includes('rate limit') || errorMsg.includes('cooldown')) {
-        errorToast(errorMsg, 5000, 'bottom')
-      } else {
-        errorToast('Failed to start generation. Please try again.', 5000, 'bottom')
-      }
+      errorToast(error.message || 'Failed to start generation. Please try again.', error.status === 429 ? 7000 : 5000)
     }
   }, [errorToast, hasActiveJobs, info])
 

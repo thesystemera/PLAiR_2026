@@ -50,7 +50,8 @@ export function InteractiveEngagementButton({
   buttonType = 'radio',
   title = 'Hold to record voice'
 }) {
-  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef, ttsMuted } = useUISelector(state => ({
+  const { visualState, updateButtonInteraction, visualColorData, djFftDataRef, micFftDataRef, speakerColorRef, ttsMuted, toastInfo } = useUISelector(state => ({
+    toastInfo: state.toastInfo,
     visualState: state.visualState,
     ttsMuted: state.settingsState.ttsMuted,
     updateButtonInteraction: state.updateRadioButtonInteraction,
@@ -422,9 +423,10 @@ export function InteractiveEngagementButton({
   const handleTouchCancel = useCallback(async () => {
     setIsPressed(false)
     interactionStateRef.current.isTouchDown = false
-    await stopRecording()
+    const discarded = await stopRecording()
+    if (discarded?.size > 0) toastInfo('Recording interrupted, not sent')
     resetInteractionState()
-  }, [stopRecording, resetInteractionState])
+  }, [stopRecording, resetInteractionState, toastInfo])
 
   const containerClasses = `${sizeConfig.containerSize} flex items-center justify-center`
 

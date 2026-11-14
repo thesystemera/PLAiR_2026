@@ -186,11 +186,13 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const { togglePlay, next, previous, audio, talkBreakProgress } = playback
   const {
     audioFeatures: latestFeatures, trackDataFor, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess,
-    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak,
+    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak, volume, isMuted,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     trackDataFor: state.trackDataFor,
     isCached: state.audioState.isCached,
+    volume: state.audioState.volume,
+    isMuted: state.audioState.muted,
     engineRef: state.engineRef,
     notificationsMuted: state.settingsState.notificationsMuted,
     ttsMuted: state.settingsState.ttsMuted,
@@ -209,8 +211,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const compact = isPhoneLandscape
   const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
   const { getGradient, getAccentColor, getGrey800, getGrey500, getWhite, getGrey400, getErrorColor } = useDynamicTheme()
-  const [volume, setVolume] = useState(1)
-  const [isMuted, setIsMuted] = useState(false)
   const [bufferedPercent, setBufferedPercent] = useState(0)
   const [isPastRestartThreshold, setIsPastRestartThreshold] = useState(false)
   const progressPercentRef = useRef(0)
@@ -347,12 +347,9 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const updateVolume = useCallback((clientX, rect) => {
     const x = clientX - rect.left
     const percent = Math.max(0, Math.min(1, x / rect.width))
-    setVolume(percent)
-    if (audio?.setVolume) {
-      audio.setVolume(percent)
-    }
-    if (percent > 0) setIsMuted(false)
-  }, [audio])
+    audio?.setVolume?.(percent)
+    if (percent > 0 && isMuted) audio?.setMuted?.(false)
+  }, [audio, isMuted])
 
   const handleVolumeMouseDown = useCallback((e) => {
     setIsDraggingVolume(true)
@@ -394,11 +391,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const handleMuteToggle = useCallback((e) => {
     e?.preventDefault()
     triggerHaptic('medium')
-    if (audio?.setMuted) {
-      const newMuted = !isMuted
-      setIsMuted(newMuted)
-      audio.setMuted(newMuted)
-    }
+    audio?.setMuted?.(!isMuted)
   }, [audio, isMuted])
 
   const handleToggleSounds = useCallback((e) => {

@@ -344,16 +344,29 @@ const SETTINGS_SAVE_DELAY_MS = 800
 
 export function SettingsSyncBridge() {
   const { user } = useAuth()
-  const { publishSettings, backgroundDownloads } = useUISelector(state => ({
+  const { publishSettings, backgroundDownloads, showNotice } = useUISelector(state => ({
     publishSettings: state.publishSettings,
     backgroundDownloads: state.settingsState.backgroundDownloads,
+    showNotice: state.showNotice,
   }))
   const userId = user?.id ?? null
   const pendingRef = useRef({})
   const timerRef = useRef(null)
   const loadedForRef = useRef(null)
   const downloadsRef = useRef(backgroundDownloads)
+  const warnedRef = useRef(false)
+  const loadFailedRef = useRef(false)
   const [attempt, setAttempt] = useState(0)
+
+  const warnNotSynced = useCallback(() => {
+    if (warnedRef.current || uiState.audioState.offlineMode) return
+    warnedRef.current = true
+    showNotice({
+      key: 'settings-sync',
+      tone: 'warning',
+      text: "Settings saved on this device. They'll sync when PLAiR is reachable",
+    })
+  }, [showNotice])
 
   const flush = useCallback(async () => {
     timerRef.current = null
@@ -365,8 +378,9 @@ export function SettingsSyncBridge() {
     } catch (err) {
       pendingRef.current = { ...changes, ...pendingRef.current }
       logger.warn('[Settings] Saving failed, will retry:', err.message)
+      warnNotSynced()
     }
-  }, [])
+  }, [warnNotSynced])
 
   const schedule = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
@@ -377,7 +391,8 @@ export function SettingsSyncBridge() {
     if (!uiState.authState.isAuthenticated) return
     Object.assign(pendingRef.current, changes)
     if (loadedForRef.current !== null) schedule()
-  }), [schedule])
+    else if (loadFailedRef.current) warnNotSynced()
+  }), [schedule, warnNotSynced])
 
   useEffect(() => api.onConnectivity((event) => {
     if (event.type === 'recovered') setAttempt(count => count + 1)
@@ -386,6 +401,7 @@ export function SettingsSyncBridge() {
   useEffect(() => {
     if (!userId) {
       loadedForRef.current = null
+      loadFailedRef.current = false
       pendingRef.current = {}
       return
     }
@@ -401,11 +417,17 @@ export function SettingsSyncBridge() {
       publishSettings(edited, { fromServer: true })
       pendingRef.current = result.stored ? edited : pickValidSettings(uiState.settingsState)
       loadedForRef.current = userId
+      loadFailedRef.current = false
       logger.info(`[Settings] ${result.stored ? 'Loaded' : 'First save of'} settings for this ${result.kind}`)
       schedule()
-    }).catch(err => logger.warn('[Settings] Loading the settings for this device failed:', err.message))
+    }).catch((err) => {
+      logger.warn('[Settings] Loading the settings for this device failed:', err.message)
+      if (cancelled) return
+      loadFailedRef.current = true
+      if (Object.keys(pendingRef.current).length) warnNotSynced()
+    })
     return () => { cancelled = true }
-  }, [userId, attempt, publishSettings, schedule])
+  }, [userId, attempt, publishSettings, schedule, warnNotSynced])
 
   useWebSocketSubscribe('device_settings_updated', (data) => {
     if (data?.kind === deviceKind()) publishSettings(data.settings, { fromServer: true })

@@ -17,6 +17,7 @@ const DETAIL_PREFIX = 'aired:'
 const ESTIMATED_ENTRY_HEIGHT = 41
 const NO_IDS = new Set()
 const NO_DETAILS = new Map()
+const DETAIL_FAILED = Symbol('detail-failed')
 const NO_ENTRIES = []
 const entryKey = (entry) => `${entry.id}|${entry.at}`
 
@@ -94,7 +95,11 @@ const TimelineRow = memo(function TimelineRow({ entry, entering, open, detail, o
           <Expandable open={open}>
             <FadeSwap swapKey={detail === null ? 'loading' : 'detail'} preset={PRESETS.fade} mode="wait">
               <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap break-words">
-                {detail === null ? 'Loading…' : (detail || 'Nothing more was kept for this one.')}
+                {detail === null
+                  ? 'Loading…'
+                  : detail === DETAIL_FAILED
+                    ? "Couldn't load this entry. Close and reopen it to try again."
+                    : (detail || 'Nothing more was kept for this one.')}
               </p>
             </FadeSwap>
           </Expandable>
@@ -124,21 +129,22 @@ export function ListenerTimeline({ kind = 'all', scrollRef }) {
   }
 
   const toggle = useCallback((id) => {
+    const opening = !openIds.has(id)
     setOpenIds(previous => {
       const next = new Set(previous)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
-    if (details.has(id)) return
+    if (details.has(id) && !(opening && details.get(id) === DETAIL_FAILED)) return
     setDetails(previous => new Map(previous).set(id, null))
     api.getTimelineEntry(id)
       .then(result => setDetails(current => new Map(current).set(id, result?.said || '')))
       .catch(error => {
         logger.warn('[Timeline] Could not load entry:', error)
-        setDetails(current => new Map(current).set(id, ''))
+        setDetails(current => new Map(current).set(id, DETAIL_FAILED))
       })
-  }, [details])
+  }, [details, openIds])
 
   const renderEntry = useCallback((entry) => (
     <TimelineRow

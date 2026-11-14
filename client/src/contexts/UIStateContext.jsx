@@ -327,6 +327,7 @@ export function UIStateProvider({ children }) {
     currentIndex: 0,
     talkBreak: null,
     audioNeedsTap: false,
+    pendingTrackId: null,
   })
 
   const engineRef = useRef({
@@ -362,6 +363,7 @@ export function UIStateProvider({ children }) {
     title: '',
     stage: '',
     progress: 0,
+    etaSeconds: null,
     url: null,
     sizeBytes: 0,
     publishedUrl: null,
@@ -577,6 +579,8 @@ export function UIStateProvider({ children }) {
     bitrate: null,
     effectiveBitrate: null,
     networkQuality: null,
+    volume: 1,
+    muted: false,
   })
 
   const publishAudioState = useCallback((updates) => {
@@ -899,6 +903,7 @@ export function UIStateProvider({ children }) {
     if (updates.currentIndex !== undefined) stateUpdates.currentIndex = updates.currentIndex
     if (updates.talkBreak !== undefined) stateUpdates.talkBreak = updates.talkBreak
     if (updates.audioNeedsTap !== undefined) stateUpdates.audioNeedsTap = updates.audioNeedsTap
+    if (updates.pendingTrackId !== undefined) stateUpdates.pendingTrackId = updates.pendingTrackId
 
     const keys = Object.keys(stateUpdates)
     if (keys.length > 0) {

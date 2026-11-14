@@ -36,7 +36,7 @@ export function VoiceRecordingProvider({ children, mixerRef }) {
 
   useEffect(() => {
     if (recordingError) {
-      errorToast(recordingError, 2000)
+      errorToast(recordingError, 4000)
       triggerHaptic('error')
       clearError()
     }

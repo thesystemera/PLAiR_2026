@@ -312,12 +312,14 @@ function QueueComponent({ onSeedRadio, onList }) {
   const playback = usePlaybackActions()
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
-  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode } = useUISelector(state => ({
+  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode, loadingTrackId, toastError } = useUISelector(state => ({
     queue: state.engineState.queue,
     currentTrackId: state.engineState.currentTrack?.id,
     currentIndex: state.engineState.currentIndex,
     isPlayingNow: state.engineState.is_playing,
     activeSeedMode: state.radioState.activeSeedMode,
+    loadingTrackId: state.engineState.pendingTrackId,
+    toastError: state.toastError,
   }))
   const {
     getWhite,
@@ -333,7 +335,6 @@ function QueueComponent({ onSeedRadio, onList }) {
     triggerEffect
   } = useDynamicTheme()
 
-  const [loadingTrackId, setLoadingTrackId] = useState(null)
   const [removingTrackIds, setRemovingTrackIds] = useState(new Set())
   const [reselectFlash, setReselectFlash] = useState(null)
   const {
@@ -373,7 +374,6 @@ function QueueComponent({ onSeedRadio, onList }) {
     }
 
     triggerHaptic(isReselect ? 'strong' : 'medium')
-    setLoadingTrackId(trackId)
     void playback.playTrack(trackId)
   }, [playback, shouldTriggerPlay, triggerEffect, getPlayingRingColor])
 
@@ -383,14 +383,15 @@ function QueueComponent({ onSeedRadio, onList }) {
     if (!shouldTriggerRemove()) return
     triggerHaptic('medium')
     setRemovingTrackIds(prev => new Set(prev).add(trackId))
-    playback.removeFromQueue(trackId).catch(() => {
+    playback.removeFromQueue(trackId).catch((error) => {
+      toastError(error?.message || "Couldn't remove that track")
       setRemovingTrackIds(prev => {
         const next = new Set(prev)
         next.delete(trackId)
         return next
       })
     })
-  }, [playback, shouldTriggerRemove])
+  }, [playback, shouldTriggerRemove, toastError])
 
   const rowColors = useMemo(() => ({
     panelBorder: getPanelBorder(),
@@ -558,11 +559,6 @@ function QueueComponent({ onSeedRadio, onList }) {
     return () => clearTimeout(timeoutId)
   }, [currentKey, reduceMotion])
 
-  useEffect(() => {
-    if (currentTrackId && loadingTrackId === currentTrackId) {
-      queueMicrotask(() => setLoadingTrackId(null))
-    }
-  }, [currentTrackId, loadingTrackId])
 
   const renderRow = useCallback(({ track, key: uniqueKey }) => {
     const isPlaying = track.id === currentTrackId

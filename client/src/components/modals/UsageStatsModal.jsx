@@ -361,6 +361,11 @@ export function UsageStatsModal({ isOpen, onClose, isAdmin }) {
       <Fade show={!!error && !data} layoutMode="popLayout">
         <ModalErrorState title="Could not load usage" message={error} onRetry={() => setReloadKey(k => k + 1)} />
       </Fade>
+      <Fade show={!!error && !!data} layoutMode="popLayout">
+        <ModalSection>
+          <InlineNote tone="error">Couldn&apos;t load this period ({error}). The numbers below are the last ones that loaded.</InlineNote>
+        </ModalSection>
+      </Fade>
       <Fade show={!data && !error} layoutMode="popLayout" className="py-10 flex justify-center">
         <Loader2 size={24} className="animate-spin text-gray-400" />
       </Fade>

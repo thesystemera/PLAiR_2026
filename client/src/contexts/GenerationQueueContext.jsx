@@ -113,8 +113,9 @@ export function GenerationQueueProvider({ children }) {
       removeJob(jobId)
     } catch (err) {
       logger.error('[GenerationQueue] Failed to cancel job:', jobId, err)
+      toastError(err?.message ? `Couldn't cancel that generation: ${err.message}` : "Couldn't cancel that generation")
     }
-  }, [removeJob])
+  }, [removeJob, toastError])
 
   const clearCompleted = useCallback(() => {
     setJobs(prev => prev.filter(isActiveJob))

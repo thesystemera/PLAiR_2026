@@ -8,12 +8,16 @@ const VIDEO_HEIGHT = 1280
 const VIDEO_FPS = 30
 const AUDIO_SAMPLE_RATE = 44100
 const CLIP_SEEK_TOLERANCE_S = 0.001
+const ETA_WINDOW_MS = 20000
+const ETA_MIN_WINDOW_MS = 4000
+const ETA_STEP_S = 5
 
 export const SHARE_JOB_ID = 'share-video'
 
 export const shareVideoBusy = status => status === 'preparing' || status === 'rendering' || status === 'publishing'
+export const shareVideoRendering = status => status === 'rendering'
 
-export function shareJobView({ status, title, stage, progress, error }) {
+export function shareJobView({ status, title, stage, progress, etaSeconds, error }) {
   if (status === 'idle') return null
   return {
     job_id: SHARE_JOB_ID,
@@ -22,6 +26,7 @@ export function shareJobView({ status, title, stage, progress, error }) {
     title,
     current_stage: stage,
     progress_percent: Math.round(progress * 100),
+    eta_seconds: shareVideoRendering(status) ? etaSeconds : null,
     error,
   }
 }
@@ -30,6 +35,16 @@ let publish = null
 let run = null
 let video = { blob: null, url: null }
 let lastPercent = -1
+const bench = { options: null, last: null }
+
+function secondsLeft(samples, progress, now) {
+  samples.push({ at: now, progress })
+  while (samples.length > 2 && now - samples[0].at > ETA_WINDOW_MS) samples.shift()
+  const first = samples[0]
+  if (now - first.at < ETA_MIN_WINDOW_MS || progress <= first.progress) return null
+  const perMs = (progress - first.progress) / (now - first.at)
+  return Math.max(ETA_STEP_S, Math.round((1 - progress) / perMs / 1000 / ETA_STEP_S) * ETA_STEP_S)
+}
 
 function report(updates) {
   publish?.(updates)
@@ -110,12 +125,14 @@ function renderInWorker(current, say, job, transfer) {
     const worker = new Worker(new URL('./shareVideoWorker.js', import.meta.url), { type: 'module' })
     current.worker = worker
     current.abort = reject
+    const samples = []
     worker.onmessage = ({ data }) => {
       if (data.type === 'progress') {
+        const etaSeconds = secondsLeft(samples, data.progress, performance.now())
         const percent = Math.round(data.progress * 100)
         if (percent !== lastPercent) {
           lastPercent = percent
-          say({ progress: percent / 100 })
+          say({ progress: percent / 100, etaSeconds })
         }
       } else if (data.type === 'stage') {
         say({ stage: data.stage })
@@ -164,40 +181,59 @@ async function start(track, { includeClips = false } = {}) {
     const pcm = await decodeAudio(trackId, track.duration_ms)
     if (!live()) return
 
+    let clipsNote = null
     if (includeClips) {
       say({ stage: 'Loading video clips...' })
       const clips = await loadClips(clipData)
       current.clips = clips
       if (!live()) return endRun(current)
+      const wanted = clipData?.clips?.length || 0
+      if (!clips.length) clipsNote = 'No video clips could be added, so the video was made without them.'
+      else if (clips.length < wanted) clipsNote = "Some video clips couldn't be loaded."
     }
 
-    say({ status: 'rendering', stage: 'Rendering frames...' })
+    const options = bench.options || {}
+    const durationMs = options.seconds ? Math.min(track.duration_ms, options.seconds * 1000) : track.duration_ms
+    if (durationMs < track.duration_ms) {
+      const samples = Math.ceil(durationMs / 1000 * pcm.sampleRate)
+      pcm.left = pcm.left.slice(0, samples)
+      pcm.right = pcm.right.slice(0, samples)
+    }
+    say({ status: options.keepVisuals ? 'preparing' : 'rendering', stage: 'Rendering frames...' })
     const { buffer, stats } = await renderInWorker(current, say, {
       artworkBlob,
       pcm,
       audioFeatures,
       lyricTimestamps,
       clipDurations: current.clips.map(clip => clip.duration || 0),
-      durationMs: track.duration_ms,
+      durationMs,
       width: VIDEO_WIDTH,
       height: VIDEO_HEIGHT,
       fps: VIDEO_FPS,
+      bench: options,
     }, [pcm.left.buffer, pcm.right.buffer])
-    logger.info(`[ShareVideo] ${stats.frames} frames in ${stats.seconds} s (${stats.speed}x realtime), ms per frame:`, stats.msPerFrame)
+    stats.megabitsPerSecond = +(buffer.byteLength * 8 / (durationMs / 1000) / 1e6).toFixed(2)
+    bench.last = stats
+    logger.info(`[ShareVideo] ${stats.frames} frames in ${stats.seconds} s (${stats.speed}x realtime), ${stats.megabitsPerSecond} Mbps, ms per frame:`, stats.msPerFrame)
 
     const blob = new Blob([buffer], { type: 'video/mp4' })
     video = { blob, url: URL.createObjectURL(blob) }
-    say({ status: 'publishing', stage: 'Publishing video to PLAiR...', progress: 1, url: video.url, sizeBytes: blob.size })
+    say({ status: 'publishing', stage: 'Publishing video to PLAiR...', progress: 1, etaSeconds: null, url: video.url, sizeBytes: blob.size })
 
     let publishedUrl = null
-    let note = null
-    try {
-      const published = await api.uploadShareVideo({ trackId, title, artist: artistCredit(track) || 'Unknown Artist', blob })
-      publishedUrl = published.page_url
-    } catch (error) {
-      logger.warn('[ShareVideo] Hosted publish failed, the MP4 stays available on this device:', error)
-      note = 'Video rendered. Sign in to publish a hosted PLAiR link, or use Share Video to send the MP4 directly.'
+    let publishNote = null
+    if (!bench.options && !api.token) {
+      publishNote = 'Video rendered. Sign in to publish a hosted PLAiR link, or use Share Video to send the MP4 directly.'
+    } else if (!bench.options) {
+      try {
+        const published = await api.uploadShareVideo({ trackId, title, artist: artistCredit(track) || 'Unknown Artist', blob })
+        publishedUrl = published.page_url
+      } catch (error) {
+        logger.warn('[ShareVideo] Hosted publish failed, the MP4 stays available on this device:', error)
+        publishNote = `Video rendered, but the hosted link failed (${error?.message || 'unknown error'}). Use Share Video to send the MP4 directly.`
+      }
     }
+    const note = [publishNote, clipsNote].filter(Boolean).join(' ') || null
     say({ status: 'complete', stage: 'Video ready', publishedUrl, note })
   } catch (error) {
     if (!live()) return
@@ -221,6 +257,14 @@ function clear() {
   if (run) return
   releaseVideo()
   report(null)
+}
+
+if (typeof window !== 'undefined') {
+  window.__plairShare = {
+    set: options => { bench.options = options || null },
+    last: () => bench.last,
+    clear: () => clear(),
+  }
 }
 
 export const shareVideoJob = {

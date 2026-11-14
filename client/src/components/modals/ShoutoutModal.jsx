@@ -13,6 +13,7 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
+import { MediaLoadError, MediaOfflineState } from '../MediaShared'
 import { useDeletePost } from '../../hooks/useDeletePost'
 import { Modal, ModalSection, ModalMetadataField, ModalCard } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
@@ -373,6 +374,8 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
   const [analytics, setAnalytics] = useState(null)
   const [replies, setReplies] = useState([])
   const [repliesLoading, setRepliesLoading] = useState(false)
+  const [repliesFailed, setRepliesFailed] = useState(false)
+  const [repliesAttempt, setRepliesAttempt] = useState(0)
   const [replySortBy, setReplySortBy] = useState('popularity')
   const [isSubmittingReply, setIsSubmittingReply] = useState(false)
   const [replyText, setReplyText] = useState('')
@@ -395,7 +398,9 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
     toastSuccess,
     toastError,
     toastWarning,
+    offlineMode,
   } = useUISelector(state => ({
+    offlineMode: state.audioState.offlineMode,
     shoutoutFftDataRef: state.shoutoutFftDataRef,
     shoutoutsUpdateCount: state.contentUpdates.shoutouts,
     openShoutoutModal: state.openShoutoutModal,
@@ -442,22 +447,32 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
       try {
         const data = await api.getShoutoutReplies(shoutout.id, replySortBy)
         setReplies(data.replies || [])
+        setRepliesFailed(false)
       } catch (error) {
         logger.error('Failed to fetch replies:', error)
         setReplies([])
+        setRepliesFailed(true)
       } finally {
         setRepliesLoading(false)
       }
     }
 
     void fetchReplies()
-  }, [shoutout?.id, isRootShoutout, replySortBy, shoutoutsUpdateCount])
+  }, [shoutout?.id, isRootShoutout, replySortBy, shoutoutsUpdateCount, repliesAttempt])
+
+  const retryReplies = useCallback(() => setRepliesAttempt(attempt => attempt + 1), [])
 
   const refreshReplies = useCallback(async () => {
     if (!shoutout?.id) return
-    const data = await api.getShoutoutReplies(shoutout.id, replySortBy)
-    setReplies(data.replies || [])
-  }, [shoutout?.id, replySortBy])
+    try {
+      const data = await api.getShoutoutReplies(shoutout.id, replySortBy)
+      setReplies(data.replies || [])
+      setRepliesFailed(false)
+    } catch (error) {
+      logger.warn('[ShoutoutModal] Reply list refresh failed:', error)
+      toastWarning("Couldn't refresh the replies")
+    }
+  }, [shoutout?.id, replySortBy, toastWarning])
 
   const handleStartRecording = useCallback(async () => {
     if (isRecording) return
@@ -976,7 +991,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   </form>
                 </Fade>
                 <FadeSwap
-                  swapKey={repliesLoading ? 'loading' : replies.length === 0 ? 'empty' : 'list'}
+                  swapKey={repliesLoading ? 'loading' : repliesFailed ? 'failed' : replies.length === 0 ? (offlineMode ? 'offline' : 'empty') : 'list'}
                   mode="wait"
                   preset={PRESETS.fade}
                 >
@@ -984,6 +999,10 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                     <div className="flex items-center justify-center py-6">
                       <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
                     </div>
+                  ) : repliesFailed ? (
+                    <MediaLoadError what="the replies" onRetry={retryReplies} compact />
+                  ) : replies.length === 0 && offlineMode ? (
+                    <MediaOfflineState icon={MessageCircle} title="Replies need a connection" compact />
                   ) : replies.length === 0 ? (
                     <div className="text-center py-6">
                       <MessageCircle size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />

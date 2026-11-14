@@ -53,6 +53,22 @@ const usesBluetoothMicrophone = async (deviceId) => {
   }
 }
 
+function micErrorMessage(error) {
+  switch (error?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Microphone blocked. Allow mic access in your browser settings.'
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No microphone found'
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'The microphone is busy in another app'
+    default:
+      return "Couldn't start the microphone"
+  }
+}
+
 export const useVoiceRecorder = () => {
   const [isRecording, setIsRecording] = useState(false)
   const [analyser, setAnalyser] = useState(null)
@@ -66,6 +82,7 @@ export const useVoiceRecorder = () => {
   const audioChunks = useRef([])
   const recordingStartTime = useRef(0)
   const isStarting = useRef(false)
+  const startFailed = useRef(false)
   const recordingMimeType = useRef('audio/webm;codecs=opus')
 
   const cleanup = useCallback(() => {
@@ -121,6 +138,7 @@ export const useVoiceRecorder = () => {
     }
 
     isStarting.current = true
+    startFailed.current = false
     setRecordingError(null)
     setRecordingSource(source)
 
@@ -208,7 +226,12 @@ export const useVoiceRecorder = () => {
       return true
     } catch (error) {
       logger.warn('Recording start failed or aborted', error)
+      const stillWanted = isStarting.current
       cleanup()
+      if (stillWanted) {
+        startFailed.current = true
+        setRecordingError(micErrorMessage(error))
+      }
       return false
     }
   }, [cleanup, isRecording])
@@ -223,6 +246,12 @@ export const useVoiceRecorder = () => {
 
       const wasValidRecording = recordingStartTime.current > 0
       recordingStartTime.current = 0
+
+      if (startFailed.current) {
+        cleanup()
+        resolve(null)
+        return
+      }
 
       if (recordingDuration < 1000) {
         setRecordingError('Hold button for at least 1 second while speaking')

@@ -9,7 +9,7 @@ import { logger } from '../../lib/logger'
 import { shareVideoBusy, shareVideoJob } from '../../lib/shareVideoJob'
 import { TrackArt } from '../DepthArt'
 import { InlineNote } from '../Notice'
-import { artistByline, artistCredit } from '../../lib/utils'
+import { artistByline, artistCredit, formatTimeLeft } from '../../lib/utils'
 import { Share2, Download, Copy, Check, Video } from 'lucide-react'
 
 export function ShareModal({ isOpen, onClose, track }) {
@@ -22,12 +22,15 @@ export function ShareModal({ isOpen, onClose, track }) {
     jobStatus,
     jobStage,
     jobProgress,
+    jobEtaSeconds,
     jobUrl,
     jobSizeBytes,
     jobPublishedUrl,
     jobError,
     jobNote,
+    toastError,
   } = useUISelector(state => ({
+    toastError: state.toastError,
     playingTrack: state.engineState.currentTrack,
     videoClipsEnabled: state.settingsState.videoClipsEnabled,
     setVideoPreviewPlaying: state.setVideoPreviewPlaying,
@@ -36,6 +39,7 @@ export function ShareModal({ isOpen, onClose, track }) {
     jobStatus: state.shareVideoState.status,
     jobStage: state.shareVideoState.stage,
     jobProgress: state.shareVideoState.progress,
+    jobEtaSeconds: state.shareVideoState.etaSeconds,
     jobUrl: state.shareVideoState.url,
     jobSizeBytes: state.shareVideoState.sizeBytes,
     jobPublishedUrl: state.shareVideoState.publishedUrl,
@@ -91,8 +95,9 @@ export function ShareModal({ isOpen, onClose, track }) {
       setTimeout(() => setLinkCopied(false), 2000)
     } catch (err) {
       logger.error('[ShareModal] Failed to copy link:', err)
+      toastError("Couldn't copy the link")
     }
-  }, [trackId, getShareLink])
+  }, [trackId, getShareLink, toastError])
 
   const handleNativeShare = useCallback(async () => {
     if (!navigator.share || !currentTrack) return
@@ -107,9 +112,10 @@ export function ShareModal({ isOpen, onClose, track }) {
     } catch (err) {
       if (err.name !== 'AbortError') {
         logger.error('[ShareModal] Share failed:', err)
+        toastError('Sharing failed, copy the link instead')
       }
     }
-  }, [currentTrack, trackTitle, trackByline, getShareLink])
+  }, [currentTrack, trackTitle, trackByline, getShareLink, toastError])
 
   const handleGenerateVideo = useCallback(() => {
     if (!currentTrack) return
@@ -181,8 +187,9 @@ export function ShareModal({ isOpen, onClose, track }) {
       setTimeout(() => setVideoLinkCopied(false), 2000)
     } catch (err) {
       logger.error('[ShareModal] Failed to copy video link:', err)
+      toastError("Couldn't copy the video link")
     }
-  }, [publishedVideoUrl])
+  }, [publishedVideoUrl, toastError])
 
   return (
     <Modal
@@ -261,7 +268,7 @@ export function ShareModal({ isOpen, onClose, track }) {
               <div className="space-y-3">
                 <ModalProgress
                   progress={jobProgress}
-                  statusText={jobStage || 'Rendering...'}
+                  statusText={[jobStage || 'Rendering...', formatTimeLeft(jobEtaSeconds)].filter(Boolean).join(' · ')}
                   showSpinner={false}
                   showCancel={true}
                   onCancel={shareVideoJob.cancel}
