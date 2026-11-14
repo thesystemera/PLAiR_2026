@@ -193,7 +193,7 @@ function VirtualScroller({
     prefetchCovers(ids, { jumped, size })
   }, [coverSize])
 
-  const compute = useCallback((settled, fromScroll = false) => {
+  const compute = useCallback((settled, fromScroll = false, fromResize = false) => {
     const container = scrollContainerRef?.current
     const latest = latestRef.current
     if (!container || !latest || !latest.layout.rowHeight) return
@@ -230,6 +230,7 @@ function VirtualScroller({
     const relativeTop = scrollTop - motion.listTop
     const firstRow = current.rowAt(relativeTop)
     const lastRow = clamp(current.rowAt(relativeTop + viewHeight) + 1, 0, rows)
+    if (fromResize && firstRow >= rangeRef.current.start && lastRow <= rangeRef.current.end) return
     const speed = Math.abs(motion.velocity)
     const idle = speed < IDLE_SPEED
     const down = motion.direction >= 0
@@ -363,7 +364,7 @@ function VirtualScroller({
 
     const resizeObserver = new ResizeObserver(() => {
       measure()
-      compute(!motion.scrolling)
+      compute(!motion.scrolling, false, true)
     })
     resizeObserver.observe(container)
     const listParent = listRef.current?.parentElement
