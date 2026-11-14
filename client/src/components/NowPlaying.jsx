@@ -326,8 +326,7 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
   )
 })
 
-const ORIGIN_BADGE_FROST = {
-  left: 'calc(-1rem - 1px)',
+const COVER_BADGE_FROST = {
   bottom: 'calc(-1rem - 1px)',
   width: '100cqw',
   height: '100cqh',
@@ -335,16 +334,17 @@ const ORIGIN_BADGE_FROST = {
   filter: 'blur(4px)',
 }
 
-const OriginBadge = memo(function OriginBadge({ trackId, human }) {
+const CoverBadge = memo(function CoverBadge({ trackId, side, colorClass, children }) {
   const art = useThemeArtwork()
   const cover = art?.trackId === trackId ? art.imageUrl : null
+  const frost = { ...COVER_BADGE_FROST, [side]: 'calc(-1rem - 1px)', backgroundImage: cover ? `url(${cover})` : undefined }
 
   return (
-    <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
-      <div className={`relative overflow-hidden px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase border border-white/30 ${human ? 'text-emerald-300/70' : 'text-purple-300/70'}`}>
-        {cover && <div aria-hidden="true" className="absolute" style={{ ...ORIGIN_BADGE_FROST, backgroundImage: `url(${cover})` }} />}
+    <div className={`absolute bottom-4 ${side === 'left' ? 'left-4' : 'right-4'} z-10 pointer-events-none select-none`}>
+      <div className={`relative overflow-hidden px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase border border-white/30 ${colorClass}`}>
+        {cover && <div aria-hidden="true" className="absolute" style={frost} />}
         <div aria-hidden="true" className="absolute inset-0 bg-black/40" />
-        <span className="relative">{human ? '100% Human' : '100% AI'}</span>
+        <span className="relative">{children}</span>
       </div>
     </div>
   )
@@ -464,7 +464,12 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             <MediaActions type="track" itemId={track.id} overlay />
           </div>
 
-          <OriginBadge trackId={track.id} human={track.is_ai_generated === false} />
+          <CoverBadge trackId={track.id} side="left" colorClass={track.is_ai_generated === false ? 'text-emerald-300/70' : 'text-purple-300/70'}>
+            {track.is_ai_generated === false ? '100% Human' : '100% AI'}
+          </CoverBadge>
+          <CoverBadge trackId={track.id} side="right" colorClass="text-white/60">
+            {track.master_chain_version ? `v${track.master_chain_version}` : 'N/A'}
+          </CoverBadge>
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">
             <ReviewsButton track={track} />
