@@ -1,8 +1,9 @@
-import { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react'
+import { memo, useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle, useSyncExternalStore } from 'react'
 import { motion, AnimatePresence, useMotionValue } from 'framer-motion'
 import { useDynamicTheme, PANEL, PANEL_SCROLL } from '../contexts/DynamicThemeContext'
 import { EDGE_FADE_MASK } from '../lib/themeManager'
 import { MOTION } from '../lib/motion'
+import { edgeFade, EDGE_FADE_EDGES } from '../lib/edgeFade'
 import { useUISelector } from '../contexts/UIStateContext'
 
 const { maskFadeTop, maskFadeBottom, maskFadeSide } = PANEL_SCROLL
@@ -14,9 +15,29 @@ function scrollerMaskStyle(mask) {
 }
 
 const SCROLLER_MASK_STYLE = scrollerMaskStyle(SCROLLER_MASK)
+const SCROLLER_STRIPS_STYLE = { isolation: 'isolate' }
+
+const EdgeFadeStrips = memo(function EdgeFadeStrips({ wrapperRef }) {
+  const canvasesRef = useRef({})
+
+  useEffect(() => edgeFade.register(wrapperRef.current, canvasesRef.current), [wrapperRef])
+
+  return EDGE_FADE_EDGES.map(edge => (
+    <canvas
+      key={edge}
+      ref={(canvas) => { canvasesRef.current[edge] = canvas }}
+      aria-hidden="true"
+      width={1}
+      height={1}
+      className="absolute pointer-events-none z-[90]"
+    />
+  ))
+})
 
 export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, mask = null }, ref) {
   const scrollRef = useRef(null)
+  const wrapperRef = useRef(null)
+  const fadeWithStrips = useSyncExternalStore(edgeFade.subscribe, edgeFade.active) && !mask
 
   useImperativeHandle(ref, () => scrollRef.current)
   const [scrollLabel, setScrollLabel] = useState('')
@@ -163,7 +184,11 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
   }, [handleScroll, handleTouchStart, handleTouchEnd, reportScrollState])
 
   return (
-    <div className="h-full relative overflow-hidden" style={mask ? scrollerMaskStyle(`${SCROLLER_MASK}, ${mask}`) : SCROLLER_MASK_STYLE}>
+    <div
+      ref={wrapperRef}
+      className="h-full relative overflow-hidden"
+      style={fadeWithStrips ? SCROLLER_STRIPS_STYLE : mask ? scrollerMaskStyle(`${SCROLLER_MASK}, ${mask}`) : SCROLLER_MASK_STYLE}
+    >
       <div
         ref={scrollRef}
         className={`h-full overflow-y-auto ${className}`}
@@ -172,6 +197,8 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
       >
         {children}
       </div>
+
+      {fadeWithStrips && <EdgeFadeStrips wrapperRef={wrapperRef} />}
 
       <AnimatePresence>
         {showLabel && (
@@ -188,7 +215,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
             className="right-4 pointer-events-none z-[100]"
           >
             <div
-              className={`rounded-full backdrop-blur-xl shadow-2xl font-bold text-sm ${scrollLabel ? 'px-4 py-2' : 'w-3 h-16 bg-white/40'}`}
+              className={`rounded-full shadow-2xl font-bold text-sm ${scrollLabel ? 'px-4 py-2' : 'w-3 h-16 bg-white/40'}`}
               style={{
                 background: scrollLabel ? `linear-gradient(135deg, ${getAccentColor(0.9)}, ${getAccentColor(0.7)})` : undefined,
                 boxShadow: `0 8px 32px ${getAccentColor(0.4)}`,

@@ -1,4 +1,4 @@
-export async function page(match = 'plair.live') {
+export async function page(match = process.env.PAGE || 'plair.live') {
   const list = await (await fetch('http://127.0.0.1:9222/json')).json()
   const target = list.find(p => p.type === 'page' && p.url.includes(match))
   if (!target) throw new Error('no plair tab')

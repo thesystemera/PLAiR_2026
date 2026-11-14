@@ -6,7 +6,7 @@ import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
 import {offlineBackend} from './lib/offlineAPI'
 import {MOTION, PRESETS} from './lib/motion'
-import {VERTICAL_EDGE_FADE_MASK} from './lib/themeManager'
+import {VERTICAL_EDGE_FADE_FILL} from './lib/themeManager'
 import {useUISelector, useUIStateGetter} from './contexts/UIStateContext'
 import {useProfilePicture} from './hooks/useProfilePicture'
 import {usePlaybackActions} from './contexts/PlaybackContext'
@@ -95,11 +95,12 @@ const PANEL_FIT_HOLD_MS = 900
 
 const canvasFallback =<div className="absolute inset-0 bg-black/50 pointer-events-none z-0" />
 
-const MOBILE_NAV_MASK = VERTICAL_EDGE_FADE_MASK('4px')
-const MOBILE_NAV_MASK_STYLE = { maskImage: MOBILE_NAV_MASK, WebkitMaskImage: MOBILE_NAV_MASK }
-const MOBILE_RAIL_STYLE = { ...MOBILE_NAV_MASK_STYLE, width: 'calc(4.5rem + var(--safe-left))', paddingLeft: 'var(--safe-left)' }
-const MOBILE_NAV_CLASS = 'flex-shrink-0 bg-black/25 border-t border-gray-800/50 flex justify-around items-center h-16 z-20'
-const MOBILE_RAIL_CLASS = 'order-first flex-shrink-0 bg-black/25 border-r border-gray-800/50 flex flex-col justify-around items-stretch h-full py-1 z-20'
+const MOBILE_NAV_FADE = '4px'
+const MOBILE_NAV_FILL = { backgroundImage: VERTICAL_EDGE_FADE_FILL('rgba(0, 0, 0, 0.25)', MOBILE_NAV_FADE), backgroundOrigin: 'border-box' }
+const MOBILE_NAV_STYLE = { ...MOBILE_NAV_FILL, borderTopColor: 'rgba(31, 41, 55, 0.043)' }
+const MOBILE_RAIL_STYLE = { ...MOBILE_NAV_FILL, width: 'calc(4.5rem + var(--safe-left))', paddingLeft: 'var(--safe-left)' }
+const MOBILE_NAV_CLASS = 'flex-shrink-0 border-t flex justify-around items-center h-16 z-20'
+const MOBILE_RAIL_CLASS = 'order-first flex-shrink-0 border-r border-gray-800/50 flex flex-col justify-around items-stretch h-full py-1 z-20'
 const FULLSCREEN_EXIT_STYLE = { top: 'max(1.5rem, calc(var(--safe-top) + 0.75rem))', right: 'max(1.5rem, calc(var(--safe-right) + 0.75rem))' }
 
 function LazyMount({ when, children }) {
@@ -846,7 +847,7 @@ function App() {
                 data-mobile-nav
                 aria-label="Panels"
                 className={isPhoneLandscape ? MOBILE_RAIL_CLASS : MOBILE_NAV_CLASS}
-                style={isPhoneLandscape ? MOBILE_RAIL_STYLE : MOBILE_NAV_MASK_STYLE}
+                style={isPhoneLandscape ? MOBILE_RAIL_STYLE : MOBILE_NAV_STYLE}
               >
                 {panelStructure.map(({ id }, index) => {
                   const config = PANEL_CONFIG[id]

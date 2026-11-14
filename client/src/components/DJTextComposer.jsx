@@ -47,7 +47,7 @@ export function DJTextComposer({ onSend }) {
         enterKeyHint="send"
         autoComplete="off"
         aria-label="Message the DJs"
-        className={`flex-1 min-w-0 px-4 py-2 bg-dark-card/80 backdrop-blur-sm border rounded-full text-sm text-white placeholder-gray-500 focus:outline-none transition ${
+        className={`flex-1 min-w-0 px-4 py-2 bg-dark-card/80 border rounded-full text-sm text-white placeholder-gray-500 focus:outline-none transition ${
           isFocused ? 'border-purple-500 shadow-lg shadow-purple-500/20' : 'border-gray-700'
         }`}
       />

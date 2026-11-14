@@ -659,8 +659,37 @@ export const TRANSITIONS = {
 export const EDGE_FADE_MASK = (fadeTop, fadeBottom, fadeSide) =>
   `linear-gradient(0deg, transparent, black ${fadeBottom}, black calc(100% - ${fadeTop}), transparent), linear-gradient(90deg, transparent, black ${fadeSide}, black calc(100% - ${fadeSide}), transparent)`
 
-export const VERTICAL_EDGE_FADE_MASK = (fade) =>
-  `linear-gradient(to bottom, transparent 0%, black ${fade}, black calc(100% - ${fade}), transparent 100%)`
+export const VERTICAL_EDGE_FADE_FILL = (color, fade) =>
+  `linear-gradient(to bottom, transparent 0%, ${color} ${fade}, ${color} calc(100% - ${fade}), transparent 100%)`
+
+const FEATHER_FAR_PX = 100000
+const featheredFills = new Map()
+
+export function featheredFill(opacity, feather) {
+  const key = `${opacity}:${feather}`
+  const cached = featheredFills.get(key)
+  if (cached) return cached
+  const stop = (offset, alpha) => `<stop offset="${offset}" stop-color="#fff" stop-opacity="${alpha}"/>`
+  const near = `${stop(0, 0)}${stop(1, 1)}`
+  const far = `${stop(0.5, 1)}${stop(1, 0)}`
+  const ramp = feather * 2
+  const body = FEATHER_FAR_PX + feather * 1.5
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><defs>' +
+    `<linearGradient id="l" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${feather}" y2="0">${near}</linearGradient>` +
+    `<linearGradient id="t" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${feather}">${near}</linearGradient>` +
+    `<linearGradient id="r" x1="0" y1="0" x2="1" y2="0">${far}</linearGradient>` +
+    `<linearGradient id="b" x1="0" y1="0" x2="0" y2="1">${far}</linearGradient>` +
+    '<mask id="ml"><rect width="100%" height="100%" fill="url(#l)"/></mask>' +
+    '<mask id="mt"><rect width="100%" height="100%" fill="url(#t)"/></mask>' +
+    `<mask id="mr"><rect x="100%" y="0" width="${ramp}" height="100%" transform="translate(-${ramp} 0)" fill="url(#r)"/>` +
+    `<rect x="100%" y="0" width="${FEATHER_FAR_PX}" height="100%" transform="translate(-${body} 0)" fill="#fff"/></mask>` +
+    `<mask id="mb"><rect x="0" y="100%" width="100%" height="${ramp}" transform="translate(0 -${ramp})" fill="url(#b)"/>` +
+    `<rect x="0" y="100%" width="100%" height="${FEATHER_FAR_PX}" transform="translate(0 -${body})" fill="#fff"/></mask>` +
+    `</defs><g mask="url(#ml)"><g mask="url(#mr)"><g mask="url(#mt)"><rect width="100%" height="100%" fill="#000" fill-opacity="${opacity}" mask="url(#mb)"/></g></g></g></svg>`
+  const fill = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
+  featheredFills.set(key, fill)
+  return fill
+}
 
 export const CATEGORY_FALLBACK_COLORS = ['#8b5cf6', '#ec4899', '#06b6d4', '#10b981', '#f59e0b']
 

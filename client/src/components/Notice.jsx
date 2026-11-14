@@ -59,7 +59,7 @@ export const NoticeChip = memo(function NoticeChip({ tone = 'neutral', icon, ico
       type={onClick ? 'button' : undefined}
       onClick={onClick}
       title={title}
-      className={`pointer-events-auto inline-flex items-center gap-2 border px-3 py-1 text-xs text-left backdrop-blur-sm max-w-[min(92vw,26rem)] ${
+      className={`pointer-events-auto inline-flex items-center gap-2 border px-3 py-1 text-xs text-left max-w-[min(92vw,26rem)] ${
         wraps ? 'rounded-2xl py-1.5' : 'rounded-full whitespace-nowrap'
       } ${borderClass || palette.border} ${onClick ? 'ui-press cursor-pointer' : ''}`}
       style={borderColor ? { ...NOTICE_BACKGROUND, borderColor } : NOTICE_BACKGROUND}

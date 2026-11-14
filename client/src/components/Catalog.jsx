@@ -221,7 +221,7 @@ const GenreCard = memo(function GenreCard({ genre, count, subGenres, onSelectGen
     >
       <div className={`aspect-square bg-gradient-to-br ${FALLBACK_GRADIENTS[gradientIndex]} opacity-80 rounded-lg mb-3 flex items-center justify-center relative overflow-hidden group-hover/card:scale-105 transition-transform duration-quick`}>
         <GenreIcon className="w-12 h-12 md:w-16 md:h-16 text-white opacity-90" />
-        <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 backdrop-blur-sm rounded-full text-xs font-bold text-white">
+        <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 rounded-full text-xs font-bold text-white">
           {count}
         </div>
       </div>

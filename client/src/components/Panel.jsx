@@ -1,34 +1,24 @@
 import { motion } from 'framer-motion'
 import { PANEL, TRANSITIONS, useDynamicTheme, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { useUISelector, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
-import { EDGE_FADE_MASK } from '../lib/themeManager'
+import { featheredFill } from '../lib/themeManager'
 import { PRESETS } from '../lib/motion'
 
-const CURVED_BACKDROP_MASK = EDGE_FADE_MASK('8px', '8px', '8px')
+const CURVED_BACKDROP_RADIUS_PX = 12
+const CURVED_BACKDROP_FEATHER_PX = 8
 
 // Re-export for use by other components (MediaStatsOverlay, MediaSearch)
 export { GLASS_EFFECT_CONFIG }
 
-/**
- * Curved backdrop with edge feathering on all four sides.
- * Same pattern as Scroller: intersected gradients + border-radius for curves.
- * No top-to-bottom gradient - just consistent backdrop with edge fade.
- * 12px corner radius, 8px feather on all sides.
- */
 export function CurvedBackdrop({ baseOpacity = 0.9, className = '' }) {
-  const r = 12
-  const mask = CURVED_BACKDROP_MASK
-
   return (
     <div
       className={`absolute inset-0 pointer-events-none ${className}`}
       style={{
-        borderRadius: `${r}px`,
-        background: `rgba(0,0,0,${baseOpacity})`,
-        maskImage: mask,
-        WebkitMaskImage: mask,
-        maskComposite: 'intersect',
-        WebkitMaskComposite: 'source-in'
+        borderRadius: `${CURVED_BACKDROP_RADIUS_PX}px`,
+        backgroundImage: featheredFill(baseOpacity, CURVED_BACKDROP_FEATHER_PX),
+        backgroundSize: '100% 100%',
+        backgroundRepeat: 'no-repeat',
       }}
     />
   )

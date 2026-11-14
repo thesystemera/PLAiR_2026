@@ -1,6 +1,7 @@
 import {logger} from '../lib/logger'
 import {memo, useEffect, useRef, useState} from 'react'
 import { useUISelector } from '../contexts/UIStateContext'
+import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import MediaActions from './MediaActions'
 import {PanelHeader} from './Panel'
@@ -325,6 +326,30 @@ const ReviewsButton = memo(function ReviewsButton({ track }) {
   )
 })
 
+const ORIGIN_BADGE_FROST = {
+  left: 'calc(-1rem - 1px)',
+  bottom: 'calc(-1rem - 1px)',
+  width: '100cqw',
+  height: '100cqh',
+  backgroundSize: 'cover',
+  filter: 'blur(4px)',
+}
+
+const OriginBadge = memo(function OriginBadge({ trackId, human }) {
+  const art = useThemeArtwork()
+  const cover = art?.trackId === trackId ? art.imageUrl : null
+
+  return (
+    <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
+      <div className={`relative overflow-hidden px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase border border-white/30 ${human ? 'text-emerald-300/70' : 'text-purple-300/70'}`}>
+        {cover && <div aria-hidden="true" className="absolute" style={{ ...ORIGIN_BADGE_FROST, backgroundImage: `url(${cover})` }} />}
+        <div aria-hidden="true" className="absolute inset-0 bg-black/40" />
+        <span className="relative">{human ? '100% Human' : '100% AI'}</span>
+      </div>
+    </div>
+  )
+})
+
 export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal }) {
   const [analyticsState, setAnalyticsState] = useState(null)
   const artBoxRef = useRef(null)
@@ -402,7 +427,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         >
         <div
           ref={artBoxRef}
-          className={`aspect-square w-full rounded-xl flex items-center justify-center shadow-2xl overflow-hidden relative ${isSplit ? '' : 'mb-4'}`}
+          className={`aspect-square w-full rounded-xl flex items-center justify-center shadow-2xl overflow-hidden relative [container-type:size] ${isSplit ? '' : 'mb-4'}`}
         >
           <TrackArtCrossfade
             trackId={track.id}
@@ -439,15 +464,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
             <MediaActions type="track" itemId={track.id} overlay />
           </div>
 
-          <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
-            <div className={`
-              px-2 py-1 rounded-sm text-[10px] font-bold tracking-wider uppercase
-              border border-white/30 bg-black/40 backdrop-blur-sm
-              ${track.is_ai_generated === false ? 'text-emerald-300/70' : 'text-purple-300/70'}
-            `}>
-              {track.is_ai_generated === false ? '100% Human' : '100% AI'}
-            </div>
-          </div>
+          <OriginBadge trackId={track.id} human={track.is_ai_generated === false} />
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">
             <ReviewsButton track={track} />

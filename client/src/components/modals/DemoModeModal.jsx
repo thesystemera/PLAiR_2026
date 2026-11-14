@@ -110,7 +110,7 @@ export const DemoModeModal = memo(function DemoModeModal({ isOpen, onClose }) {
       title={
         <div className="flex items-center gap-3">
           <Sparkles size={24} style={{ color: '#f59e0b' }} />
-          <span>Welcome to AI Radio</span>
+          <span>Welcome to PLAiR</span>
         </div>
       }
       maxWidth="max-w-3xl"
