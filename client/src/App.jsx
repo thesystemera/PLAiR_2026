@@ -105,6 +105,22 @@ const MOBILE_NAV_CLASS = 'flex-shrink-0 border-t flex justify-around items-cente
 const MOBILE_RAIL_CLASS = 'order-first flex-shrink-0 border-r border-gray-800/50 flex flex-col justify-around items-stretch h-full py-1 z-20'
 const FULLSCREEN_EXIT_STYLE = { top: 'max(1.5rem, calc(var(--safe-top) + 0.75rem))', right: 'max(1.5rem, calc(var(--safe-right) + 0.75rem))' }
 
+function TwoWayDots({ side }) {
+  return (
+    <span className="flex gap-[3px] h-0 translate-y-0.5" aria-hidden="true">
+      {[0, 1].map(index => (
+        <motion.span
+          key={index}
+          className="w-1 h-1 rounded-full bg-current"
+          initial={false}
+          animate={{ opacity: index === side ? 1 : 0.35 }}
+          transition={MOTION.quick}
+        />
+      ))}
+    </span>
+  )
+}
+
 function LazyMount({ when, children }) {
   const [hasMounted, setHasMounted] = useState(when)
   if (when && !hasMounted) setHasMounted(true)
@@ -902,6 +918,7 @@ function App() {
                           <span className={`truncate max-w-[60px] ${isPhoneLandscape ? 'text-[10px]' : 'text-xs'}`}>{user?.username || 'User'}</span>
                         </>
                       ) : (
+                        <>
                         <FadeSwap
                           swapKey={id === PANEL_IDS.CATALOG ? catalogView : id === PANEL_IDS.RADIO ? radioInput : id}
                           preset={PRESETS.fade}
@@ -922,6 +939,9 @@ function App() {
                             }
                           </span>
                         </FadeSwap>
+                        {id === PANEL_IDS.CATALOG && <TwoWayDots side={catalogView === 'shoutouts' ? 1 : 0} />}
+                        {id === PANEL_IDS.RADIO && <TwoWayDots side={radioInput === 'text' ? 1 : 0} />}
+                        </>
                       )}
                     </button>
                   )

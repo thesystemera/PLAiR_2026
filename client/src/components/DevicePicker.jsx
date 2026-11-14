@@ -186,7 +186,7 @@ export function useDevicePicker() {
   }
 }
 
-const DEVICE_BADGE_CLASS = 'text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center shadow-md'
+const DEVICE_BADGE_CLASS = 'text-white rounded-full w-4 h-4 flex items-center justify-center shadow-md'
 
 function OfflineDeviceButton({ isOpen, setIsOpen, connectionMode, storageInfo }) {
   const { getErrorColor } = useDynamicTheme()
@@ -237,9 +237,13 @@ function OnlineDeviceButton({ currentDevice, activeDevice, isOpen, setIsOpen, ge
       <Pop show={!!activeDevice && !activeDevice.is_current} className="absolute -top-1 -right-1">
         <FadeSwap swapKey={isPlaying ? 'playing' : 'paused'} preset={PRESETS.iconSwap} mode="wait">
           {isPlaying ? (
-            <span className={DEVICE_BADGE_CLASS} style={{ background: getSuccessColor() }}>▶️</span>
+            <span className={DEVICE_BADGE_CLASS} style={{ background: getSuccessColor() }} title="Playing on another device">
+              <Play size={8} fill="currentColor" className="ml-px" />
+            </span>
           ) : (
-            <span className={DEVICE_BADGE_CLASS} style={{ background: getWarningColor() }}>⏸️</span>
+            <span className={DEVICE_BADGE_CLASS} style={{ background: getWarningColor() }} title="Paused on another device">
+              <Pause size={8} fill="currentColor" />
+            </span>
           )}
         </FadeSwap>
       </Pop>

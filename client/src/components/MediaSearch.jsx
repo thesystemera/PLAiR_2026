@@ -41,7 +41,7 @@ export const MediaSearch = memo(function MediaSearch({
     toggleCatalogView: state.toggleCatalogView,
     offlineMode: state.audioState.offlineMode,
   }))
-  const { isLG } = useViewport()
+  const { isLG, isMobile } = useViewport()
   const compact = isLG
   const currentView = catalogView
   const showError = toastError
@@ -278,18 +278,20 @@ export const MediaSearch = memo(function MediaSearch({
                 )}
               </button>
             )}
-            <button
-              type="button"
-              onClick={toggleCatalogView}
-              className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
-              title={currentView === 'tracks' ? 'View Shoutouts' : 'View Catalog'}
-            >
-              {currentView === 'tracks' ? (
-                <ShoutoutsIcon className="w-4 h-4" />
-              ) : (
-                <CatalogIcon className="w-4 h-4" />
-              )}
-            </button>
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={toggleCatalogView}
+                className={`ui-press flex-shrink-0 ${actionButtonSize} bg-gray-700 text-white rounded-full hover:bg-gray-600 transition flex items-center justify-center`}
+                title={currentView === 'tracks' ? 'View Shoutouts' : 'View Catalog'}
+              >
+                {currentView === 'tracks' ? (
+                  <ShoutoutsIcon className="w-4 h-4" />
+                ) : (
+                  <CatalogIcon className="w-4 h-4" />
+                )}
+              </button>
+            )}
           </div>
         </motion.div>
       </form>
