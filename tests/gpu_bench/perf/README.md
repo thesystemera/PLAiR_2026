@@ -6,6 +6,14 @@ Node scripts that drive PLAiR on the owner's phone over USB through Chrome DevTo
 Setup: `adb forward tcp:9222 localabstract:chrome_devtools_remote`. Some scripts hard-code the adb path of an
 old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 
+- `state.mjs` - what the phone's tab is doing right now (quality level and levers, scene thread, cover stats, canvases); changes nothing.
+- `survey.mjs [panels] [seconds]` - per panel: frames per second and slow frames at rest, then under simulated tilt.
+- `ablate.mjs <panel> [rounds] [rest]` - frames per second with coarse covers, flat covers and no scene, interleaved. Frame rate moves in steps of one screen refresh (8.3 ms at 120 Hz), so a saving that does not cross a step shows nothing here: use `budget.mjs` / `frame.mjs` for milliseconds.
+- `budget.mjs <panel> [rounds] [extra]` - GPU ms per frame of the scene's main pass and of the covers (full and coarse) by the slope method.
+- `frame.mjs <panel> '<json configs>' [rounds]` - settled average frame time for any set of renderer / scene switches plus optional page code (live CSS), interleaved; load a stage with extra copies so the frame is GPU-bound, then compare.
+- `gpucaps.mjs` - the phone GPU's float render-target support and whether the coarse cover targets are complete.
+- `surfaces.mjs [panel]` - on-screen elements whose CSS makes Chrome draw through an off-screen texture (mask, backdrop-filter, filter, opacity, rounded clips over a canvas).
+- `vizframe.mjs [panel]` - one compositor frame: render passes with their rectangles, and the layers.
 - `cdp.mjs` - shared helper: attach to the plair.live tab, `send`, `evaluate`, `sleep`.
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.

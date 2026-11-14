@@ -130,6 +130,28 @@ Shipped 6 Oct, each checked with `identity.mjs` (tilt and lights frozen, every p
   the tilt for tests (the rolling-average tilt drifts back to centre while a pose is held).
 - Frame under motion: cover pass + ~13 ms of scene and compositing. Next lever: the scene.
 
+## 3e. Frame budget on the phone, 14 Nov (High, music playing, scene on the main thread, Chrome 157)
+
+Frames per second (`survey.mjs`): Radio 60 and Queue 59 at rest and under tilt; Catalog 47 at rest, 30-46 under tilt;
+Now Playing 51 at rest, 40-44 under tilt. Covers flat or scene off: 57-60 on both (`ablate.mjs`).
+
+GPU milliseconds, everything forced every frame (`budget.mjs`, `frame.mjs`, tilt pinned, lights held):
+
+- Now Playing: frame 28 ms. Covers 12.7 (coarse 7.6), scene main pass 4.0-5.0, scene capture pass about 5.5
+  (`phone.mjs gpu`, runs every frame while music plays), CSS masks 2.1, `backdrop-blur` on the "100% AI" badge and the
+  notice chip 1.0, the rest (screen compositing, page work) about 2-3.
+- Catalog: frame 35 ms. Covers 18.7 (coarse 10.3), everything else about 16.
+- **Everything except the covers is already 15-16 ms, the whole 60 fps budget.** That is why even the cheap relight
+  pass at rest drops frames, and why coarse covers alone show no change in fps (18-19 ms still misses 16.7).
+- Copying covers from the atlas into their canvases costs nothing (7 copies = 1 copy), again. The tab buttons'
+  `brightness` filter costs nothing.
+- Chrome draws 4 render passes per frame on every panel (`vizframe.mjs`). On Now Playing the cc frame has 6: the
+  panel's edge-fade mask (1076x1812, redrawn whenever the cover changes), the tab bar's mask, the two backdrop blurs,
+  the profile tab button, and the screen (`surfaces.mjs` lists the CSS).
+- **Keep It Smooth has a dead band.** It lowers a lever only when frames average over 1.5 refresh intervals (25 ms,
+  under 40 fps, at Chrome's 60 Hz) and restores it under 1.11. This phone sits at 44-51 fps on Catalog and Now Playing,
+  so coarse covers never came on (the stored step was 0); my forced tests pushed it on. Not changed yet.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
