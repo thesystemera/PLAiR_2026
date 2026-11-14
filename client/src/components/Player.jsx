@@ -1,6 +1,6 @@
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, HardDrive, Bell, BellOff} from 'lucide-react'
 import { applySoundMode, nextSoundMode, soundModeFor } from '../lib/soundModes'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, frame, cancelFrame } from 'framer-motion'
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { formatDuration } from '../lib/utils'
 import { triggerHaptic } from '../lib/haptics'
@@ -99,6 +99,7 @@ function getDynamicSegmentColor(normalizedLoudness, trackEnergy, trackValence, s
 
 const PREVIOUS_THRESHOLD_MS = 3000
 const PLAYER_HEIGHT_SETTLE_MS = 140
+const PLAYER_STILL_FRAMES = 12
 
 const PLAY_BUTTON_HOVER = PRESETS.hoverPressLarge.whileHover
 
@@ -262,24 +263,35 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     if (!player) return
 
     let settleTimer = null
-    const publish = (height) => {
-      playerInset.set(height)
-      clearTimeout(settleTimer)
-      settleTimer = setTimeout(() => reportInterfaceState({ playerHeight: height }), PLAYER_HEIGHT_SETTLE_MS)
-    }
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const borderBox = entry.borderBoxSize?.[0]
-        publish(borderBox ? borderBox.blockSize : entry.target.offsetHeight)
+    let following = false
+    let stillFrames = 0
+    const measure = () => player.getBoundingClientRect().height
+    const follow = () => {
+      const height = measure()
+      if (height !== playerInset.height()) {
+        stillFrames = 0
+        playerInset.set(height)
+        clearTimeout(settleTimer)
+        settleTimer = setTimeout(() => reportInterfaceState({ playerHeight: height }), PLAYER_HEIGHT_SETTLE_MS)
+      } else if (++stillFrames >= PLAYER_STILL_FRAMES) {
+        following = false
+        cancelFrame(follow)
       }
+    }
+    const resizeObserver = new ResizeObserver(() => {
+      if (following) return
+      following = true
+      stillFrames = 0
+      frame.postRender(follow, true)
     })
 
     resizeObserver.observe(player)
-    playerInset.set(player.offsetHeight)
-    reportInterfaceState({ playerHeight: player.offsetHeight })
+    playerInset.set(measure())
+    reportInterfaceState({ playerHeight: playerInset.height() })
 
     return () => {
       clearTimeout(settleTimer)
+      cancelFrame(follow)
       resizeObserver.disconnect()
     }
   }, [reportInterfaceState])

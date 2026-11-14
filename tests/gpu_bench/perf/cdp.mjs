@@ -1,6 +1,6 @@
 // Tapping the tab that is already open toggles it (Radio: Talk/Text, Catalog: tracks/shoutouts): openPanel never does.
 export async function page(match = process.env.PAGE || 'plair.live') {
-  const list = await (await fetch('http://127.0.0.1:9222/json')).json()
+  const list = await (await fetch(`http://127.0.0.1:${process.env.CDP_PORT || 9222}/json`)).json()
   const target = list.find(p => p.type === 'page' && p.url.includes(match))
   if (!target) throw new Error('no plair tab')
   const socket = new WebSocket(target.webSocketDebuggerUrl)
@@ -32,3 +32,14 @@ export const openPanel = (p, name) => p.evaluate(`(() => {
   return 'opened'
 })()`)
 
+// The modal's Close button listens to pointer events, so .click() does nothing: closeDialogs presses each one.
+export const closeDialogs = p => p.evaluate(`(() => {
+  const buttons = [...document.querySelectorAll('button[aria-label="Close"]')]
+  for (const button of buttons) {
+    const rect = button.getBoundingClientRect()
+    const at = { bubbles: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, pointerId: 1, pointerType: 'mouse', isPrimary: true }
+    button.dispatchEvent(new PointerEvent('pointerdown', at))
+    button.dispatchEvent(new PointerEvent('pointerup', at))
+  }
+  return buttons.length
+})()`)

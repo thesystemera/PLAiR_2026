@@ -4,7 +4,7 @@
 // The video is published under the signed-in account, so only run it when the owner asked.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { page, sleep, openPanel } from './cdp.mjs'
+import { page, sleep, openPanel, closeDialogs } from './cdp.mjs'
 
 const mode = process.argv[2] || 'close'
 const SCRATCH = process.env.SCRATCH || 'E:/scratch/plair/sharevideo_phone'
@@ -56,7 +56,7 @@ try {
   await sleep(5000)
   await shot('2-rendering')
   if (mode === 'close') {
-    console.log('Share window closed:', await p.evaluate(`(() => { const b = document.querySelector('button[aria-label="Close"]'); if (!b) return 'no close button'; b.click(); return 'clicked' })()`))
+    console.log('Share window closed:', await closeDialogs(p))
     await sleep(1500)
     await shot('3-closed-while-rendering')
   }

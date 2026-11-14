@@ -26,6 +26,7 @@ import {
 } from './sceneEffects'
 import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from './lyricStyle'
 import { loadLyricFonts } from './lyricFonts'
+import { NV12_COLOR_SPACE, createFrameReadback, frameReadbackSupported } from './videoFrameReadback'
 
 function seededRandom(seed) {
   let s = seed
@@ -33,6 +34,8 @@ function seededRandom(seed) {
 }
 
 const VIDEO_QUEUE_FRAMES = 4
+const VIDEO_BITRATE = 2_000_000
+const KEY_FRAME_SECONDS = 2
 const AUDIO_QUEUE_CHUNKS = 4
 const AUDIO_CHUNK_SECONDS = 1
 const PROGRESS_INTERVAL_MS = 250
@@ -58,6 +61,12 @@ async function waitForEncoderQueue(encoder, maxQueueSize, getError) {
     }
     await encoderDequeued(encoder)
   }
+}
+
+function readFrame(gl, width, height) {
+  const pixels = new Uint8Array(width * height * 4)
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+  return pixels
 }
 
 async function encodeAudio(audioEncoder, pcm, getError) {
@@ -124,6 +133,7 @@ export async function renderVideo({
     audioEncoder: null,
     clipTextures: [],
     clipFrame: null,
+    readback: null,
   }
   const spent = { effects: 0, clips: 0, lyrics: 0, draw: 0, encode: 0 }
   const sampleRate = pcm.sampleRate
@@ -247,15 +257,11 @@ export async function renderVideo({
   })
   resources.videoEncoder = videoEncoder
 
-  videoEncoder.configure({
-    codec: 'avc1.64001f',
-    width,
-    height,
-    bitrate: 1_000_000,
-    framerate: fps,
-    ...bench.encoder,
-  })
-  const keyFrameEvery = bench.keyFrameEvery || 30
+  const encoderConfig = { codec: 'avc1.64001f', width, height, bitrate: VIDEO_BITRATE, framerate: fps, bitrateMode: 'constant', ...bench.encoder }
+  const constantBitrate = await VideoEncoder.isConfigSupported(encoderConfig).then(result => result.supported, () => false)
+  if (!constantBitrate) delete encoderConfig.bitrateMode
+  videoEncoder.configure(encoderConfig)
+  const keyFrameEvery = bench.keyFrameEvery || Math.round(fps * KEY_FRAME_SECONDS)
   const syncPixel = new Uint8Array(4)
 
   let audioEncoderError = null
@@ -323,6 +329,22 @@ export async function renderVideo({
 
   const delta = 1 / fps
   const frameDuration = Math.round((1 / fps) * 1_000_000)
+  const readback = !bench.canvasFrames && frameReadbackSupported(width, height) ? createFrameReadback(renderer, width, height) : null
+  resources.readback = readback
+  const frameBytes = readback ? new Uint8Array(readback.byteLength) : null
+  const encodeFrame = (source, index, init) => {
+    const videoFrame = new VideoFrame(source, { timestamp: Math.round((index / fps) * 1_000_000), duration: frameDuration, ...init })
+    videoEncoder.encode(videoFrame, { keyFrame: index % keyFrameEvery === 0 })
+    videoFrame.close()
+  }
+  const encodeOldest = async () => {
+    await readback.untilOldestReady()
+    const index = readback.take(frameBytes)
+    if (!bench.noEncode) encodeFrame(frameBytes, index, { format: 'NV12', codedWidth: width, codedHeight: height, colorSpace: NV12_COLOR_SPACE })
+    await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
+  }
+
+  let sample = null
   const renderStart = performance.now()
   let lastProgressAt = renderStart
 
@@ -409,21 +431,24 @@ export async function renderVideo({
     }
     const lyricsDone = performance.now()
 
-    if (!bench.noRender || frame === 0) renderer.render(scene, camera)
-
-    if (bench.noEncode) {
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, syncPixel)
+    if (readback) {
+      renderer.setRenderTarget(readback.target)
+      renderer.render(scene, camera)
+      if (frame === bench.sampleFrame) sample = readFrame(gl, width, height)
+      readback.submit(frame)
     } else {
-      const videoFrame = new VideoFrame(canvas, {
-        timestamp: Math.round((frame / fps) * 1_000_000),
-        duration: frameDuration,
-      })
-      videoEncoder.encode(videoFrame, { keyFrame: frame % keyFrameEvery === 0 })
-      videoFrame.close()
+      renderer.render(scene, camera)
+      if (frame === bench.sampleFrame) sample = readFrame(gl, width, height)
+      if (bench.noEncode) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, syncPixel)
+      else encodeFrame(canvas, frame)
     }
     const drawDone = performance.now()
 
-    await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
+    if (readback) {
+      while (readback.pending() > 0 && (readback.pending() >= readback.capacity || readback.oldestReady())) await encodeOldest()
+    } else {
+      await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
+    }
 
     const now = performance.now()
     spent.effects += effectsDone - frameStart
@@ -439,6 +464,7 @@ export async function renderVideo({
   }
 
   onStatus?.('Finishing video encoding...')
+  while (readback && readback.pending() > 0) await encodeOldest()
   try {
     await videoEncoder.flush()
   } catch (err) {
@@ -454,6 +480,9 @@ export async function renderVideo({
     seconds: +renderSeconds.toFixed(1),
     speed: +(durationMs / 1000 / renderSeconds).toFixed(2),
     msPerFrame: Object.fromEntries(Object.entries(spent).map(([stage, ms]) => [stage, +(ms / totalFrames).toFixed(2)])),
+    frames_source: readback ? 'readback' : 'canvas',
+    constantBitrate,
+    sample,
   }
 
   if (bench.noEncode) return { buffer: new ArrayBuffer(0), stats }
@@ -476,6 +505,10 @@ export async function renderVideo({
       if (resources.audioEncoder) {
         resources.audioEncoder.close()
       }
+    } catch { /* ignore */ }
+
+    try {
+      resources.readback?.dispose()
     } catch { /* ignore */ }
 
     try {

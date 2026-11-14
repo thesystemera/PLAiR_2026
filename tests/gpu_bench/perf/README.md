@@ -26,6 +26,12 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `atlassize.mjs [rounds] [extra] [sizes]` - Now Playing frame time with the cover atlas forced to each size (Chrome copies the whole atlas every frame: 0.7 ms per megapixel).
 - `atlasresize.mjs [panel] [rounds]` - frames around a forced atlas resize, and how long the resize blocks the page (4-6 ms per dimension).
 - `trailshare.mjs` - share of each on-screen cover's pixels that take the edge-fill path (`PANEL=Catalog`).
+- `sharevideo_phone.mjs [close|stay]` - a full share video on the phone through the app's own buttons (closing the Share window mid-render by default): time, frames per second of the app meanwhile, the page's stage timings. It publishes under the signed-in account: only when the owner asked.
+- `sharebench.mjs '<json {label: options}>'` - short share-video renders with the pipeline's bench switches (`seconds`, `canvasFrames`, `noEncode`, `flatShader`, `encoder`, `keyFrameEvery`, `sampleFrame`, `keepVisuals`, `closeWindow`); prints speed, bitrate, ms per frame and, with `sampleFrame`, the decoded frame against the rendered one (PSNR, colour shift). Nothing is uploaded.
+- `encbench.mjs [frames]`, `encbench_i420.mjs [frames] [names]` - the device's video encoders alone: frames a second and bitrate per configuration, from a canvas and from ready-made frames in memory.
+- `roloop.mjs install|read|remove` - what was written in the frames where Chrome raised a ResizeObserver loop error.
+- `insetsync.mjs [button title]` - opens and closes a player panel and checks frame by frame that the panels keep their distance to the player.
+- Any of these also drive the desktop: `node ../headless.mjs <url>` keeps headless Chrome open on the P6000, then run the script with `CDP_PORT=9338 PAGE=<part of the url>`.
 - `cdp.mjs` - shared helper: attach to the plair.live tab (`PAGE=<part of another address>`), `send`, `evaluate`, `sleep`, and `openPanel`, which never taps the tab that is already open (that toggles Radio between Talk and Text and the Catalog between tracks and shoutouts; a script did exactly that to the owner's setting on 14 Nov).
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.

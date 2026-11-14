@@ -233,6 +233,31 @@ run); `coarse` is its own stage.
 Still the biggest costs: the cover pass (12-14 ms on Now Playing: lighting 4.4, edge fill 2.5-3, march and bound
 4-5), the scroller's mask (2.5-2.9 ms) and the scene (2.6-3.2 ms).
 
+## 3h. Share video on the phone (14-15 Nov)
+
+First full run on the phone (6:14 song, 720x1280 at 30 fps): 9.6 minutes (0.65x realtime), 201 MB (4.3 Mbps for
+1 Mbps asked), the app at 34-52 fps meanwhile. Why (`sharebench.mjs`, 20-second clips):
+
+- The loop waited on Chrome's GPU process twice per frame. Render plus a 1-pixel read: 30-38 ms a frame, and 29-32 ms
+  with a flat shader, so it is the round trip, not the shader (about 6 ms). `new VideoFrame(canvas)` plus encode of a
+  still picture: 42 ms. Together 61-75 ms a frame.
+- The encoders are not the limit: fed frames from memory in a worker (`encbench_i420.mjs`) the hardware encoder does
+  54 frames/s in High profile and 79 in Main, the software one 25. In variable mode the hardware encoder spends
+  about 5 Mbps whatever is asked; in constant mode it holds 1, 2 and 3 Mbps exactly at the same speed.
+- Resting the live visuals while frames render: 0.43x -> 0.52x on the same clip.
+
+Built on 15 Nov (`lib/videoFrameReadback.js`): frames are packed as NV12 on the GPU and read back through pixel-pack
+buffers with fences, several in flight, and the encoder runs at a constant bitrate with a key frame every 2 s.
+Desktop (P6000, headless): same speed as before (10.4x, the desktop was never limited by this); a decoded frame
+against the rendered one: 38.8 dB for the old settings (1 Mbps variable, key frame every second, 1.25 Mbps real),
+39.5 dB at 1 Mbps constant, 41.6 at 1.5, 43.3 at 2; colour shift under 1.3 levels in every case. **The phone numbers
+for the new path are not measured yet**: run `sharebench.mjs` there (default, `canvasFrames`, `noEncode`, and
+`encoder.bitrate` 1 / 1.5 / 2 Mbps with `sampleFrame`) and set `VIDEO_BITRATE` from the PSNR.
+
+ResizeObserver loop errors (74 in the server log on 14 Nov): the player's size observer wrote the panel insets inside
+its callback (the 14 Nov afternoon change). Now the height is passed on after framer-motion's render step: 104 errors
+-> 0 for four panel toggles in headless Chrome, panels within 6 px of the player for two frames of a 418 px move.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
