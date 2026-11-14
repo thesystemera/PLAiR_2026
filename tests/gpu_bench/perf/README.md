@@ -21,6 +21,11 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `scenecopy.mjs [rounds]` - cost of copying out of the live background canvas (about 1.7 ms a frame for the first copy; why edge-fade strips fed from the scene were rejected).
 - `fillcheck.mjs <out dir> [dark]` + `fillcheck_diff.py <dir>` - pixel check on the phone of the mask-free fills against the masked originals; the diff script compares any `*_old.png` / `*_new.png` pair.
 - `tab.mjs open <url> | front <part> | close <part> | list` - tabs in the phone's Chrome. The owner runs PLAiR as an installed app, so a second tab is confusing for them: prefer deploying.
+- `oldnew.mjs [panels] [rounds] [seconds]` - the deployed build against the 14 Nov morning behaviour (atlas forced to 3840x1024, radio-button code back in the panel-interior shader), interleaved, frames per second at rest and under tilt. Frame rates taken an hour apart are not comparable; this is.
+- `scenepass.mjs [panel] [rounds] [extra] [variants]` - ms per main scene pass by the slope method, with the two glass shaders edited live (`VARIANTS_FILE=./scenevariants.mjs` adds the interior-shader variants).
+- `atlassize.mjs [rounds] [extra] [sizes]` - Now Playing frame time with the cover atlas forced to each size (Chrome copies the whole atlas every frame: 0.7 ms per megapixel).
+- `atlasresize.mjs [panel] [rounds]` - frames around a forced atlas resize, and how long the resize blocks the page (4-6 ms per dimension).
+- `trailshare.mjs` - share of each on-screen cover's pixels that take the edge-fill path (`PANEL=Catalog`).
 - `cdp.mjs` - shared helper: attach to the plair.live tab (`PAGE=<part of another address>`), `send`, `evaluate`, `sleep`, and `openPanel`, which never taps the tab that is already open (that toggles Radio between Talk and Text and the Catalog between tracks and shoutouts; a script did exactly that to the owner's setting on 14 Nov).
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.
@@ -28,7 +33,7 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `ctxloss.mjs '<variants json>' <rounds> [panel]` - reload, then interleaved switches under simulated tilt, logging every WebGL context created or lost; stops at the first real loss. Run `adb logcat` alongside: Chrome logs the GPU reset reason there.
 - `stages.mjs '<stage,stage>' <rounds> [extra passes]` - GPU ms per cover pass on Now Playing by the slope method (forced full pass + N extra passes, fixed tilt, fixed light level, settles after each shader swap), for shader variants from `edits.mjs` (live source edits, no build); interleaved rounds, medians.
 - `identity.mjs '<stage,stage>' <out dir> [panel]` - reads the largest on-screen cover's own canvas with tilt and lights frozen and compares every pixel to the first shot (mean, max, % of pixels off by >2 / >8), saving PNGs and x8 diff images. Put `reference` first to score variants against a 96-step march.
-- `edits.mjs` - the shader variants both use (`as is`, `lights off`, `no parallax`, `reference`, ...).
+- `edits.mjs` - the shader variants both use (`as is`, `lights off`, `no parallax`, `reference`, ...). Stages run at full resolution; `coarse` is its own stage. The cover pass varies 2-3 ms with the cover, so compare stages inside one round (`stages.mjs` prints the song).
 - `soak.mjs <rounds>` - fresh reload, then motion on Now Playing, watching for WebGL context loss.
 - `catwhy2.mjs <px/s>` - catalog fling, classifies every blank tile per frame (no data / no pack / decoding / ready not drawn).
 - `fadeab.mjs` - skips with the theme transitions on vs off.

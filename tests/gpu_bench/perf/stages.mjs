@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 import { STAGES, installShaderEdits, applyStage, removeShaderEdits } from './edits.mjs'
 
 const names = (process.argv[2] || Object.keys(STAGES).join(',')).split(',')
@@ -10,7 +10,7 @@ await installShaderEdits(p)
 const measureOnce = (ms) => p.evaluate(`new Promise(resolve => { const f = []; const end = performance.now() + ${ms}; const tick = t => { f.push(t); if (t < end) requestAnimationFrame(tick); else resolve(+((f.at(-1) - f[0]) / (f.length - 1)).toFixed(2)) }; requestAnimationFrame(tick) })`)
 const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() => { throw new Error('the page stopped drawing frames (screen off or app in the background?)') })])
 
-await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === 'Playing').click(), 1`)
+await openPanel(p, process.env.PANEL || 'Playing')
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 } }), 1')
 await sleep(1500)
@@ -34,8 +34,9 @@ try {
         times.push(await measure(2500))
       }
       const perPass = (times[1] - times[0]) / extra
+      const song = await p.evaluate(`navigator.mediaSession.metadata?.title || ''`)
       results[name].push(perPass)
-      console.log(`round ${r + 1} ${name.padEnd(16)} frame ${times[0]} ms, +${extra} passes ${times[1]} ms -> ${perPass.toFixed(2)} ms/pass (programs edited: ${hits})`)
+      console.log(`round ${r + 1} ${name.padEnd(16)} frame ${times[0]} ms, +${extra} passes ${times[1]} ms -> ${perPass.toFixed(2)} ms/pass (programs edited: ${hits}) [${song}]`)
     }
   }
 } finally {

@@ -25,7 +25,7 @@ import {
   WebGLRenderer,
   WebGLRenderTarget,
 } from 'three'
-import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, backdropFragmentShader } from './sceneShaders'
+import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader } from './sceneShaders'
 import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -64,7 +64,15 @@ const ARTWORK_SWAP_FRAMES = 2
 const ARTWORK_FADE_MAX_STEP_S = 1 / 30
 const PANEL_CORNER_RADIUS = 0.015
 const OPAQUE_PANEL_OPACITY = 0.9995
-const MAX_SPLIT_RECTS = 7
+const PANEL_FEATHER = 0.01
+const MIN_PANEL_SIZE = 0.01
+const MIN_PANEL_OPACITY = 0.01
+const MAX_PANELS = 7
+const MAX_SPLIT_RECTS = MAX_PANELS * 2
+const SPLIT_GRID = 128
+const RADIO_BUTTON_REACH = 1.25
+const RADIO_BUTTON_MIN_STATE = 0.005
+const RADIO_BUTTON_MIN_RADIUS = 0.001
 export const LYRIC_WIDTH = 1024
 export const LYRIC_HEIGHT = 512
 
@@ -187,21 +195,59 @@ async function loadArtworkTexture(blob) {
   return texture
 }
 
+function addRect(out, n, x0, y0, x1, y1) {
+  out[n * 4] = Math.max(0, x0)
+  out[n * 4 + 1] = Math.max(0, y0)
+  out[n * 4 + 2] = Math.min(1, x1)
+  out[n * 4 + 3] = Math.min(1, y1)
+  return out[n * 4] < out[n * 4 + 2] && out[n * 4 + 1] < out[n * 4 + 3] ? n + 1 : n
+}
+
 function opaquePanelRects(regions, opacities, count, out) {
   let n = 0
   for (let i = 0; i < count; i++) {
     const region = regions[i]
-    if (region.z < 0.01 || opacities[i] < OPAQUE_PANEL_OPACITY) continue
-    const halfWidth = region.z * 0.5 - PANEL_CORNER_RADIUS
-    const halfHeight = region.w * 0.5 - PANEL_CORNER_RADIUS
-    if (halfWidth <= 0 || halfHeight <= 0) continue
-    out[n * 4] = Math.max(0, region.x - halfWidth)
-    out[n * 4 + 1] = Math.max(0, region.y - halfHeight)
-    out[n * 4 + 2] = Math.min(1, region.x + halfWidth)
-    out[n * 4 + 3] = Math.min(1, region.y + halfHeight)
-    if (out[n * 4] < out[n * 4 + 2] && out[n * 4 + 1] < out[n * 4 + 3]) n++
+    if (region.z < MIN_PANEL_SIZE || opacities[i] < OPAQUE_PANEL_OPACITY) continue
+    const halfWidth = region.z * 0.5
+    const halfHeight = region.w * 0.5
+    const insetWidth = halfWidth - PANEL_CORNER_RADIUS
+    const insetHeight = halfHeight - PANEL_CORNER_RADIUS
+    if (insetWidth <= 0 || insetHeight <= 0) continue
+    n = addRect(out, n, region.x - halfWidth, region.y - insetHeight, region.x + halfWidth, region.y + insetHeight)
+    n = addRect(out, n, region.x - insetWidth, region.y - halfHeight, region.x + insetWidth, region.y + halfHeight)
   }
   return n
+}
+
+function glassPanelRects(regions, opacities, count, out) {
+  let n = 0
+  for (let i = 0; i < count; i++) {
+    const region = regions[i]
+    if (region.z < MIN_PANEL_SIZE || opacities[i] < MIN_PANEL_OPACITY) continue
+    const halfWidth = region.z * 0.5 + PANEL_FEATHER
+    const halfHeight = region.w * 0.5 + PANEL_FEATHER
+    n = addRect(out, n, region.x - halfWidth, region.y - halfHeight, region.x + halfWidth, region.y + halfHeight)
+  }
+  return n
+}
+
+function insideAny(rects, count, x, y) {
+  for (let k = 0; k < count; k++) {
+    if (x > rects[k * 4] && x < rects[k * 4 + 2] && y > rects[k * 4 + 1] && y < rects[k * 4 + 3]) return true
+  }
+  return false
+}
+
+function radioButtonBounds(uniforms, out) {
+  const radius = uniforms.u_radio_button_radius.value
+  if (uniforms.u_radio_button_state.value <= RADIO_BUTTON_MIN_STATE || radius.x <= RADIO_BUTTON_MIN_RADIUS) return false
+  const center = uniforms.u_radio_button_pos.value
+  const reach = Math.max(RADIO_BUTTON_REACH, 1.08 + 0.1 * uniforms.u_audio_pulse.value)
+  out[0] = Math.max(0, Math.floor((center.x - radius.x * reach) * SPLIT_GRID) / SPLIT_GRID)
+  out[1] = Math.max(0, Math.floor((center.y - radius.y * reach) * SPLIT_GRID) / SPLIT_GRID)
+  out[2] = Math.min(1, Math.ceil((center.x + radius.x * reach) * SPLIT_GRID) / SPLIT_GRID)
+  out[3] = Math.min(1, Math.ceil((center.y + radius.y * reach) * SPLIT_GRID) / SPLIT_GRID)
+  return out[0] < out[2] && out[1] < out[3]
 }
 
 function pushQuad(positions, uvs, x0, y0, x1, y1) {
@@ -212,44 +258,56 @@ function pushQuad(positions, uvs, x0, y0, x1, y1) {
   }
 }
 
-function splitScreen(rects, count) {
+function fullScreenQuads() {
+  const quads = { positions: [], uvs: [] }
+  pushQuad(quads.positions, quads.uvs, 0, 0, 1, 1)
+  return quads
+}
+
+function splitScreen(opaque, opaqueCount, glass, glassCount, button) {
   const xs = [0, 1]
   const ys = [0, 1]
-  for (let i = 0; i < count; i++) {
-    xs.push(rects[i * 4], rects[i * 4 + 2])
-    ys.push(rects[i * 4 + 1], rects[i * 4 + 3])
+  for (let i = 0; i < opaqueCount; i++) {
+    xs.push(opaque[i * 4], opaque[i * 4 + 2])
+    ys.push(opaque[i * 4 + 1], opaque[i * 4 + 3])
+  }
+  for (let i = 0; i < glassCount; i++) {
+    xs.push(glass[i * 4], glass[i * 4 + 2])
+    ys.push(glass[i * 4 + 1], glass[i * 4 + 3])
+  }
+  if (button) {
+    xs.push(button[0], button[2])
+    ys.push(button[1], button[3])
   }
   const sortUnique = values => [...new Set(values)].sort((a, b) => a - b)
   const columns = sortUnique(xs)
   const rows = sortUnique(ys)
   const inner = { positions: [], uvs: [] }
+  const innerButton = { positions: [], uvs: [] }
   const outer = { positions: [], uvs: [] }
+  const backdrop = { positions: [], uvs: [] }
   for (let j = 0; j < rows.length - 1; j++) {
     const y0 = rows[j]
     const y1 = rows[j + 1]
     const cy = (y0 + y1) * 0.5
     let runStart = 0
-    let runInside = null
+    let runTarget = null
     for (let i = 0; i <= columns.length - 1; i++) {
-      let inside = null
+      let target = null
       if (i < columns.length - 1) {
         const cx = (columns[i] + columns[i + 1]) * 0.5
-        inside = false
-        for (let k = 0; k < count; k++) {
-          if (cx > rects[k * 4] && cx < rects[k * 4 + 2] && cy > rects[k * 4 + 1] && cy < rects[k * 4 + 3]) { inside = true; break }
-        }
+        const underButton = !!button && cx > button[0] && cx < button[2] && cy > button[1] && cy < button[3]
+        if (insideAny(opaque, opaqueCount, cx, cy)) target = underButton ? innerButton : inner
+        else target = underButton || insideAny(glass, glassCount, cx, cy) ? outer : backdrop
       }
-      if (inside !== runInside) {
-        if (runInside !== null) {
-          const target = runInside ? inner : outer
-          pushQuad(target.positions, target.uvs, columns[runStart], y0, columns[i], y1)
-        }
+      if (target !== runTarget) {
+        if (runTarget !== null) pushQuad(runTarget.positions, runTarget.uvs, columns[runStart], y0, columns[i], y1)
         runStart = i
-        runInside = inside
+        runTarget = target
       }
     }
   }
-  return { inner, outer }
+  return { inner, innerButton, outer, backdrop }
 }
 
 function setQuads(geometry, quads) {
@@ -475,24 +533,42 @@ export class SceneRenderer {
       fragmentShader: sceneGlassFragmentShader,
       uniforms: this.fgMaterial.uniforms,
     })
+    this.glassButtonMaterial = new ShaderMaterial({
+      vertexShader: backgroundVertexShader,
+      fragmentShader: sceneGlassButtonFragmentShader,
+      uniforms: this.fgMaterial.uniforms,
+    })
     this.glassGeometry = new BufferGeometry()
     this.glassInteriorGeometry = new BufferGeometry()
-    setQuads(this.glassGeometry, splitScreen(null, 0).outer)
-    setQuads(this.glassInteriorGeometry, splitScreen(null, 0).outer)
+    this.glassButtonGeometry = new BufferGeometry()
+    this.glassBackdropGeometry = new BufferGeometry()
+    for (const geometry of [this.glassGeometry, this.glassInteriorGeometry, this.glassButtonGeometry, this.glassBackdropGeometry]) setQuads(geometry, fullScreenQuads())
     this.splitRects = new Float64Array(MAX_SPLIT_RECTS * 4)
     this.splitScratch = new Float64Array(MAX_SPLIT_RECTS * 4)
+    this.splitGlass = new Float64Array(MAX_PANELS * 4)
+    this.splitGlassScratch = new Float64Array(MAX_PANELS * 4)
+    this.splitButton = new Float64Array(4)
+    this.splitButtonScratch = new Float64Array(4)
     this.splitCount = -1
+    this.splitGlassCount = -1
+    this.splitHasButton = false
     this.splitHasInterior = false
+    this.splitHasInteriorButton = false
     this.splitHasOuter = true
+    this.splitHasBackdrop = false
 
     this.captureMesh = new Mesh(this.geometry, this.bgMaterial)
     this.glassMesh = new Mesh(this.glassGeometry, this.fgMaterial)
     this.glassInteriorMesh = new Mesh(this.glassInteriorGeometry, this.glassInteriorMaterial)
+    this.glassButtonMesh = new Mesh(this.glassButtonGeometry, this.glassButtonMaterial)
+    this.glassBackdropMesh = new Mesh(this.glassBackdropGeometry, this.backdropMaterial)
     this.backdropMesh = new Mesh(this.geometry, this.backdropMaterial)
-    for (const mesh of [this.captureMesh, this.glassMesh, this.glassInteriorMesh, this.backdropMesh]) mesh.frustumCulled = false
+    for (const mesh of [this.captureMesh, this.glassMesh, this.glassInteriorMesh, this.glassButtonMesh, this.glassBackdropMesh, this.backdropMesh]) mesh.frustumCulled = false
     this.captureScene.add(this.captureMesh)
     this.mainScene.add(this.glassMesh)
     this.mainScene.add(this.glassInteriorMesh)
+    this.mainScene.add(this.glassButtonMesh)
+    this.mainScene.add(this.glassBackdropMesh)
     this.mainScene.add(this.backdropMesh)
     for (const node of [this.mainScene, this.captureScene, this.mainCamera, this.captureCamera]) {
       node.updateMatrixWorld(true)
@@ -680,6 +756,9 @@ export class SceneRenderer {
     this.fgMaterial.dispose()
     this.backdropMaterial.dispose()
     this.glassInteriorMaterial.dispose()
+    this.glassButtonMaterial.dispose()
+    this.glassButtonGeometry.dispose()
+    this.glassBackdropGeometry.dispose()
     this.glassGeometry.dispose()
     this.glassInteriorGeometry.dispose()
     this.geometry.dispose()
@@ -689,17 +768,30 @@ export class SceneRenderer {
 
   updateGlassSplit(regions, opacities, count) {
     const rects = this.splitScratch
+    const glass = this.splitGlassScratch
     const n = opaquePanelRects(regions, opacities, count, rects)
-    let changed = n !== this.splitCount
+    const glassCount = glassPanelRects(regions, opacities, count, glass)
+    const button = radioButtonBounds(this.fgMaterial.uniforms, this.splitButtonScratch) ? this.splitButtonScratch : null
+    let changed = n !== this.splitCount || glassCount !== this.splitGlassCount || !!button !== this.splitHasButton
     for (let i = 0; !changed && i < n * 4; i++) changed = rects[i] !== this.splitRects[i]
+    for (let i = 0; !changed && i < glassCount * 4; i++) changed = glass[i] !== this.splitGlass[i]
+    for (let i = 0; !changed && button && i < 4; i++) changed = button[i] !== this.splitButton[i]
     if (!changed) return
     this.splitCount = n
     this.splitRects.set(rects)
-    const { inner, outer } = splitScreen(rects, n)
+    this.splitGlassCount = glassCount
+    this.splitGlass.set(glass)
+    this.splitHasButton = !!button
+    if (button) this.splitButton.set(button)
+    const { inner, innerButton, outer, backdrop } = splitScreen(rects, n, glass, glassCount, button)
     if (inner.positions.length) setQuads(this.glassInteriorGeometry, inner)
+    if (innerButton.positions.length) setQuads(this.glassButtonGeometry, innerButton)
     if (outer.positions.length) setQuads(this.glassGeometry, outer)
+    if (backdrop.positions.length) setQuads(this.glassBackdropGeometry, backdrop)
     this.splitHasInterior = inner.positions.length > 0
+    this.splitHasInteriorButton = innerButton.positions.length > 0
     this.splitHasOuter = outer.positions.length > 0
+    this.splitHasBackdrop = backdrop.positions.length > 0
   }
 
   frame(delta) {
@@ -1216,6 +1308,8 @@ export class SceneRenderer {
       if (hasVisiblePanels) this.updateGlassSplit(packedRegions, packedOpacities, packedCount)
       this.glassMesh.visible = hasVisiblePanels && this.splitHasOuter
       this.glassInteriorMesh.visible = hasVisiblePanels && this.splitHasInterior
+      this.glassButtonMesh.visible = hasVisiblePanels && this.splitHasInteriorButton
+      this.glassBackdropMesh.visible = hasVisiblePanels && this.splitHasBackdrop
       this.backdropMesh.visible = !hasVisiblePanels
 
       if (timing) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }

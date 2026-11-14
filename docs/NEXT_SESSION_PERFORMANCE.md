@@ -185,6 +185,54 @@ Rejected, with the number:
 Still the biggest costs, untouched: the cover pass (12.7 ms on Now Playing, 18.7 on the Catalog), the scene's main
 pass (4-5 ms) and the scroller's mask (2.5-2.9 ms).
 
+## 3g. Shader pass, 14 Nov evening (same picture required)
+
+**Cover shader: nothing left to take with the same picture.** Now Playing, 989x989, full resolution, `stages.mjs`:
+12.1-13.2 ms a pass (it varies 2-3 ms with the cover, so compare inside one round only; the script prints the song).
+Tried, 2 rounds each, noise about 0.4 ms:
+
+- Lighting rewritten with the same maths and fewer vectors (`light algebra`): -0.17. Normal rebuilt without
+  `normalize` / `length`: +0.5. Glint computed only where it can be positive: +0.8.
+- Depth-bound setup in integers (`floatBitsToInt` for the level, shifts for the cells): -0.3.
+- Explicit LOD on the fill's reads: -0.7 once, and no change when it was tried on 6 Oct.
+- The edge fill wrapped in a variable-bound loop to force a real branch: +0.7 to +3.8.
+- The edge fill is honest work, not a compiler artefact: 21.8% of the big cover's pixels take the 8-read fill path
+  (`trailshare.mjs`; 0.7-42% on Catalog tiles). Removing the fill saves 2.5-3.0 ms, its gate alone costs 0.5-0.8, the
+  four gradient reads 0-0.2.
+- The depth bound is worth about 10 ms a pass (lights off: 8.7-10.5 ms with it, 20.6 without).
+
+**Around the cover pass: the atlas.** Chrome copies the whole atlas canvas every frame a cover is drawn (0.7 ms per
+megapixel), and the atlas only ever grew: 3840x1024 after one visit to the Catalog, on every panel. Now Playing's
+frame under the same load: 42.6 ms with it, 41.0 ms at 1280x1024 (`atlassize.mjs`). Now the atlas is 1024 wide (wider
+only for a wider cover), covers are packed tallest first, and its height follows the frame's covers: it grows at once
+and shrinks after 90 draws at more than 1.5x the need. Phone: Catalog and Now Playing 1024x1472 (no resize between
+them), Queue 1024x192, Radio 1024x128. Resizing a WebGL canvas blocks the page 4-6 ms per dimension on the phone
+(`atlasresize.mjs`; both: about 10 ms; assigning the same size: 0.2 ms), which is why only the height moves.
+
+**Scene main pass: 4.0-4.4 ms -> Radio 3.2, Queue 2.7, Now Playing 2.6** (`scenepass.mjs`, slope with 8 extra passes).
+
+- The panel-interior shader (84% of the phone's screen) carried the radio button's code for every pixel: without it
+  the pass is 1.0 ms cheaper. The interior cells under the button's bounding box draw with a third program that keeps
+  it (`sceneGlassButtonFragmentShader`), so the picture is the same.
+- The interior now reaches the panels' edges (only the four corner squares stay with the full shader), and cells no
+  panel or button can reach draw with the backdrop shader: another 0.2-0.7 ms.
+- Not done: a constant panel-count loop (-0.2 to -0.4 ms) needs one program per panel count.
+- Pixel check (`tests/gpu_bench/scene_split_check.js`: the same uniforms drawn with the split and with the full shader
+  on every pixel): on the phone 1,343-1,927 of 660,912 pixels differ by one level (one pixel by two, once); the same
+  split drawn twice is identical. Before the change the old split differed from the full shader the same way
+  (P6000, phone size: 1,182-1,294 of 418,304 before, 529-905 after).
+
+**Frames per second, today's build against the morning's behaviour, interleaved (`oldnew.mjs`, 3 rounds):** Catalog
+under tilt 40.2 -> 44.0, Now Playing under tilt 41.5 -> 44.0, at rest 56.6 -> 57.9. Under touch (`touchfps.mjs`)
+Radio 66 -> 70. Frame rates measured an hour apart on the phone are not comparable (the same build read 39 and 34 on
+the Catalog); only interleaved runs are.
+
+Rig: `edits.mjs` stages now run at full resolution by default (they forced coarse covers on, and left them on after a
+run); `coarse` is its own stage.
+
+Still the biggest costs: the cover pass (12-14 ms on Now Playing: lighting 4.4, edge fill 2.5-3, march and bound
+4-5), the scroller's mask (2.5-2.9 ms) and the scene (2.6-3.2 ms).
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

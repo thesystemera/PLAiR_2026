@@ -448,6 +448,7 @@ const GLASS_FRAGMENT_BODY = `
       }
     }
 
+    #ifdef GLASS_RADIO_BUTTON
     vec2 toCenter = screenUV - u_radio_button_pos;
     vec2 normalizedDist = toCenter / u_radio_button_radius;
     float dist = length(normalizedDist);
@@ -509,6 +510,7 @@ const GLASS_FRAGMENT_BODY = `
 
       finalColor = mix(finalColor, vec4(glassColor, 1.0), opacityMult);
     }
+    #endif
 
     return finalColor;
   }
@@ -543,7 +545,9 @@ const backdropFragmentShader = BACKGROUND_FRAGMENT_BODY + BACKGROUND_FUNCTION + 
   }
 `
 
-const sceneFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BACKGROUND_FUNCTION + AMBIENT_GLOW_FUNCTION + `
+const RADIO_BUTTON_DEFINE = '#define GLASS_RADIO_BUTTON\n'
+
+const sceneFragmentShader = RADIO_BUTTON_DEFINE + BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY + BACKGROUND_FUNCTION + AMBIENT_GLOW_FUNCTION + `
   void main() {
     vec4 glass = clamp(computeGlass(), 0.0, 1.0);
     vec3 color;
@@ -564,5 +568,6 @@ const sceneGlassFragmentShader = BACKGROUND_FRAGMENT_BODY + GLASS_FRAGMENT_BODY 
     gl_FragColor = vec4(applyAmbientGlow(glass.rgb, vUv, glass.a), 1.0);
   }
 `
+const sceneGlassButtonFragmentShader = RADIO_BUTTON_DEFINE + sceneGlassFragmentShader
 
-export { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, backdropFragmentShader }
+export { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader }

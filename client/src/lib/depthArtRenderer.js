@@ -19,6 +19,10 @@ const AHEAD_FRAMES = 10
 const AHEAD_MIN_VIEWPORTS = 0.5
 const AHEAD_MAX_VIEWPORTS = 2
 const AHEAD_DRAWS_PER_FRAME = 4
+const ATLAS_STEP_PX = 64
+const ATLAS_MIN_WIDTH = 1024
+const ATLAS_SPARE_RATIO = 1.5
+const ATLAS_SHRINK_AFTER_DRAWS = 90
 const CONTEXT_OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false }
 const NO_PARALLAX = { parallaxX: 0, parallaxY: 0 }
 
@@ -71,6 +75,7 @@ class DepthArtRenderer {
     this.stepScale = 1
     this.tiltOverride = null
     this.coarseOverride = null
+    this.atlasSpareDraws = 0
     this.coarseUnavailable = false
     this.coarseTargets = null
     this.skipDraw = false
@@ -559,33 +564,64 @@ class DepthArtRenderer {
   }
 
   drawBatch(batch, probe) {
-    let group = []
+    const canvas = this.canvas
+    const fit = px => Math.min(this.maxSize, Math.ceil(px / ATLAS_STEP_PX) * ATLAS_STEP_PX)
+    let area = 0
+    let widest = 0
+    for (const item of batch) {
+      area += item.width * item.height
+      widest = Math.max(widest, item.width)
+    }
+    const width = Math.max(canvas.width, fit(Math.max(ATLAS_MIN_WIDTH, widest, area / this.maxSize)))
+    const tallestFirst = batch.length > 1 ? [...batch].sort((a, b) => b.height - a.height) : batch
+    const groups = []
+    let group = { items: [], width: 0, height: 0 }
     let x = 0
     let y = 0
     let rowHeight = 0
-    let usedWidth = 0
-    for (const item of batch) {
-      if (x + item.width > this.maxSize) {
+    for (const item of tallestFirst) {
+      if (x + item.width > width) {
         y += rowHeight
         x = 0
         rowHeight = 0
       }
-      if (y + item.height > this.maxSize) {
-        this.drawGroup(group, usedWidth, y + rowHeight, probe)
-        group = []
+      if (y + item.height > this.maxSize && group.items.length) {
+        groups.push(group)
+        group = { items: [], width: 0, height: 0 }
         x = 0
         y = 0
         rowHeight = 0
-        usedWidth = 0
       }
       item.x = x
       item.y = y
-      group.push(item)
+      group.items.push(item)
       x += item.width
-      usedWidth = Math.max(usedWidth, x)
       rowHeight = Math.max(rowHeight, item.height)
+      group.width = Math.max(group.width, x)
+      group.height = y + rowHeight
     }
-    if (group.length) this.drawGroup(group, usedWidth, y + rowHeight, probe)
+    if (group.items.length) groups.push(group)
+    let height = 0
+    for (const { height: used } of groups) height = Math.max(height, fit(used))
+    this.fitAtlas(width, height)
+    for (const { items, width: used, height: usedHeight } of groups) this.drawGroup(items, used, usedHeight, probe)
+  }
+
+  fitAtlas(width, height) {
+    const canvas = this.canvas
+    if (canvas.width !== width) canvas.width = width
+    if (canvas.height < height) {
+      canvas.height = height
+      this.atlasSpareDraws = 0
+      return
+    }
+    if (canvas.height <= height * ATLAS_SPARE_RATIO) {
+      this.atlasSpareDraws = 0
+      return
+    }
+    if (++this.atlasSpareDraws < ATLAS_SHRINK_AFTER_DRAWS) return
+    canvas.height = height
+    this.atlasSpareDraws = 0
   }
 
   drawCoarse(items, width, height, probe) {
@@ -653,10 +689,6 @@ class DepthArtRenderer {
   drawGroup(group, width, height, probe) {
     const gl = this.gl
     const canvas = this.canvas
-    if (canvas.width < width || canvas.height < height) {
-      canvas.width = Math.max(canvas.width, Math.min(this.maxSize, Math.ceil(width / 256) * 256))
-      canvas.height = Math.max(canvas.height, Math.min(this.maxSize, Math.ceil(height / 256) * 256))
-    }
     const { full, cache, relight } = this.programs
     const profile = window.__plairProfile
     const drawStart = profile ? performance.now() : 0
