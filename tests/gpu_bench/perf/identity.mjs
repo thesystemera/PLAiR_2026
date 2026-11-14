@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 import { STAGES, installShaderEdits, applyStage, removeShaderEdits } from './edits.mjs'
 
 const names = (process.argv[2] || 'as is,as is,start at bound').split(',')
@@ -9,7 +9,7 @@ mkdirSync(outDir, { recursive: true })
 const p = await page()
 await installShaderEdits(p)
 const panel = process.argv[4]
-if (panel) await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+if (panel) await openPanel(p, panel)
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await sleep(2500)
 const level = await p.evaluate('window.__plairLight.read().level')

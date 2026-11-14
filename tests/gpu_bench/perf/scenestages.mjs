@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 // GPU ms of the background scene's main pass per variant on the phone (slope method: forced redraw + N extra main
 // passes), with the covers not drawing. Variants override scene uniforms for the run.
@@ -11,7 +11,7 @@ const panel = process.argv[5] || 'Playing'
 const p = await page()
 const measureOnce = (ms) => p.evaluate(`new Promise(resolve => { const f = []; const end = performance.now() + ${ms}; const tick = t => { f.push(t); if (t < end) requestAnimationFrame(tick); else resolve(+((f.at(-1) - f[0]) / (f.length - 1)).toFixed(2)) }; requestAnimationFrame(tick) })`)
 const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() => { throw new Error('the page stopped drawing frames (screen off or app in the background?)') })])
-await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+await openPanel(p, panel)
 await sleep(1500)
 await p.evaluate(`window.__plairArt.set({ skipDraw: true, tilt: { x: 0.6, y: 0.4 } }), 1`)
 const names = [...new Set(variants.flatMap(([, uniforms]) => Object.keys(uniforms)))]

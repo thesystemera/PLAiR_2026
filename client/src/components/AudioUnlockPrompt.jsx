@@ -4,12 +4,12 @@ import { Volume2 } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { usePlaybackActions } from '../contexts/PlaybackContext'
 import { PRESETS } from '../lib/motion'
+import { insetBottomWithGap } from '../lib/playerInset'
+import { usePlayerInset } from '../hooks/usePlayerInset'
 
 export const AudioUnlockPrompt = memo(function AudioUnlockPrompt() {
-  const { visible, playerHeight } = useUISelector(state => ({
-    visible: !!state.engineState.audioNeedsTap && !!state.engineState.isActiveDevice && !state.interfaceState.isFullscreenVisuals,
-    playerHeight: state.interfaceState.playerHeight || 0,
-  }))
+  const visible = useUISelector(state => !!state.engineState.audioNeedsTap && !!state.engineState.isActiveDevice && !state.interfaceState.isFullscreenVisuals)
+  const abovePlayer = usePlayerInset(insetBottomWithGap)
   const { togglePlay } = usePlaybackActions()
 
   return (
@@ -18,8 +18,8 @@ export const AudioUnlockPrompt = memo(function AudioUnlockPrompt() {
         <motion.div
           key="audio-unlock"
           {...PRESETS.fadeSlide}
+          ref={abovePlayer}
           className="fixed left-1/2 -translate-x-1/2 z-[60]"
-          style={{ bottom: `calc(${playerHeight}px + 1rem)` }}
         >
           <button
             type="button"

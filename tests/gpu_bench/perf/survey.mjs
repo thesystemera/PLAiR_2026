@@ -1,6 +1,6 @@
 // node survey.mjs [panels] [seconds] — per panel: frames per second and slow frames with the phone at rest, then under
 // simulated hand-held tilt. Switches panels on the phone. Panels are the tab labels (the Radio tab reads "Text" in text mode).
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panels = (process.argv[2] || 'Queue,Catalog,Text,Playing').split(',')
 const seconds = Number(process.argv[3] || 4)
@@ -51,8 +51,8 @@ const wobbleFor = async (ms) => {
 console.log('playing:', await p.evaluate(`navigator.mediaSession?.playbackState`), '| quality:', await p.evaluate(`JSON.stringify((({ level, smoothStep, levers }) => ({ level, smoothStep, levers }))(window.__plairQuality()))`))
 try {
   for (const panel of panels) {
-    const found = await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); if (!b) return false; b.click(); return true })()`)
-    if (!found) { console.log(panel, 'tab not found'); continue }
+    const found = await openPanel(p, panel)
+    if (found === 'missing') { console.log(panel, 'tab not found'); continue }
     await sleep(2000)
     console.log(panel.padEnd(8), 'rest', await measure(seconds * 1000))
     await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 0, gamma: 0 })

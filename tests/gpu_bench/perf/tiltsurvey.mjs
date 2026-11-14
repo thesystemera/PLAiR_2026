@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 const p = await page()
 const panels = (process.argv[2] || 'Catalog,Queue,Radio,Playing').split(',')
 const seconds = Number(process.argv[3] || 5)
@@ -17,7 +17,7 @@ const measure = (ms) => p.evaluate(`new Promise(resolve => { const f = []; const
 await sleep(1500)
 console.log('gyro', await p.evaluate(`window.__plairScene.eval("const g = scene.state?.gyro; return g ? [+g.parallaxX.toFixed(2), +g.parallaxY.toFixed(2)] : null")`))
 for (const panel of panels) {
-  await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+  await openPanel(p, panel)
   await sleep(1800)
   await p.evaluate(`window.__plairProfile = {}, 1`)
   const all = await measure(seconds * 1000)

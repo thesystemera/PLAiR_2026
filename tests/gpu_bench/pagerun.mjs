@@ -1,4 +1,4 @@
-// node pagerun.mjs <url> <seconds> <expression>  — open a page in headless Chrome on the P6000, trace main-thread GPU waits, print an expression
+// node pagerun.mjs <url> <seconds> <expression>  — open a page in headless Chrome on the P6000, trace main-thread GPU waits, print an expression (WINDOW=1600,1000 sets the window size)
 import { spawn, execSync } from 'node:child_process'
 import { killProfileChrome } from './killchrome.mjs'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -11,7 +11,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 const profile = mkdtempSync(join(tmpdir(), 'plair-page-'))
 const chrome = spawn('C:/Program Files/Google/Chrome/Application/chrome.exe', [
   '--headless=new', ...(process.env.SWIFTSHADER ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : ['--use-angle=d3d11', `--use-adapter-luid=${process.env.LUID || '0,86686'}`]),
-  `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
+  `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...(process.env.WINDOW ? [`--window-size=${process.env.WINDOW}`] : []), '--no-first-run', '--no-default-browser-check', 'about:blank',
 ], { stdio: 'ignore' })
 let ws
 for (let i = 0; i < 50 && !ws; i++) {

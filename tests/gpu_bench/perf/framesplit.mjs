@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 // Where a moving frame's time goes on the phone: frame time with the background scene and the covers each forced to
 // redraw every frame or switched off (tilt pinned, light level fixed). node framesplit.mjs <panels> <rounds>
@@ -17,7 +17,7 @@ const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() 
 const set = (scene, art) => p.evaluate(`window.__plairScene.set({ ...${JSON.stringify(scene)}, extra: 0 }), window.__plairArt.set({ skipDraw: ${art.skipDraw}, bench: { forceFull: ${art.forceFull}, extraFull: 0 }, tilt: { x: 0.6, y: 0.4 } }), window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), 1`)
 try {
   for (const panel of panels) {
-    await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+    await openPanel(p, panel)
     await sleep(1500)
     const results = Object.fromEntries(COMBOS.map(([label]) => [label, []]))
     for (let r = 0; r < rounds; r++) {

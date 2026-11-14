@@ -1,7 +1,7 @@
 // node frame.mjs <panel> '<json list of [label, art settings, scene settings, page code?]>' [rounds] — settled average frame
 // time for each configuration, interleaved, tilt pinned and lights held. For working out fixed costs: load a stage
 // with extra copies so the frame is GPU-bound, then subtract the known cost of the copies (budget.mjs).
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Playing'
 const configs = JSON.parse(process.argv[3])
@@ -23,7 +23,7 @@ const settled = async () => {
 const RESET_ART = { coarse: null, lit: true, skipCopy: false, bench: { forceFull: false, extraFull: 0, extraCopy: 0 } }
 const RESET_SCENE = { skip: false, force: false, extra: 0, uniforms: null }
 
-await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); b?.click(); return 1 })()`)
+await openPanel(p, panel)
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 } }), 1')
 await sleep(1800)

@@ -526,7 +526,6 @@ export class SceneRenderer {
       case 'click': this.click = { intensity: message.intensity, at: Date.now() - message.age, active: true }; break
       case 'visible': this.setVisible(message.visible); break
       case 'bench': Object.assign(this.bench, message.bench); break
-      case 'redraw': this.signature.force = true; break
       case 'eval': this.runEval(message); break
       case 'dispose': this.dispose(); break
       default: break

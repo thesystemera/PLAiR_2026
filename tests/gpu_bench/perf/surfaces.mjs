@@ -1,12 +1,12 @@
 // node surfaces.mjs [panel] — on-screen elements whose CSS can make Chrome draw them through an off-screen texture
 // (a render pass): backdrop-filter, filter, mask, clip-path, blend mode, opacity below 1, will-change, and rounded
 // clips that hold a canvas. Largest first. Changes nothing.
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2]
 const p = await page()
 if (panel) {
-  await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); b?.click(); return 1 })()`)
+  await openPanel(p, panel)
   await sleep(2000)
 }
 const rows = await p.evaluate(`(() => {

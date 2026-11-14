@@ -22,6 +22,8 @@ import { FadeSwap } from './Motion'
 import { PRESETS } from '../lib/motion'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
+import { insetBottom, insetBottomAboveTabs } from '../lib/playerInset'
+import { usePlayerInset } from '../hooks/usePlayerInset'
 
 const RADIO_SIDE_WIDTH = 'min(18rem, 40vw)'
 
@@ -66,11 +68,10 @@ export function Radio() {
   const { getFilterAllActive, getFilterInactive } = useDynamicTheme()
 
   const { radioButtonOpacity: buttonOpacity, radioButtonForegroundOpacity: buttonForegroundOpacity, radioButtonInteraction: buttonInteraction } = useRadioButton()
-  const { reportEngineStatus, isMusicPlaying, mobilePanel, playerHeight, isFullscreenVisuals, radioInput, toggleRadioInput } = useUISelector(state => ({
+  const { reportEngineStatus, isMusicPlaying, mobilePanel, isFullscreenVisuals, radioInput, toggleRadioInput } = useUISelector(state => ({
     reportEngineStatus: state.reportEngineStatus,
     isMusicPlaying: state.engineState.isMusicPlaying,
     mobilePanel: state.interfaceState.currentMobilePanel,
-    playerHeight: state.interfaceState.playerHeight,
     isFullscreenVisuals: state.interfaceState.isFullscreenVisuals,
     radioInput: state.settingsState.radioInput,
     toggleRadioInput: state.toggleRadioInput,
@@ -92,6 +93,11 @@ export function Radio() {
   const conversationScrollRef = useRef(null)
   const scrollerRef = useRef(null)
   const anchorRef = useRef(null)
+  const anchorInset = usePlayerInset(isPhoneLandscape ? insetBottom : insetBottomAboveTabs)
+  const attachAnchor = useCallback((node) => {
+    anchorRef.current = node
+    anchorInset(node)
+  }, [anchorInset])
   const { offset: maskOffset, scale: anchorScale, size: buttonSize } = useRadioAnchor(scrollerRef, anchorRef)
 
   const { toastError, toastInfo } = useUISelector(state => ({ toastError: state.toastError, toastInfo: state.toastInfo }))
@@ -264,17 +270,15 @@ export function Radio() {
 
       {createPortal(
         <div
-          ref={anchorRef}
+          ref={attachAnchor}
           className="fixed flex items-center justify-center pointer-events-none"
           style={isPhoneLandscape ? {
             top: `calc(var(--safe-top) + ${PANEL.headerHeight}px)`,
-            bottom: `${playerHeight}px`,
             right: 'var(--safe-right)',
             width: RADIO_SIDE_WIDTH,
             zIndex: 50
           } : {
             top: isMobile ? `calc(var(--safe-top) + ${PANEL.headerHeight}px)` : `${PANEL.headerHeight}px`,
-            bottom: `${playerHeight + 64}px`,
             left: 0,
             right: 0,
             zIndex: 50

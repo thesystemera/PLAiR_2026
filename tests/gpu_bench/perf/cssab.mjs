@@ -1,7 +1,7 @@
 // node cssab.mjs <panel> '<json: {"label": "css rules", ...}>' [rounds] [extra cover passes] — GPU cost of page styling:
 // the frame is loaded with forced cover and scene passes so it is GPU-bound, then each set of CSS rules is injected in
 // turn (interleaved with "as is") and the settled frame time compared. The page flickers; rules are removed at the end.
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Playing'
 const variants = { 'as is': '', ...JSON.parse(process.argv[3]) }
@@ -23,7 +23,7 @@ const settled = async () => {
 }
 const setCss = rules => p.evaluate(`(() => { document.getElementById('bench-css')?.remove(); const rules = ${JSON.stringify(rules)}; if (rules) { const s = document.createElement('style'); s.id = 'bench-css'; s.textContent = rules; document.head.appendChild(s) } return 1 })()`)
 
-await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); b?.click(); return 1 })()`)
+await openPanel(p, panel)
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await p.evaluate(`window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 }, coarse: false, bench: { forceFull: true, extraFull: ${extra} } }), window.__plairScene.set({ force: true }), 1`)
 await sleep(1800)

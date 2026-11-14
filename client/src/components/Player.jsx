@@ -16,6 +16,7 @@ import { artPop, nudge } from '../lib/microMotion'
 import { FadeSwap, Pop } from './Motion'
 import { ON_AIR_LAMP } from '../lib/themeManager'
 import { TrackArtCrossfade } from './DepthArt'
+import { playerInset } from '../lib/playerInset'
 
 const SOUND_ICONS = { volume: Volume2, bell: Bell, bellOff: BellOff, muted: VolumeX }
 
@@ -97,6 +98,7 @@ function getDynamicSegmentColor(normalizedLoudness, trackEnergy, trackValence, s
 }
 
 const PREVIOUS_THRESHOLD_MS = 3000
+const PLAYER_HEIGHT_SETTLE_MS = 140
 
 const PLAY_BUTTON_HOVER = PRESETS.hoverPressLarge.whileHover
 
@@ -256,19 +258,28 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playerRef = useRef(null)
 
   useEffect(() => {
-    if (!playerRef.current) return
+    const player = playerRef.current
+    if (!player) return
 
+    let settleTimer = null
+    const publish = (height) => {
+      playerInset.set(height)
+      clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => reportInterfaceState({ playerHeight: height }), PLAYER_HEIGHT_SETTLE_MS)
+    }
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const borderBox = entry.borderBoxSize?.[0]
-        reportInterfaceState({ playerHeight: borderBox ? borderBox.blockSize : entry.target.offsetHeight })
+        publish(borderBox ? borderBox.blockSize : entry.target.offsetHeight)
       }
     })
 
-    resizeObserver.observe(playerRef.current)
-    reportInterfaceState({ playerHeight: playerRef.current.offsetHeight })
+    resizeObserver.observe(player)
+    playerInset.set(player.offsetHeight)
+    reportInterfaceState({ playerHeight: player.offsetHeight })
 
     return () => {
+      clearTimeout(settleTimer)
       resizeObserver.disconnect()
     }
   }, [reportInterfaceState])

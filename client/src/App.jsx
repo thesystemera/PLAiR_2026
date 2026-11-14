@@ -2,6 +2,8 @@ import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef
 import {AnimatePresence, motion} from 'framer-motion'
 import {api} from './lib/api'
 import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
+import {insetBottom, insetPaddingBottom} from './lib/playerInset'
+import {usePlayerInset} from './hooks/usePlayerInset'
 import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
 import {offlineBackend} from './lib/offlineAPI'
@@ -172,6 +174,12 @@ function App() {
   })
   const [panelFits, setPanelFits] = useState(null)
   const panelRowRef = useRef(null)
+  const panelRowInset = usePlayerInset(insetPaddingBottom)
+  const mobilePanelsInset = usePlayerInset(insetBottom)
+  const attachPanelRow = useCallback((node) => {
+    panelRowRef.current = node
+    panelRowInset(node)
+  }, [panelRowInset])
   const panelFitTimerRef = useRef(null)
 
   const { playTrack, seek, seedRadio, reloadCurrentTrackQuality, audio } = usePlaybackActions()
@@ -783,12 +791,9 @@ function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: isFullscreenVisuals ? 0 : 1 }}
               transition={PANEL_FADE_TRANSITION}
-              ref={panelRowRef}
+              ref={attachPanelRow}
               className="flex flex-1 gap-4 p-4 relative z-10 overflow-hidden"
-              style={{
-                paddingBottom: `${playerHeight + 16}px`,
-                ...getPanelPointerEvents(!isFullscreenVisuals)
-              }}
+              style={getPanelPointerEvents(!isFullscreenVisuals)}
             >
               {panelStructure.map(({ id, content, stateKey }) => (
                 <Panel
@@ -812,9 +817,9 @@ function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: isFullscreenVisuals ? 0 : 1 }}
               transition={PANEL_FADE_TRANSITION}
+              ref={mobilePanelsInset}
               className={`fixed inset-x-0 top-0 flex z-10 ${isPhoneLandscape ? 'flex-row' : 'flex-col'}`}
               style={{
-                bottom: `${playerHeight}px`,
                 paddingTop: 'var(--safe-top)',
                 paddingRight: isPhoneLandscape ? 'var(--safe-right)' : undefined,
                 ...getPanelPointerEvents(!isFullscreenVisuals)

@@ -2,7 +2,7 @@
 // scene's main pass, the lit covers as full passes and as coarse passes. Tilt pinned, lights held at a fixed level,
 // each stage forced every frame with N extra copies; ms per copy = (frame with N extra - frame with none) / N.
 // Covers and the background flicker while it runs; everything is put back at the end.
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Playing'
 const rounds = Number(process.argv[3] || 3)
@@ -29,7 +29,7 @@ const STAGES = {
   'covers, coarse': async n => { await scene({ force: true, extra: 0 }); await art({ coarse: true, bench: { forceFull: true, extraFull: n } }) },
 }
 
-await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); b?.click(); return 1 })()`)
+await openPanel(p, panel)
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 } }), 1')
 await sleep(1800)

@@ -1,3 +1,4 @@
+// Tapping the tab that is already open toggles it (Radio: Talk/Text, Catalog: tracks/shoutouts): openPanel never does.
 export async function page(match = process.env.PAGE || 'plair.live') {
   const list = await (await fetch('http://127.0.0.1:9222/json')).json()
   const target = list.find(p => p.type === 'page' && p.url.includes(match))
@@ -21,3 +22,13 @@ export async function page(match = process.env.PAGE || 'plair.live') {
   return { send, evaluate, on: f => listeners.push(f), close: () => socket.close() }
 }
 export const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+export const openPanel = (p, name) => p.evaluate(`(() => {
+  const names = ${JSON.stringify(name === 'Radio' || name === 'Text' ? ['Radio', 'Text'] : [name])}
+  const tab = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => names.some(n => b.innerText.trim().startsWith(n)))
+  if (!tab) return 'missing'
+  if (tab.getAttribute('aria-current') === 'page') return 'already open'
+  tab.click()
+  return 'opened'
+})()`)
+

@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 // fps with the phone at rest (real sensors, music driving the lights), coarse off vs on, alternating.
 const panels = (process.argv[2] || 'Playing,Catalog').split(',')
@@ -8,7 +8,7 @@ const measureOnce = (ms) => p.evaluate(`new Promise(resolve => { const f = []; c
 const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() => { throw new Error('the page stopped drawing frames') })])
 try {
   for (const panel of panels) {
-    await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+    await openPanel(p, panel)
     await sleep(1500)
     const fps = { off: [], on: [] }
     for (let r = 0; r < rounds; r++) {

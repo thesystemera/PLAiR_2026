@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 // Moving-frame fps with coarse parallax and lighting off vs on: scene and covers forced to redraw every frame,
 // tilt pinned, light level fixed, alternating. node coarsefps.mjs <panels> <rounds>
@@ -10,7 +10,7 @@ const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() 
 try {
   await p.evaluate(`window.__plairScene.set({ force: true, extra: 0 }), window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), 1`)
   for (const panel of panels) {
-    await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+    await openPanel(p, panel)
     await sleep(1500)
     const fps = { off: [], on: [] }
     for (let r = 0; r < rounds; r++) {

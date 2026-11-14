@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useUISelector } from '../contexts/UIStateContext'
 import { PRESETS } from '../lib/motion'
 import { ON_AIR_LAMP, getOnAirSegment } from '../lib/themeManager'
+import { insetBottom } from '../lib/playerInset'
+import { usePlayerInset } from '../hooks/usePlayerInset'
 
 const LAMP_GLOW = `0 0 6px 2px ${ON_AIR_LAMP}d9, 0 0 14px 4px #f59e0b59`
 
@@ -67,11 +69,12 @@ const EDGE_LEFT = 'linear-gradient(to right, var(--on-air-accent), transparent)'
 const EDGE_RIGHT = 'linear-gradient(to left, var(--on-air-accent), transparent)'
 
 export const OnAirFrame = memo(function OnAirFrame() {
-  const { talkBreak, bottom } = useUISelector(state => ({ talkBreak: state.engineState.talkBreak, bottom: state.interfaceState.playerHeight || 0 }))
-  return <OnAirFrameView talkBreak={talkBreak} bottom={bottom} />
+  const talkBreak = useUISelector(state => state.engineState.talkBreak)
+  return <OnAirFrameView talkBreak={talkBreak} />
 })
 
-const OnAirFrameView = memo(function OnAirFrameView({ talkBreak, bottom }) {
+const OnAirFrameView = memo(function OnAirFrameView({ talkBreak }) {
+  const abovePlayer = usePlayerInset(insetBottom)
   const segment = getOnAirSegment(talkBreak)
   const paused = talkBreak?.paused ? 'true' : 'false'
   const dim = talkBreak?.paused ? 0.5 : undefined
@@ -83,13 +86,14 @@ const OnAirFrameView = memo(function OnAirFrameView({ talkBreak, bottom }) {
           key="on-air-frame"
           {...PRESETS.fadeSlow}
           aria-hidden="true"
-          className="fixed inset-0 z-40 pointer-events-none"
+          ref={abovePlayer}
+          className="fixed inset-x-0 top-0 z-40 pointer-events-none"
           style={{ '--on-air-lamp': `${ON_AIR_LAMP}59`, '--on-air-accent': `${segment.color}40` }}
         >
           <div className="ui-breathe absolute inset-x-0 top-0 h-16" data-paused={paused} style={{ background: EDGE_TOP, opacity: dim }} />
-          <div className="ui-breathe absolute inset-x-0 h-12" data-paused={paused} style={{ bottom, background: EDGE_BOTTOM, opacity: dim }} />
-          <div className="ui-breathe absolute top-0 left-0 w-5" data-paused={paused} style={{ bottom, background: EDGE_LEFT, opacity: dim }} />
-          <div className="ui-breathe absolute top-0 right-0 w-5" data-paused={paused} style={{ bottom, background: EDGE_RIGHT, opacity: dim }} />
+          <div className="ui-breathe absolute inset-x-0 bottom-0 h-12" data-paused={paused} style={{ background: EDGE_BOTTOM, opacity: dim }} />
+          <div className="ui-breathe absolute inset-y-0 left-0 w-5" data-paused={paused} style={{ background: EDGE_LEFT, opacity: dim }} />
+          <div className="ui-breathe absolute inset-y-0 right-0 w-5" data-paused={paused} style={{ background: EDGE_RIGHT, opacity: dim }} />
         </motion.div>
       )}
     </AnimatePresence>

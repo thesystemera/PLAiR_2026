@@ -1,4 +1,4 @@
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const variants = JSON.parse(process.argv[2] || '[["with copy",{"skipCopy":false}],["no copy",{"skipCopy":true}]]')
 const rounds = Number(process.argv[3] || 8)
@@ -59,7 +59,7 @@ say('reload')
 await p.send('Page.reload', { ignoreCache: true })
 await sleep(11000)
 say('after load', await state())
-await p.evaluate(`[...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim() === ${JSON.stringify(panel)}).click(), 1`)
+await openPanel(p, panel)
 let wobbling = true
 const wobble = (async () => { const start = Date.now(); while (wobbling) { const t = (Date.now() - start) / 1000; await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 10 * Math.sin(t * Math.PI * 1.6), gamma: 10 * Math.sin(t * Math.PI * 1.2 + 1) }); await sleep(33) } })()
 await sleep(1500)

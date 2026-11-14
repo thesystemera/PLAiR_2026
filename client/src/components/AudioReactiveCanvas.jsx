@@ -17,7 +17,6 @@ import {addFrameWork, frameStatsActive} from '../lib/frameStats'
 import {renderLyricToCanvas} from '../lib/sceneEffects'
 import {drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle} from '../lib/lyricStyle'
 import {loadLyricFonts} from '../lib/lyricFonts'
-import {edgeFade} from '../lib/edgeFade'
 import {usePlaybackActions} from '../contexts/PlaybackContext'
 
 const VOICE_GAIN = 2.2
@@ -124,7 +123,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const lyricRef = useRef({ canvas: null, words: null, styled: null, key: null })
   const aspectRef = useRef(LYRIC_WIDTH / LYRIC_HEIGHT)
   const evalsRef = useRef(new Map())
-  const fadeSourceRef = useRef(null)
 
   latestRef.current = { ui, getUIState, audio, visualQuality, glassTaps, reduceMotion, levelIndex, reportFrame, reportRenderer, onContextLostChange, getAccentRgb, getCategoryMetadata, interactionEffectsRef, canvasDpr, referenceDpr }
 
@@ -135,7 +133,6 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     switch (message.type) {
       case 'tick': {
         latest.reportFrame(message.delta, message.wanted)
-        if (message.rendered && channelRef.current?.thread === 'main' && canvasRef.current) edgeFade.paint(canvasRef.current)
         publishBeat(message.kick, message.pulse)
         publishLightLevel(message.level, message.target)
         glowRef.current.set(message.glow)
@@ -149,10 +146,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       }
       case 'ready': splashReady('scene'); break
       case 'renderer': latest.reportRenderer(message.name); break
-      case 'context':
-        latest.onContextLostChange(message.lost)
-        edgeFade.setSource(message.lost ? null : fadeSourceRef.current)
-        break
+      case 'context': latest.onContextLostChange(message.lost); break
       case 'clipIndex': {
         const clips = clipsRef.current
         clips.currentIndex = message.index
@@ -194,14 +188,10 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
         const scene = new SceneRenderer({ canvas, captureResolution, glassBlurFactor, emit: onSceneMessage })
         channelRef.current = { thread: 'main', send: message => scene.handle(message), close: () => scene.dispose() }
         for (const message of pending) scene.handle(message)
-        fadeSourceRef.current = () => scene.handle({ type: 'redraw' })
-        edgeFade.setSource(fadeSourceRef.current)
       })
     }
     logger.info(`[AudioReactiveCanvas] Scene renders on the ${channelRef.current.thread} thread`)
     return () => {
-      fadeSourceRef.current = null
-      edgeFade.setSource(null)
       channelRef.current?.close()
       channelRef.current = null
     }

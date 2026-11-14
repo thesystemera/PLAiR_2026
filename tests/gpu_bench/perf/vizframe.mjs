@@ -1,12 +1,12 @@
 // node vizframe.mjs [panel] — one compositor frame from the phone: every render pass Chrome draws for the page (each
 // one beyond the last is an off-screen texture), its rectangle, what changed inside it and how many quads it holds,
 // then the layers with their sizes and memory. `surfaces.mjs` names the CSS that forces the passes. Changes nothing.
-import { page, sleep } from './cdp.mjs'
+import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2]
 const p = await page()
 if (panel) {
-  await p.evaluate(`(() => { const b = [...document.querySelectorAll('[data-mobile-nav] button')].find(b => b.innerText.trim().startsWith(${JSON.stringify(panel)})); b?.click(); return 1 })()`)
+  await openPanel(p, panel)
   await sleep(2000)
 }
 const version = await (await fetch('http://127.0.0.1:9222/json/version')).json()
