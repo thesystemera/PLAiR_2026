@@ -72,6 +72,9 @@ export const IMAGE_BODY = `
   uniform float u_focal_depth;
   uniform float u_focal_range;
   uniform float u_is_capture;
+  uniform vec2 u_tex_resolution;
+
+  float focalDepth;
 
   const vec2 BOKEH_DIR_1 = vec2(1.0, 0.0);
   const vec2 BOKEH_DIR_2 = vec2(-0.5, 0.8660254);
@@ -82,10 +85,18 @@ export const IMAGE_BODY = `
        if (u_is_capture > 0.5) return 0.0;
        return u_max_blur;
     }
-    vec2 clampedUV = clamp(uv, 0.0, 1.0);
-    float depth = texture2D(u_depth_map, clampedUV).r;
-    float blurAmount = abs(depth - u_focal_depth) - u_focal_range;
-    return max(0.0, blurAmount) * u_max_blur * 2.0 + (u_max_blur * 0.05);
+    return 0.0;
+  }
+
+  vec4 sampleFocus(vec2 uv, float transition) {
+    vec2 texel = uv * u_tex_resolution;
+    float lod = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
+    vec2 clamped = clamp(uv, 0.0, 1.0);
+    float depth = textureLod(u_depth_map, clamped, lod + 2.5).g;
+    lod += clamp((abs(depth - focalDepth) - u_focal_range) * u_max_blur, 0.0, 4.5);
+    vec4 color = textureLod(u_texture, clamped, lod);
+    if (transition >= 1.0) return color;
+    return mix(textureLod(u_texture_prev, clamped, lod), color, transition * transition * (3.0 - 2.0 * transition));
   }
 
   vec4 sampleBlend(vec2 uv, float transition) {
@@ -109,6 +120,7 @@ export const IMAGE_BODY = `
   }
 
   vec4 sampleImage(vec2 uv, float blurAmount, float transition) {
+    if (u_has_depth_map > 0.5) return sampleFocus(uv, transition);
     vec4 color;
     float blendFactor = transition * transition * (3.0 - 2.0 * transition);
     if (blurAmount > 1.0 && u_is_capture < 0.5) {
@@ -160,6 +172,7 @@ export const IMAGE_BODY = `
   }
 
   vec4 coverImage() {
+    focalDepth = u_focal_depth;
     vec2 uv = vFxUv;
     float blurAmount = getBlurAmount(uv);
     vec4 finalColor;
@@ -184,7 +197,6 @@ export const IMAGE_BODY = `
 `
 
 export const FRAMING = `
-  uniform vec2 u_tex_resolution;
   uniform vec2 u_parallax;
   uniform float u_scale;
   uniform vec2 u_frame_offset;

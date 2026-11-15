@@ -19,6 +19,7 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
 import { LOOKS, LOOK_IDS, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
+import { applyFocus, createFocus } from './scene/focus'
 import {
   createInitialEffects,
   buildVisualCueMap,
@@ -244,7 +245,8 @@ export async function renderVideo({
   }
   const plan = bench.flatShader ? null : planShots(audioFeatures)
   const directorCursor = createDirectorCursor()
-  const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, energy: 0, bands: depth?.bands || null, tilt: { x: 0, y: 0 } }
+  const focus = createFocus()
+  const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: plan?.beats || null, energy: 0, bands: depth?.bands || null, grid: depth?.grid || null, frame: focus.frame, flipY: false, tilt: { x: 0, y: 0 } }
 
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
@@ -407,6 +409,7 @@ export async function renderVideo({
     material.uniforms.u_max_blur.value = effects.blur
     material.uniforms.u_chromatic.value = effects.chromatic
     material.uniforms.u_flicker.value = effects.flicker
+    applyFocus(material.uniforms, focus, depth?.grid || null, false, delta, effects.blur)
 
     let look = 'cover'
     if (plan) {
@@ -418,6 +421,7 @@ export async function renderVideo({
         lookContext.rotation = material.uniforms.u_rotation.value
         lookContext.pulse = at.pulse
         lookContext.beatsSince = at.beatsSince
+        lookContext.firstBeat = at.firstBeat
         lookContext.energy = rawEnergy
         setLookUniforms(material.uniforms, at.shot, lookContext)
       }
@@ -592,5 +596,5 @@ async function loadTextures(packBlob) {
   const depthTexture = new CanvasTexture(depth.canvas)
   depthTexture.flipY = false
   depthTexture.minFilter = LinearMipmapLinearFilter
-  return { texture, depth: { texture: depthTexture, bands: depth.bands } }
+  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
 }

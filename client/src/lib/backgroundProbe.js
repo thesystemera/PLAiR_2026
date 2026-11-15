@@ -83,6 +83,15 @@ function coverFit(u, v, aspect, texAspect, out) {
 
 const fitted = new Float32Array(2)
 
+function tileAt(rects, u, v) {
+  let found = -1
+  for (let i = 0; i < rects.length; i++) {
+    const rect = rects[i]
+    if (u >= rect.x && u < rect.z && v >= rect.y && v < rect.w) found = i
+  }
+  return found
+}
+
 function backgroundAt(u, v, p) {
   let framedX
   let framedY
@@ -91,16 +100,15 @@ function backgroundAt(u, v, p) {
   let rotateHue = Math.abs(p.hue) > 0.001
   let level = 1
   const split = p.split
-  if (split) {
-    const cols = split.u_split_grid.value.x
-    const rows = split.u_split_grid.value.y
-    const cellX = Math.min(Math.floor(u * cols), cols - 1)
-    const cellY = Math.min(Math.floor(v * rows), rows - 1)
-    const tile = cellY * cols + cellX
+  const tile = split ? tileAt(split.u_tile_rect.value, u, v) : -1
+  if (tile >= 0) {
+    const rect = split.u_tile_rect.value[tile]
     const crop = split.u_tile_crop.value[tile]
-    let localU = u * cols - cellX
+    const width = rect.z - rect.x
+    const height = rect.w - rect.y
+    let localU = (u - rect.x) / width
     if (crop.w > 0.5) localU = 1 - localU
-    coverFit(localU, v * rows - cellY, (p.width / cols) / (p.height / rows), p.texWidth / p.texHeight, fitted)
+    coverFit(localU, (v - rect.y) / height, (p.width * width) / (p.height * height), p.texWidth / p.texHeight, fitted)
     framedX = (fitted[0] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetX + crop.x
     framedY = (fitted[1] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetY + crop.y
     hueCos = split.u_tile_hue.value[tile].x
@@ -108,6 +116,7 @@ function backgroundAt(u, v, p) {
     rotateHue = true
     level = split.u_tile_level.value[tile]
   } else {
+    if (split) level = split.u_split_frame.value.x
     coverFit(u, v, p.width / p.height, p.texWidth / p.texHeight, fitted)
     framedX = (fitted[0] - 0.5) / p.frameScale + p.frameOffsetX
     framedY = (fitted[1] - 0.5) / p.frameScale + p.frameOffsetY

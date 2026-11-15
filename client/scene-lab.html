@@ -35,8 +35,21 @@ canvas.height = Math.round(height * dpr)
 canvas.style.width = `${width}px`
 canvas.style.height = `${height}px`
 
+const compileWatch = { start: performance.now(), last: performance.now(), gaps: [], drawing: true }
 const scene = new SceneRenderer({ canvas, emit: () => {} })
 scene.handle({ type: 'size', width, height, dpr, referenceDpr: dpr })
+const watchFrame = now => {
+  compileWatch.gaps.push(+(now - compileWatch.last).toFixed(1))
+  if (scene.programsReady && !scene.lookReady.depth) (compileWatch.duringLooks ||= []).push(+(now - compileWatch.last).toFixed(1))
+  compileWatch.last = now
+  if (scene.programsReady && !compileWatch.cover) compileWatch.cover = +(now - compileWatch.start).toFixed(0)
+  if (scene.programsReady) {
+    scene.bench.force = true
+    scene.frame(1 / 60)
+  }
+  if (compileWatch.drawing) requestAnimationFrame(watchFrame)
+}
+requestAnimationFrame(watchFrame)
 const [blob, features, lyricTiming] = await Promise.all([
   fetch(`/api/artwork/${id}/pack/512`).then(r => r.blob()),
   fetch(`/api/audio-features/${id}`).then(r => r.json()),
@@ -58,6 +71,12 @@ const until = async (test, ms = 20000) => {
 }
 
 await until(() => scene.programsReady && scene.lookReady.split && scene.lookReady.depth)
+compileWatch.looks = +(performance.now() - compileWatch.start).toFixed(0)
+await sleep(300)
+compileWatch.drawing = false
+scene.bench.force = false
+const sortedGaps = [...compileWatch.gaps].sort((a, b) => b - a)
+window.compileStats = { coverReady: compileWatch.cover, looksReady: compileWatch.looks, frames: compileWatch.gaps.length, worstGaps: sortedGaps.slice(0, 6), duringLooks: compileWatch.duringLooks, over50: compileWatch.gaps.filter(g => g > 50).length }
 await until(() => {
   scene.handle({ type: 'state', state: { isPlaying: false, progressMs: 0, durationMs: features.duration * 1000 } })
   scene.frame(1 / 30)
@@ -94,7 +113,7 @@ async function at(seconds, capture) {
 function describe(shot) {
   const v = shot.variant
   if (shot.look === 'split') return `${v.layout}${v.mirror ? ' mirror' : ''}${v.chase ? ' chase' : ''} hues ${v.hues.join('/')}`
-  if (shot.look === 'depth') return `${v.motion} ${v.grade}${v.focus ? ' focus' : ''}`
+  if (shot.look === 'depth') return `${v.motion} ${v.grade} ${v.focus}`
   return ''
 }
 
@@ -224,6 +243,7 @@ async function identity(cases = 6) {
   for (let c = 0; c < Math.min(cases, setups.length); c++) {
     await at(30 + c * 17)
     setups[c]()
+    fg.u_has_depth_map.value = 0
     for (const [name, oldShader, material] of pairs) {
       const old = new ShaderMaterial({ vertexShader: OLD.backgroundVertexShader, fragmentShader: oldShader, uniforms: material.uniforms })
       const a = read(material)

@@ -124,5 +124,5 @@ export function directorAt(plan, t, cursor) {
   const lastBeat = b > 0 ? beats[b - 1] : -Infinity
   const pulse = Math.exp(-Math.max(0, t - lastBeat) / PULSE_DECAY_S)
   const firstBeat = lowerBound(beats, shot.start - 0.05)
-  return { shot, index: i, pulse, beatsSince: Math.max(0, b - 1 - firstBeat) }
+  return { shot, index: i, pulse, firstBeat, beatsSince: Math.max(0, b - 1 - firstBeat) }
 }

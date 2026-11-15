@@ -29,6 +29,7 @@ import {
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
 import { LOOKS, LOOK_IDS, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
+import { applyFocus, createFocus } from './scene/focus'
 import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -80,7 +81,7 @@ export const LYRIC_WIDTH = 1024
 export const LYRIC_HEIGHT = 512
 
 const BG_SIGNATURE_UNIFORMS = [
-  'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
+  'u_has_depth_map', 'u_focal_depth', 'u_focal_range', 'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
   'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_brightness', 'u_contrast', 'u_saturation',
   'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution', 'u_text_empty',
 ]
@@ -202,7 +203,7 @@ async function loadArtworkTextures(blob) {
   depthTexture.wrapT = ClampToEdgeWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
-  return { texture, depth: { texture: depthTexture, bands: depth.bands } }
+  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
 }
 
 function addRect(out, n, x0, y0, x1, y1) {
@@ -433,9 +434,11 @@ export class SceneRenderer {
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
     this.layerDepth = { A: null, B: null }
     this.bands = null
+    this.depthGrid = null
+    this.focus = createFocus()
     this.plan = null
     this.directorCursor = createDirectorCursor()
-    this.lookContext = { t: 0, aspect: 1, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, energy: 0, bands: null, tilt: { x: 0, y: 0 } }
+    this.lookContext = { t: 0, aspect: 1, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: null, energy: 0, bands: null, grid: null, frame: this.focus.frame, flipY: true, tilt: { x: 0, y: 0 } }
     this.frontLayer = 'A'
     this.artworkUrl = null
     this.artworkTokens = { A: 0, B: 0 }
@@ -665,8 +668,11 @@ export class SceneRenderer {
       ctx.rotation = bgUniforms.u_rotation.value
       ctx.pulse = at.pulse
       ctx.beatsSince = at.beatsSince
+      ctx.firstBeat = at.firstBeat
+      ctx.beats = plan.beats
       ctx.energy = energy
       ctx.bands = this.bands
+      ctx.grid = bgUniforms.u_has_depth_map.value > 0.5 ? this.depthGrid : null
       ctx.tilt.x = -parallaxX / Math.max(width, 1)
       ctx.tilt.y = -parallaxY / Math.max(height, 1)
       setLookUniforms(bgUniforms, at.shot, ctx)
@@ -772,6 +778,8 @@ export class SceneRenderer {
     const depth = this.layerDepth[this.frontLayer]
     u.u_depth_map.value = depth ? depth.texture : this.transparentPixel
     this.bands = depth ? depth.bands : null
+    this.depthGrid = depth ? depth.grid : null
+    this.focus.primed = false
   }
 
   setLyric({ image, empty, probe }) {
@@ -1238,7 +1246,7 @@ export class SceneRenderer {
     bgUniforms.u_hue.value = effects.hue * Math.PI / 180
     bgUniforms.u_max_blur.value = visualQuality === 'high' ? effects.blur : 0
     bgUniforms.u_chromatic.value = visualQuality === 'high' && !reduceMotion ? effects.chromatic : 0
-    bgUniforms.u_has_depth_map.value = 0.0
+    applyFocus(bgUniforms, this.focus, visualQuality === 'high' ? this.depthGrid : null, true, delta, effects.blur)
     bgUniforms.u_flicker.value = effects.flicker
     this.direct(reduceMotion, effects.currentEnergy || 0, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
 

@@ -1,9 +1,14 @@
 import { Vector2, Vector4 } from 'three'
 import { pickWeighted } from '../random'
+import { APERTURE, FOCUS_RANGE, depthGrid } from '../focus'
 
 const DEG = Math.PI / 180
 const MOTIONS = [['pulse', 3], ['dolly', 2], ['drift', 2]]
 const GRADES = [['plain', 2], ['dusk', 2], ['neon', 1]]
+const FOCUS_MODES = [['subject', 3], ['rack', 2], ['deep', 1]]
+const RACK_BEATS = 8
+const RACK_S = 0.6
+const MAX_LAYER_BLUR = 3
 const FLAT_SPREAD = 0.12
 const FILL_BIAS = 4.0
 const DEPTH_BIAS = 2.5
@@ -35,7 +40,25 @@ function depthBands(data) {
   }
   const spread = quantile(0.9) - quantile(0.1)
   if (spread < FLAT_SPREAD) return null
-  return { near: quantile(0.66), mid: quantile(0.33), soft: Math.max(0.015, spread * 0.06) }
+  return {
+    near: quantile(0.66),
+    mid: quantile(0.33),
+    soft: Math.max(0.015, spread * 0.06),
+    layers: [quantile(0.165), quantile(0.5), quantile(0.83)],
+  }
+}
+
+const easeInOut = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
+
+function layerFocus(v, ctx, layers) {
+  if (v.focus !== 'rack') return layers[2]
+  const stage = Math.floor(ctx.beatsSince / RACK_BEATS)
+  const target = n => (n % 2 === 0 ? layers[2] : layers[0])
+  const beats = ctx.beats
+  const start = beats?.length ? beats[Math.min(beats.length - 1, ctx.firstBeat + stage * RACK_BEATS)] : ctx.t
+  const k = easeInOut(Math.min(1, Math.max(0, (ctx.t - start) / RACK_S)))
+  const from = stage === 0 ? target(0) : target(stage - 1)
+  return from + (target(stage) - from) * k
 }
 
 export function readDepth(map, makeCanvas) {
@@ -43,7 +66,8 @@ export function readDepth(map, makeCanvas) {
   const context = canvas.getContext('2d', { willReadFrequently: true })
   context.drawImage(map, 0, 0)
   map.close()
-  return { canvas, bands: depthBands(context.getImageData(0, 0, canvas.width, canvas.height).data) }
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height)
+  return { canvas, bands: depthBands(data), grid: depthGrid(data, canvas.width, canvas.height) }
 }
 
 export default {
@@ -68,7 +92,6 @@ export default {
 `,
   },
   glsl: `
-  uniform vec2 u_tex_resolution;
   uniform float u_layer_ready;
   uniform vec4 u_layers[3];
   uniform vec4 u_layer_grade[3];
@@ -128,7 +151,7 @@ export default {
     return {
       motion: pickWeighted(rand, MOTIONS),
       grade: pickWeighted(rand, GRADES),
-      focus: rand() < (level === 'low' ? 0.7 : 0.4),
+      focus: level === 'low' ? 'subject' : pickWeighted(rand, FOCUS_MODES),
       shadow: 0.3 + rand() * 0.25,
       direction: rand() < 0.5 ? -1 : 1,
     }
@@ -155,9 +178,11 @@ export default {
     }
     const tilt = ctx.tilt
     const grades = GRADE_LAYERS[v.grade]
-    const focus = v.focus ? [1.6, 0.5, 0] : [0, 0, 0]
+    const focal = layerFocus(v, ctx, bands.layers)
+    const aperture = v.focus === 'deep' ? 0 : APERTURE * (1 + 0.3 * ctx.pulse)
     for (let k = 0; k < 3; k++) {
-      u.u_layers.value[k].set(slide[k] + tilt.x * TILT[k], tilt.y * TILT[k], zooms[k], focus[k])
+      const blur = Math.min(MAX_LAYER_BLUR, Math.max(0, (Math.abs(bands.layers[k] - focal) - FOCUS_RANGE) * aperture))
+      u.u_layers.value[k].set(slide[k] + tilt.x * TILT[k], tilt.y * TILT[k], zooms[k], blur)
       const [hue, brightness, saturation] = grades[k]
       const angle = ctx.hue + hue * DEG
       u.u_layer_grade.value[k].set(Math.cos(angle), Math.sin(angle), brightness, saturation)
