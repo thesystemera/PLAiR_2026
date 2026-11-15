@@ -19,7 +19,6 @@ const NORM_FPS = 15
 const clamp01 = x => Math.min(1, Math.max(0, x))
 const ease = x => x * x * (3 - 2 * x)
 const lerp = (a, b, k) => a + (b - a) * k
-const reach = zoom => Math.max(0, 0.5 - 0.5 / zoom) * 0.9
 
 function hash(seed, beat, k) {
   let h = (seed ^ Math.imul(beat + 1, 0x9E3779B1) ^ Math.imul(k + 1, 0x85EBCA77)) >>> 0
@@ -28,64 +27,53 @@ function hash(seed, beat, k) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296
 }
 
-function keyFrame(seed, wide) {
+function keyFrame(seed, energy) {
   const rand = seededRandom(seed)
-  const zoom = wide ? 1 + rand() * 0.1 : 1.35 + rand() * 0.45
-  const limit = reach(zoom)
-  return { x: (rand() * 2 - 1) * limit, y: (rand() * 2 - 1) * limit, z: zoom }
+  if (rand() < 0.2) return { x: 0, y: 0, z: 1 }
+  const magnitude = 0.3 + 0.4 * energy
+  return { z: 1 + rand() * magnitude, x: (rand() - 0.5) * magnitude * 0.5, y: (rand() - 0.5) * magnitude * 0.5 }
+}
+
+function hold(out, key, zoom = 0) {
+  out.z = key.z + zoom
+  out.x = key.x
+  out.y = key.y
+  return out
 }
 
 function cameraAt(shot, at, t, bpb, out) {
   const span = Number.isFinite(shot.end) ? Math.max(0.5, shot.end - shot.start) : 8
   const p = clamp01((t - shot.start) / span)
-  const start = keyFrame(shot.seed, true)
-  const goal = keyFrame(shot.seed + 1, false)
+  const energy = shot.energy ?? 0.5
+  const start = keyFrame(shot.seed, energy)
   switch (shot.camera) {
     case 'push':
-      out.z = lerp(1, 1.18, ease(p))
-      out.x = lerp(0, goal.x * 0.4, p)
-      out.y = lerp(0, goal.y * 0.4, p)
-      return out
+      return hold(out, start, 0.15 * ease(p))
     case 'pushHard':
-      out.z = lerp(1, 1.6, p * p)
-      out.x = lerp(start.x, goal.x * 0.6, p * p)
-      out.y = lerp(start.y, goal.y * 0.6, p * p)
-      return out
-    case 'drift':
-      out.z = 1.08 + 0.12 * (start.z - 1) * 10
-      out.x = lerp(start.x, -start.x, p)
-      out.y = lerp(start.y, -start.y, p)
-      return out
-    case 'coverage': {
-      const bar = Math.floor(at.beatsSince / bpb)
-      const key = keyFrame(shot.seed + 7 * bar, bar % 2 === 0)
-      out.z = key.z
-      out.x = key.x
-      out.y = key.y
+      return hold(out, start, 0.5 * p * p)
+    case 'drift': {
+      const goal = keyFrame(shot.seed + 1, energy)
+      out.z = lerp(start.z, goal.z, p)
+      out.x = lerp(start.x, goal.x, p)
+      out.y = lerp(start.y, goal.y, p)
       return out
     }
-    case 'shake': {
-      const key = keyFrame(shot.seed + 13 * Math.floor(at.beatsSince / 2), false)
-      out.z = key.z
-      out.x = key.x
-      out.y = key.y
-      return out
-    }
+    case 'coverage':
+      return hold(out, keyFrame(shot.seed + 7 * Math.floor(at.beatsSince / bpb), energy))
+    case 'shake':
+      return hold(out, keyFrame(shot.seed + 13 * Math.floor(at.beatsSince / 2), energy))
     case 'float':
-      out.z = 1.06 + 0.04 * Math.sin(t * 0.3)
-      out.x = 0.03 * Math.sin(t * 0.21 + start.x * 9)
-      out.y = 0.03 * Math.cos(t * 0.17 + start.y * 9)
+      hold(out, start, 0.04 * Math.sin(t * 0.3))
+      out.x += 0.03 * Math.sin(t * 0.21)
+      out.y += 0.03 * Math.cos(t * 0.17)
       return out
     case 'pull':
-      out.z = lerp(1.35, 1, ease(p))
-      out.x = lerp(goal.x * 0.5, 0, ease(p))
-      out.y = lerp(goal.y * 0.5, 0, ease(p))
+      out.z = lerp(start.z + 0.3, 1, ease(p))
+      out.x = lerp(start.x, 0, ease(p))
+      out.y = lerp(start.y, 0, ease(p))
       return out
     default:
-      out.z = 1
-      out.x = 0
-      out.y = 0
-      return out
+      return hold(out, start)
   }
 }
 
