@@ -318,7 +318,7 @@ async function trace(fps = 30) {
   const plan = planShots(features, { sections })
   const fx = createFx()
   const cursor = { shot: 0, beat: 0 }
-  const rows = plan.song.sections.map(s => ({ section: `${s.start.toFixed(0)}s ${s.role}`, seconds: s.end - s.start, cuts: 0, punch: 0, twitch: 0, glitch: 0, hue: 0, flash: 0, bright: [9, 0], oldHits: 0, oldTwitch: 0 }))
+  const rows = plan.song.sections.map(s => ({ section: `${s.start.toFixed(0)}s ${s.role}`, seconds: s.end - s.start, cuts: 0, punch: 0, twitch: 0, glitch: 0, hue: 0, flash: 0, bright: [9, 0], oldHits: 0, oldTwitch: 0, frames: 0, split: 0, turn: 0, hueSum: 0, moves: 0, palettes: new Set() }))
   const rowAt = t => rows[Math.max(0, plan.song.sections.findIndex(s => t >= s.start && t < s.end))]
   const prev = { punch: 0, rotation: 0, glitch: 0, hue: 0, flash: 0 }
   const beats = features.beats
@@ -332,6 +332,13 @@ async function trace(fps = 30) {
     const out = stepFx(fx, plan, at, t, 1 / fps, true)
     const row = rowAt(t)
     if (out.cut) row.cuts++
+    row.frames++
+    if (fx.chromatic > 8) row.split++
+    row.turn += Math.abs(fx.rotation)
+    row.hueSum += Math.abs(fx.hue)
+    if (Math.abs(fx.frameScale - (prev.zoom ?? fx.frameScale)) > 0.05) row.moves++
+    prev.zoom = fx.frameScale
+    row.palettes.add(at.shot.fx.palette)
     if (fx.punch > prev.punch + 0.005) row.punch++
     if (Math.abs(fx.rotation) > Math.abs(prev.rotation) + 0.5) row.twitch++
     if (Math.abs(fx.glitchX) > Math.abs(prev.glitch) + 5) row.glitch++
@@ -353,7 +360,7 @@ async function trace(fps = 30) {
       if (oldBeat % 2 === 1) row.oldTwitch++
     }
   }
-  return rows.map(r => `${r.section.padEnd(16)} ${r.seconds.toFixed(0).padStart(3)}s cuts ${r.cuts} punch ${r.punch} twitch ${r.twitch} glitch ${r.glitch} hue ${r.hue} flash ${r.flash} light ${r.bright[0].toFixed(2)}-${r.bright[1].toFixed(2)} | old: hits ${r.oldHits} twitch ${r.oldTwitch}`)
+  return rows.map(r => `${r.section.padEnd(15)} ${r.seconds.toFixed(0).padStart(3)}s cuts ${r.cuts} reframes ${r.moves} punch ${r.punch} twitch ${r.twitch} glitch ${r.glitch} flash ${r.flash} | colour split ${Math.round(100 * r.split / Math.max(1, r.frames))}% of frames, sway ${(r.turn / Math.max(1, r.frames)).toFixed(1)} deg, hue ${(r.hueSum / Math.max(1, r.frames)).toFixed(0)} deg | ${[...r.palettes].join('/')} | old hits ${r.oldHits}`)
 }
 
 window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, ready: true }

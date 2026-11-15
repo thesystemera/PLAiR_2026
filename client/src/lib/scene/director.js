@@ -4,25 +4,29 @@ import { pickWeighted, seededRandom } from './random'
 import { analyzeSong } from './structure'
 
 const RECIPES = {
-  intro: { bars: 4, looks: [['cover', 3], ['depth', 2]], camera: 'push', level: 'low' },
-  verse: { bars: 4, looks: [['cover', 3], ['depth', 2], ['split', 1]], camera: 'drift', level: 'mid' },
-  build: { bars: 2, looks: [['split', 3], ['cover', 2], ['depth', 1]], camera: 'pushHard', level: 'high', accelerate: true },
-  chorus: { bars: 2, looks: null, camera: 'coverage', level: 'high' },
-  bridge: { bars: 2, looks: [['depth', 3], ['split', 1], ['cover', 1]], camera: 'drift', level: 'mid' },
-  solo: { bars: 1, looks: [['split', 3], ['depth', 1], ['cover', 1]], camera: 'shake', level: 'high' },
-  interlude: { bars: 4, looks: [['depth', 3], ['cover', 1]], camera: 'float', level: 'low' },
-  outro: { bars: 4, looks: [['cover', 3], ['depth', 1]], camera: 'pull', level: 'low' },
+  intro: { bars: 2, looks: [['cover', 3], ['depth', 2], ['split', 1]], cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
+  verse: { bars: 2, looks: [['cover', 2], ['depth', 2], ['split', 2]], cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
+  build: { bars: 2, looks: [['split', 3], ['cover', 2], ['depth', 1]], cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
+  chorus: { bars: 2, looks: null, cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
+  bridge: { bars: 2, looks: [['depth', 3], ['split', 2], ['cover', 1]], cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
+  solo: { bars: 1, looks: [['split', 3], ['depth', 1], ['cover', 1]], cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
+  interlude: { bars: 4, looks: [['depth', 3], ['cover', 1], ['split', 1]], cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
+  outro: { bars: 4, looks: [['cover', 3], ['depth', 1]], cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
 }
 
-const FX = {
-  intro: { punch: 0, twitch: 0, glitch: 0, chroma: 0, hue: 0, flash: 0, breathe: 0.3, blur: 0.2 },
-  verse: { punch: 0.3, twitch: 0, glitch: 0.1, chroma: 0.1, hue: 0, flash: 0, breathe: 0.5, blur: 0.4 },
-  build: { punch: 0.6, twitch: 0.2, glitch: 0.4, chroma: 0.6, hue: 0.2, flash: 0.3, breathe: 0.8, blur: 0.5 },
-  chorus: { punch: 1, twitch: 0.45, glitch: 0.6, chroma: 0.6, hue: 0.6, flash: 0.6, breathe: 1, blur: 0.8 },
-  bridge: { punch: 0.2, twitch: 0, glitch: 0.2, chroma: 0.3, hue: 0.4, flash: 0, breathe: 0.4, blur: 0.6 },
-  solo: { punch: 0.8, twitch: 0.9, glitch: 0.9, chroma: 0.9, hue: 0.8, flash: 0.5, breathe: 1, blur: 0.6 },
-  interlude: { punch: 0, twitch: 0, glitch: 0, chroma: 0.1, hue: 0.2, flash: 0, breathe: 0.3, blur: 0.8 },
-  outro: { punch: 0.1, twitch: 0, glitch: 0, chroma: 0, hue: 0, flash: 0, breathe: 0.3, blur: 0.4 },
+const PALETTES = {
+  prism: { chroma: 1, hue: 0.35, glitch: 0.2, twitch: 0.15, punch: 0.45, sway: 0.25, strobe: 0.1 },
+  jolt: { chroma: 0.45, hue: 0.25, glitch: 0.4, twitch: 0.9, punch: 1, sway: 0.1, strobe: 0.25 },
+  glitch: { chroma: 0.8, hue: 0.35, glitch: 1, twitch: 0.35, punch: 0.4, sway: 0.1, strobe: 0.45 },
+  sway: { chroma: 0.55, hue: 0.45, glitch: 0.1, twitch: 0.1, punch: 0.3, sway: 1, strobe: 0 },
+  colour: { chroma: 0.6, hue: 1, glitch: 0.2, twitch: 0.2, punch: 0.4, sway: 0.35, strobe: 0.1 },
+}
+
+function shotFx(palette, gain, energy, final) {
+  const scale = gain * (0.75 + 0.45 * energy) * (final ? 1.2 : 1)
+  const fx = { palette }
+  for (const [key, weight] of Object.entries(PALETTES[palette])) fx[key] = Math.min(1.3, weight * scale)
+  return fx
 }
 
 const CHORUS_FAMILIES = [
@@ -34,7 +38,7 @@ const CHORUS_FAMILIES = [
 ]
 
 const PULSE_DECAY_S = 0.18
-const STILL = Object.freeze({ shots: [Object.freeze({ start: 0, end: Infinity, look: 'cover', variant: {}, level: 'low', role: 'verse', fx: FX.verse, camera: 'still', seed: 1 })], beats: [], song: null })
+const STILL = Object.freeze({ shots: [Object.freeze({ start: 0, end: Infinity, look: 'cover', variant: {}, level: 'low', role: 'verse', fx: shotFx('sway', 0.6, 0.3, false), camera: 'still', seed: 1 })], beats: [], song: null })
 
 function songSeed(features, beats) {
   let h = 2166136261
@@ -59,7 +63,7 @@ function snapToBeat(beats, time) {
 function cutLengths(total, recipe, bpb, energy, leadsToChorus, final) {
   let bars = recipe.bars
   if (energy > 0.75 && bars > 1) bars /= 2
-  if (energy < 0.25 && recipe.level !== 'high') bars *= 2
+  if (energy < 0.2 && recipe.level === 'low') bars *= 2
   if (final) bars /= 2
   const step = Math.max(1, Math.round(bars * bpb))
   const lengths = []
@@ -123,9 +127,9 @@ export function planShots(features, { sections, still = false } = {}) {
           if (candidate !== previous?.look || tries === 3) look = candidate
         }
       }
-      const level = RECIPES[role].level
-      const fx = { ...FX[role] }
-      if (section.final) for (const key of Object.keys(fx)) fx[key] = Math.min(1, fx[key] * 1.25)
+      const recipeNow = RECIPES[role]
+      const level = recipeNow.level
+      const fx = shotFx(pickWeighted(rand, recipeNow.palettes), recipeNow.gain, section.energy, section.final)
       const shot = {
         start: index === 0 && c === 0 ? 0 : beats[Math.min(b, beats.length - 1)],
         end: Infinity,
@@ -135,7 +139,7 @@ export function planShots(features, { sections, still = false } = {}) {
         section: section.type,
         energy: section.energy,
         fx,
-        camera: RECIPES[role].camera,
+        camera: pickWeighted(rand, recipeNow.cameras),
         drop: role === 'chorus' && c === 0,
         seed: Math.floor(rand() * 1e9),
         variant: LOOKS[look].variant(rand, level, prefer),
