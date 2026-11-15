@@ -1,6 +1,6 @@
 import { Matrix3, Vector2, Vector4 } from 'three'
 import { pickWeighted } from '../random'
-import { APERTURE, FOCUS_RANGE, analysisPixels, depthGrid } from '../focus'
+import { APERTURE, FOCUS_RANGE, analysisPixels, depthBands, depthGrid } from '../focus'
 import { gradeMatrix } from '../grade'
 import { FAR_LEVEL } from '../softPyramid'
 
@@ -11,7 +11,6 @@ const FOCUS_MODES = [['subject', 3], ['rack', 2], ['deep', 1]]
 const RACK_BEATS = 8
 const RACK_S = 0.6
 const MAX_LAYER_BLUR = 3
-const FLAT_SPREAD = 0.12
 const FILL_LEVEL = 4
 const DEPTH_BIAS = 2.5
 const SHADOW_REACH = 0.004
@@ -23,33 +22,6 @@ const GRADE_LAYERS = {
   plain: [[0, 0.92, 0.9], [0, 0.97, 1], [0, 1, 1]],
   dusk: [[0, 0.5, 0.55], [0, 0.78, 0.85], [0, 1, 1.05]],
   neon: [[150, 0.75, 1.35], [60, 0.9, 1.15], [0, 1, 1]],
-}
-
-function depthBands(data) {
-  const histogram = new Uint32Array(256)
-  let total = 0
-  for (let i = 1; i < data.length; i += 4) {
-    histogram[data[i]]++
-    total++
-  }
-  if (!total) return null
-  const quantile = q => {
-    const target = q * total
-    let seen = 0
-    for (let v = 0; v < 256; v++) {
-      seen += histogram[v]
-      if (seen >= target) return v / 255
-    }
-    return 1
-  }
-  const spread = quantile(0.9) - quantile(0.1)
-  if (spread < FLAT_SPREAD) return null
-  return {
-    near: quantile(0.66),
-    mid: quantile(0.33),
-    soft: Math.max(0.015, spread * 0.06),
-    layers: [quantile(0.165), quantile(0.5), quantile(0.83)],
-  }
 }
 
 const easeInOut = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)

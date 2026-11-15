@@ -1,9 +1,13 @@
+import { coverAnalysis } from './scene/focus'
+
 const DECODE_OPTIONS = { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }
 const IMAGE_QUALITY = 0.92
 const COLOR_SAMPLES = 10000
 const BLUR_QUALITY = 0.8
 
-export async function decodePackHere(blob, map = true) {
+const analysisCanvas = (width, height) => new OffscreenCanvas(width, height)
+
+export async function decodePackHere(blob, map = true, analysis = false) {
   const packed = await createImageBitmap(blob, DECODE_OPTIONS)
   const half = Math.floor(packed.width / 2)
   try {
@@ -11,7 +15,7 @@ export async function decodePackHere(blob, map = true) {
       createImageBitmap(packed, 0, 0, half, packed.height),
       map ? createImageBitmap(packed, half, 0, half, packed.height) : null,
     ])
-    return { color, map: depth }
+    return analysis ? { color, map: depth, analysis: coverAnalysis(color, depth, analysisCanvas) } : { color, map: depth }
   } finally {
     packed.close()
   }
@@ -88,8 +92,8 @@ function inWorker(message) {
 
 const onMainThread = typeof window !== 'undefined'
 
-export function decodePack(blob, { map = true } = {}) {
-  return onMainThread ? inWorker({ op: 'decode', blob, map }) : decodePackHere(blob, map)
+export function decodePack(blob, { map = true, analysis = false } = {}) {
+  return onMainThread ? inWorker({ op: 'decode', blob, map, analysis }) : decodePackHere(blob, map, analysis)
 }
 
 export function packColorSamples(blob) {

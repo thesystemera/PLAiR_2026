@@ -333,18 +333,6 @@ export function DynamicThemeProvider({ children }) {
     }
   }, [])
 
-  useEffect(() => {
-    const root = document.documentElement
-    const accent = colors?.accent
-    if (accent) {
-      root.style.setProperty('--theme-accent-85', accent.replace('1)', '0.85)'))
-      root.style.setProperty('--theme-accent-60', accent.replace('1)', '0.6)'))
-    } else {
-      root.style.removeProperty('--theme-accent-85')
-      root.style.removeProperty('--theme-accent-60')
-    }
-  }, [colors])
-
   const colorsRef = useRef(null)
 
   useLayoutEffect(() => {
@@ -352,6 +340,14 @@ export function DynamicThemeProvider({ children }) {
     colorsRef.current = theme
     const style = document.documentElement.style
     for (const [name, value] of Object.entries(themeCssVars(theme))) style.setProperty(name, value)
+    const accent = colors?.accent
+    if (accent) {
+      style.setProperty('--theme-accent-85', accent.replace('1)', '0.85)'))
+      style.setProperty('--theme-accent-60', accent.replace('1)', '0.6)'))
+    } else {
+      style.removeProperty('--theme-accent-85')
+      style.removeProperty('--theme-accent-60')
+    }
   }, [colors])
 
   const getters = useMemo(() => ({

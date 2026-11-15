@@ -30,9 +30,9 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
-import { analysisPixels, applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
+import { applyFocus, createFocus } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
 import { setGrade } from './scene/grade'
 import { createSoftener } from './scene/softPyramid'
@@ -194,7 +194,7 @@ function generateNoiseTexture() {
 }
 
 async function loadArtworkTextures(blob) {
-  const { color, map } = await decodePack(blob, { map: true })
+  const { color, map, analysis } = await decodePack(blob, { map: true, analysis: true })
   const canvas = makeCanvas(color.width, color.height)
   const context = canvas.getContext('2d', { willReadFrequently: true })
   context.drawImage(color, 0, 0)
@@ -204,16 +204,19 @@ async function loadArtworkTextures(blob) {
   texture.wrapT = MirroredRepeatWrapping
   texture.generateMipmaps = true
   texture.needsUpdate = true
-  const depth = map ? readDepth(map, makeCanvas) : null
-  if (!depth?.bands) return { texture, depth: null }
-  const depthTexture = new CanvasTexture(depth.canvas)
+  if (!analysis) {
+    map?.close()
+    return { texture, depth: null }
+  }
+  const depthCanvas = makeCanvas(map.width, map.height)
+  depthCanvas.getContext('2d', { willReadFrequently: true }).drawImage(map, 0, 0)
+  map.close()
+  const depthTexture = new CanvasTexture(depthCanvas)
   depthTexture.wrapS = MirroredRepeatWrapping
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
-  const small = analysisPixels(canvas, makeCanvas)
-  const detail = detailGrid(small.data, small.width, small.height)
-  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, true) } }
+  return { texture, depth: { texture: depthTexture, ...analysis } }
 }
 
 function addRect(out, n, x0, y0, x1, y1) {

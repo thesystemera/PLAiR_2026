@@ -1,7 +1,7 @@
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, HardDrive, Bell, BellOff} from 'lucide-react'
 import { applySoundMode, nextSoundMode, soundModeFor } from '../lib/soundModes'
 import { motion, AnimatePresence, frame, cancelFrame } from 'framer-motion'
-import { memo, useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { memo, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { formatDuration } from '../lib/utils'
 import { triggerHaptic } from '../lib/haptics'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
@@ -156,30 +156,48 @@ const TrackArtwork = memo(function TrackArtwork({ trackId, hasArtwork, onClick, 
   )
 })
 
-const StaticWaveformLayer = memo(function StaticWaveformLayer({ bars, variant }) {
-  return (
-    <div className="absolute inset-0 flex items-center w-full h-full">
-      {bars.map((bar) => {
-        const { r, g, b } = bar.color
-        const isPlayed = variant === 'played'
+const WAVEFORM_MIN_HEIGHT_PERCENT = 10
+const WAVEFORM_UNPLAYED_ALPHA = 0.4
+const WAVEFORM_GLOW_PX = 4
+const WAVEFORM_GLOW_ALPHA = 0.5
 
-        const barColor = `rgba(${r}, ${g}, ${b}, ${isPlayed ? 1.0 : 0.4})`
-        const barShadow = isPlayed ? `0 0 4px rgba(${r}, ${g}, ${b}, 0.5)` : 'none'
+function drawWaveform(canvas, bars, played) {
+  const dpr = window.devicePixelRatio || 1
+  const width = Math.round(canvas.clientWidth * dpr)
+  const height = Math.round(canvas.clientHeight * dpr)
+  if (width < 1 || height < 1) return
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width
+    canvas.height = height
+  }
+  const context = canvas.getContext('2d')
+  context.clearRect(0, 0, width, height)
+  context.shadowBlur = played ? WAVEFORM_GLOW_PX * dpr : 0
+  for (let i = 0; i < bars.length; i++) {
+    const { r, g, b } = bars[i].color
+    const left = Math.round(i * width / bars.length)
+    const right = Math.round((i + 1) * width / bars.length)
+    const barHeight = Math.max(WAVEFORM_MIN_HEIGHT_PERCENT, bars[i].height) / 100 * height
+    const top = Math.round((height - barHeight) / 2)
+    const bottom = Math.round((height + barHeight) / 2)
+    if (played) context.shadowColor = `rgba(${r}, ${g}, ${b}, ${WAVEFORM_GLOW_ALPHA})`
+    context.fillStyle = `rgba(${r}, ${g}, ${b}, ${played ? 1 : WAVEFORM_UNPLAYED_ALPHA})`
+    context.fillRect(left, top, right - left, bottom - top)
+  }
+}
 
-        return (
-          <div
-            key={bar.id}
-            className="flex-1"
-            style={{
-              height: `${Math.max(10, bar.height)}%`,
-              backgroundColor: barColor,
-              boxShadow: barShadow,
-            }}
-          />
-        )
-      })}
-    </div>
-  )
+const WaveformLayer = memo(function WaveformLayer({ bars, variant }) {
+  const canvasRef = useRef(null)
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    const observer = new ResizeObserver(() => drawWaveform(canvas, bars, variant === 'played'))
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [bars, variant])
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 })
 
 export const Player = memo(function Player({ onSeek, onArtworkClick }) {
@@ -657,11 +675,11 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
             style={{ transform: `scaleX(${bufferedPercent / 100})`, transition: CSS_TRANSITION.buffered }}
           />
 
-          <StaticWaveformLayer bars={waveformBars} variant="unplayed" />
+          <WaveformLayer bars={waveformBars} variant="unplayed" />
 
           <div ref={progressRefCallbacks.window} className="absolute inset-0 overflow-hidden will-change-transform" style={PLAYED_WINDOW_STYLE}>
             <div ref={progressRefCallbacks.content} className="absolute inset-0 will-change-transform" style={PLAYED_CONTENT_STYLE}>
-              <StaticWaveformLayer bars={waveformBars} variant="played" />
+              <WaveformLayer bars={waveformBars} variant="played" />
             </div>
           </div>
 

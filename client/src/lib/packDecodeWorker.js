@@ -1,6 +1,6 @@
 import { decodePackHere, packBlursHere, packColorSamplesHere, packImageHere } from './packImage'
 
-self.onmessage = async ({ data: { id, op, blob, map, radii } }) => {
+self.onmessage = async ({ data: { id, op, blob, map, analysis, radii } }) => {
   try {
     if (op === 'blurs') {
       self.postMessage({ id, result: await packBlursHere(blob, radii) })
@@ -10,7 +10,7 @@ self.onmessage = async ({ data: { id, op, blob, map, radii } }) => {
       const samples = await packColorSamplesHere(blob)
       self.postMessage({ id, result: samples }, [samples.buffer])
     } else {
-      const result = await decodePackHere(blob, map)
+      const result = await decodePackHere(blob, map, analysis)
       self.postMessage({ id, result }, [result.color, result.map].filter(Boolean))
     }
   } catch (error) {

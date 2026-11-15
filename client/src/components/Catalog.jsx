@@ -87,11 +87,25 @@ function createCatalogScrollLabel(tracks, sortMode, options = {}) {
   }
 }
 
-const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null }) {
+const queued = { queue: null, ids: new Set() }
+
+function queuedTrackIds(queue) {
+  if (queue !== queued.queue) {
+    queued.queue = queue
+    queued.ids = new Set(queue.map(item => item.id))
+  }
+  return queued.ids
+}
+
+const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null }) {
   const { getWhite, triggerEffect } = useDynamicTheme()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
-  const { isLoading } = useUISelector(state => ({ isLoading: state.engineState.pendingTrackId === track.id }))
+  const { isLoading, isPlaying, isQueued } = useUISelector(state => ({
+    isLoading: state.engineState.pendingTrackId === track.id,
+    isPlaying: state.engineState.currentTrack?.id === track.id,
+    isQueued: queuedTrackIds(state.engineState.queue).has(track.id),
+  }))
   const cardInteraction = usePointerInteraction()
   const { boxRef: artBoxRef, onLoad: onArtLoad } = useArtPop(track.has_artwork === false ? null : track.id, isCardEntering(index, shouldAnimate))
 
@@ -196,8 +210,6 @@ const TrackCard = memo(function TrackCard({ track, isPlaying, isQueued, onPlayNo
 }, (prev, next) => {
   return (
     prev.track.id === next.track.id &&
-    prev.isPlaying === next.isPlaying &&
-    prev.isQueued === next.isQueued &&
     prev.selectedGenre === next.selectedGenre
   )
 })
@@ -242,11 +254,9 @@ const getTrackArtworkId = (track) => (track.has_artwork === false ? null : track
 function CatalogComponent({ onPlayNow, onPickSeed }) {
   const playback = usePlaybackActions()
   const {
-    currentTrackId, queue, contentUpdateCounter, toastInfo, toastError,
+    contentUpdateCounter, toastInfo, toastError,
     connectionMode, isOnline, offlineMode, hasActiveJobs,
   } = useUISelector(state => ({
-    currentTrackId: state.engineState.currentTrack?.id,
-    queue: state.engineState.queue,
     contentUpdateCounter: state.contentUpdates.tracks,
     toastInfo: state.toastInfo,
     toastError: state.toastError,
@@ -255,8 +265,6 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
     offlineMode: state.audioState.offlineMode,
     hasActiveJobs: state.queueState.hasActiveJobs,
   }))
-  const queuedTrackIds = useMemo(() => queue.map(t => t.id), [queue])
-
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [sortMode, setSortMode] = useState('recent')
@@ -470,7 +478,6 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
   }, [])
 
   const displayTracks = isSearchMode ? searchTracks : catalogWindow.items
-  const queuedTrackSet = useMemo(() => new Set(queuedTrackIds), [queuedTrackIds])
 
   const trackRange = useMemo(() => {
     if (displayTracks.length === 0) return null
@@ -562,15 +569,13 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
     <TrackCard
       key={track.id}
       track={track}
-      isPlaying={track.id === currentTrackId}
-      isQueued={queuedTrackSet.has(track.id)}
       onPlayNow={onPlayNow}
       onPickSeed={onPickSeed}
       index={absoluteIndex}
       shouldAnimate={cardsEntering}
       selectedGenre={selectedGenre}
     />
-  ), [currentTrackId, queuedTrackSet, onPlayNow, onPickSeed, selectedGenre, cardsEntering])
+  ), [onPlayNow, onPickSeed, selectedGenre, cardsEntering])
 
   const renderPlaceholder = useCallback((absoluteIndex) => (
     <div

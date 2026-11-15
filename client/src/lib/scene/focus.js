@@ -5,6 +5,7 @@ const SPRING = 60
 const DAMPING = 2 * Math.sqrt(SPRING) * 0.7
 const scratch = new Float32Array(GRID * GRID)
 const ANALYSIS_SIZE = 256
+const FLAT_SPREAD = 0.12
 
 export const FOCUS_RANGE = 0.05
 export const APERTURE = 7
@@ -19,6 +20,33 @@ export function analysisPixels(image, makeCanvas) {
   context.imageSmoothingQuality = 'medium'
   context.drawImage(image, 0, 0, width, height)
   return context.getImageData(0, 0, width, height)
+}
+
+export function depthBands(data) {
+  const histogram = new Uint32Array(256)
+  let total = 0
+  for (let i = 1; i < data.length; i += 4) {
+    histogram[data[i]]++
+    total++
+  }
+  if (!total) return null
+  const quantile = q => {
+    const target = q * total
+    let seen = 0
+    for (let v = 0; v < 256; v++) {
+      seen += histogram[v]
+      if (seen >= target) return v / 255
+    }
+    return 1
+  }
+  const spread = quantile(0.9) - quantile(0.1)
+  if (spread < FLAT_SPREAD) return null
+  return {
+    near: quantile(0.66),
+    mid: quantile(0.33),
+    soft: Math.max(0.015, spread * 0.06),
+    layers: [quantile(0.165), quantile(0.5), quantile(0.83)],
+  }
 }
 
 export function depthGrid(data, width, height) {
@@ -187,6 +215,16 @@ function colourDistinctness(colour) {
   for (let i = 0; i < cells; i++) for (let c = 0; c < 3; c++) mean[c] += colour[i * 3 + c] / cells
   const channels = [0, 1, 2].map(c => boxMean(Float32Array.from({ length: cells }, (_, i) => colour[i * 3 + c]), 1))
   return Float32Array.from({ length: cells }, (_, i) => Math.hypot(channels[0][i] - mean[0], channels[1][i] - mean[1], channels[2][i] - mean[2]))
+}
+
+export function coverAnalysis(color, map, makeCanvas) {
+  if (!map) return null
+  const depth = analysisPixels(map, makeCanvas)
+  const bands = depthBands(depth.data)
+  if (!bands) return null
+  const grid = depthGrid(depth.data, depth.width, depth.height)
+  const small = analysisPixels(color, makeCanvas)
+  return { bands, grid, interest: interestPoints(grid, detailGrid(small.data, small.width, small.height), true) }
 }
 
 export function interestPoints(depth, cover, flipY, count = 5) {
