@@ -58,6 +58,7 @@ try {
     await p.evaluate(`document.querySelector('button[title="Share track"]').click()`)
     await until(`[...document.querySelectorAll('button')].some(b => b.textContent.trim().startsWith('Generate Video'))`, 10, 'the Share window')
     await sleep(700)
+    if (options.css) await p.evaluate(`(() => { const style = document.createElement('style'); style.id = 'sharebench-css'; style.textContent = ${JSON.stringify(options.css)}; document.head.appendChild(style); return 1 })()`)
     await clickText('Generate Video')
     if (options.closeWindow) {
       await sleep(1200)
@@ -77,7 +78,7 @@ try {
       console.log(label.padEnd(34), result)
     }
     await sleep(1500)
-    await p.evaluate(`window.__plairShare.clear(), 1`)
+    await p.evaluate(`document.getElementById('sharebench-css')?.remove(), window.__plairShare.clear(), 1`)
     await closeDialogs(p)
     await sleep(1500)
   }

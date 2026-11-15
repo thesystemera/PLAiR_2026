@@ -99,9 +99,8 @@ export function createFrameReadback(renderer, width, height) {
   }
 
   const oldestReady = () => {
-    const status = gl.clientWaitSync(pending[0].sync, 0, 0)
-    if (status === gl.WAIT_FAILED || gl.isContextLost()) throw new Error('The video renderer lost its graphics context')
-    return status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED
+    if (gl.isContextLost()) throw new Error('The video renderer lost its graphics context')
+    return gl.getSyncParameter(pending[0].sync, gl.SYNC_STATUS) === gl.SIGNALED
   }
 
   return {
