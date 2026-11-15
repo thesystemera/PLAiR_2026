@@ -76,7 +76,9 @@ export const IMAGE_BODY = `
   uniform vec2 u_tex_resolution;
 
   float focalDepth;
-  float focusLod;
+  float focusBase;
+  float focusBlur;
+  vec3 lyricInk = vec3(1.0);
 
   vec4 splineLevel(sampler2D tex, vec2 uv, float level) {
     vec2 size = max(vec2(1.0), floor(u_tex_resolution / exp2(level)));
@@ -95,27 +97,28 @@ export const IMAGE_BODY = `
          + g1.y * (g0.x * textureLod(tex, vec2(c0.x, c1.y), level) + g1.x * textureLod(tex, c1, level));
   }
 
-  vec4 softColor(vec2 uv, float lod) {
-    if (lod < 0.75) return textureLod(u_texture, uv, lod);
+  vec4 softColor(vec2 uv, float base, float blur) {
+    if (blur < 0.75) return textureLod(u_texture, uv, base + blur);
+    float lod = base + blur;
     if (lod < 1.0) return mix(textureLod(u_texture, uv, 0.0), textureLod(u_texture_near, uv, 0.0), lod);
     if (lod < 2.0) return mix(textureLod(u_texture_near, uv, 0.0), textureLod(u_texture_far, uv, 0.0), lod - 1.0);
     return textureLod(u_texture_far, uv, lod - 2.0);
   }
 
-  vec4 leavingColor(vec2 uv, float lod) {
-    if (lod < 0.75) return textureLod(u_texture_prev, uv, lod);
-    return textureLod(u_texture_prev_far, uv, max(lod - 2.0, 0.0));
+  vec4 leavingColor(vec2 uv, float base, float blur) {
+    if (blur < 0.75) return textureLod(u_texture_prev, uv, base + blur);
+    return textureLod(u_texture_prev_far, uv, max(base + blur - 2.0, 0.0));
   }
 
   vec2 depthView(vec2 uv, vec2 local) {
     vec2 texel = uv * u_tex_resolution;
-    float lod = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
+    focusBase = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
     if (u_has_depth_map < 0.5) {
-      focusLod = lod + (u_is_capture > 0.5 ? 0.0 : u_max_blur);
+      focusBlur = u_is_capture > 0.5 ? 0.0 : u_max_blur;
       return uv;
     }
     float away = splineLevel(u_depth_map, uv, 2.0).g - focalDepth;
-    focusLod = lod + clamp((abs(away) - u_focal_range) * u_max_blur, 0.0, 4.5);
+    focusBlur = clamp((abs(away) - u_focal_range) * u_max_blur, 0.0, 4.5);
     return uv + (u_orbit.xy + local * u_orbit.z) * away;
   }
 
@@ -125,13 +128,13 @@ export const IMAGE_BODY = `
   }
 
   vec4 chromaticImage(vec2 uv, mat3 grade) {
-    vec4 color = gradeColor(softColor(uv, focusLod), grade);
+    vec4 color = gradeColor(softColor(uv, focusBase, focusBlur), grade);
     if (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) {
       vec2 offset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
-      color.r = clamp(dot(vec3(grade[0].r, grade[1].r, grade[2].r), softColor(uv + offset, focusLod).rgb) + u_grade_lift, 0.0, 1.0);
-      color.b = clamp(dot(vec3(grade[0].b, grade[1].b, grade[2].b), softColor(uv - offset, focusLod).rgb) + u_grade_lift, 0.0, 1.0);
+      color.r = clamp(dot(vec3(grade[0].r, grade[1].r, grade[2].r), softColor(uv + offset, focusBase, focusBlur).rgb) + u_grade_lift, 0.0, 1.0);
+      color.b = clamp(dot(vec3(grade[0].b, grade[1].b, grade[2].b), softColor(uv - offset, focusBase, focusBlur).rgb) + u_grade_lift, 0.0, 1.0);
     }
-    if (u_transition < 1.0) color = mix(gradeColor(leavingColor(uv, focusLod), grade), color, u_transition * u_transition * (3.0 - 2.0 * u_transition));
+    if (u_transition < 1.0) color = mix(gradeColor(leavingColor(uv, focusBase, focusBlur), grade), color, u_transition * u_transition * (3.0 - 2.0 * u_transition));
     return color;
   }
 
@@ -161,13 +164,7 @@ export const IMAGE_BODY = `
 
 `
 
-export const FRAMING = `
-  uniform vec2 u_parallax;
-  uniform float u_scale;
-  uniform vec2 u_frame_offset;
-  uniform float u_frame_scale;
-  uniform vec2 u_fx_rot;
-
+export const FRAMING_FUNCTIONS = `
   vec2 coverFit(vec2 uv, vec2 canvasRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
     float texAspect = u_tex_resolution.x / u_tex_resolution.y;
@@ -186,6 +183,14 @@ export const FRAMING = `
   }
 `
 
+export const FRAMING = `
+  uniform vec2 u_parallax;
+  uniform float u_scale;
+  uniform vec2 u_frame_offset;
+  uniform float u_frame_scale;
+  uniform vec2 u_fx_rot;
+` + FRAMING_FUNCTIONS
+
 export const finishImage = (name, ending) => `  ${name} {
     vec4 finalColor = lookImage();
 
@@ -202,7 +207,7 @@ export const finishImage = (name, ending) => `  ${name} {
     if (u_text_empty < 0.5) {
       vec4 lyricsSample = texture2D(u_text_texture, vTextUv);
       if(lyricsSample.a > 0.01) {
-        finalColor.rgb = mix(finalColor.rgb, lyricsSample.rgb, lyricsSample.a);
+        finalColor.rgb = mix(finalColor.rgb, lyricsSample.rgb * lyricInk, lyricsSample.a);
       }
     }
     ${ending}

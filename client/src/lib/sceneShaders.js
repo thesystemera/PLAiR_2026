@@ -42,7 +42,11 @@ const GLASS_MAIN = `
 export function lookShaders(id) {
   const look = LOOKS[id]
   const body = IMAGE_BODY + (look.framing ? FRAMING : '') + look.glsl
+  const tiled = look.tiled
+    ? { tiledVertex: backgroundVertex(look.tiled.vertexHead, look.tiled.vertexMain), tiledBackdrop: IMAGE_BODY + look.tiled.glsl + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN }
+    : null
   return {
+    ...tiled,
     vertex: look.vertex ? backgroundVertex(look.vertex.head, look.vertex.main) : BACKGROUND_VERTEX,
     background: body + finishImage('void main()', 'gl_FragColor = finalColor;'),
     backdrop: body + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,

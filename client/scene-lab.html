@@ -138,7 +138,7 @@ async function sheet(times, columns = 6, scale = 0.5) {
     const x = (i % columns) * cellW
     const y = Math.floor(i / columns) * (cellH + 18)
     const item = typeof times[i] === 'number' ? { t: times[i] } : times[i]
-    if (item.look) force(item.look, item.level, item.seed)
+    if (item.look) force(item.look, item.level, item.seed, item.prefer)
     const row = await at(item.t, source => ctx.drawImage(source, x, y + 18, cellW, cellH))
     const shot = scene.plan?.shots?.[scene.directorCursor.shot]
     ctx.fillStyle = '#ddd'
@@ -157,10 +157,10 @@ async function still(seconds, look, seed = 7, level = 'high') {
   return { ...row, image }
 }
 
-function force(look, level = 'high', seed = 7) {
+function force(look, level = 'high', seed = 7, prefer = {}) {
   const base = planShots(features, { sections, lines })
   scene.plan = look
-    ? { ...base, shots: base.shots.map(s => ({ ...s, look, level, variant: LOOKS[look].variant(seededRandom(seed), level) })) }
+    ? { ...base, shots: base.shots.map(s => ({ ...s, look, level, variant: LOOKS[look].variant(seededRandom(seed), level, prefer) })) }
     : base
   scene.directorCursor = { shot: 0, beat: 0 }
   return scene.plan.shots[0].variant
@@ -351,7 +351,8 @@ async function trace(fps = 30) {
   return rows.map(r => `${r.label.padEnd(18)} ${(r.to - r.from).toFixed(0).padStart(2)}s cuts ${String(r.cuts).padStart(2)} hits ${(r.hits / Math.max(1, r.to - r.from)).toFixed(1)}/s ${String(r.patch).padEnd(12)} ${String(r.kicks).padEnd(14)} | ${Object.keys(channels).map(name => `${name} ${stat(r.values[name])}`).join('  ')} | ${[...r.shots].join(' ')}`)
 }
 
-const SPLINE_BLUR = `  vec4 softColor(vec2 uv, float lod) {
+const SPLINE_BLUR = `  vec4 softColor(vec2 uv, float base, float blur) {
+    float lod = base + blur;
     if (lod < 0.75) return textureLod(u_texture, uv, lod);
     float level = floor(lod);
     return mix(splineLevel(u_texture, uv, level), splineLevel(u_texture, uv, level + 1.0), lod - level);
@@ -360,8 +361,8 @@ const SPLINE_BLUR = `  vec4 softColor(vec2 uv, float lod) {
 `
 
 function splineReference(source) {
-  const start = source.indexOf('  vec4 softColor(vec2 uv, float lod) {')
-  const end = source.indexOf('  vec4 leavingColor(vec2 uv, float lod) {')
+  const start = source.indexOf('  vec4 softColor(vec2 uv, float base, float blur) {')
+  const end = source.indexOf('  vec4 leavingColor(vec2 uv, float base, float blur) {')
   if (start < 0 || end < 0) throw new Error('the blur function was not found in the shader')
   return (source.slice(0, start) + SPLINE_BLUR + source.slice(end)).replace(/textureLod\(u_texture_far, uv, ([0-9.]+)\)/g, (_, level) => `splineLevel(u_texture, uv, ${(Number(level) + 2).toFixed(1)})`)
 }
@@ -435,7 +436,40 @@ async function blurCheck(seconds, look, pins = null, crop = 150, zoom = 3) {
   return { look: scene.look, max, mean: +(total / pixels).toFixed(3), over2: +(100 * over2 / pixels).toFixed(2), over4: +(100 * over4 / pixels).toFixed(2), image: out.toDataURL('image/png') }
 }
 
-window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, ready: true }
+async function tilesCheck(seconds, prefer = {}, seed = 7) {
+  force('split', 'high', seed, prefer)
+  await at(seconds)
+  scene.setBackdrop()
+  const target = new WebGLRenderTarget(canvas.width, canvas.height)
+  const stage = new Scene()
+  const read = (geometry, material) => {
+    const mesh = new Mesh(geometry, material)
+    mesh.frustumCulled = false
+    stage.clear()
+    stage.add(mesh)
+    scene.renderer.setRenderTarget(target)
+    scene.renderer.render(stage, scene.captureCamera)
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4)
+    scene.renderer.readRenderTargetPixels(target, 0, 0, canvas.width, canvas.height, pixels)
+    scene.renderer.setRenderTarget(null)
+    return pixels
+  }
+  const searched = read(new PlaneGeometry(2, 2), scene.lookMaterials.split.backdrop)
+  const tiled = read(scene.tileGeometry, scene.lookMaterials.split.tiled)
+  target.dispose()
+  const layout = scene.plan.shots[scene.directorCursor.shot].variant.layout
+  force(null)
+  let max = 0
+  let over2 = 0
+  for (let i = 0; i < tiled.length; i += 4) {
+    const d = Math.max(Math.abs(tiled[i] - searched[i]), Math.abs(tiled[i + 1] - searched[i + 1]), Math.abs(tiled[i + 2] - searched[i + 2]))
+    if (d > max) max = d
+    if (d > 2) over2++
+  }
+  return { layout, vertices: scene.tileGeometry.drawRange.count, max, over2, pixels: tiled.length / 4 }
+}
+
+window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, tilesCheck, ready: true }
 info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
 </script>
 </body>

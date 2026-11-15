@@ -109,7 +109,7 @@ export default {
 
   vec3 layerColor(vec2 uv, int k, float lod) {
     vec4 grade = u_layer_grade[k];
-    vec4 color = gradeColor(softColor(uv, lod + u_layers[k].w), u_layer_tone[k]);
+    vec4 color = gradeColor(softColor(uv, lod, u_layers[k].w), u_layer_tone[k]);
     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     return mix(vec3(luma), color.rgb, grade.w) * grade.z;
   }

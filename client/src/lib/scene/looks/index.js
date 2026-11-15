@@ -6,6 +6,7 @@ import depth from './depth'
 export const LOOKS = { cover, split, depth }
 export const LOOK_IDS = Object.keys(LOOKS)
 export { readDepth } from './depth'
+export { MAX_TILE_VERTICES, tileQuads } from './split'
 
 export function lookUniforms() {
   const uniforms = { u_fx_rot: { value: new Vector2(1, 0) } }

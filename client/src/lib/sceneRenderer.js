@@ -1,8 +1,10 @@
 import {
+  BufferAttribute,
   BufferGeometry,
   CanvasTexture,
   ColorManagement,
   DataTexture,
+  DynamicDrawUsage,
   Float32BufferAttribute,
   LinearFilter,
   LinearMipmapLinearFilter,
@@ -28,7 +30,7 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { LOOKS, LOOK_IDS, MAX_TILE_VERTICES, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms, tileQuads } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
@@ -567,11 +569,16 @@ export class SceneRenderer {
         full: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.scene, uniforms: this.fgMaterial.uniforms }),
         backdrop: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.backdrop, uniforms: this.backdropMaterial.uniforms }),
       }
+      if (shaders.tiledBackdrop) this.lookMaterials[id].tiled = new ShaderMaterial({ vertexShader: shaders.tiledVertex, fragmentShader: shaders.tiledBackdrop, uniforms: this.backdropMaterial.uniforms })
     }
     this.lookSignatures = Object.fromEntries(LOOK_IDS.map(id => [id, id === 'cover' ? [] : lookSignature(id)]))
     this.lookIndex = Object.fromEntries(LOOK_IDS.map((id, i) => [id, i]))
     this.lookReady = { cover: true }
     this.look = 'cover'
+    this.tileGeometry = new BufferGeometry()
+    for (const [name, size] of [['position', 3], ['uv', 2], ['tile', 1]]) {
+      this.tileGeometry.setAttribute(name, new BufferAttribute(new Float32Array(MAX_TILE_VERTICES * size), size).setUsage(DynamicDrawUsage))
+    }
     this.glassGeometry = new BufferGeometry()
     this.glassInteriorGeometry = new BufferGeometry()
     this.glassButtonGeometry = new BufferGeometry()
@@ -647,8 +654,28 @@ export class SceneRenderer {
     this.captureMesh.material = materials.capture
     this.glassMesh.material = materials.full
     this.glassBackdropMesh.material = materials.backdrop
-    this.backdropMesh.material = materials.backdrop
     this.look = id
+  }
+
+  setBackdrop() {
+    const materials = this.lookMaterials[this.look]
+    const mesh = this.backdropMesh
+    if (!materials.tiled) {
+      mesh.geometry = this.geometry
+      mesh.material = materials.backdrop
+      return
+    }
+    const uniforms = this.bgMaterial.uniforms
+    const { position, uv, tile } = this.tileGeometry.attributes
+    const vertices = tileQuads(uniforms.u_tile_rect.value, uniforms.u_tile_count.value, position.array, uv.array, tile.array)
+    for (const attribute of [position, uv, tile]) {
+      attribute.clearUpdateRanges()
+      attribute.addUpdateRange(0, vertices * attribute.itemSize)
+      attribute.needsUpdate = true
+    }
+    this.tileGeometry.setDrawRange(0, vertices)
+    mesh.geometry = this.tileGeometry
+    mesh.material = materials.tiled
   }
 
   direct(at, reduceMotion, width, height, parallaxX, parallaxY) {
@@ -855,6 +882,7 @@ export class SceneRenderer {
       if (id === 'cover') continue
       for (const material of Object.values(this.lookMaterials[id])) material.dispose()
     }
+    this.tileGeometry.dispose()
     this.glassButtonGeometry.dispose()
     this.glassBackdropGeometry.dispose()
     this.glassGeometry.dispose()
@@ -1303,6 +1331,7 @@ export class SceneRenderer {
       this.glassButtonMesh.visible = hasVisiblePanels && this.splitHasInteriorButton
       this.glassBackdropMesh.visible = hasVisiblePanels && this.splitHasBackdrop
       this.backdropMesh.visible = !hasVisiblePanels
+      if (!hasVisiblePanels) this.setBackdrop()
 
       if (timing) { gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, timing.pixel); timing.t = performance.now() }
       renderer.render(this.mainScene, this.mainCamera)

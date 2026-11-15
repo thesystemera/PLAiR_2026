@@ -13,7 +13,9 @@ const KICKS = {
   strobe: [0.08, 0.25],
 }
 const FLOW = { zoom: 0.07, chroma: 45, tilt: 3, light: 0.22, colour: 0.25, depth: 0.22, aperture: 0.6, shake: 2.5 }
-const HAND = { base: 0.006, energy: 0.01, parallax: 3, tremble: 0.004 }
+const HAND = { base: 0.006, energy: 0.01, parallax: 3, tremble: 0.004, flat: 0.5 }
+const DRIFT = 0.05
+const GENTLE = 0.6
 const PARALLAX = 2.2
 const ORBIT_LIMIT = 0.11
 const DOLLY = { push: 0.18, hard: 0.3, limit: 0.35 }
@@ -69,11 +71,11 @@ function blend(out, a, b, k) {
 
 function handheld(out, shot, t, fx) {
   const phase = (shot.seed % 997) / 97
-  const amount = HAND.base + HAND.energy * fx.currentEnergy
+  const amount = (HAND.base + HAND.energy * fx.currentEnergy) * (shot.space ? 1 : HAND.flat)
   const x = amount * (Math.sin(t * 0.83 + phase) + 0.6 * Math.sin(t * 2.1 + 2 * phase))
   const y = amount * (Math.sin(t * 0.71 + 3 * phase) + 0.6 * Math.sin(t * 1.7 + phase))
   const tremble = HAND.tremble * fx.shake
-  const reach = HAND.parallax * (1 + FLOW.shake * fx.shake)
+  const reach = shot.space ? HAND.parallax * FLOW.shake * fx.shake : 0
   out.x += x + tremble * Math.sin(t * 33 + phase)
   out.y += y + tremble * Math.sin(t * 27 + 2 * phase)
   out.z += 1.2 * amount * Math.sin(t * 0.53 + 2 * phase)
@@ -111,6 +113,7 @@ function cameraAt(shot, at, t, out, fx) {
     }
     case 'mid':
       framing(subject, 0.5, out)
+      out.px = side * DRIFT * (2 * p - 1)
       break
     case 'closePan': {
       framing(subject, 1, out)
@@ -123,6 +126,7 @@ function cameraAt(shot, at, t, out, fx) {
     }
     case 'wide':
       framing(subject, 0, out)
+      out.py = side * DRIFT * (2 * p - 1)
       break
     case 'orbit': {
       framing(subject, Math.max(size, 0.5), out)
@@ -157,6 +161,11 @@ function cameraAt(shot, at, t, out, fx) {
     default:
       framing(subject, size, out)
       return out
+  }
+  if (!shot.space) {
+    out.px = 0
+    out.py = 0
+    out.pz = 0
   }
   return handheld(out, shot, t, fx)
 }
@@ -308,9 +317,10 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   fx.frameOffsetX = camera.x
   fx.frameOffsetY = camera.y
   fx.frameScale = camera.z
-  fx.orbitX = clamp(camera.px, ORBIT_LIMIT)
-  fx.orbitY = clamp(camera.py, ORBIT_LIMIT)
-  fx.dolly = clamp(camera.pz + FLOW.depth * fx.depthSwell, DOLLY.limit)
+  const reach = shot.look === 'depth' ? 1 : GENTLE
+  fx.orbitX = clamp(camera.px * reach, ORBIT_LIMIT)
+  fx.orbitY = clamp(camera.py * reach, ORBIT_LIMIT)
+  fx.dolly = shot.space ? clamp((camera.pz + FLOW.depth * fx.depthSwell) * reach, DOLLY.limit) : 0
 
   fx.chromatic = Math.max(fx.chromaKick, FLOW.chroma * Math.min(1, patch.prism) * swell)
   fx.tilt += (FLOW.tilt * patch.tilt * swell * fx.side - fx.tilt) * (1 - Math.exp(-dt * 14))
@@ -323,7 +333,7 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   const glow = patch.light * swell
   const light = ROLE_LIGHT[shot.role] || 0
   fx.beatPulse = swell * (0.2 + 0.8 * energy)
-  fx.scale += ((1 + FLOW.zoom * patch.zoom * swell + fx.punch) - fx.scale) * (1 - Math.exp(-dt * 20))
+  fx.scale += ((1 + FLOW.zoom * (patch.zoom + (shot.space ? 0 : patch.depth)) * swell + fx.punch) - fx.scale) * (1 - Math.exp(-dt * 20))
   fx.flicker += (1 - fx.flicker) * settle
   fx.brightness += ((0.4 + 0.3 * energy + 0.08 * signals.level + light + fx.flash + FLOW.light * glow) - fx.brightness) * (1 - Math.exp(-dt * 14))
   fx.saturation += ((0.85 + 0.35 * energy + light + FLOW.colour * glow) - fx.saturation) * settle

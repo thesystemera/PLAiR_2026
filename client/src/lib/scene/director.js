@@ -35,6 +35,8 @@ const LOOK_CARDS = [
   ['split', { layout: 'blinds' }],
   ['split', { layout: 'boxes' }],
   ['split', { layout: 'tunnel' }],
+  ['split', { layout: 'curtain' }],
+  ['split', { layout: 'mosaic' }],
 ]
 
 const CHORUS_FAMILIES = [
@@ -47,16 +49,20 @@ const CHORUS_FAMILIES = [
   [['split', { layout: 'tunnel' }], ['depth', { motion: 'breathe' }]],
   [['split', { layout: 'columns' }], ['depth', { motion: 'crane' }]],
   [['split', { layout: 'blinds' }], ['depth', { motion: 'orbit' }]],
+  [['split', { layout: 'mosaic' }], ['depth', { motion: 'dolly' }]],
+  [['split', { layout: 'curtain' }], ['depth', { motion: 'track' }]],
 ]
 
 const PERCUSSIVE = { zoom: 1, shake: 1, tilt: 1, prism: 0.5, twitch: 1, punch: 1, strobe: 1, rotate: 0.5 }
-const SUNG_LAYOUTS = { wipe: 0.5, strips: 0.5, columns: 0.5, quad: 0.5 }
+const SUNG_LAYOUTS = { wipe: 0.5, strips: 0.5, columns: 0.5, quad: 0.5, curtain: 0.5 }
+const SPACE_SHARE = { intro: 0.15, verse: 0.15, build: 0.4, chorus: 0.35, bridge: 0.2, solo: 0.4, interlude: 0.3, outro: 0.15 }
+const SPACE_IN_GAPS = 0.15
 const DROP_LIFT = 0.22
 const CALM_LIFT = -0.25
 const BUILD_TREND = 0.2
 const FAST_WORDS = 3.2
 const SLOW_WORDS = 1.3
-const STILL = Object.freeze({ shots: [Object.freeze({ start: 0, end: Infinity, look: 'cover', variant: {}, level: 'low', role: 'verse', patch: shotPatch('depth', 'light', 0.6, 0.3, false), camera: 'still', seed: 1, gate: 2, hueShift: 0, firstWord: 0 })], beats: [], song: null })
+const STILL = Object.freeze({ shots: [Object.freeze({ start: 0, end: Infinity, look: 'cover', variant: {}, level: 'low', role: 'verse', patch: shotPatch('depth', 'light', 0.6, 0.3, false), camera: 'still', space: false, seed: 1, gate: 2, hueShift: 0, firstWord: 0 })], beats: [], song: null })
 
 const clamp = (x, min, max) => Math.min(max, Math.max(min, x))
 
@@ -189,7 +195,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
   const dealLook = createDeck(LOOK_CARDS, rand)
   const dealCamera = createDeck(CAMERA_CARDS, rand)
   let subject = 0
-  const coverage = { effects: {}, looks: {}, patches: {}, cameras: {} }
+  const coverage = { effects: {}, looks: {}, patches: {}, cameras: {}, space: {} }
+  const spaceOwed = {}
   const count = (group, name) => { coverage[group][name] = (coverage[group][name] || 0) + 1 }
   let chorusShots = 0
   song.sections.forEach((section, sectionIndex) => {
@@ -224,12 +231,13 @@ export function planShots(features, { sections, lines, still = false } = {}) {
         let look
         let variant
         let camera
+        let space
         let shotSubject = phraseSubject
         let shotStep = step++
         const level = filled ? 'high' : recipe.level
         const motif = hook >= 0 ? motifs.get(hook) : null
         if (motif) {
-          ;({ look, variant, camera, subject: shotSubject, step: shotStep } = motif)
+          ;({ look, variant, camera, space, subject: shotSubject, step: shotStep } = motif)
         } else {
           let prefer = {}
           if (opening) look = 'cover'
@@ -248,9 +256,15 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           variant = LOOKS[look].variant(rand, level, prefer)
           if (recipe.camera !== 'deck') camera = recipe.camera
           else if (calm) camera = 'float'
-          else if (rising) camera = 'push'
+          else if (rising && b >= (phrase.start + phrase.end) / 2) camera = 'push'
           else camera = dealCamera()
-          if (hook >= 0) motifs.set(hook, { look, variant, camera, subject: shotSubject, step: shotStep })
+          if (look === 'depth') space = true
+          else {
+            const owed = (spaceOwed[role] || 0) + SPACE_SHARE[role] + (vocal ? 0 : SPACE_IN_GAPS)
+            space = owed >= 1
+            spaceOwed[role] = space ? owed - 1 : owed
+          }
+          if (hook >= 0) motifs.set(hook, { look, variant, camera, space, subject: shotSubject, step: shotStep })
         }
         const turn = rand()
         const shot = {
@@ -269,6 +283,7 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           support,
           phraseBeat: phrase.start,
           camera,
+          space,
           subject: shotSubject,
           step: shotStep,
           drop: b === phrase.start && ((role === 'chorus' && phrase.index === 0) || phrase.lift > DROP_LIFT),
@@ -283,6 +298,7 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           shots.push(shot)
           count('looks', lookName(look, variant))
           count('cameras', camera)
+          count('space', space ? 'in 3D' : 'flat')
         }
       }
     })

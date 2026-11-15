@@ -27,7 +27,7 @@ const force = look => run(`
 const measureOnce = ms => p.evaluate(`new Promise(resolve => { const f = []; const end = performance.now() + ${ms}; const tick = t => { f.push(t); if (t < end) requestAnimationFrame(tick); else resolve(+((f.at(-1) - f[0]) / (f.length - 1)).toFixed(2)) }; requestAnimationFrame(tick) })`)
 const measure = ms => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() => { throw new Error('the page stopped drawing frames') })])
 
-console.log('panel:', await openPanel(p, panel))
+if (panel !== 'none') console.log('panel:', await openPanel(p, panel))
 await sleep(1500)
 console.log(await run(`return JSON.stringify({ look: scene.look, quality: scene.state.visualQuality, depth: !!scene.depthGrid, canvas: [scene.gl.drawingBufferWidth, scene.gl.drawingBufferHeight], panels: scene.fgMaterial.uniforms.u_panel_count.value, interior: scene.splitHasInterior, outer: scene.splitHasOuter, backdrop: scene.splitHasBackdrop, playing: scene.state.isPlaying })`))
 const results = {}
