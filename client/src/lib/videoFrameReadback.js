@@ -10,8 +10,7 @@ import {
   WebGLRenderTarget,
 } from 'three'
 
-const POOL_FRAMES = 6
-const READY_TIMEOUT_MS = 8000
+const MAX_BATCH_FRAMES = 8
 
 export const NV12_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false }
 
@@ -24,6 +23,7 @@ const PACK_VERTEX = `
 const PACK_FRAGMENT = `
   uniform sampler2D u_frame;
   uniform vec2 u_size;
+  uniform float u_first_row;
 
   const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -41,7 +41,7 @@ const PACK_FRAGMENT = `
 
   void main() {
     float x = floor(gl_FragCoord.x);
-    float y = floor(gl_FragCoord.y);
+    float y = floor(gl_FragCoord.y) - u_first_row;
     if (y < u_size.y) {
       gl_FragColor = vec4(lumaAt(4.0 * x, y), lumaAt(4.0 * x + 1.0, y), lumaAt(4.0 * x + 2.0, y), lumaAt(4.0 * x + 3.0, y));
     } else {
@@ -61,23 +61,19 @@ export function frameReadbackSupported(width, height) {
   }
 }
 
-const nextTask = () => new Promise(resolve => {
-  const channel = new MessageChannel()
-  channel.port1.onmessage = () => { channel.port1.close(); resolve() }
-  channel.port2.postMessage(0)
-})
-
-export function createFrameReadback(renderer, width, height) {
+export function createFrameReadback(renderer, width, height, batchLimit = MAX_BATCH_FRAMES) {
   const gl = renderer.getContext()
   const packedWidth = width / 4
-  const packedHeight = height * 1.5
-  const byteLength = width * height * 1.5
+  const frameRows = height * 1.5
+  const frameBytes = width * height * 1.5
+  const batch = Math.max(1, Math.min(batchLimit, Math.floor(gl.getParameter(gl.MAX_TEXTURE_SIZE) / frameRows)))
   const frameTarget = new WebGLRenderTarget(width, height, { depthBuffer: false, minFilter: LinearFilter, magFilter: LinearFilter, generateMipmaps: false })
-  const packedTarget = new WebGLRenderTarget(packedWidth, packedHeight, { depthBuffer: false, minFilter: NearestFilter, magFilter: NearestFilter, generateMipmaps: false })
+  const packedTarget = new WebGLRenderTarget(packedWidth, frameRows * batch, { depthBuffer: false, minFilter: NearestFilter, magFilter: NearestFilter, generateMipmaps: false })
+  packedTarget.scissorTest = true
   const material = new ShaderMaterial({
     vertexShader: PACK_VERTEX,
     fragmentShader: PACK_FRAGMENT,
-    uniforms: { u_frame: { value: frameTarget.texture }, u_size: { value: new Vector2(width, height) } },
+    uniforms: { u_frame: { value: frameTarget.texture }, u_size: { value: new Vector2(width, height) }, u_first_row: { value: 0 } },
     depthTest: false,
     depthWrite: false,
   })
@@ -87,67 +83,36 @@ export function createFrameReadback(renderer, width, height) {
   const scene = new Scene()
   scene.add(mesh)
   const camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1)
-  const idle = []
-  const pending = []
-
-  const createBuffer = () => {
-    const buffer = gl.createBuffer()
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer)
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, byteLength, gl.STREAM_READ)
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
-    return buffer
-  }
-
-  const oldestReady = () => {
-    if (gl.isContextLost()) throw new Error('The video renderer lost its graphics context')
-    return gl.getSyncParameter(pending[0].sync, gl.SYNC_STATUS) === gl.SIGNALED
-  }
+  const bytes = new Uint8Array(frameBytes * batch)
+  const waiting = []
 
   return {
     target: frameTarget,
-    byteLength,
-    capacity: POOL_FRAMES,
-    pending: () => pending.length,
-    oldestReady,
+    batch,
+    waiting: () => waiting.length,
+    full: () => waiting.length >= batch,
 
     submit(index) {
+      const firstRow = waiting.length * frameRows
+      material.uniforms.u_first_row.value = firstRow
+      packedTarget.viewport.set(0, firstRow, packedWidth, frameRows)
+      packedTarget.scissor.set(0, firstRow, packedWidth, frameRows)
       renderer.setRenderTarget(packedTarget)
       renderer.render(scene, camera)
-      const buffer = idle.pop() || createBuffer()
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer)
-      gl.readPixels(0, 0, packedWidth, packedHeight, gl.RGBA, gl.UNSIGNED_BYTE, 0)
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
-      const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
-      gl.flush()
-      pending.push({ buffer, sync, index })
+      waiting.push(index)
     },
 
-    async untilOldestReady() {
-      const deadline = performance.now() + READY_TIMEOUT_MS
-      while (!oldestReady()) {
-        if (performance.now() > deadline) throw new Error('The video renderer stopped answering')
-        await nextTask()
-      }
-    },
-
-    take(bytes) {
-      const { buffer, sync, index } = pending.shift()
-      gl.deleteSync(sync)
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer)
-      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, bytes)
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
-      idle.push(buffer)
-      return index
+    read() {
+      renderer.setRenderTarget(packedTarget)
+      gl.readPixels(0, 0, packedWidth, frameRows * waiting.length, gl.RGBA, gl.UNSIGNED_BYTE, bytes)
+      if (gl.isContextLost()) throw new Error('The video renderer lost its graphics context')
+      const frames = waiting.map((index, slot) => ({ index, bytes: bytes.subarray(slot * frameBytes, (slot + 1) * frameBytes) }))
+      waiting.length = 0
+      return frames
     },
 
     dispose() {
-      for (const { buffer, sync } of pending) {
-        gl.deleteSync(sync)
-        gl.deleteBuffer(buffer)
-      }
-      for (const buffer of idle) gl.deleteBuffer(buffer)
-      pending.length = 0
-      idle.length = 0
+      waiting.length = 0
       frameTarget.dispose()
       packedTarget.dispose()
       material.dispose()

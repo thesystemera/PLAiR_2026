@@ -35,8 +35,9 @@ import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from
 import { loadLyricFonts } from './lyricFonts'
 import { NV12_COLOR_SPACE, createFrameReadback, frameReadbackSupported } from './videoFrameReadback'
 
-const VIDEO_QUEUE_FRAMES = 4
-const VIDEO_BITRATE = 2_000_000
+const VIDEO_QUEUE_FRAMES = 8
+const VIDEO_BITRATE = 1_500_000
+const VIDEO_CODEC = 'avc1.4d001f'
 const KEY_FRAME_SECONDS = 2
 const AUDIO_QUEUE_CHUNKS = 4
 const AUDIO_CHUNK_SECONDS = 1
@@ -285,7 +286,7 @@ export async function renderVideo({
   })
   resources.videoEncoder = videoEncoder
 
-  const encoderConfig = { codec: 'avc1.64001f', width, height, bitrate: VIDEO_BITRATE, framerate: fps, bitrateMode: 'constant', ...bench.encoder }
+  const encoderConfig = { codec: VIDEO_CODEC, width, height, bitrate: VIDEO_BITRATE, framerate: fps, bitrateMode: 'constant', ...bench.encoder }
   const constantBitrate = await VideoEncoder.isConfigSupported(encoderConfig).then(result => result.supported, () => false)
   if (!constantBitrate) delete encoderConfig.bitrateMode
   videoEncoder.configure(encoderConfig)
@@ -347,19 +348,18 @@ export async function renderVideo({
 
   const delta = 1 / fps
   const frameDuration = Math.round((1 / fps) * 1_000_000)
-  const readback = !bench.canvasFrames && frameReadbackSupported(width, height) ? createFrameReadback(renderer, width, height) : null
+  const readback = !bench.canvasFrames && frameReadbackSupported(width, height) ? createFrameReadback(renderer, width, height, bench.batchFrames) : null
   resources.readback = readback
-  const frameBytes = readback ? new Uint8Array(readback.byteLength) : null
   const encodeFrame = (source, index, init) => {
     const videoFrame = new VideoFrame(source, { timestamp: Math.round((index / fps) * 1_000_000), duration: frameDuration, ...init })
     videoEncoder.encode(videoFrame, { keyFrame: index % keyFrameEvery === 0 })
     videoFrame.close()
   }
-  const encodeOldest = async () => {
-    await readback.untilOldestReady()
-    const index = readback.take(frameBytes)
-    if (!bench.noEncode) encodeFrame(frameBytes, index, { format: 'NV12', codedWidth: width, codedHeight: height, colorSpace: NV12_COLOR_SPACE })
-    await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
+  const encodeBatch = async () => {
+    for (const { index, bytes } of readback.read()) {
+      if (!bench.noEncode) encodeFrame(bytes, index, { format: 'NV12', codedWidth: width, codedHeight: height, colorSpace: NV12_COLOR_SPACE })
+      await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
+    }
   }
 
   let sample = null
@@ -461,7 +461,7 @@ export async function renderVideo({
     const drawDone = performance.now()
 
     if (readback) {
-      while (readback.pending() > 0 && (readback.pending() >= readback.capacity || readback.oldestReady())) await encodeOldest()
+      if (readback.full()) await encodeBatch()
     } else {
       await waitForEncoderQueue(videoEncoder, VIDEO_QUEUE_FRAMES, videoError)
     }
@@ -480,7 +480,7 @@ export async function renderVideo({
   }
 
   onStatus?.('Finishing video encoding...')
-  while (readback && readback.pending() > 0) await encodeOldest()
+  if (readback && readback.waiting() > 0) await encodeBatch()
   try {
     await videoEncoder.flush()
   } catch (err) {
@@ -496,7 +496,7 @@ export async function renderVideo({
     seconds: +renderSeconds.toFixed(1),
     speed: +(durationMs / 1000 / renderSeconds).toFixed(2),
     msPerFrame: Object.fromEntries(Object.entries(spent).map(([stage, ms]) => [stage, +(ms / totalFrames).toFixed(2)])),
-    frames_source: readback ? 'readback' : 'canvas',
+    frames_source: readback ? `readback, ${readback.batch} a read` : 'canvas',
     constantBitrate,
     sample,
   }

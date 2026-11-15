@@ -22,31 +22,37 @@ const compareSample = frame => p.evaluate(`(async () => {
   const video = document.querySelector('video[src^="blob:"]')
   if (!video) return 'no finished video on the page'
   if (video.readyState < 1) await new Promise(r => video.addEventListener('loadedmetadata', r, { once: true }))
-  video.currentTime = (${frame} + 0.5) / 30
-  await new Promise(r => video.addEventListener('seeked', r, { once: true }))
-  await new Promise(r => setTimeout(r, 300))
   const canvas = document.createElement('canvas')
   const width = canvas.width = video.videoWidth
   const height = canvas.height = video.videoHeight
   if (sample.length !== width * height * 4) return 'the sample is not the video size'
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  ctx.drawImage(video, 0, 0)
-  const data = ctx.getImageData(0, 0, width, height).data
-  const bias = [0, 0, 0]
-  let squared = 0
-  for (let y = 0; y < height; y++) {
-    const source = (height - 1 - y) * width * 4
-    const shown = y * width * 4
-    for (let x = 0; x < width; x++) {
-      for (let c = 0; c < 3; c++) {
-        const d = data[shown + x * 4 + c] - sample[source + x * 4 + c]
-        bias[c] += d
-        squared += d * d
+  const compare = async at => {
+    video.currentTime = (at + 0.5) / 30
+    await new Promise(r => video.addEventListener('seeked', r, { once: true }))
+    await new Promise(r => setTimeout(r, 250))
+    ctx.drawImage(video, 0, 0)
+    const data = ctx.getImageData(0, 0, width, height).data
+    const bias = [0, 0, 0]
+    let squared = 0
+    for (let y = 0; y < height; y++) {
+      const source = (height - 1 - y) * width * 4
+      const shown = y * width * 4
+      for (let x = 0; x < width; x++) {
+        for (let c = 0; c < 3; c++) {
+          const d = data[shown + x * 4 + c] - sample[source + x * 4 + c]
+          bias[c] += d
+          squared += d * d
+        }
       }
     }
+    const pixels = width * height
+    return { psnr_dB: +(10 * Math.log10(255 * 255 / (squared / (pixels * 3)))).toFixed(2), videoMinusSource_rgb: bias.map(v => +(v / pixels).toFixed(2)) }
   }
-  const pixels = width * height
-  return JSON.stringify({ psnr_dB: +(10 * Math.log10(255 * 255 / (squared / (pixels * 3)))).toFixed(2), videoMinusSource_rgb: bias.map(v => +(v / pixels).toFixed(2)) })
+  const here = await compare(${frame})
+  const before = await compare(${frame} - 1)
+  const after = await compare(${frame} + 1)
+  return JSON.stringify({ ...here, neighbours_dB: [before.psnr_dB, after.psnr_dB] })
 })()`)
 try {
   await closeDialogs(p)
@@ -70,7 +76,7 @@ try {
       return last && last !== window.__shareBefore ? JSON.stringify({ ...last, sample: !!last.sample }) : ''
     })()`, 240, `the render (${label})`)
     const stats = result === 'FAILED' ? null : JSON.parse(result)
-    if (stats?.sample) {
+    if (stats?.sample && !options.closeWindow) {
       console.log(label.padEnd(34), JSON.stringify(stats))
       await until(`!!document.querySelector('video[src^="blob:"]')`, 30, 'the finished video')
       console.log(''.padEnd(34), 'colour check:', await compareSample(options.sampleFrame))

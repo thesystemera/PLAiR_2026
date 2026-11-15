@@ -248,11 +248,29 @@ First full run on the phone (6:14 song, 720x1280 at 30 fps): 9.6 minutes (0.65x 
 
 Built on 15 Nov (`lib/videoFrameReadback.js`): frames are packed as NV12 on the GPU and read back through pixel-pack
 buffers with fences, several in flight, and the encoder runs at a constant bitrate with a key frame every 2 s.
-Desktop (P6000, headless): same speed as before (10.4x, the desktop was never limited by this); a decoded frame
-against the rendered one: 38.8 dB for the old settings (1 Mbps variable, key frame every second, 1.25 Mbps real),
-39.5 dB at 1 Mbps constant, 41.6 at 1.5, 43.3 at 2; colour shift under 1.3 levels in every case. **The phone numbers
-for the new path are not measured yet**: run `sharebench.mjs` there (default, `canvasFrames`, `noEncode`, and
-`encoder.bitrate` 1 / 1.5 / 2 Mbps with `sampleFrame`) and set `VIDEO_BITRATE` from the PSNR.
+Desktop (P6000, headless): 10.4x, as before (the desktop was never limited by this); a decoded frame against the
+rendered one: 38.8 dB for the old settings (1 Mbps variable, key frame every second, 1.25 Mbps real), 39.5 dB at
+1 Mbps constant, 41.6 at 1.5, 43.3 at 2; colour shift under 1.3 levels in every case.
+
+On the phone (16 Nov) the fenced buffers were no faster than about 0.74x. A CPU profile of the render worker
+(`workerprof.mjs`) put 82% of its time inside `getBufferSubData`: it blocks 10-12 ms even after the fence has
+passed (25-30 ms in the busy worker). `readbacktest.mjs` tried every way of doing it (buffer usage hints, one buffer
+reused, `clientWaitSync` or `getSyncParameter`, waiting extra tasks or frames after the fence): all the same, and a
+plain `readPixels` into memory blocks about 6 ms. Chrome on this phone has no read that does not block; a read costs
+about 10 ms whatever its size plus about 3.5 ms per frame. So frames share a read: each is packed into its own rows
+of one tall target and one `readPixels` brings back as many as fit under `MAX_TEXTURE_SIZE` (4 on the phone at
+8192, 8 on desktop). The pixel-pack buffers and fences are gone.
+
+Phone, 20 s clips (`sharebench.mjs`): render plus read 2.82x realtime; with the encoder 1.75x in High profile and
+2.0-2.2x in Main (`avc1.4d001f`). A whole 3:17 song with the Share window closed: 99 s (1.99x), 1.62 Mbps, encode
+15.7 ms a frame, drawing 0.6. Picture against the rendered frame, Main profile, encoded on the phone: 44.5 / 46.2 /
+46.6 dB at 1 / 1.5 / 2 Mbps on a calm frame, 38.4 / 41.8 / 43.1 dB on a busy one; High at 1.5 Mbps is 0.5 dB better
+and 20% slower. Shipped: Main, 1.5 Mbps constant (`VIDEO_CODEC`, `VIDEO_BITRATE`).
+
+What it cost and what is open: the desktop renders at 5-6x with the shared read against 10.4x with the fenced
+buffers (one read is about 16 ms on the P6000, and the scene is heavier since the 15-16 Nov rework); nobody waits
+on that. With the Share window left open the phone renders at about 1.7x, not 2.0x; not looked into yet. The
+encoder is now the limit (15.7 of about 17 ms a frame).
 
 ResizeObserver loop errors (74 in the server log on 14 Nov): the player's size observer wrote the panel insets inside
 its callback (the 14 Nov afternoon change). Now the height is passed on after framer-motion's render step: 104 errors
