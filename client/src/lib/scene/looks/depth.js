@@ -154,9 +154,9 @@ export default {
   }),
   signature: ['u_layer_ready', 'u_layers', 'u_layer_grade', 'u_layer_bands', 'u_layer_shadow'],
 
-  variant(rand, level) {
+  variant(rand, level, prefer = {}) {
     return {
-      motion: pickWeighted(rand, MOTIONS),
+      motion: prefer.motion || pickWeighted(rand, MOTIONS),
       grade: pickWeighted(rand, GRADES),
       focus: level === 'low' ? 'subject' : pickWeighted(rand, FOCUS_MODES),
       shadow: 0.3 + rand() * 0.25,

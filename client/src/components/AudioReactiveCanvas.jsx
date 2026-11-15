@@ -259,8 +259,11 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   }, [send, ui.isScreenVisible])
 
   useEffect(() => {
-    send({ type: 'features', features: ui.audioFeatures || null })
-  }, [send, ui.audioFeatures])
+    const features = ui.audioFeatures || null
+    const timing = ui.lyricTimestamps
+    const sections = features && timing?.id === features.id ? timing.timed_sections || null : null
+    send({ type: 'features', features, sections })
+  }, [send, ui.audioFeatures, ui.lyricTimestamps])
 
   useEffect(() => {
     const blob = artworkPack ? blobForUrl(artworkPack) : null

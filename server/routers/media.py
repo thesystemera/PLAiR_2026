@@ -15,7 +15,7 @@ from services.youtube_clip_service import get_youtube_clip_service
 from services.artwork_thumbnail_service import PACK_SIZES, ensure_pack, pack_path
 from services.normal_map_service import ensure_track_normal
 from services.device_settings_service import settings_for, valid_kind
-from services import log_service, lyric_style_service, track_asset_stages as stages
+from services import log_service, lyric_sections, lyric_style_service, track_asset_stages as stages
 from database import User
 from config import settings
 from service_registry import services
@@ -297,8 +297,15 @@ async def get_lyric_timestamps(request: Request, track_id: str):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=404, detail="Lyric timestamps not found")
     return await _json_file_response(request, settings.LYRIC_TIMESTAMPS_DIR / f"{track_id}.json", "Lyric timestamps not found",
-                                     extend=lambda timing: lyric_style_service.attach_style(track_id, timing),
+                                     extend=lambda timing: _extend_lyric_timing(track_id, timing),
                                      extra=(lyric_style_service.style_path(track_id),))
+
+
+def _extend_lyric_timing(track_id: str, timing: dict) -> None:
+    lyric_style_service.attach_style(track_id, timing)
+    track = services.catalog_service.get_track(track_id) if services.catalog_service else None
+    prompt = stages.track_lyrics_text(track) if track else ''
+    timing['timed_sections'] = lyric_sections.timed_lyric_sections(prompt, timing.get('raw_words') or [], timing.get('duration') or 0)
 
 @router.post("/api/lyric-timestamps/{track_id}/generate")
 async def generate_lyric_timestamps(track_id: str, _admin: User = Depends(require_admin)):

@@ -21,10 +21,8 @@ import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from '.
 import { LOOKS, LOOK_IDS, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus } from './scene/focus'
+import { createFx, stepFx } from './scene/beatFx'
 import {
-  createInitialEffects,
-  buildVisualCueMap,
-  calculateFrameEffects,
   processLyricTimestamps,
   getLyricAt,
   renderLyricToCanvas,
@@ -32,11 +30,6 @@ import {
 import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from './lyricStyle'
 import { loadLyricFonts } from './lyricFonts'
 import { NV12_COLOR_SPACE, createFrameReadback, frameReadbackSupported } from './videoFrameReadback'
-
-function seededRandom(seed) {
-  let s = seed
-  return () => { s = Math.sin(s * 9999) * 10000; return s - Math.floor(s) }
-}
 
 const VIDEO_QUEUE_FRAMES = 4
 const VIDEO_BITRATE = 2_000_000
@@ -244,7 +237,7 @@ export async function renderVideo({
     materials[id] = new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, side: DoubleSide, uniforms: material.uniforms })
     resources.lookMaterials.push(materials[id])
   }
-  const plan = bench.flatShader ? null : planShots(audioFeatures)
+  const plan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections })
   const directorCursor = createDirectorCursor()
   const focus = createFocus()
   const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: plan?.beats || null, energy: 0, bands: depth?.bands || null, grid: depth?.grid || null, frame: focus.frame, flipY: false, tilt: { x: 0, y: 0 } }
@@ -316,10 +309,7 @@ export async function renderVideo({
   audioDone.catch(err => { audioFailure = err })
   pcm = null
 
-  const effects = createInitialEffects()
-
-  const beats = audioFeatures?.beats || []
-  const visualCueMap = buildVisualCueMap(beats)
+  const effects = createFx()
 
   for (let index = 0; index < clipDurations.length; index++) {
     const clipTexture = new VideoFrameTexture()
@@ -334,16 +324,6 @@ export async function renderVideo({
   let currentClipIndex = 0
   let videoClipBlend = 0
   const clipVirtualTime = new Array(clipDurations.length).fill(0)
-
-  const trackingState = {
-    lastSegmentIndex: 0,
-    lastBeatIndex: 0,
-    tempoTime: 0,
-    energyHistory: [],
-    energyStamps: [],
-    energyScratch: [],
-  }
-  const rand = seededRandom(42)
 
   const lyricData = processLyricTimestamps(lyricTimestamps)
   let lyricIndex = 0
@@ -381,22 +361,11 @@ export async function renderVideo({
     const timeMs = (frame / fps) * 1000
     const currentTime = timeMs / 1000
 
-    const rawEnergy = calculateFrameEffects({
-      effects,
-      audioFeatures,
-      currentTimeSeconds: currentTime,
-      delta,
-      visualCueMap,
-      trackingState,
-      random: rand,
-      onCameraCut: () => {
-        if (resources.clipTextures.length > 0) {
-          currentClipIndex = (currentClipIndex + 1) % resources.clipTextures.length
-        }
-      },
-    })
-
-    effects.blur *= 0.9
+    const at = plan ? directorAt(plan, currentTime, directorCursor) : null
+    const beat = stepFx(effects, plan, at, currentTime, delta, true)
+    if (beat.cut && resources.clipTextures.length > 0) currentClipIndex = (currentClipIndex + 1) % resources.clipTextures.length
+    const rawEnergy = effects.currentEnergy
+    effects.blur *= Math.exp(-delta * 6)
     const effectsDone = performance.now()
 
     material.uniforms.u_time.value = currentTime
@@ -415,8 +384,7 @@ export async function renderVideo({
     applyFocus(material.uniforms, focus, depth?.grid || null, false, delta, effects.blur)
 
     let look = 'cover'
-    if (plan) {
-      const at = directorAt(plan, currentTime, directorCursor)
+    if (at) {
       look = LOOKS[at.shot.look].needsDepth && !lookContext.bands ? 'cover' : at.shot.look
       if (look !== 'cover') {
         lookContext.t = currentTime

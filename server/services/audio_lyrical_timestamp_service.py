@@ -15,11 +15,11 @@ import torch
 
 from services import log_service
 from services import lyric_style_service, track_asset_stages
+from services.lyric_sections import SECTION_PATTERN
 from services.base_service import SingletonService
 from config import settings
 from models_global import gpu_lease, raise_if_cuda_oom
 
-SECTION_PATTERN = re.compile(r'\[(Intro|Verse|Chorus|Bridge|Outro|Breakdown|Instrumental|Pre-Chorus)[^]]*?\]', re.IGNORECASE)
 MATCH_SCORE = 2.0
 FUZZY_SCORE = 1.0
 MISMATCH_SCORE = -1.0

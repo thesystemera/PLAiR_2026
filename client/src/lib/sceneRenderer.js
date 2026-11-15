@@ -30,7 +30,8 @@ import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, 
 import { LOOKS, LOOK_IDS, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus } from './scene/focus'
-import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
+import { createFx, stepFx } from './scene/beatFx'
+import { lowerBound, numericAscending } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
 import { decodePack } from './packImage'
@@ -396,25 +397,13 @@ export class SceneRenderer {
     this.textTexture.needsUpdate = true
     this.textProbe = null
 
-    this.effects = {
-      chromatic: 0, glitchX: 0, glitchY: 0, rotation: 0, brightness: 0.6, saturation: 1, contrast: 1,
-      scale: 1.0, hue: 0, blur: 0, flicker: 1, currentEnergy: 0, macroEnergy: 0.5,
-      frameOffset: new Vector2(0, 0), targetFrameOffset: new Vector2(0, 0), frameScale: 1.0, targetFrameScale: 1.0, beatPulse: 0.0,
-    }
-    this.beatState = { threshold: 0.65, intensity: 0, onBeat: false }
-    this.energyHistory = []
-    this.energyScratch = []
-    this.energyStamps = []
+    this.effects = createFx()
     this.signature = {
       current: new Float64Array(SIGNATURE_SIZE), previous: new Float64Array(SIGNATURE_SIZE), length: 0,
       textures: [null, null, null, null], textVersion: -1, fgVisible: false, force: true, captureStale: true,
       captureLength: 0, captured: new Float64Array(SIGNATURE_SIZE),
     }
     this.audioFeatures = null
-    this.visualCueMap = new Map()
-    this.lastBeatIndex = 0
-    this.lastSegmentIndex = 0
-    this.tempoTime = 0
     this.interpolatedProgress = 0
     this.lastSeenProgress = 0
     this.localProgressUpdateTime = Date.now()
@@ -428,7 +417,6 @@ export class SceneRenderer {
     this.probeParams = {}
     this.lightCurve = null
     this.lightLevel = 0
-    this.lastKickBeat = -1
     this.click = { intensity: 0, at: 0, active: false }
     this.transitionProgress = 1
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
@@ -650,16 +638,15 @@ export class SceneRenderer {
     this.look = id
   }
 
-  direct(reduceMotion, energy, width, height, parallaxX, parallaxY) {
+  direct(at, reduceMotion, energy, width, height, parallaxX, parallaxY) {
     const plan = this.plan
-    if (!plan || reduceMotion) {
+    if (!plan || !at || reduceMotion) {
       this.setLook('cover')
       return
     }
     const bgUniforms = this.bgMaterial.uniforms
     const ctx = this.lookContext
     ctx.t = this.interpolatedProgress / 1000
-    const at = directorAt(plan, ctx.t, this.directorCursor)
     let look = at.shot.look
     if (!this.lookReady[look] || (LOOKS[look].needsDepth && !this.bands)) look = 'cover'
     if (look !== 'cover') {
@@ -684,7 +671,7 @@ export class SceneRenderer {
     switch (message.type) {
       case 'size': this.setSize(message); break
       case 'state': Object.assign(this.state, message.state); this.updateStats(); break
-      case 'features': this.setFeatures(message.features); break
+      case 'features': this.setFeatures(message.features, message.sections); break
       case 'artwork': this.setArtwork(message.key, message.blob); break
       case 'lyric': this.setLyric(message); break
       case 'clips': this.setClipCount(message.count); break
@@ -721,27 +708,13 @@ export class SceneRenderer {
     }
   }
 
-  setFeatures(features) {
+  setFeatures(features, sections) {
     this.audioFeatures = features || null
     this.lightCurve = buildLightCurve(features)
-    this.plan = features ? planShots(features) : null
+    this.plan = features ? planShots(features, { sections }) : null
     this.directorCursor = createDirectorCursor()
-    if (!features) return
-    this.lastBeatIndex = 0
-    this.lastSegmentIndex = 0
-    const { loudness_segments: segments, beats } = features
-    if (!segments || segments.length === 0 || !beats || beats.length === 0) return
-    const cueMap = new Map()
-    let beatCounter = 0
-    beats.forEach((beatTime, index) => {
-      const cues = new Set()
-      if (index % 16 === 0) cues.add('CAMERA_CUT')
-      beatCounter++
-      if (beatCounter % 2 === 0) cues.add('SMALL_ROTATION')
-      if (cues.size > 0) cueMap.set(beatTime, cues)
-    })
-    this.visualCueMap = cueMap
-    this.tempoTime = 0
+    this.effects.lastBeat = -1
+    this.effects.lastShot = -1
   }
 
   setArtwork(url, blob) {
@@ -934,123 +907,16 @@ export class SceneRenderer {
     }
     this.interpolatedProgress = isPlaying ? progressMs + (now - this.localProgressUpdateTime) : progressMs
 
-    const features = this.audioFeatures
-    const tempo = features?.tempo || 120
-    const beatDurationMs = (60 / tempo) * 1000
-    const tempoSyncedDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 1.5))
-    const fastDecay = Math.min(1.0, (delta * 1000) / (beatDurationMs * 0.8))
-
-    let kickOut = 0
-    let pulseOut = 0
-    if (isPlaying && features?.loudness_segments) {
-      const currentTime = this.interpolatedProgress / 1000
-      const segments = features.loudness_segments
-      const beats = features.beats || []
-
-      let segIdx = this.lastSegmentIndex
-      while (segIdx < segments.length - 1 && segments[segIdx + 1].start <= currentTime) segIdx++
-      this.lastSegmentIndex = segIdx
-      const currentSegment = segments[segIdx]
-
-      if (currentSegment) {
-        const minL = features.min_loudness || -60
-        const peakL = features.peak_loudness || -1
-        const rawEnergy = Math.max(0, Math.min(1, (currentSegment.loudness - minL) / (peakL - minL)))
-        effects.currentEnergy = rawEnergy
-
-        const beatState = this.beatState
-        beatState.threshold = pushEnergySample(this.energyHistory, this.energyStamps, this.energyScratch, rawEnergy, now)
-        beatState.intensity = Math.max(0, (rawEnergy - beatState.threshold) / (1.0 - beatState.threshold))
-
-        let onBeat = false
-        let beatHit = -1
-        for (let i = this.lastBeatIndex; i < beats.length; i++) {
-          const beatTime = beats[i]
-          if (beatTime > currentTime + 0.08) break
-          if (Math.abs(beatTime - currentTime) < 0.08) {
-            onBeat = true
-            beatHit = beatTime
-            this.lastBeatIndex = Math.max(0, i - 1)
-            const cues = this.visualCueMap.get(beatTime)
-            if (cues) {
-              if (cues.has('CAMERA_CUT')) {
-                const magnitude = 0.3 + (rawEnergy * 0.4)
-                if (Math.random() < 0.2) {
-                  effects.targetFrameOffset.set(0, 0)
-                  effects.targetFrameScale = 1.0
-                } else {
-                  effects.targetFrameScale = 1.0 + (Math.random() * magnitude)
-                  effects.targetFrameOffset.set((Math.random() - 0.5) * magnitude * 0.5, (Math.random() - 0.5) * magnitude * 0.5)
-                }
-                effects.frameOffset.copy(effects.targetFrameOffset)
-                effects.frameScale = effects.targetFrameScale
-                if (this.clips.count > 0) {
-                  this.clips.currentIndex = (this.clips.currentIndex + 1) % this.clips.count
-                  this.emit({ type: 'clipIndex', index: this.clips.currentIndex })
-                }
-              }
-              if (cues.has('SMALL_ROTATION')) effects.rotation += (Math.random() - 0.5) * 10.0 * rawEnergy
-            }
-            break
-          }
-        }
-        beatState.onBeat = onBeat && rawEnergy > beatState.threshold && beatState.intensity > 0.4
-
-        if (beatState.onBeat) {
-          effects.glitchX = (Math.random() - 0.5) * beatState.intensity * 150.0
-          effects.glitchY = (Math.random() - 0.5) * beatState.intensity * 150.0
-          if (beatState.intensity > 0.5 && visualQuality === 'high') {
-            effects.hue += beatState.intensity * 30.0
-            effects.chromatic = beatState.intensity * 80.0
-            effects.blur += beatState.intensity * 25.0
-          }
-        }
-
-        const kick = onBeat && beatHit !== this.lastKickBeat && rawEnergy > beatState.threshold
-        if (kick) this.lastKickBeat = beatHit
-
-        if (!beatState.onBeat) {
-          effects.glitchX *= (1.0 - fastDecay)
-          effects.glitchY *= (1.0 - fastDecay)
-        }
-
-        effects.hue *= (1.0 - tempoSyncedDecay)
-        effects.chromatic *= (1.0 - fastDecay)
-        effects.rotation *= (1.0 - fastDecay)
-        effects.brightness += ((0.25 + (rawEnergy * 0.5)) - effects.brightness) * perFrame(0.1)
-        effects.saturation += ((0.8 + (rawEnergy * 0.4)) - effects.saturation) * perFrame(0.1)
-        effects.contrast += ((0.9 + (rawEnergy * 0.2)) - effects.contrast) * perFrame(0.1)
-
-        const halfSpeedBps = tempo / 120.0
-        this.tempoTime += delta
-        const breathing = (Math.sin(this.tempoTime * halfSpeedBps * Math.PI * 2.0) + 1.0) / 2.0
-
-        effects.beatPulse = breathing * (0.2 + rawEnergy * 0.8)
-        effects.flicker += ((1.0 - (breathing * rawEnergy * 0.2)) - effects.flicker) * perFrame(0.2)
-        effects.scale += ((1.0 + (breathing * rawEnergy * 0.1)) - effects.scale) * perFrame(0.05)
-
-        const lightUp = this.lightLevel >= LIGHT_KICK_FLOOR
-        kickOut = reduceMotion || !kick || !lightUp ? 0 : Math.min(1, 0.5 + beatState.intensity * 0.5)
-        pulseOut = reduceMotion ? 0 : effects.beatPulse
-      }
-    } else {
-      effects.chromatic *= (1.0 - fastDecay)
-      effects.glitchX *= (1.0 - fastDecay)
-      effects.glitchY *= (1.0 - fastDecay)
-      effects.rotation += (0 - effects.rotation) * perFrame(0.1)
-      effects.brightness += (0.6 - effects.brightness) * perFrame(0.05)
-      effects.saturation += (1 - effects.saturation) * perFrame(0.05)
-      effects.contrast += (1 - effects.contrast) * perFrame(0.05)
-      effects.scale += (1.0 - effects.scale) * perFrame(0.05)
-      effects.flicker += (1.0 - effects.flicker) * perFrame(0.1)
-      effects.hue += (0 - effects.hue) * perFrame(0.1)
-      effects.targetFrameOffset.set(0, 0)
-      effects.targetFrameScale = 1.0
-      effects.frameOffset.copy(effects.targetFrameOffset)
-      effects.frameScale = effects.targetFrameScale
-      effects.beatPulse = 0.0
-      this.beatState.onBeat = false
+    const plan = this.plan
+    const playhead = this.interpolatedProgress / 1000
+    const at = plan ? directorAt(plan, playhead, this.directorCursor) : null
+    const beat = stepFx(effects, plan, at, playhead, delta, isPlaying)
+    if (beat.cut && this.clips.count > 0) {
+      this.clips.currentIndex = (this.clips.currentIndex + 1) % this.clips.count
+      this.emit({ type: 'clipIndex', index: this.clips.currentIndex })
     }
+    const kickOut = reduceMotion || this.lightLevel < LIGHT_KICK_FLOOR ? 0 : beat.kick
+    const pulseOut = reduceMotion ? 0 : effects.beatPulse
 
     const curve = this.lightCurve
     const lightTarget = !isPlaying ? 0 : curve
@@ -1237,7 +1103,7 @@ export class SceneRenderer {
     } else {
       bgUniforms.u_parallax.value.set(pX, pY)
       bgUniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
-      bgUniforms.u_frame_offset.value.set(effects.frameOffset.x, effects.frameOffset.y)
+      bgUniforms.u_frame_offset.value.set(effects.frameOffsetX, effects.frameOffsetY)
       bgUniforms.u_frame_scale.value = effects.frameScale
       bgUniforms.u_scale.value = effects.scale || 1.0
       bgUniforms.u_rotation.value = effects.rotation * Math.PI / 180
@@ -1250,7 +1116,7 @@ export class SceneRenderer {
     bgUniforms.u_chromatic.value = visualQuality === 'high' && !reduceMotion ? effects.chromatic : 0
     applyFocus(bgUniforms, this.focus, visualQuality === 'high' ? this.depthGrid : null, true, delta, effects.blur)
     bgUniforms.u_flicker.value = effects.flicker
-    this.direct(reduceMotion, effects.currentEnergy || 0, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
+    this.direct(at, reduceMotion, effects.currentEnergy || 0, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
 
     const clips = this.clips
     if (clips.count > 0 && visualQuality === 'high') {

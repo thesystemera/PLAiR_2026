@@ -55,7 +55,8 @@ const [blob, features, lyricTiming] = await Promise.all([
   fetch(`/api/audio-features/${id}`).then(r => r.json()),
   fetch(`/api/lyric-timestamps/${id}`).then(r => (r.ok ? r.json() : null)),
 ])
-scene.handle({ type: 'features', features })
+const sections = lyricTiming?.timed_sections || null
+scene.handle({ type: 'features', features, sections })
 scene.handle({ type: 'artwork', key: id, blob })
 const styled = lyricTiming ? prepareLyricStyle(lyricTiming) : null
 const fontsReady = styled ? await loadLyricFonts(styled.uses, styled.text) : false
@@ -111,6 +112,10 @@ async function at(seconds, capture) {
 }
 
 function describe(shot) {
+  return `${shot.role}${shot.drop ? '!' : ''} ${lookDetail(shot)}`
+}
+
+function lookDetail(shot) {
   const v = shot.variant
   if (shot.look === 'split') return `${v.layout}${v.mirror ? ' mirror' : ''}${v.chase ? ' chase' : ''} hues ${v.hues.join('/')}`
   if (shot.look === 'depth') return `${v.motion} ${v.grade} ${v.focus}`
@@ -152,17 +157,29 @@ async function still(seconds, look, seed = 7, level = 'high') {
 }
 
 function force(look, level = 'high', seed = 7) {
-  if (!look) {
-    scene.plan = planShots(features)
-  } else {
-    scene.plan = { shots: [{ start: 0, end: Infinity, look, level, variant: LOOKS[look].variant(seededRandom(seed), level) }], beats: features.beats }
-  }
+  const base = planShots(features, { sections })
+  scene.plan = look
+    ? { ...base, shots: base.shots.map(s => ({ ...s, look, level, variant: LOOKS[look].variant(seededRandom(seed), level) })) }
+    : base
   scene.directorCursor = { shot: 0, beat: 0 }
   return scene.plan.shots[0].variant
 }
 
 function plan() {
-  return planShots(features).shots.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, level: s.level, what: describe(s) }))
+  return planShots(features, { sections }).shots.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, what: describe(s) }))
+}
+
+function structure() {
+  const { song, shots } = planShots(features, { sections })
+  return {
+    meter: `${song.bpb}/4, downbeat phase ${song.phase}, ${(60 / song.period).toFixed(1)} bpm`,
+    sections: song.sections.map(s => {
+      const inside = shots.filter(shot => shot.start >= s.start - 0.01 && shot.start < s.end - 0.01)
+      const looks = {}
+      for (const shot of inside) looks[shot.look] = (looks[shot.look] || 0) + 1
+      return `${s.start.toFixed(0)}-${s.end.toFixed(0)}s ${s.type} -> ${s.role}${s.final ? ' (final)' : ''} energy ${s.energy.toFixed(2)}: ${inside.length} shots ${JSON.stringify(looks)}`
+    }),
+  }
 }
 
 async function timing(n = 40) {
@@ -295,7 +312,51 @@ async function video(seconds, times, width = 360, height = 640) {
   return { image: out.toDataURL('image/png'), stats, megabytes: +(buffer.byteLength / 1e6).toFixed(2) }
 }
 
-window.lab = { scene, features, at, sheet, still, video, plan, force, timing, identity, ready: true }
+async function trace(fps = 30) {
+  const { createFx, stepFx } = await import('/src/lib/scene/beatFx.js')
+  const { directorAt } = await import('/src/lib/scene/director.js')
+  const plan = planShots(features, { sections })
+  const fx = createFx()
+  const cursor = { shot: 0, beat: 0 }
+  const rows = plan.song.sections.map(s => ({ section: `${s.start.toFixed(0)}s ${s.role}`, seconds: s.end - s.start, cuts: 0, punch: 0, twitch: 0, glitch: 0, hue: 0, flash: 0, bright: [9, 0], oldHits: 0, oldTwitch: 0 }))
+  const rowAt = t => rows[Math.max(0, plan.song.sections.findIndex(s => t >= s.start && t < s.end))]
+  const prev = { punch: 0, rotation: 0, glitch: 0, hue: 0, flash: 0 }
+  const beats = features.beats
+  const segs = features.loudness_segments
+  const history = []
+  let seg = 0
+  let oldBeat = 0
+  for (let frame = 0; frame < features.duration * fps; frame++) {
+    const t = frame / fps
+    const at = directorAt(plan, t, cursor)
+    const out = stepFx(fx, plan, at, t, 1 / fps, true)
+    const row = rowAt(t)
+    if (out.cut) row.cuts++
+    if (fx.punch > prev.punch + 0.005) row.punch++
+    if (Math.abs(fx.rotation) > Math.abs(prev.rotation) + 0.5) row.twitch++
+    if (Math.abs(fx.glitchX) > Math.abs(prev.glitch) + 5) row.glitch++
+    if (Math.abs(fx.hue) > Math.abs(prev.hue) + 5) row.hue++
+    if (fx.flash > prev.flash + 0.02) row.flash++
+    row.bright[0] = Math.min(row.bright[0], fx.brightness)
+    row.bright[1] = Math.max(row.bright[1], fx.brightness)
+    Object.assign(prev, { punch: fx.punch, rotation: fx.rotation, glitch: fx.glitchX, hue: fx.hue, flash: fx.flash })
+    while (seg < segs.length - 1 && segs[seg + 1].start <= t) seg++
+    const raw = Math.max(0, Math.min(1, (segs[seg].loudness - (features.min_loudness || -60)) / ((features.peak_loudness || -1) - (features.min_loudness || -60))))
+    history.push([t, raw])
+    while (history.length && t - history[0][0] > 1.667) history.shift()
+    const sorted = history.map(h => h[1]).sort((a, b) => a - b)
+    const threshold = Math.max(0.65, sorted[Math.floor(sorted.length * 0.8)] || 0.65)
+    const intensity = Math.max(0, (raw - threshold) / (1 - threshold))
+    while (oldBeat < beats.length && beats[oldBeat] < t - 0.5 / fps) oldBeat++
+    if (oldBeat < beats.length && Math.abs(beats[oldBeat] - t) < 0.5 / fps) {
+      if (raw > threshold && intensity > 0.4) row.oldHits++
+      if (oldBeat % 2 === 1) row.oldTwitch++
+    }
+  }
+  return rows.map(r => `${r.section.padEnd(16)} ${r.seconds.toFixed(0).padStart(3)}s cuts ${r.cuts} punch ${r.punch} twitch ${r.twitch} glitch ${r.glitch} hue ${r.hue} flash ${r.flash} light ${r.bright[0].toFixed(2)}-${r.bright[1].toFixed(2)} | old: hits ${r.oldHits} twitch ${r.oldTwitch}`)
+}
+
+window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, ready: true }
 info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
 </script>
 </body>

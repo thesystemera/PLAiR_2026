@@ -167,8 +167,8 @@ export default {
   }),
   signature: ['u_tile_rect', 'u_tile_crop', 'u_tile_hue', 'u_tile_level', 'u_tile_focus', 'u_split_frame'],
 
-  variant(rand, level) {
-    const layout = pickWeighted(rand, LAYOUTS)
+  variant(rand, level, prefer = {}) {
+    const layout = prefer.layout || pickWeighted(rand, LAYOUTS)
     const mirror = layout !== 'boxes' && rand() < 0.4
     const crops = []
     for (let i = 0; i < TILES; i++) {
