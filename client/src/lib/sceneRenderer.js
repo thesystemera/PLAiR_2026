@@ -671,7 +671,7 @@ export class SceneRenderer {
     switch (message.type) {
       case 'size': this.setSize(message); break
       case 'state': Object.assign(this.state, message.state); this.updateStats(); break
-      case 'features': this.setFeatures(message.features, message.sections); break
+      case 'features': this.setFeatures(message.features, message.sections, message.lines); break
       case 'artwork': this.setArtwork(message.key, message.blob); break
       case 'lyric': this.setLyric(message); break
       case 'clips': this.setClipCount(message.count); break
@@ -708,10 +708,10 @@ export class SceneRenderer {
     }
   }
 
-  setFeatures(features, sections) {
+  setFeatures(features, sections, lines) {
     this.audioFeatures = features || null
     this.lightCurve = buildLightCurve(features)
-    this.plan = features ? planShots(features, { sections }) : null
+    this.plan = features ? planShots(features, { sections, lines }) : null
     this.directorCursor = createDirectorCursor()
     this.effects.lastBeat = -1
     this.effects.lastShot = -1

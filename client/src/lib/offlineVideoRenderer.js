@@ -237,7 +237,7 @@ export async function renderVideo({
     materials[id] = new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, side: DoubleSide, uniforms: material.uniforms })
     resources.lookMaterials.push(materials[id])
   }
-  const plan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections })
+  const plan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections, lines: lyricTimestamps?.lyrics })
   const directorCursor = createDirectorCursor()
   const focus = createFocus()
   const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: plan?.beats || null, energy: 0, bands: depth?.bands || null, grid: depth?.grid || null, frame: focus.frame, flipY: false, tilt: { x: 0, y: 0 } }

@@ -1,5 +1,5 @@
 import { seededRandom } from './random'
-import { energyAt, isDownbeat } from './structure'
+import { barPosition, energyAt } from './structure'
 
 const ROLE_LIGHT = { intro: -0.06, verse: 0, build: 0.03, chorus: 0.07, bridge: -0.02, solo: 0.06, interlude: -0.08, outro: -0.06 }
 const REST = { brightness: 0.6, saturation: 1, contrast: 1 }
@@ -78,12 +78,37 @@ function cameraAt(shot, at, t, bpb, out) {
   }
 }
 
+function onRhythm(shot, song, b) {
+  const position = barPosition(song, b)
+  switch (shot.rhythm) {
+    case 'sparse': return b === shot.phraseBeat || (position === 0 && hash(shot.seed, b, 11) < 0.5)
+    case 'down': return position === 0
+    case 'half': return position % 2 === 0
+    case 'off': return position % 2 === 1
+    default: return true
+  }
+}
+
+function fire(fx, w, seed, b, accent, down, k, scale) {
+  const strength = Math.min(1, (0.35 + 0.65 * accent) * (down ? 1.4 : 1)) * scale
+  if (hash(seed, b, 1) < w.punch * strength) fx.punch = Math.max(fx.punch, (0.025 + 0.06 * accent) * Math.min(1, w.punch) * k * scale)
+  if (hash(seed, b, 2) < w.twitch * strength * 0.8) fx.twist += (hash(seed, b, 3) * 2 - 1) * (3 + 7 * accent) * Math.min(1, w.twitch) * k * scale
+  if (hash(seed, b, 4) < w.glitch * strength * 0.7) {
+    fx.glitchX = (hash(seed, b, 5) - 0.5) * 150 * accent * w.glitch * k * scale
+    fx.glitchY = (hash(seed, b, 6) - 0.5) * 150 * accent * w.glitch * k * scale
+    fx.chromaKick = Math.max(fx.chromaKick, 80 * accent * k * scale)
+  }
+  if (hash(seed, b, 7) < w.chroma * strength) fx.chromaKick = Math.max(fx.chromaKick, (30 + 55 * accent) * Math.min(1, w.chroma) * k * scale)
+  if (down && hash(seed, b, 8) < w.hue * 0.7) fx.hueKick += (hash(seed, b, 9) < 0.5 ? -1 : 1) * (25 + 35 * accent) * k
+  if (hash(seed, b, 10) < w.strobe * strength * 0.6) fx.flash = Math.max(fx.flash, 0.16 * k * scale)
+}
+
 export function createFx() {
   return {
     chromatic: 0, glitchX: 0, glitchY: 0, rotation: 0, hue: 0, blur: 0, flicker: 1, scale: 1,
     brightness: REST.brightness, saturation: REST.saturation, contrast: REST.contrast,
     frameOffsetX: 0, frameOffsetY: 0, frameScale: 1, beatPulse: 0, currentEnergy: 0,
-    punch: 0, flash: 0, twist: 0, hueKick: 0, chromaKick: 0, tempoTime: 0, lastBeat: -1, lastShot: -1, camera: { x: 0, y: 0, z: 1 },
+    punch: 0, flash: 0, twist: 0, hueKick: 0, chromaKick: 0, tempoTime: 0, lastBeat: -1, lastHalf: -1, lastShot: -1, camera: { x: 0, y: 0, z: 1 },
   }
 }
 
@@ -139,22 +164,19 @@ export function stepFx(fx, plan, at, t, dt, playing) {
     const fresh = fx.lastBeat !== -1 && b === fx.lastBeat + 1
     fx.lastBeat = b
     if (fresh) {
-      const seed = shot.seed
       const accent = song.accents[b] ?? 0.5
-      const down = isDownbeat(song, b)
-      const strength = Math.min(1, (0.35 + 0.65 * accent) * (down ? 1.4 : 1))
-      if (hash(seed, b, 1) < w.punch * strength) fx.punch = Math.max(fx.punch, (0.025 + 0.06 * accent) * Math.min(1, w.punch) * k)
-      if (hash(seed, b, 2) < w.twitch * strength * 0.8) fx.twist += (hash(seed, b, 3) * 2 - 1) * (3 + 7 * accent) * Math.min(1, w.twitch) * k
-      if (hash(seed, b, 4) < w.glitch * strength * 0.7) {
-        fx.glitchX = (hash(seed, b, 5) - 0.5) * 150 * accent * w.glitch * k
-        fx.glitchY = (hash(seed, b, 6) - 0.5) * 150 * accent * w.glitch * k
-        fx.chromaKick = Math.max(fx.chromaKick, 80 * accent * k)
-      }
-      if (hash(seed, b, 7) < w.chroma * strength) fx.chromaKick = Math.max(fx.chromaKick, (30 + 55 * accent) * Math.min(1, w.chroma) * k)
-      if (down && hash(seed, b, 8) < w.hue * 0.7) fx.hueKick += (hash(seed, b, 9) < 0.5 ? -1 : 1) * (25 + 35 * accent) * k
-      if (hash(seed, b, 10) < w.strobe * strength * 0.6) fx.flash = Math.max(fx.flash, 0.16 * k)
+      const down = barPosition(song, b) === 0
+      if (onRhythm(shot, song, b)) fire(fx, w, shot.seed, b, accent, down, k, shot.rhythm === 'fill' ? 1.2 : 1)
       if (accent > 0.5) fx.blur += 18 * accent * k
       if (accent > 0.35) kick = Math.min(1, 0.4 + 0.6 * accent)
+    }
+  }
+
+  if ((shot.rhythm === 'eighth' || shot.rhythm === 'fill') && b >= 0 && b + 1 < song.beats.length && fx.lastHalf !== b) {
+    const beats = song.beats
+    if (t >= (beats[b] + beats[b + 1]) / 2) {
+      fx.lastHalf = b
+      fire(fx, w, shot.seed + 77, b, (song.accents[b] ?? 0.5) * 0.8, false, k, 0.6)
     }
   }
 

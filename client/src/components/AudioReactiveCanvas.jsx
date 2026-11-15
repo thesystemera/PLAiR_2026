@@ -261,8 +261,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   useEffect(() => {
     const features = ui.audioFeatures || null
     const timing = ui.lyricTimestamps
-    const sections = features && timing?.id === features.id ? timing.timed_sections || null : null
-    send({ type: 'features', features, sections })
+    const matched = features && timing?.id === features.id ? timing : null
+    const lines = matched?.lyrics?.map(line => ({ start: line.start, end: line.end, line: line.line })) || null
+    send({ type: 'features', features, sections: matched?.timed_sections || null, lines })
   }, [send, ui.audioFeatures, ui.lyricTimestamps])
 
   useEffect(() => {

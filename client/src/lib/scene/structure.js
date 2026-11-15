@@ -5,6 +5,7 @@ const SMOOTH_S = 1.5
 const ACCENT_WINDOW_S = 0.07
 const MIN_SECTION_S = 6
 const SOLO_ENERGY = 0.55
+const PHRASE_BARS = 4
 const ROLES = {
   intro: 'intro',
   verse: 'verse',
@@ -98,7 +99,42 @@ function audioSections(features, duration, energyOf) {
   })
 }
 
-export function analyzeSong(features, lyricSections) {
+function lyricLines(lines) {
+  const parsed = (lines || [])
+    .filter(line => Number.isFinite(line?.start) && Number.isFinite(line?.end) && line.end > line.start)
+    .map(line => ({ start: line.start, end: line.end, key: String(line.line || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim() }))
+    .sort((a, b) => a.start - b.start)
+  const counts = new Map()
+  for (const line of parsed) if (line.key) counts.set(line.key, (counts.get(line.key) || 0) + 1)
+  const hooks = new Map()
+  for (const line of parsed) {
+    line.hook = -1
+    if (!line.key || counts.get(line.key) < 2) continue
+    if (!hooks.has(line.key)) hooks.set(line.key, hooks.size)
+    line.hook = hooks.get(line.key)
+  }
+  return parsed
+}
+
+function phrasesOf(section, beats, bpb, phase, energyOf) {
+  const first = beats.findIndex(beat => beat >= section.start - 0.05)
+  if (first < 0) return []
+  let end = beats.findIndex(beat => beat >= section.end - 0.05)
+  if (end < 0) end = beats.length
+  if (end <= first) return []
+  let downbeat = first
+  while (downbeat < end && (((downbeat - phase) % bpb) + bpb) % bpb !== 0) downbeat++
+  const starts = [first]
+  for (let b = downbeat + PHRASE_BARS * bpb; b < end - bpb; b += PHRASE_BARS * bpb) starts.push(b)
+  return starts.map((start, index) => {
+    const stop = starts[index + 1] ?? end
+    const from = beats[start]
+    const to = stop < beats.length ? beats[stop] : section.end
+    return { start, end: stop, index, count: starts.length, energy: energyOf(from, to), from, to }
+  })
+}
+
+export function analyzeSong(features, lyricSections, lines) {
   const beats = features?.beats || []
   const segments = features?.loudness_segments || []
   const lastSegment = segments[segments.length - 1]
@@ -124,15 +160,26 @@ export function analyzeSong(features, lyricSections) {
     if (role === 'break') role = sectionEnergy >= SOLO_ENERGY ? 'solo' : 'interlude'
     return { start: section.start, end: section.end, type: section.type, role, energy: sectionEnergy, sung: section.sung !== false, chorus: role === 'chorus' ? choruses++ : -1 }
   })
-  for (const section of sections) section.final = section.role === 'chorus' && section.chorus === choruses - 1 && choruses > 1
+  for (const section of sections) {
+    section.final = section.role === 'chorus' && section.chorus === choruses - 1 && choruses > 1
+    section.phrases = phrasesOf(section, beats, bpb, phase, energyOf)
+  }
   const period = beats.length > 1 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : 0.5
-  return { beats, bpb, phase, period, duration, step: STEP_S, energy, accents: accents.ranked, sections }
+  return { beats, bpb, phase, period, duration, step: STEP_S, energy, accents: accents.ranked, sections, lines: lyricLines(lines) }
 }
 
 export function energyAt(song, t) {
   return song.energy[Math.max(0, Math.min(song.energy.length - 1, Math.floor(t / song.step)))]
 }
 
-export function isDownbeat(song, beat) {
-  return (((beat - song.phase) % song.bpb) + song.bpb) % song.bpb === 0
+export function barPosition(song, beat) {
+  return (((beat - song.phase) % song.bpb) + song.bpb) % song.bpb
+}
+
+export function lineAt(song, t) {
+  for (const line of song.lines) {
+    if (line.start > t + 0.15) return null
+    if (t < line.end) return line
+  }
+  return null
 }

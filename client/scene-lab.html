@@ -56,7 +56,8 @@ const [blob, features, lyricTiming] = await Promise.all([
   fetch(`/api/lyric-timestamps/${id}`).then(r => (r.ok ? r.json() : null)),
 ])
 const sections = lyricTiming?.timed_sections || null
-scene.handle({ type: 'features', features, sections })
+const lines = lyricTiming?.lyrics || null
+scene.handle({ type: 'features', features, sections, lines })
 scene.handle({ type: 'artwork', key: id, blob })
 const styled = lyricTiming ? prepareLyricStyle(lyricTiming) : null
 const fontsReady = styled ? await loadLyricFonts(styled.uses, styled.text) : false
@@ -112,7 +113,7 @@ async function at(seconds, capture) {
 }
 
 function describe(shot) {
-  return `${shot.role}${shot.drop ? '!' : ''} ${lookDetail(shot)}`
+  return `${shot.role}${shot.drop ? '!' : ''} ${shot.rhythm || ''}${shot.hook >= 0 ? ` hook${shot.hook}` : ''} ${lookDetail(shot)}`
 }
 
 function lookDetail(shot) {
@@ -157,7 +158,7 @@ async function still(seconds, look, seed = 7, level = 'high') {
 }
 
 function force(look, level = 'high', seed = 7) {
-  const base = planShots(features, { sections })
+  const base = planShots(features, { sections, lines })
   scene.plan = look
     ? { ...base, shots: base.shots.map(s => ({ ...s, look, level, variant: LOOKS[look].variant(seededRandom(seed), level) })) }
     : base
@@ -166,18 +167,20 @@ function force(look, level = 'high', seed = 7) {
 }
 
 function plan() {
-  return planShots(features, { sections }).shots.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, what: describe(s) }))
+  return planShots(features, { sections, lines }).shots.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, what: describe(s) }))
 }
 
 function structure() {
-  const { song, shots } = planShots(features, { sections })
+  const { song, shots } = planShots(features, { sections, lines })
   return {
     meter: `${song.bpb}/4, downbeat phase ${song.phase}, ${(60 / song.period).toFixed(1)} bpm`,
     sections: song.sections.map(s => {
       const inside = shots.filter(shot => shot.start >= s.start - 0.01 && shot.start < s.end - 0.01)
       const looks = {}
       for (const shot of inside) looks[shot.look] = (looks[shot.look] || 0) + 1
-      return `${s.start.toFixed(0)}-${s.end.toFixed(0)}s ${s.type} -> ${s.role}${s.final ? ' (final)' : ''} energy ${s.energy.toFixed(2)}: ${inside.length} shots ${JSON.stringify(looks)}`
+      const rhythms = s.phrases.map(p => shots.find(shot => shot.phraseBeat === p.start && shot.rhythm !== 'fill')?.rhythm || '-').join(' > ')
+      const hooks = inside.filter(shot => shot.hook >= 0).length
+      return `${s.start.toFixed(0)}-${s.end.toFixed(0)}s ${s.type} -> ${s.role}${s.final ? ' (final)' : ''} energy ${s.energy.toFixed(2)}, ${s.phrases.length} phrases [${rhythms}]: ${inside.length} shots, ${hooks} on hook lines ${JSON.stringify(looks)}`
     }),
   }
 }
@@ -312,10 +315,33 @@ async function video(seconds, times, width = 360, height = 640) {
   return { image: out.toDataURL('image/png'), stats, megabytes: +(buffer.byteLength / 1e6).toFixed(2) }
 }
 
+async function phraseTrace(fps = 30) {
+  const { createFx, stepFx } = await import('/src/lib/scene/beatFx.js')
+  const { directorAt } = await import('/src/lib/scene/director.js')
+  const plan = planShots(features, { sections, lines })
+  const fx = createFx()
+  const cursor = { shot: 0, beat: 0 }
+  const rows = []
+  for (const s of plan.song.sections) for (const p of s.phrases) rows.push({ from: p.from, to: p.to, label: `${p.from.toFixed(0)}s ${s.role} p${p.index + 1}`, events: 0, cuts: 0, rhythm: new Set() })
+  const prev = { punch: 0, twist: 0, chroma: 0, flash: 0, hue: 0 }
+  for (let frame = 0; frame < features.duration * fps; frame++) {
+    const t = frame / fps
+    const at = directorAt(plan, t, cursor)
+    const out = stepFx(fx, plan, at, t, 1 / fps, true)
+    const row = rows.find(r => t >= r.from && t < r.to)
+    if (!row) continue
+    row.rhythm.add(at.shot.rhythm)
+    if (out.cut) row.cuts++
+    if (fx.punch > prev.punch + 0.005 || Math.abs(fx.twist) > Math.abs(prev.twist) + 0.5 || fx.chromaKick > prev.chroma + 5 || fx.flash > prev.flash + 0.02 || Math.abs(fx.hueKick) > Math.abs(prev.hue) + 5) row.events++
+    Object.assign(prev, { punch: fx.punch, twist: fx.twist, chroma: fx.chromaKick, flash: fx.flash, hue: fx.hueKick })
+  }
+  return rows.map(r => `${r.label.padEnd(18)} ${(r.to - r.from).toFixed(0).padStart(2)}s ${[...r.rhythm].join('/').padEnd(18)} cuts ${String(r.cuts).padStart(2)}  hits ${String(r.events).padStart(3)} (${(r.events / Math.max(1, r.to - r.from)).toFixed(1)}/s)`)
+}
+
 async function trace(fps = 30) {
   const { createFx, stepFx } = await import('/src/lib/scene/beatFx.js')
   const { directorAt } = await import('/src/lib/scene/director.js')
-  const plan = planShots(features, { sections })
+  const plan = planShots(features, { sections, lines })
   const fx = createFx()
   const cursor = { shot: 0, beat: 0 }
   const rows = plan.song.sections.map(s => ({ section: `${s.start.toFixed(0)}s ${s.role}`, seconds: s.end - s.start, cuts: 0, punch: 0, twitch: 0, glitch: 0, hue: 0, flash: 0, bright: [9, 0], oldHits: 0, oldTwitch: 0, frames: 0, split: 0, turn: 0, hueSum: 0, moves: 0, palettes: new Set() }))
@@ -363,7 +389,7 @@ async function trace(fps = 30) {
   return rows.map(r => `${r.section.padEnd(15)} ${r.seconds.toFixed(0).padStart(3)}s cuts ${r.cuts} reframes ${r.moves} punch ${r.punch} twitch ${r.twitch} glitch ${r.glitch} flash ${r.flash} | colour split ${Math.round(100 * r.split / Math.max(1, r.frames))}% of frames, sway ${(r.turn / Math.max(1, r.frames)).toFixed(1)} deg, hue ${(r.hueSum / Math.max(1, r.frames)).toFixed(0)} deg | ${[...r.palettes].join('/')} | old hits ${r.oldHits}`)
 }
 
-window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, ready: true }
+window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, phraseTrace, force, timing, identity, ready: true }
 info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
 </script>
 </body>

@@ -1,17 +1,17 @@
 import { LOOKS } from './looks'
 import { lowerBound } from '../sceneEffects'
 import { pickWeighted, seededRandom } from './random'
-import { analyzeSong } from './structure'
+import { analyzeSong, lineAt } from './structure'
 
 const RECIPES = {
-  intro: { bars: 2, looks: [['cover', 3], ['depth', 2], ['split', 1]], cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
-  verse: { bars: 2, looks: [['cover', 2], ['depth', 2], ['split', 2]], cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
-  build: { bars: 2, looks: [['split', 3], ['cover', 2], ['depth', 1]], cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
-  chorus: { bars: 2, looks: null, cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
-  bridge: { bars: 2, looks: [['depth', 3], ['split', 2], ['cover', 1]], cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
-  solo: { bars: 1, looks: [['split', 3], ['depth', 1], ['cover', 1]], cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
-  interlude: { bars: 4, looks: [['depth', 3], ['cover', 1], ['split', 1]], cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
-  outro: { bars: 4, looks: [['cover', 3], ['depth', 1]], cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
+  intro: { looks: [['cover', 3], ['depth', 2], ['split', 1]], cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
+  verse: { looks: [['cover', 2], ['depth', 2], ['split', 2]], cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
+  build: { looks: [['split', 3], ['cover', 2], ['depth', 1]], cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
+  chorus: { looks: null, cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
+  bridge: { looks: [['depth', 3], ['split', 2], ['cover', 1]], cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
+  solo: { looks: [['split', 3], ['depth', 1], ['cover', 1]], cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
+  interlude: { looks: [['depth', 3], ['cover', 1], ['split', 1]], cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
+  outro: { looks: [['cover', 3], ['depth', 1]], cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
 }
 
 const PALETTES = {
@@ -28,6 +28,21 @@ function shotFx(palette, gain, energy, final) {
   for (const [key, weight] of Object.entries(PALETTES[palette])) fx[key] = Math.min(1.3, weight * scale)
   return fx
 }
+
+const RHYTHMS = {
+  intro: ['sparse', 'down', 'half'],
+  verse: ['sparse', 'down', 'off', 'half', 'beat'],
+  build: ['half', 'beat', 'eighth'],
+  chorus: ['half', 'off', 'beat', 'eighth'],
+  bridge: ['down', 'off', 'half'],
+  solo: ['beat', 'eighth'],
+  interlude: ['sparse', 'down'],
+  outro: ['down', 'sparse'],
+}
+
+const MIN_GAP = { sparse: 8, down: 4, off: 4, half: 4, beat: 2, eighth: 2 }
+const GAP_LOOKS = [['split', 3], ['depth', 2], ['cover', 1]]
+const FILL_LOOKS = [['split', 2], ['cover', 1], ['depth', 1]]
 
 const CHORUS_FAMILIES = [
   [['split', { layout: 'boxes' }], ['cover', {}]],
@@ -60,97 +75,138 @@ function snapToBeat(beats, time) {
   return time - beats[i - 1] < beats[i] - time ? i - 1 : i
 }
 
-function cutLengths(total, recipe, bpb, energy, leadsToChorus, final) {
-  let bars = recipe.bars
-  if (energy > 0.75 && bars > 1) bars /= 2
-  if (energy < 0.2 && recipe.level === 'low') bars *= 2
-  if (final) bars /= 2
-  const step = Math.max(1, Math.round(bars * bpb))
-  const lengths = []
-  let left = total
-  if (recipe.accelerate) {
-    const tail = []
-    for (const [beats, count] of [[1, bpb], [2, 2], [4, 2]]) {
-      for (let i = 0; i < count && left - beats >= 0; i++) {
-        tail.push(beats)
-        left -= beats
-      }
+function accelerating(first, last, bpb, step) {
+  const cuts = []
+  let end = last
+  for (const [beats, count] of [[1, bpb], [2, 2], [4, 2]]) {
+    for (let i = 0; i < count && end - beats >= first; i++) {
+      end -= beats
+      cuts.push(end)
     }
-    while (left > 0) {
-      lengths.push(Math.min(step, left))
-      left -= step
-    }
-    return [...lengths, ...tail.reverse()].filter(n => n > 0)
   }
-  let tail = []
-  if (leadsToChorus && left > 2 * bpb) {
-    tail = Array.from({ length: Math.round(bpb / 2) }, () => 2)
-    left -= tail.reduce((a, b) => a + b, 0)
-  }
-  while (left > 0) {
-    const n = left - step < step / 2 ? left : step
-    lengths.push(n)
-    left -= n
-  }
-  return [...lengths, ...tail]
+  for (let b = first; b < end; b += step) cuts.push(b)
+  return cuts.sort((x, y) => x - y)
 }
 
-export function planShots(features, { sections, still = false } = {}) {
+function phraseRhythm(role, phrase, sectionEnergy, rand) {
+  const list = RHYTHMS[role]
+  let index = Math.floor((phrase.index / Math.max(1, phrase.count)) * list.length)
+  const lift = phrase.energy - sectionEnergy
+  if (lift > 0.08) index++
+  if (lift < -0.08) index--
+  if (rand() < 0.2) index += rand() < 0.5 ? -1 : 1
+  return list[Math.max(0, Math.min(list.length - 1, index))]
+}
+
+function phraseCuts(song, phrase, role, rhythm, fill, lineStarts) {
+  const { beats, bpb } = song
+  const cuts = new Map([[phrase.start, 'phrase']])
+  if (RECIPES[role].accelerate) {
+    for (const b of accelerating(phrase.start, phrase.end, bpb, 2 * bpb)) if (!cuts.has(b)) cuts.set(b, 'fill')
+    return cuts
+  }
+  const fillStart = fill ? Math.max(phrase.start + 1, phrase.end - bpb) : phrase.end
+  for (const { beat, line } of lineStarts) if (beat > phrase.start && beat < fillStart) cuts.set(beat, line)
+  for (let b = phrase.start + bpb; b < fillStart; b += bpb) {
+    if (!cuts.has(b) && !lineAt(song, beats[b] + 0.05)) cuts.set(b, 'gap')
+  }
+  for (let b = fillStart; b < phrase.end; b += role === 'solo' ? 1 : 2) cuts.set(b, 'fill')
+  const minGap = MIN_GAP[rhythm]
+  const kept = new Map()
+  let last = -Infinity
+  for (const b of [...cuts.keys()].sort((x, y) => x - y)) {
+    const reason = cuts.get(b)
+    const gap = reason === 'phrase' ? 0 : reason === 'fill' ? 1 : minGap
+    if (b - last < gap) continue
+    kept.set(b, reason)
+    last = b
+  }
+  return kept
+}
+
+function chooseLook(rand, weights, previous) {
+  let look = null
+  for (let tries = 0; !look && tries < 4; tries++) {
+    const candidate = pickWeighted(rand, weights)
+    if (candidate !== previous || tries === 3) look = candidate
+  }
+  return look
+}
+
+export function planShots(features, { sections, lines, still = false } = {}) {
   const beats = features?.beats
   if (still || !beats?.length || beats.length < 8) return STILL
-  const song = analyzeSong(features, sections)
+  const song = analyzeSong(features, sections, lines)
   const rand = seededRandom(songSeed(features, beats))
   const family = CHORUS_FAMILIES[Math.floor(rand() * CHORUS_FAMILIES.length)]
+  const lineStarts = song.lines.map(line => ({ beat: snapToBeat(beats, line.start), line }))
+  const motifs = new Map()
   const shots = []
-  let previous = null
-  song.sections.forEach((section, index) => {
+  let chorusShots = 0
+  song.sections.forEach((section, sectionIndex) => {
     const recipe = RECIPES[section.role]
-    const first = index === 0 ? 0 : snapToBeat(beats, section.start)
-    const last = index === song.sections.length - 1 ? beats.length : snapToBeat(beats, section.end)
-    const leadsToChorus = song.sections[index + 1]?.role === 'chorus' && section.role !== 'build'
-    const lengths = cutLengths(Math.max(1, last - first), recipe, song.bpb, section.energy, leadsToChorus, section.final)
-    const tailFrom = leadsToChorus ? lengths.length - Math.round(song.bpb / 2) : Infinity
-    let b = first
-    lengths.forEach((length, c) => {
-      const role = c >= tailFrom ? 'build' : section.role
-      let look = null
-      let prefer = {}
-      if (role === 'chorus') {
-        look = family[c % family.length][0]
-        prefer = family[c % family.length][1]
-      } else if (index === 0 && c === 0) {
-        look = 'cover'
-      } else {
-        const weights = RECIPES[role].looks
-        for (let tries = 0; !look && tries < 4; tries++) {
-          const candidate = pickWeighted(rand, weights)
-          if (candidate !== previous?.look || tries === 3) look = candidate
+    const nextIsChorus = song.sections[sectionIndex + 1]?.role === 'chorus'
+    section.phrases.forEach(phrase => {
+      const role = section.role
+      const rhythm = phraseRhythm(role, phrase, section.energy, rand)
+      const palette = pickWeighted(rand, recipe.palettes)
+      const lastPhrase = phrase.index === phrase.count - 1
+      const fill = lastPhrase ? nextIsChorus || role === 'chorus' || role === 'solo' || rand() < 0.3 : role === 'chorus' && rand() < 0.4
+      const cuts = phraseCuts(song, phrase, role, rhythm, fill, lineStarts)
+      for (const [b, reason] of cuts) {
+        const opening = sectionIndex === 0 && phrase.index === 0 && b === phrase.start
+        const start = opening ? 0 : beats[b]
+        const vocal = lineAt(song, beats[b] + 0.05)
+        const hook = typeof reason === 'object' && reason.hook >= 0 ? reason.hook : -1
+        const filled = reason === 'fill'
+        const previous = shots[shots.length - 1]
+        let look
+        let variant
+        let camera
+        const level = filled ? 'high' : recipe.level
+        const motif = hook >= 0 ? motifs.get(hook) : null
+        if (motif) {
+          ;({ look, variant, camera } = motif)
+        } else {
+          let prefer = {}
+          if (opening) look = 'cover'
+          else if (role === 'chorus' && !filled) {
+            const pick = family[chorusShots++ % family.length]
+            look = pick[0]
+            prefer = pick[1]
+          } else look = chooseLook(rand, filled ? FILL_LOOKS : vocal ? recipe.looks : GAP_LOOKS, previous?.look)
+          variant = LOOKS[look].variant(rand, level, prefer)
+          const held = typeof reason === 'object' && reason.end - reason.start > 2 * song.bpb * song.period
+          if (b === phrase.start) camera = role === 'chorus' || role === 'solo' ? 'coverage' : 'push'
+          else if (held) camera = 'push'
+          else if (!vocal) camera = role === 'solo' ? 'shake' : 'coverage'
+          else camera = pickWeighted(rand, recipe.cameras)
+          if (hook >= 0) motifs.set(hook, { look, variant, camera })
         }
+        const shot = {
+          start,
+          end: Infinity,
+          look,
+          level,
+          role: filled && nextIsChorus && lastPhrase ? 'build' : role,
+          section: section.type,
+          energy: phrase.energy,
+          fx: shotFx(filled ? (rand() < 0.5 ? 'glitch' : 'jolt') : palette, recipe.gain, phrase.energy, section.final),
+          rhythm: filled ? 'fill' : rhythm,
+          phraseBeat: phrase.start,
+          camera,
+          drop: role === 'chorus' && phrase.index === 0 && b === phrase.start,
+          hook,
+          vocal: !!vocal,
+          seed: Math.floor(rand() * 1e9),
+          variant,
+        }
+        if (!previous || shot.start > previous.start + 0.05) shots.push(shot)
       }
-      const recipeNow = RECIPES[role]
-      const level = recipeNow.level
-      const fx = shotFx(pickWeighted(rand, recipeNow.palettes), recipeNow.gain, section.energy, section.final)
-      const shot = {
-        start: index === 0 && c === 0 ? 0 : beats[Math.min(b, beats.length - 1)],
-        end: Infinity,
-        look,
-        level,
-        role,
-        section: section.type,
-        energy: section.energy,
-        fx,
-        camera: pickWeighted(rand, recipeNow.cameras),
-        drop: role === 'chorus' && c === 0,
-        seed: Math.floor(rand() * 1e9),
-        variant: LOOKS[look].variant(rand, level, prefer),
-      }
-      if (!previous || shot.start > previous.start) {
-        shots.push(shot)
-        previous = shot
-      }
-      b += length
     })
   })
+  if (!shots.length) return STILL
+  shots[0].start = 0
   for (let i = 0; i < shots.length - 1; i++) shots[i].end = shots[i + 1].start
   return { shots, beats, song }
 }
