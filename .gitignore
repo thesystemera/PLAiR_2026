@@ -60,3 +60,4 @@ tests/.dj_test_account.json
 /upscale_ab/
 
 /tests/gpu_bench/old/
+/client/scene-lab-old.js

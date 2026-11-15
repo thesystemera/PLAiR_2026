@@ -417,7 +417,9 @@ triggerEffect('click', { x: 0.5, y: 0.5, intensity: 1.0 })
 
 ### 11. Shader Effects Architecture - DRY Pattern
 
-**Files:** `lib/sceneShaders.js` (all scene shaders), `lib/sceneEffects.js` (beat/energy effect functions), `lib/sceneRenderer.js` (the live scene), `lib/sceneWorker.js`, `components/AudioReactiveCanvas.jsx` (page side), `offlineVideoRenderer.js` (consumer)
+**Files:** `lib/sceneShaders.js` (puts the scene programs together), `lib/scene/glsl/` (the GLSL parts), `lib/scene/looks/` (one file per look), `lib/scene/director.js` (the cuts), `lib/sceneEffects.js` (beat/energy effect functions), `lib/sceneRenderer.js` (the live scene), `lib/sceneWorker.js`, `components/AudioReactiveCanvas.jsx` (page side), `offlineVideoRenderer.js` (consumer)
+
+**Looks and the director (15 Nov, music-video background):** the background is drawn in one of several looks, cut on the beat like a music video. A look is one file in `lib/scene/looks/` (registered in `looks/index.js`): its GLSL defines `vec4 lookImage()` (the picture before the shared finish: fallback, scanline, flicker and the lyric words on top), optionally its own vertex outputs, its uniforms, a seeded `variant(rand, level)` and a `frame(shot, ctx, uniforms)` that sets its uniforms each frame. `cover` is the original look (its programs render pixel for pixel what they did before the split, checked with `lab.identity()`); `split` tiles the cover (two or three bands, or a 2x2 grid; mirrored pairs, a hue per tile, gutters, a chase that lights one tile per beat in loud parts); `depth` cuts the cover into three layers by its depth map (the pack's green channel, banded at the 33rd/66th percentile per cover; flat maps have no depth look) that zoom, dolly and drift apart, with a cut-out shadow and a soft fill where layers part. Every look is its own set of programs (capture, full scene, backdrop) sharing one uniforms object, compiled after the cover's in the background; the renderer swaps the meshes' materials on a cut, never one shader with an `if` per look. `director.planShots(features)` plans the whole song once from the sections and beats (seeded by the song, so the live scene and the share video cut the same way): each section's loudness rank sets a level (low: cut every 32 beats, mostly cover; mid: 16; high: 8, mostly split and depth), the intro is always the cover, cuts land on beats. A look that can't run yet (programs compiling, no depth) shows the cover. Reduce motion = the cover only. Textures sampled inside branches that differ per pixel use `textureLod` with the level worked out before the branch (implicit derivatives there gave 2x2 speckle on D3D11). The CPU light probe follows the split tiles (`backgroundProbe.js`). Lab: `client/scene-lab.html` (stills, contact sheets, plans, forced looks, GPU time per look, a share-video render, old-vs-new pixel check), driven headless on the P6000 by `tests/gpu_bench/scenelab.mjs`. Measured at phone resolution on the P6000, background only: cover 0.14 ms, split 0.20, depth 0.28; not yet measured on the phone.
 
 The live background and the share-video renderer (`offlineVideoRenderer.js`, which runs only inside `shareVideoWorker.js`: it gets the decoded audio and any clip frames from the page) share the shaders (`sceneShaders.js`) and `createInitialEffects()`, `buildVisualCueMap()`, `calculateFrameEffects()`, `processLyricTimestamps()`, `getLyricAt()`, `renderLyricToCanvas()` (`sceneEffects.js`).
 
@@ -610,6 +612,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 
 - `client/public/sw.js` - Service worker: precaches the build's asset manifest, caches static/dynamic files, never intercepts /api, serves ranges.
 - `client/vite.config.js` - Vite config: React plugin, offline asset-manifest plugin, dev server on 3000 proxying /api, /ws, /track.
+- `client/scene-lab.html` - Dev page (Vite dev server only, never built): the background scene for one song stepped by hand; `window.lab` gives stills, contact sheets (`sheet`), the director's plan, forced looks, GPU time per look, a short share-video render and the old-vs-new pixel check (`identity`, against `/scene-lab-old.js`, an older `sceneShaders.js` bundled with esbuild, git-ignored).
 - `client/lyric-sheet.html` - Dev page (Vite dev server only, never built): every card of a song's lyric style at its final state; `?track=ID` (default The Archive of Cool) and `?aspect=0.46` for a phone held upright.
 
 #### client/src
@@ -765,7 +768,16 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `client/src/lib/shareVideoWorker.js` - Worker entry that runs `renderVideo` and relays progress, stages and clip-frame requests.
 - `client/src/lib/sceneEffects.js` - Beat and energy effect functions and lyric helpers shared by the live scene and the share-video renderer.
 - `client/src/lib/sceneRenderer.js` - The background scene: three.js setup, per-frame effects, glass panels, capture pass, light probe, render-on-change signature, the screen split between the glass programs (`splitScreen`); runs in the worker or on the main thread.
-- `client/src/lib/sceneShaders.js` - The background, glass scene (full, panel interior, panel interior under the radio button) and fullscreen backdrop shaders.
+- `client/src/lib/sceneShaders.js` - Puts the scene programs together: per look (`lookShaders`) the background, full scene and backdrop programs; the glass programs (panel interior, interior under the radio button); the cover look's programs under their old names.
+- `client/src/lib/scene/glsl/background.js` - The background GLSL: vertex shader (with room for a look's own outputs), the image body (sampling, bokeh, grading, the cover picture), the framing helpers looks use, and the shared finish (fallback, scanline, flicker, lyric words).
+- `client/src/lib/scene/glsl/glass.js` - The glass panels and radio button GLSL (`computeGlass`).
+- `client/src/lib/scene/glsl/glow.js` - The DJ voice and ON AIR ambient glow GLSL.
+- `client/src/lib/scene/looks/index.js` - The look registry: uniforms for every look, signature names, setting a look's uniforms for a frame.
+- `client/src/lib/scene/looks/cover.js` - The original look: the cover with the beat effects.
+- `client/src/lib/scene/looks/split.js` - Split screen: two or three bands or a 2x2 grid of the cover, mirrored pairs, a hue and crop per tile, gutters, a beat chase.
+- `client/src/lib/scene/looks/depth.js` - Depth layers: the cover cut into three layers by its depth map (percentile bands per cover), moved apart in the vertex shader (pulse, dolly, drift, tilt), graded per layer, cut-out shadow and soft fill.
+- `client/src/lib/scene/director.js` - Plans a song's shots from its sections and beats (seeded by the song) and finds the shot, beat pulse and beats since the cut for a moment.
+- `client/src/lib/scene/random.js` - Seeded random numbers and weighted picks for the director and looks.
 - `client/src/lib/sceneWorker.js` - Web Worker entry that hosts `SceneRenderer` on an OffscreenCanvas.
 - `client/src/lib/panelReveal.js` - Panel slide reveal: fixes open panels' contents at their final width during a slide (no per-frame reflow), switched on automatically after janky slides (`plair_panel_reveal` = on/off overrides).
 - `client/src/lib/passkeys.js` - WebAuthn passkey helpers: login, sign-up, add and silent upgrade.
@@ -871,6 +883,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `tests/perf_depth_art.mjs` - Frame-time benchmark of depth/light artwork on a simulated low-end phone in headless Chrome; no LLM.
 - `tests/gpu_bench/perf/` - Phone performance scripts over USB (frame budget by the slope method, interleaved A/B under simulated tilt, CSS and compositing cost, copy cost, player panel open/close, React re-render roots, blank-cover classes, soak for context loss); its `README.md` lists them, `docs/NEXT_SESSION_PERFORMANCE.md` explains the methods.
 - `tests/gpu_bench/headless.mjs` - Headless Chrome on the P6000 left open on a page, so the phone scripts in `perf/` can drive the desktop (`CDP_PORT`, `PAGE`).
+- `tests/gpu_bench/scenelab.mjs` - Opens `client/scene-lab.html` (Vite dev server) in headless Chrome on the P6000, awaits each expression given and saves any image it returns as PNG; no LLM.
 - `tests/gpu_bench/sharevideo.mjs` - Renders a share video for the song on air in headless Chrome on the P6000 (`stay`, `close` the Share window mid-render, `cancel`), prints the speed and per-stage timings, saves screenshots to E:; a new guest each run (one DeepSeek welcome).
 - `tests/gpu_bench/` - Headless Chrome pinned to the P6000: per-pass GPU timing, traces, panel-toggle frames and pixel-identity checks against an older shader (`README.md`); no LLM.
 - `tests/pulse_links_test.py` - Checks City Pulse links between gigs, places, news and shoutouts on fake sources; no LLM.

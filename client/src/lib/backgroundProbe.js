@@ -73,14 +73,45 @@ function sample(pixels, u, v, out) {
   return out
 }
 
+function coverFit(u, v, aspect, texAspect, out) {
+  out[0] = u
+  out[1] = v
+  if (texAspect > aspect) out[0] = u * aspect / texAspect + (1 - aspect / texAspect) / 2
+  else out[1] = v * texAspect / aspect + (1 - texAspect / aspect) / 2
+  return out
+}
+
+const fitted = new Float32Array(2)
+
 function backgroundAt(u, v, p) {
-  const cover = p.coverX
-  let cu = u
-  let cv = v
-  if (cover) cu = u * p.coverScale + p.coverOffset
-  else cv = v * p.coverScale + p.coverOffset
-  const framedX = (cu - 0.5) / p.frameScale + p.frameOffsetX
-  const framedY = (cv - 0.5) / p.frameScale + p.frameOffsetY
+  let framedX
+  let framedY
+  let hueCos = p.hueCos
+  let hueSin = p.hueSin
+  let rotateHue = Math.abs(p.hue) > 0.001
+  let level = 1
+  const split = p.split
+  if (split) {
+    const cols = split.u_split_grid.value.x
+    const rows = split.u_split_grid.value.y
+    const cellX = Math.min(Math.floor(u * cols), cols - 1)
+    const cellY = Math.min(Math.floor(v * rows), rows - 1)
+    const tile = cellY * cols + cellX
+    const crop = split.u_tile_crop.value[tile]
+    let localU = u * cols - cellX
+    if (crop.w > 0.5) localU = 1 - localU
+    coverFit(localU, v * rows - cellY, (p.width / cols) / (p.height / rows), p.texWidth / p.texHeight, fitted)
+    framedX = (fitted[0] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetX + crop.x
+    framedY = (fitted[1] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetY + crop.y
+    hueCos = split.u_tile_hue.value[tile].x
+    hueSin = split.u_tile_hue.value[tile].y
+    rotateHue = true
+    level = split.u_tile_level.value[tile]
+  } else {
+    coverFit(u, v, p.width / p.height, p.texWidth / p.texHeight, fitted)
+    framedX = (fitted[0] - 0.5) / p.frameScale + p.frameOffsetX
+    framedY = (fitted[1] - 0.5) / p.frameScale + p.frameOffsetY
+  }
   const px = framedX - p.shiftX
   const py = framedY - p.shiftY
   const fxU = (p.cos * px + p.sin * py) / p.scale + 0.5
@@ -105,18 +136,18 @@ function backgroundAt(u, v, p) {
   r = luma + (r - luma) * p.saturation
   g = luma + (g - luma) * p.saturation
   b = luma + (b - luma) * p.saturation
-  if (Math.abs(p.hue) > 0.001) {
+  if (rotateHue) {
     const base = r * 0.213 + g * 0.715 + b * 0.072
-    const hr = base + p.hueCos * (r * 0.787 - g * 0.715 - b * 0.072) - p.hueSin * (-r * 0.213 - g * 0.715 + b * 0.928)
-    const hg = base + p.hueCos * (-r * 0.213 + g * 0.285 - b * 0.072) + p.hueSin * (r * 0.143 - g * 0.285 + b * 0.142)
-    const hb = base + p.hueCos * (-r * 0.213 - g * 0.715 + b * 0.928) + p.hueSin * (-r * 0.787 + g * 0.715 + b * 0.072)
+    const hr = base + hueCos * (r * 0.787 - g * 0.715 - b * 0.072) - hueSin * (-r * 0.213 - g * 0.715 + b * 0.928)
+    const hg = base + hueCos * (-r * 0.213 + g * 0.285 - b * 0.072) + hueSin * (r * 0.143 - g * 0.285 + b * 0.142)
+    const hb = base + hueCos * (-r * 0.213 - g * 0.715 + b * 0.928) + hueSin * (-r * 0.787 + g * 0.715 + b * 0.072)
     r = hr
     g = hg
     b = hb
   }
-  r = Math.min(1, Math.max(0, r))
-  g = Math.min(1, Math.max(0, g))
-  b = Math.min(1, Math.max(0, b))
+  r = Math.min(1, Math.max(0, r)) * level
+  g = Math.min(1, Math.max(0, g)) * level
+  b = Math.min(1, Math.max(0, b)) * level
 
   if (color[3] < 0.01 && p.transition < 0.01) {
     const fallbackY = (-p.sin * framedX + p.cos * framedY) / (p.scale + 0.2) + 0.5
@@ -144,11 +175,6 @@ function backgroundAt(u, v, p) {
 }
 
 export function sampleBackgroundProbe(p) {
-  const canvasAspect = p.width / p.height
-  const texAspect = p.texWidth / p.texHeight
-  p.coverX = texAspect > canvasAspect
-  p.coverScale = p.coverX ? canvasAspect / texAspect : texAspect / canvasAspect
-  p.coverOffset = (1 - p.coverScale) / 2
   p.glitchU = p.glitchX / p.width
   p.glitchV = p.glitchY / p.height
   p.shiftX = p.parallaxX / p.width + p.glitchU

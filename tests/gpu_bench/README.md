@@ -17,6 +17,7 @@ P6000's adapter LUID with `python list_gpus.py` (it changes on reboot) and pass 
 | `pyramid.html` | Checks the max-depth pyramid level by level against a CPU reduction. `?id=...` |
 | `headless.mjs` | `node headless.mjs <url> [seconds]`: headless Chrome on the P6000 left open on a page (phone layout by default) so the scripts in `perf/` can drive it with `CDP_PORT=9338 PAGE=<part of the url>`. |
 | `scene_split_check.js` | `PRELOAD="$(cat scene_split_check.js)" node pagerun.mjs <url> 16 'window.results'` (or its `__sceneSplitCheck` in the phone's page): draws the scene's main pass with the screen split between its glass programs, then with the full shader on every pixel, same uniforms, and compares every pixel; also draws the split twice as the noise floor. Run it after any change to the split or the glass shaders. |
+| `scenelab.mjs` | `node scenelab.mjs <url of client/scene-lab.html?track=ID> <out dir> '<expression>' ...`: the background scene's lab page (Vite dev server, e.g. `npx vite --port 3017`) on the P6000; awaits each expression (`lab.sheet([...])`, `lab.plan()`, `lab.timing(40)`, `lab.identity()`, `lab.video(26, [13, 23])`) and saves returned images as PNG. |
 | `serve.mjs` | `node serve.mjs <dir> <port>`: serves a client build or this folder, proxies `/api`, `/ws`, `/track` to the backend, `/src/...` from `client/src`. |
 
 Build a client to test without touching production: `npx vite build --outDir <scratch dir> --emptyOutDir`, then

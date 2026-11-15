@@ -1,0 +1,282 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scene lab</title>
+<style>
+  body { background: #111; color: #bbb; font: 12px system-ui, sans-serif; margin: 12px; }
+  #scene { display: block; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="info">loading…</div>
+<canvas id="scene"></canvas>
+<script type="module">
+// Dev page (Vite dev server only, never built): the background scene for one song, stepped by hand.
+// ?track=ID&w=412&h=915&dpr=1. window.lab: at(seconds), sheet(times), plan(), force(look), timing(n), identity()
+import { Mesh, PlaneGeometry, Scene, ShaderMaterial, WebGLRenderTarget } from 'three'
+import { SceneRenderer } from '/src/lib/sceneRenderer.js'
+import { LOOKS } from '/src/lib/scene/looks/index.js'
+import { planShots } from '/src/lib/scene/director.js'
+import { seededRandom } from '/src/lib/scene/random.js'
+import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from '/src/lib/lyricStyle.js'
+import { loadLyricFonts } from '/src/lib/lyricFonts.js'
+
+const params = new URLSearchParams(location.search)
+const id = params.get('track') || '1d50fa908702839d40b44d5dc477689b'
+const width = Number(params.get('w') || 412)
+const height = Number(params.get('h') || 915)
+const dpr = Number(params.get('dpr') || 1)
+const info = document.getElementById('info')
+const canvas = document.getElementById('scene')
+canvas.width = Math.round(width * dpr)
+canvas.height = Math.round(height * dpr)
+canvas.style.width = `${width}px`
+canvas.style.height = `${height}px`
+
+const scene = new SceneRenderer({ canvas, emit: () => {} })
+scene.handle({ type: 'size', width, height, dpr, referenceDpr: dpr })
+const [blob, features, lyricTiming] = await Promise.all([
+  fetch(`/api/artwork/${id}/pack/512`).then(r => r.blob()),
+  fetch(`/api/audio-features/${id}`).then(r => r.json()),
+  fetch(`/api/lyric-timestamps/${id}`).then(r => (r.ok ? r.json() : null)),
+])
+scene.handle({ type: 'features', features })
+scene.handle({ type: 'artwork', key: id, blob })
+const styled = lyricTiming ? prepareLyricStyle(lyricTiming) : null
+const fontsReady = styled ? await loadLyricFonts(styled.uses, styled.text) : false
+const aspect = width / height
+const lyricCanvas = document.createElement('canvas')
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+const until = async (test, ms = 20000) => {
+  const end = performance.now() + ms
+  while (!test()) {
+    if (performance.now() > end) throw new Error('timed out')
+    await sleep(50)
+  }
+}
+
+await until(() => scene.programsReady && scene.lookReady.split && scene.lookReady.depth)
+await until(() => {
+  scene.handle({ type: 'state', state: { isPlaying: false, progressMs: 0, durationMs: features.duration * 1000 } })
+  scene.frame(1 / 30)
+  return scene.layers[scene.frontLayer] !== scene.transparentPixel && scene.transitionProgress >= 1
+})
+
+async function lyricAt(seconds) {
+  const frame = styled && fontsReady ? lyricFrameAt(styled, seconds) : null
+  if (!frame) {
+    scene.handle({ type: 'lyric', image: null, empty: true, probe: null })
+    return
+  }
+  const size = lyricCanvasSize(aspect)
+  lyricCanvas.width = size.width
+  lyricCanvas.height = size.height
+  drawLyricFrame(lyricCanvas.getContext('2d'), styled, frame, size.width, size.height, aspect)
+  scene.handle({ type: 'lyric', image: await createImageBitmap(lyricCanvas), empty: false, probe: null })
+}
+
+async function at(seconds, capture) {
+  await lyricAt(seconds)
+  scene.bench.force = true
+  const frames = 12
+  for (let i = 0; i < frames; i++) {
+    scene.handle({ type: 'state', state: { isPlaying: true, progressMs: (seconds - (frames - 1 - i) / 60) * 1000, durationMs: features.duration * 1000 } })
+    scene.frame(1 / 60)
+  }
+  scene.bench.force = false
+  capture?.(canvas)
+  const shot = scene.plan?.shots?.[scene.directorCursor.shot]
+  return { seconds, look: scene.look, planned: shot?.look, level: shot?.level }
+}
+
+function describe(shot) {
+  const v = shot.variant
+  if (shot.look === 'split') return `${v.layout}${v.mirror ? ' mirror' : ''}${v.chase ? ' chase' : ''} hues ${v.hues.join('/')}`
+  if (shot.look === 'depth') return `${v.motion} ${v.grade}${v.focus ? ' focus' : ''}`
+  return ''
+}
+
+async function sheet(times, columns = 6, scale = 0.5) {
+  const cellW = Math.round(width * scale)
+  const cellH = Math.round(height * scale)
+  const out = document.createElement('canvas')
+  out.width = columns * cellW
+  out.height = Math.ceil(times.length / columns) * (cellH + 18)
+  const ctx = out.getContext('2d')
+  ctx.fillStyle = '#111'
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.font = '12px system-ui'
+  const rows = []
+  for (let i = 0; i < times.length; i++) {
+    const x = (i % columns) * cellW
+    const y = Math.floor(i / columns) * (cellH + 18)
+    const item = typeof times[i] === 'number' ? { t: times[i] } : times[i]
+    if (item.look) force(item.look, item.level, item.seed)
+    const row = await at(item.t, source => ctx.drawImage(source, x, y + 18, cellW, cellH))
+    const shot = scene.plan?.shots?.[scene.directorCursor.shot]
+    ctx.fillStyle = '#ddd'
+    ctx.fillText(`${item.t.toFixed(1)}s ${row.look} ${shot && row.look === shot.look ? describe(shot) : ''}`.slice(0, 48), x + 4, y + 13)
+    rows.push(row)
+  }
+  if (times.some(item => item.look)) force(null)
+  return { image: out.toDataURL('image/png'), rows }
+}
+
+async function still(seconds, look, seed = 7, level = 'high') {
+  if (look) force(look, level, seed)
+  let image = null
+  const row = await at(seconds, source => { image = source.toDataURL('image/png') })
+  if (look) force(null)
+  return { ...row, image }
+}
+
+function force(look, level = 'high', seed = 7) {
+  if (!look) {
+    scene.plan = planShots(features)
+  } else {
+    scene.plan = { shots: [{ start: 0, end: Infinity, look, level, variant: LOOKS[look].variant(seededRandom(seed), level) }], beats: features.beats }
+  }
+  scene.directorCursor = { shot: 0, beat: 0 }
+  return scene.plan.shots[0].variant
+}
+
+function plan() {
+  return planShots(features).shots.map(s => ({ start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, level: s.level, what: describe(s) }))
+}
+
+async function timing(n = 40) {
+  const gl = scene.gl
+  const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2')
+  if (!ext) return 'no timer queries'
+  const result = {}
+  for (const look of Object.keys(LOOKS)) {
+    force(look)
+    await at(60)
+    const runs = []
+    for (let r = 0; r < 5; r++) {
+      const query = gl.createQuery()
+      gl.beginQuery(ext.TIME_ELAPSED_EXT, query)
+      for (let i = 0; i < n; i++) scene.renderer.render(scene.mainScene, scene.mainCamera)
+      gl.endQuery(ext.TIME_ELAPSED_EXT)
+      gl.flush()
+      await until(() => gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE))
+      runs.push(gl.getQueryParameter(query, gl.QUERY_RESULT) / n / 1e6)
+      gl.deleteQuery(query)
+    }
+    runs.sort((a, b) => a - b)
+    result[look] = +runs[2].toFixed(3)
+  }
+  force(null)
+  return result
+}
+
+async function identity(cases = 6) {
+  const OLD = await import(/* @vite-ignore */ `/scene-lab-old.js?${Date.now()}`)
+  const target = new WebGLRenderTarget(canvas.width, canvas.height)
+  const quad = new Mesh(new PlaneGeometry(2, 2))
+  quad.frustumCulled = false
+  const stage = new Scene()
+  stage.add(quad)
+  const pairs = [
+    ['background', OLD.backgroundFragmentShader, scene.bgMaterial],
+    ['scene', OLD.sceneFragmentShader, scene.fgMaterial],
+    ['backdrop', OLD.backdropFragmentShader, scene.backdropMaterial],
+    ['glass', OLD.sceneGlassFragmentShader, scene.glassInteriorMaterial],
+    ['glass button', OLD.sceneGlassButtonFragmentShader, scene.glassButtonMaterial],
+  ]
+  const read = material => {
+    quad.material = material
+    scene.renderer.setRenderTarget(target)
+    scene.renderer.render(stage, scene.captureCamera)
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4)
+    scene.renderer.readRenderTargetPixels(target, 0, 0, canvas.width, canvas.height, pixels)
+    scene.renderer.setRenderTarget(null)
+    return pixels
+  }
+  const fg = scene.fgMaterial.uniforms
+  const setups = [
+    () => {},
+    () => { fg.u_chromatic.value = 45; fg.u_hue.value = 0.6; fg.u_glitch.value.set(30, -12) },
+    () => { fg.u_max_blur.value = 30; fg.u_transition.value = 0.4; fg.u_texture_prev.value = scene.transparentPixel },
+    () => { fg.u_is_capture.value = 1 },
+    () => {
+      fg.u_panel_count.value = 2
+      fg.u_panel_regions.value[0].set(0.5, 0.3, 0.9, 0.4)
+      fg.u_panel_regions.value[1].set(0.5, 0.8, 0.9, 0.2)
+      fg.u_panel_opacities.value[0] = 1
+      fg.u_panel_opacities.value[1] = 0.6
+      fg.u_panel_ids.value[1] = 5
+      fg.u_panels_bounding_box.value.set(0, 0, 1, 1)
+      fg.u_player_gradient_intensity.value = 0.8
+      fg.u_radio_button_state.value = 1
+      fg.u_radio_button_pos.value.set(0.5, 0.5)
+      fg.u_radio_button_radius.value.set(0.2, 0.09)
+      fg.u_radio_state_int.value = 3
+      fg.u_glow_active.value = 1
+      fg.u_voice_glow.value.set(0.3, 0.1, 0.4)
+    },
+    () => { fg.u_flicker.value = 0.8; fg.u_contrast.value = 1.1; fg.u_saturation.value = 1.3; fg.u_text_empty.value = 0 },
+  ]
+  force('cover')
+  const report = []
+  for (let c = 0; c < Math.min(cases, setups.length); c++) {
+    await at(30 + c * 17)
+    setups[c]()
+    for (const [name, oldShader, material] of pairs) {
+      const old = new ShaderMaterial({ vertexShader: OLD.backgroundVertexShader, fragmentShader: oldShader, uniforms: material.uniforms })
+      const a = read(material)
+      const b = read(old)
+      old.dispose()
+      let differing = 0
+      let max = 0
+      let lit = 0
+      for (let i = 0; i < a.length; i += 4) {
+        const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]))
+        if (d) differing++
+        if (d > max) max = d
+        if (b[i] + b[i + 1] + b[i + 2]) lit++
+      }
+      report.push({ case: c, shader: name, differing, max, lit })
+    }
+  }
+  target.dispose()
+  force(null)
+  return report
+}
+
+async function video(seconds, times, width = 360, height = 640) {
+  const { renderVideo } = await import('/src/lib/offlineVideoRenderer.js')
+  const sampleRate = 48000
+  const pcm = { left: new Float32Array(sampleRate * seconds), right: new Float32Array(sampleRate * seconds), sampleRate }
+  const { buffer, stats } = await renderVideo({ artworkBlob: blob, pcm, audioFeatures: features, lyricTimestamps: lyricTiming, durationMs: seconds * 1000, width, height, fps: 30 })
+  const element = document.createElement('video')
+  element.muted = true
+  element.src = URL.createObjectURL(new Blob([buffer], { type: 'video/mp4' }))
+  await new Promise((resolve, reject) => { element.onloadeddata = resolve; element.onerror = () => reject(new Error('video did not decode')) })
+  const columns = Math.min(times.length, 6)
+  const out = document.createElement('canvas')
+  out.width = columns * width / 2
+  out.height = Math.ceil(times.length / columns) * (height / 2 + 18)
+  const ctx = out.getContext('2d')
+  ctx.fillStyle = '#111'
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.font = '12px system-ui'
+  ctx.fillStyle = '#ddd'
+  for (let i = 0; i < times.length; i++) {
+    element.currentTime = times[i]
+    await new Promise(resolve => { element.onseeked = resolve })
+    const x = (i % columns) * width / 2
+    const y = Math.floor(i / columns) * (height / 2 + 18)
+    ctx.drawImage(element, x, y + 18, width / 2, height / 2)
+    ctx.fillText(`${times[i]}s`, x + 4, y + 13)
+  }
+  return { image: out.toDataURL('image/png'), stats, megabytes: +(buffer.byteLength / 1e6).toFixed(2) }
+}
+
+window.lab = { scene, features, at, sheet, still, video, plan, force, timing, identity, ready: true }
+info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
+</script>
+</body>
+</html>

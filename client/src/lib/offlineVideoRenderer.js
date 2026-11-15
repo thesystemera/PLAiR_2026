@@ -4,6 +4,7 @@ import {
   DataTexture,
   DoubleSide,
   LinearFilter,
+  LinearMipmapLinearFilter,
   Mesh,
   OrthographicCamera,
   PlaneGeometry,
@@ -15,7 +16,9 @@ import {
   WebGLRenderer,
 } from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
-import { backgroundVertexShader, backgroundFragmentShader } from './sceneShaders'
+import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
+import { LOOKS, LOOK_IDS, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import {
   createInitialEffects,
   buildVisualCueMap,
@@ -126,7 +129,9 @@ export async function renderVideo({
     renderer: null,
     geometry: null,
     material: null,
+    lookMaterials: [],
     artworkTexture: null,
+    depthTexture: null,
     lyricTexture: null,
     transparentPixel: null,
     videoEncoder: null,
@@ -174,8 +179,9 @@ export async function renderVideo({
   resources.lyricTexture = lyricTexture
 
   onStatus?.('Loading artwork...')
-  const artworkTexture = await loadTexture(artworkBlob)
+  const { texture: artworkTexture, depth } = await loadTextures(artworkBlob)
   resources.artworkTexture = artworkTexture
+  resources.depthTexture = depth?.texture || null
   const texWidth = artworkTexture.image.width
   const texHeight = artworkTexture.image.height
 
@@ -191,7 +197,7 @@ export async function renderVideo({
     uniforms: {
       u_texture: { value: artworkTexture },
       u_texture_prev: { value: artworkTexture },
-      u_depth_map: { value: transparentPixel },
+      u_depth_map: { value: depth?.texture || transparentPixel },
       u_text_texture: { value: lyricTexture },
       u_video_clip: { value: transparentPixel },
       u_video_clip_blend: { value: 0.0 },
@@ -216,6 +222,7 @@ export async function renderVideo({
       u_focal_depth: { value: 0.5 },
       u_focal_range: { value: 0.1 },
       u_is_capture: { value: 0.0 },
+      ...lookUniforms(),
     }
   })
 
@@ -228,6 +235,16 @@ export async function renderVideo({
   const mesh = new Mesh(geometry, material)
   scene.add(mesh)
   resources.material = material
+  const materials = { cover: material }
+  for (const id of LOOK_IDS) {
+    if (id === 'cover') continue
+    const shaders = lookShaders(id)
+    materials[id] = new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, side: DoubleSide, uniforms: material.uniforms })
+    resources.lookMaterials.push(materials[id])
+  }
+  const plan = bench.flatShader ? null : planShots(audioFeatures)
+  const directorCursor = createDirectorCursor()
+  const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, energy: 0, bands: depth?.bands || null, tilt: { x: 0, y: 0 } }
 
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
@@ -391,6 +408,22 @@ export async function renderVideo({
     material.uniforms.u_chromatic.value = effects.chromatic
     material.uniforms.u_flicker.value = effects.flicker
 
+    let look = 'cover'
+    if (plan) {
+      const at = directorAt(plan, currentTime, directorCursor)
+      look = LOOKS[at.shot.look].needsDepth && !lookContext.bands ? 'cover' : at.shot.look
+      if (look !== 'cover') {
+        lookContext.t = currentTime
+        lookContext.hue = material.uniforms.u_hue.value
+        lookContext.rotation = material.uniforms.u_rotation.value
+        lookContext.pulse = at.pulse
+        lookContext.beatsSince = at.beatsSince
+        lookContext.energy = rawEnergy
+        setLookUniforms(material.uniforms, at.shot, lookContext)
+      }
+    }
+    mesh.material = materials[look]
+
     if (resources.clipTextures.length > 0) {
       const targetBlend = 0.15 + (rawEnergy * 0.55)
       const blendSpeed = targetBlend > videoClipBlend ? 0.15 : 0.08
@@ -524,10 +557,12 @@ export async function renderVideo({
 
     try {
       if (resources.material) resources.material.dispose()
+      for (const lookMaterial of resources.lookMaterials) lookMaterial.dispose()
     } catch { /* ignore */ }
 
     try {
       if (resources.artworkTexture) resources.artworkTexture.dispose()
+      if (resources.depthTexture) resources.depthTexture.dispose()
     } catch { /* ignore */ }
 
     try {
@@ -547,10 +582,15 @@ export async function renderVideo({
   }
 }
 
-async function loadTexture(packBlob) {
-  const { color } = await decodePack(packBlob, { map: false })
+async function loadTextures(packBlob) {
+  const { color, map } = await decodePack(packBlob, { map: true })
   const texture = new CanvasTexture(color)
   texture.image = color
   texture.flipY = false
-  return texture
+  const depth = map ? readDepth(map, (w, h) => new OffscreenCanvas(w, h)) : null
+  if (!depth?.bands) return { texture, depth: null }
+  const depthTexture = new CanvasTexture(depth.canvas)
+  depthTexture.flipY = false
+  depthTexture.minFilter = LinearMipmapLinearFilter
+  return { texture, depth: { texture: depthTexture, bands: depth.bands } }
 }

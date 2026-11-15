@@ -6,6 +6,7 @@ import {
   DataTexture,
   Float32BufferAttribute,
   LinearFilter,
+  LinearMipmapLinearFilter,
   LinearSRGBColorSpace,
   MathUtils,
   Mesh,
@@ -25,7 +26,9 @@ import {
   WebGLRenderer,
   WebGLRenderTarget,
 } from 'three'
-import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader } from './sceneShaders'
+import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
+import { LOOKS, LOOK_IDS, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { lowerBound, numericAscending, pushEnergySample } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -56,7 +59,7 @@ const LIGHT_RELEASE_RATE = 0.35
 const LIGHT_WITHOUT_ANALYSIS = 0.5
 const LIGHT_KICK_FLOOR = 0.25
 const SIGNATURE_EPSILON = 1e-4
-const SIGNATURE_SIZE = 160
+const SIGNATURE_SIZE = 320
 const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
 const CLICK_DECAY_MS = 500
@@ -182,8 +185,8 @@ function generateNoiseTexture() {
   return texture
 }
 
-async function loadArtworkTexture(blob) {
-  const { color } = await decodePack(blob, { map: false })
+async function loadArtworkTextures(blob) {
+  const { color, map } = await decodePack(blob, { map: true })
   const canvas = makeCanvas(color.width, color.height)
   canvas.getContext('2d').drawImage(color, 0, 0)
   color.close()
@@ -192,7 +195,14 @@ async function loadArtworkTexture(blob) {
   texture.wrapT = ClampToEdgeWrapping
   texture.generateMipmaps = true
   texture.needsUpdate = true
-  return texture
+  const depth = map ? readDepth(map, makeCanvas) : null
+  if (!depth?.bands) return { texture, depth: null }
+  const depthTexture = new CanvasTexture(depth.canvas)
+  depthTexture.wrapS = ClampToEdgeWrapping
+  depthTexture.wrapT = ClampToEdgeWrapping
+  depthTexture.minFilter = LinearMipmapLinearFilter
+  depthTexture.needsUpdate = true
+  return { texture, depth: { texture: depthTexture, bands: depth.bands } }
 }
 
 function addRect(out, n, x0, y0, x1, y1) {
@@ -421,6 +431,11 @@ export class SceneRenderer {
     this.click = { intensity: 0, at: 0, active: false }
     this.transitionProgress = 1
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
+    this.layerDepth = { A: null, B: null }
+    this.bands = null
+    this.plan = null
+    this.directorCursor = createDirectorCursor()
+    this.lookContext = { t: 0, aspect: 1, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, energy: 0, bands: null, tilt: { x: 0, y: 0 } }
     this.frontLayer = 'A'
     this.artworkUrl = null
     this.artworkTokens = { A: 0, B: 0 }
@@ -467,6 +482,7 @@ export class SceneRenderer {
         u_focal_depth: { value: 0.5 },
         u_focal_range: { value: 0.1 },
         u_is_capture: { value: 0.0 },
+        ...lookUniforms(),
       },
     })
 
@@ -538,6 +554,20 @@ export class SceneRenderer {
       fragmentShader: sceneGlassButtonFragmentShader,
       uniforms: this.fgMaterial.uniforms,
     })
+    this.lookMaterials = { cover: { capture: this.bgMaterial, full: this.fgMaterial, backdrop: this.backdropMaterial } }
+    for (const id of LOOK_IDS) {
+      if (id === 'cover') continue
+      const shaders = lookShaders(id)
+      this.lookMaterials[id] = {
+        capture: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, uniforms: this.bgMaterial.uniforms }),
+        full: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.scene, uniforms: this.fgMaterial.uniforms }),
+        backdrop: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.backdrop, uniforms: this.backdropMaterial.uniforms }),
+      }
+    }
+    this.lookSignatures = Object.fromEntries(LOOK_IDS.map(id => [id, id === 'cover' ? [] : lookSignature(id)]))
+    this.lookIndex = Object.fromEntries(LOOK_IDS.map((id, i) => [id, i]))
+    this.lookReady = { cover: true }
+    this.look = 'cover'
     this.glassGeometry = new BufferGeometry()
     this.glassInteriorGeometry = new BufferGeometry()
     this.glassButtonGeometry = new BufferGeometry()
@@ -578,7 +608,10 @@ export class SceneRenderer {
     Promise.all([
       this.renderer.compileAsync(this.captureScene, this.captureCamera),
       this.renderer.compileAsync(this.mainScene, this.mainCamera),
-    ]).then(() => { this.programsReady = true })
+    ]).then(() => {
+      this.programsReady = true
+      return this.compileLooks()
+    })
 
     let rendererName = ''
     try {
@@ -588,6 +621,57 @@ export class SceneRenderer {
       rendererName = ''
     }
     this.emit({ type: 'renderer', name: rendererName })
+  }
+
+  async compileLooks() {
+    for (const id of LOOK_IDS) {
+      if (this.lookReady[id] || this.disposed) continue
+      const scene = new Scene()
+      for (const material of Object.values(this.lookMaterials[id])) {
+        const mesh = new Mesh(this.geometry, material)
+        mesh.frustumCulled = false
+        scene.add(mesh)
+      }
+      await this.renderer.compileAsync(scene, this.captureCamera)
+      this.lookReady[id] = true
+    }
+  }
+
+  setLook(id) {
+    if (id === this.look) return
+    const materials = this.lookMaterials[id]
+    this.captureMesh.material = materials.capture
+    this.glassMesh.material = materials.full
+    this.glassBackdropMesh.material = materials.backdrop
+    this.backdropMesh.material = materials.backdrop
+    this.look = id
+  }
+
+  direct(reduceMotion, energy, width, height, parallaxX, parallaxY) {
+    const plan = this.plan
+    if (!plan || reduceMotion) {
+      this.setLook('cover')
+      return
+    }
+    const bgUniforms = this.bgMaterial.uniforms
+    const ctx = this.lookContext
+    ctx.t = this.interpolatedProgress / 1000
+    const at = directorAt(plan, ctx.t, this.directorCursor)
+    let look = at.shot.look
+    if (!this.lookReady[look] || (LOOKS[look].needsDepth && !this.bands)) look = 'cover'
+    if (look !== 'cover') {
+      ctx.aspect = width / Math.max(height, 1)
+      ctx.hue = bgUniforms.u_hue.value
+      ctx.rotation = bgUniforms.u_rotation.value
+      ctx.pulse = at.pulse
+      ctx.beatsSince = at.beatsSince
+      ctx.energy = energy
+      ctx.bands = this.bands
+      ctx.tilt.x = -parallaxX / Math.max(width, 1)
+      ctx.tilt.y = -parallaxY / Math.max(height, 1)
+      setLookUniforms(bgUniforms, at.shot, ctx)
+    }
+    this.setLook(look)
   }
 
   handle(message) {
@@ -634,6 +718,8 @@ export class SceneRenderer {
   setFeatures(features) {
     this.audioFeatures = features || null
     this.lightCurve = buildLightCurve(features)
+    this.plan = features ? planShots(features) : null
+    this.directorCursor = createDirectorCursor()
     if (!features) return
     this.lastBeatIndex = 0
     this.lastSegmentIndex = 0
@@ -657,14 +743,17 @@ export class SceneRenderer {
     const layer = this.frontLayer === 'A' ? 'B' : 'A'
     const token = ++this.artworkTokens[layer]
     this.artworkUrl = url
-    loadArtworkTexture(blob).then(texture => {
+    loadArtworkTextures(blob).then(({ texture, depth }) => {
       if (this.disposed || this.artworkTokens[layer] !== token) {
         texture.dispose()
+        depth?.texture.dispose()
         return
       }
       const old = this.layers[layer]
       this.layers[layer] = texture
       if (old !== this.transparentPixel) old.dispose()
+      this.layerDepth[layer]?.texture.dispose()
+      this.layerDepth[layer] = depth
       this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
     }).catch(error => {
       if (this.artworkTokens[layer] === token) this.emit({ type: 'warn', message: `Failed to load artwork texture: ${error?.message || error}` })
@@ -680,6 +769,9 @@ export class SceneRenderer {
     u.u_tex_resolution.value.set(img && img.width ? img.width : 1, img && img.height ? img.height : 1)
     u.u_texture_prev.value = prev
     u.u_has_depth_map.value = 0.0
+    const depth = this.layerDepth[this.frontLayer]
+    u.u_depth_map.value = depth ? depth.texture : this.transparentPixel
+    this.bands = depth ? depth.bands : null
   }
 
   setLyric({ image, empty, probe }) {
@@ -748,7 +840,7 @@ export class SceneRenderer {
     this.disposed = true
     this.stop()
     this.statsStop?.()
-    for (const texture of [this.layers.A, this.layers.B, this.textTexture, this.noiseTexture, ...this.clips.textures]) {
+    for (const texture of [this.layers.A, this.layers.B, this.layerDepth.A?.texture, this.layerDepth.B?.texture, this.textTexture, this.noiseTexture, ...this.clips.textures]) {
       if (texture && texture !== this.transparentPixel) texture.dispose()
     }
     this.captureTarget.dispose()
@@ -757,6 +849,10 @@ export class SceneRenderer {
     this.backdropMaterial.dispose()
     this.glassInteriorMaterial.dispose()
     this.glassButtonMaterial.dispose()
+    for (const id of LOOK_IDS) {
+      if (id === 'cover') continue
+      for (const material of Object.values(this.lookMaterials[id])) material.dispose()
+    }
     this.glassButtonGeometry.dispose()
     this.glassBackdropGeometry.dispose()
     this.glassGeometry.dispose()
@@ -1144,6 +1240,7 @@ export class SceneRenderer {
     bgUniforms.u_chromatic.value = visualQuality === 'high' && !reduceMotion ? effects.chromatic : 0
     bgUniforms.u_has_depth_map.value = 0.0
     bgUniforms.u_flicker.value = effects.flicker
+    this.direct(reduceMotion, effects.currentEnergy || 0, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
 
     const clips = this.clips
     if (clips.count > 0 && visualQuality === 'high') {
@@ -1205,6 +1302,8 @@ export class SceneRenderer {
     signature.current[sigLength++] = bgUniforms.u_parallax.value.y * PARALLAX_SIGNATURE_SCALE
     signature.current[sigLength++] = w
     signature.current[sigLength++] = h
+    signature.current[sigLength++] = this.lookIndex[this.look]
+    sigLength = writeUniformSignature(signature.current, sigLength, bgUniforms, this.lookSignatures[this.look])
     const captureLength = sigLength
     sigLength = writeUniformSignature(signature.current, sigLength, fgUniforms, FG_SIGNATURE_UNIFORMS)
     signature.current[sigLength++] = fgUniforms.u_radio_state_int.value === 4 ? fgUniforms.u_radio_time.value : 0
@@ -1258,6 +1357,7 @@ export class SceneRenderer {
       p.hue = u.u_hue.value
       p.flicker = u.u_flicker.value
       p.text = u.u_text_empty.value < 0.5 ? this.textProbe : null
+      p.split = this.look === 'split' ? u : null
       probe = sampleBackgroundProbe(p).slice()
     }
 
