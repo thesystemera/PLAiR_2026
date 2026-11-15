@@ -5,16 +5,15 @@ import { lowerBound } from '../sceneEffects'
 const ROLE_LIGHT = { intro: -0.06, verse: 0, build: 0.03, chorus: 0.07, bridge: -0.02, solo: 0.06, interlude: -0.08, outro: -0.06 }
 const REST = { brightness: 0.6, saturation: 1, contrast: 1 }
 const CHROMA_FLOOR = 35
-const SPREAD = {
-  chromatic: [6, 90],
-  glitch: [20, 75],
-  sway: [0, 3],
-  twist: [2, 8],
-  hue: [0, 40],
-  punch: [0.02, 0.1],
-  flash: [0.05, 0.25],
+const KICKS = {
+  twitch: [25, 75],
+  rotate: [3, 8],
+  prism: [45, 100],
+  punch: [0.03, 0.1],
+  hue: [20, 45],
+  strobe: [0.08, 0.25],
 }
-const IMPULSE_FLOOR = { glitch: 0.5, twist: 0.3, punch: 0.001, flash: 0.002 }
+const FLOWS = { chroma: [6, 45], sway: [0, 3], hue: [0, 25] }
 const NORM_FPS = 15
 
 const clamp01 = x => Math.min(1, Math.max(0, x))
@@ -101,59 +100,54 @@ function onRhythm(shot, song, b) {
   }
 }
 
-function fire(fx, card, seed, b, accent, k, scale) {
+function spread(sorted, value, [min, max]) {
+  if (!sorted?.length) return value
+  return min + (lowerBound(sorted, value) / sorted.length) * (max - min)
+}
+
+function fire(fx, card, seed, b, accent, k, scale, norm) {
   const strength = (0.5 + 0.5 * accent) * k * scale
-  const side = hash(seed, b, 3) < 0.5 ? -1 : 1
+  fx.kickLog?.[card].push(strength)
+  const range = KICKS[card]
+  const size = norm ? spread(norm.kicks[card], strength, range) : strength * range[1]
   switch (card) {
-    case 'twitch':
-      fx.gx = (hash(seed, b, 5) * 2 - 1) * 75 * strength
-      fx.gy = (hash(seed, b, 6) * 2 - 1) * 75 * strength
+    case 'twitch': {
+      const x = hash(seed, b, 5) * 2 - 1
+      const y = hash(seed, b, 6) * 2 - 1
+      const length = Math.hypot(x, y) || 1
+      fx.gx = (x / length) * size
+      fx.gy = (y / length) * size
       break
+    }
     case 'rotate':
-      fx.twist += side * 8 * strength
+      fx.twist += (hash(seed, b, 3) < 0.5 ? -1 : 1) * size
       break
     case 'prism':
-      fx.chromaKick = Math.max(fx.chromaKick, 100 * strength)
+      fx.chromaKick = Math.max(fx.chromaKick, size)
       break
     case 'punch':
-      fx.punch = Math.max(fx.punch, 0.09 * strength)
+      fx.punch = Math.max(fx.punch, size)
       break
     case 'hue':
-      fx.hueKick = (b % 2 ? -1 : 1) * 50 * strength
+      fx.hueKick = (b % 2 ? -1 : 1) * size
       break
     case 'strobe':
-      fx.flash = Math.max(fx.flash, 0.25 * strength)
+      fx.flash = Math.max(fx.flash, size)
       break
     default:
       break
   }
 }
 
-function spread(sorted, value, [min, max]) {
-  if (!sorted.length) return value
-  return min + (lowerBound(sorted, value) / sorted.length) * (max - min)
-}
-
-function impulse(sorted, value, channel) {
-  return value < IMPULSE_FLOOR[channel] ? 0 : spread(sorted, value, SPREAD[channel])
-}
-
 export function measureSpread(plan, directorAt, createCursor) {
   const fx = createFx()
+  fx.kickLog = Object.fromEntries(Object.keys(KICKS).map(card => [card, []]))
+  fx.flowLog = Object.fromEntries(Object.keys(FLOWS).map(flow => [flow, []]))
   const cursor = createCursor()
-  const samples = { chromatic: [], sway: [], twist: [], hue: [], glitch: [], punch: [], flash: [] }
   const dt = 1 / NORM_FPS
-  for (let t = 0; t < plan.song.duration; t += dt) {
-    stepFx(fx, plan, directorAt(plan, t, cursor), t, dt, true)
-    const raw = fx.raw
-    samples.chromatic.push(raw.chromatic)
-    samples.sway.push(Math.abs(raw.sway))
-    samples.hue.push(Math.abs(raw.hue))
-    for (const channel of ['glitch', 'twist', 'punch', 'flash']) if (Math.abs(raw[channel]) >= IMPULSE_FLOOR[channel]) samples[channel].push(Math.abs(raw[channel]))
-  }
-  const sorted = {}
-  for (const [channel, values] of Object.entries(samples)) sorted[channel] = Float32Array.from(values).sort()
-  return sorted
+  for (let t = 0; t < plan.song.duration; t += dt) stepFx(fx, plan, directorAt(plan, t, cursor), t, dt, true)
+  const sort = log => Object.fromEntries(Object.entries(log).map(([name, values]) => [name, Float32Array.from(values).sort()]))
+  return { kicks: sort(fx.kickLog), flows: sort(fx.flowLog) }
 }
 
 export function createFx() {
@@ -162,7 +156,6 @@ export function createFx() {
     brightness: REST.brightness, saturation: REST.saturation, contrast: REST.contrast,
     frameOffsetX: 0, frameOffsetY: 0, frameScale: 1, beatPulse: 0, currentEnergy: 0,
     punch: 0, flash: 0, twist: 0, hueKick: 0, chromaKick: 0, gx: 0, gy: 0, tempoTime: 0,
-    raw: { chromatic: 0, sway: 0, twist: 0, hue: 0, glitch: 0, punch: 0, flash: 0 },
     interest: null, lastBeat: -1, lastHalf: -1, lastShot: -1, camera: { x: 0, y: 0, z: 1 },
   }
 }
@@ -202,7 +195,7 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   fx.currentEnergy = energy
   const k = 0.75 + 0.35 * energy
   const period = song.period
-  const fastDecay = 1 - Math.exp(-dt / (period * 0.35))
+  const fastDecay = 1 - Math.exp(-dt / (period * 0.8))
   const slowDecay = 1 - Math.exp(-dt / (period * 1.5))
   let kick = 0
   let cut = false
@@ -223,8 +216,8 @@ export function stepFx(fx, plan, at, t, dt, playing) {
     if (fresh) {
       const accent = song.accents[b] ?? 0.5
       const down = barPosition(song, b) === 0
-      if (onRhythm(shot, song, b)) fire(fx, shot.lead, shot.seed, b, accent, k, shot.rhythm === 'fill' ? 1.2 : 1)
-      if (down) fire(fx, shot.support, shot.seed + 1, b, accent, k, 0.7)
+      if (onRhythm(shot, song, b)) fire(fx, shot.lead, shot.seed, b, accent, k, shot.rhythm === 'fill' ? 1.2 : 1, plan.norm)
+      if (down) fire(fx, shot.support, shot.seed + 1, b, accent, k, 0.7, plan.norm)
       if (accent > 0.5) fx.blur += 18 * accent * k
       if (accent > 0.35) kick = Math.min(1, 0.4 + 0.6 * accent)
     }
@@ -234,7 +227,7 @@ export function stepFx(fx, plan, at, t, dt, playing) {
     const beats = song.beats
     if (t >= (beats[b] + beats[b + 1]) / 2) {
       fx.lastHalf = b
-      fire(fx, shot.lead, shot.seed + 77, b, (song.accents[b] ?? 0.5) * 0.8, k, 0.6)
+      fire(fx, shot.lead, shot.seed + 77, b, (song.accents[b] ?? 0.5) * 0.8, k, 0.6, plan.norm)
     }
   }
 
@@ -250,25 +243,22 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   const breathing = (Math.sin(fx.tempoTime * (60 / period / 120) * Math.PI * 2) + 1) / 2
   const bars = t / (period * song.bpb)
   const phase = (shot.seed % 1000) / 159
-  const raw = fx.raw
-  raw.sway = Math.sin(Math.PI * bars + phase) * 5 * w.sway * k
-  raw.twist = fx.twist
-  raw.hue = fx.hueKick + Math.sin(Math.PI * bars / 2 + phase) * 35 * w.hue * k
-  raw.chromatic = Math.max(fx.chromaKick, CHROMA_FLOOR * Math.min(1, w.chroma) * k * (0.6 + 0.4 * breathing))
-  raw.glitch = Math.hypot(fx.gx, fx.gy)
-  raw.punch = fx.punch
-  raw.flash = fx.flash
   const norm = plan.norm
-  fx.chromatic = norm ? spread(norm.chromatic, raw.chromatic, SPREAD.chromatic) : raw.chromatic
-  fx.rotation = norm
-    ? Math.sign(raw.sway) * spread(norm.sway, Math.abs(raw.sway), SPREAD.sway) + Math.sign(raw.twist) * impulse(norm.twist, Math.abs(raw.twist), 'twist')
-    : raw.sway + raw.twist
-  fx.hue = norm ? Math.sign(raw.hue) * spread(norm.hue, Math.abs(raw.hue), SPREAD.hue) : raw.hue
-  const glitch = norm ? impulse(norm.glitch, raw.glitch, 'glitch') : raw.glitch
-  fx.glitchX = raw.glitch > 0 ? fx.gx * glitch / raw.glitch : 0
-  fx.glitchY = raw.glitch > 0 ? fx.gy * glitch / raw.glitch : 0
-  const punch = norm ? impulse(norm.punch, raw.punch, 'punch') : raw.punch
-  const flash = norm ? impulse(norm.flash, raw.flash, 'flash') : raw.flash
+  const flowChroma = CHROMA_FLOOR * Math.min(1, w.chroma) * k * (0.6 + 0.4 * breathing)
+  const flowSway = Math.sin(Math.PI * bars + phase) * 5 * w.sway * k
+  const flowHue = Math.sin(Math.PI * bars / 2 + phase) * 35 * w.hue * k
+  if (fx.flowLog) {
+    fx.flowLog.chroma.push(flowChroma)
+    fx.flowLog.sway.push(Math.abs(flowSway))
+    fx.flowLog.hue.push(Math.abs(flowHue))
+  }
+  fx.chromatic = Math.max(fx.chromaKick, norm ? spread(norm.flows.chroma, flowChroma, FLOWS.chroma) : flowChroma)
+  fx.rotation = fx.twist + (norm ? Math.sign(flowSway) * spread(norm.flows.sway, Math.abs(flowSway), FLOWS.sway) : flowSway)
+  fx.hue = fx.hueKick + (norm ? Math.sign(flowHue) * spread(norm.flows.hue, Math.abs(flowHue), FLOWS.hue) : flowHue)
+  fx.glitchX = fx.gx
+  fx.glitchY = fx.gy
+  const punch = fx.punch
+  const flash = fx.flash
 
   const camera = cameraAt(shot, at, t, song.bpb, fx.camera, fx.interest)
   fx.frameOffsetX = camera.x
