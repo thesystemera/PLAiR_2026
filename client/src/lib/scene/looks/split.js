@@ -29,12 +29,17 @@ const MOSAIC_STAGGER_BEATS = 0.5
 const MOSAIC_FLIP = 0.3
 const MOSAIC_BACK = 0.22
 const INK = { share: 0.65, light: 0.7, chroma: 0.6 }
-const MAX_EDGES = 2 * TILES + 2
-export const MAX_TILE_VERTICES = (MAX_EDGES - 1) * (MAX_EDGES - 1) * 6
+const MAX_CUTS = 4 * TILES + 2
+const MAX_CELLS = (MAX_CUTS - 1) * (MAX_CUTS - 1)
+const TILE_GROUPS = 2 * TILES + 1
 const QUAD_RIGHT = [0, 1, 1, 0, 1, 0]
 const QUAD_TOP = [0, 0, 1, 0, 1, 1]
-const columnEdges = new Float64Array(MAX_EDGES)
-const rowEdges = new Float64Array(MAX_EDGES)
+const NO_TILE = -1
+const columnCuts = new Float64Array(MAX_CUTS)
+const rowCuts = new Float64Array(MAX_CUTS)
+const cellTile = new Int8Array(MAX_CELLS)
+const WHOLE_SCREEN = new Vector4(0, 0, 1, 1)
+const grid = { columns: 0, rows: 0 }
 const turns = new Int16Array(TILES)
 const flipping = new Uint8Array(TILES)
 const MIRROR = 1
@@ -239,7 +244,7 @@ function layoutBoxes(v, ctx, rects, crops, sung) {
   return count
 }
 
-function sortedEdges(out, rects, count, low, high) {
+function sortedCuts(out, rects, count, low, high, band) {
   let n = 0
   out[n++] = 0
   out[n++] = 1
@@ -248,10 +253,12 @@ function sortedEdges(out, rects, count, low, high) {
     const to = rects[i][high]
     if (from > 0 && from < 1) out[n++] = from
     if (to > 0 && to < 1) out[n++] = to
+    if (band > 0 && from + band > 0 && from + band < 1) out[n++] = from + band
+    if (band > 0 && to - band > 0 && to - band < 1) out[n++] = to - band
   }
-  const edges = out.subarray(0, n).sort()
+  const cuts = out.subarray(0, n).sort()
   let unique = 1
-  for (let i = 1; i < n; i++) if (edges[i] > edges[unique - 1]) edges[unique++] = edges[i]
+  for (let i = 1; i < n; i++) if (cuts[i] > cuts[unique - 1]) cuts[unique++] = cuts[i]
   return unique
 }
 
@@ -263,34 +270,71 @@ function tileOver(rects, count, x, y) {
   return TILES
 }
 
-export function tileQuads(rects, count, positions, uvs, tiles) {
-  const columns = sortedEdges(columnEdges, rects, count, 'x', 'z')
-  const rows = sortedEdges(rowEdges, rects, count, 'y', 'w')
-  let vertex = 0
-  const quad = (x0, y0, x1, y1, tile) => {
-    for (let corner = 0; corner < 6; corner++) {
-      const x = QUAD_RIGHT[corner] ? x1 : x0
-      const y = QUAD_TOP[corner] ? y1 : y0
-      positions[vertex * 3] = x * 2 - 1
-      positions[vertex * 3 + 1] = y * 2 - 1
-      positions[vertex * 3 + 2] = 0
-      uvs[vertex * 2] = x
-      uvs[vertex * 2 + 1] = y
-      tiles[vertex++] = tile
+function cutScreen(rects, count, bandX, bandY) {
+  const columns = sortedCuts(columnCuts, rects, count, 'x', 'z', bandX) - 1
+  const rows = sortedCuts(rowCuts, rects, count, 'y', 'w', bandY) - 1
+  for (let j = 0; j < rows; j++) {
+    const y = (rowCuts[j] + rowCuts[j + 1]) / 2
+    for (let i = 0; i < columns; i++) {
+      const x = (columnCuts[i] + columnCuts[i + 1]) / 2
+      const tile = tileOver(rects, count, x, y)
+      if (bandY <= 0) cellTile[j * columns + i] = tile
+      else {
+        const rect = rects[tile]
+        const edged = tile < TILES && (x - rect.x < bandX || rect.z - x < bandX || y - rect.y < bandY || rect.w - y < bandY)
+        cellTile[j * columns + i] = edged ? tile : NO_TILE
+      }
     }
   }
-  for (let j = 0; j < rows - 1; j++) {
-    const y0 = rowEdges[j]
-    const y1 = rowEdges[j + 1]
-    let start = 0
-    let run = -1
-    for (let i = 0; i < columns; i++) {
-      const tile = i < columns - 1 ? tileOver(rects, count, (columnEdges[i] + columnEdges[i + 1]) / 2, (y0 + y1) / 2) : -1
-      if (tile === run) continue
-      if (run >= 0) quad(columnEdges[start], y0, columnEdges[i], y1, run)
-      start = i
-      run = tile
+  grid.columns = columns
+  grid.rows = rows
+}
+
+function writeQuads(tile, positions, uvs, vertex) {
+  const { columns, rows } = grid
+  for (let j = 0; j < rows; j++) {
+    let start = -1
+    for (let i = 0; i <= columns; i++) {
+      const inside = i < columns && cellTile[j * columns + i] === tile
+      if (inside && start < 0) start = i
+      if (inside || start < 0) continue
+      for (let corner = 0; corner < 6; corner++) {
+        const x = QUAD_RIGHT[corner] ? columnCuts[i] : columnCuts[start]
+        const y = QUAD_TOP[corner] ? rowCuts[j + 1] : rowCuts[j]
+        positions[vertex * 3] = x * 2 - 1
+        positions[vertex * 3 + 1] = y * 2 - 1
+        positions[vertex * 3 + 2] = 0
+        uvs[vertex * 2] = x
+        uvs[vertex * 2 + 1] = y
+        vertex++
+      }
+      start = -1
     }
+  }
+  return vertex
+}
+
+function tileQuads(uniforms, positions, uvs, ranges) {
+  const rects = uniforms.u_tile_rect.value
+  const count = uniforms.u_tile_count.value
+  const resolution = uniforms.u_canvas_resolution.value
+  const border = uniforms.u_split_frame.value.y
+  const bandY = border > 0 ? border + 1 / Math.max(1, resolution.y) : 0
+  const bandX = bandY * resolution.y / Math.max(1, resolution.x)
+  let vertex = 0
+  cutScreen(rects, count, 0, 0)
+  for (let tile = 0; tile <= TILES; tile++) {
+    const start = vertex
+    if (tile < count || tile === TILES) vertex = writeQuads(tile, positions, uvs, vertex)
+    ranges[tile * 2] = start
+    ranges[tile * 2 + 1] = vertex - start
+  }
+  if (bandY > 0) cutScreen(rects, count, bandX, bandY)
+  for (let tile = 0; tile < TILES; tile++) {
+    const start = vertex
+    if (bandY > 0 && tile < count) vertex = writeQuads(tile, positions, uvs, vertex)
+    ranges[(TILES + 1 + tile) * 2] = start
+    ranges[(TILES + 1 + tile) * 2 + 1] = vertex - start
   }
   return vertex
 }
@@ -340,65 +384,71 @@ export default {
   }
 `,
   tiled: {
+    groups: TILE_GROUPS,
+    vertices: 2 * MAX_CELLS * 6,
     vertexHead: `
-  attribute float tile;
   uniform vec2 u_fx_rot;
-  uniform vec4 u_tile_rect[${TILES}];
-  uniform vec4 u_tile_crop[${TILES + 1}];
-  uniform mat3 u_tile_grade[${TILES + 1}];
-  uniform float u_tile_level[${TILES + 1}];
-  uniform float u_tile_focus[${TILES + 1}];
-  uniform vec3 u_tile_ink[${TILES + 1}];
+  uniform vec4 u_tile_frame;
+  uniform vec4 u_tile_cropping;
   varying vec2 vTileUv;
-  varying vec4 vTileRect;
-  varying vec3 vTileGrade0;
-  varying vec3 vTileGrade1;
-  varying vec3 vTileGrade2;
-  varying vec3 vTileLook;
-  varying vec3 vTileInk;
 ${FRAMING_FUNCTIONS}`,
-    vertexMain: `    int tileIndex = int(tile + 0.5);
-    bool tileFramed = tileIndex < ${TILES};
-    vec4 tileFrame = vec4(0.0, 0.0, 1.0, 1.0);
-    if (tileFramed) tileFrame = u_tile_rect[tileIndex];
-    vec2 tileSize = tileFrame.zw - tileFrame.xy;
-    vec4 tileCrop = u_tile_crop[tileIndex];
-    bool tileWhole = tileCrop.w > 1.5;
-    vec2 tileBase = tileWhole ? uv : (uv - tileFrame.xy) / tileSize;
-    if (mod(tileCrop.w, 2.0) > 0.5) tileBase.x = tileWhole ? tileFrame.x + tileFrame.z - tileBase.x : 1.0 - tileBase.x;
-    vTileUv = framedUv(tileBase, tileWhole ? u_canvas_resolution : u_canvas_resolution * tileSize, tileCrop.xy, tileCrop.z);
-    vTileRect = tileFrame;
-    mat3 tileGrade = u_tile_grade[tileIndex];
-    vTileGrade0 = tileGrade[0];
-    vTileGrade1 = tileGrade[1];
-    vTileGrade2 = tileGrade[2];
-    vTileLook = vec3(u_tile_level[tileIndex], u_tile_focus[tileIndex], tileFramed ? 1.0 : 0.0);
-    vTileInk = u_tile_ink[tileIndex];
+    vertexMain: `    vec2 tileSize = u_tile_frame.zw - u_tile_frame.xy;
+    bool tileWhole = u_tile_cropping.w > 1.5;
+    vec2 tileBase = tileWhole ? uv : (uv - u_tile_frame.xy) / tileSize;
+    if (mod(u_tile_cropping.w, 2.0) > 0.5) tileBase.x = tileWhole ? u_tile_frame.x + u_tile_frame.z - tileBase.x : 1.0 - tileBase.x;
+    vTileUv = framedUv(tileBase, tileWhole ? u_canvas_resolution : u_canvas_resolution * tileSize, u_tile_cropping.xy, u_tile_cropping.z);
 `,
-    glsl: `
-  uniform vec4 u_split_frame;
+    picture: `
+  uniform mat3 u_tile_tone;
+  uniform vec2 u_tile_light;
+  uniform vec3 u_tile_lettering;
   varying vec2 vTileUv;
-  varying vec4 vTileRect;
-  varying vec3 vTileGrade0;
-  varying vec3 vTileGrade1;
-  varying vec3 vTileGrade2;
-  varying vec3 vTileLook;
-  varying vec3 vTileInk;
 
   vec4 lookImage() {
-    focalDepth = vTileLook.y;
-    lyricInk = vTileInk;
-    vec4 color = chromaticImage(depthView(vTileUv, vec2(0.0)), mat3(vTileGrade0, vTileGrade1, vTileGrade2));
-    color.rgb *= vTileLook.x;
-    float border = u_split_frame.y;
-    if (border > 0.0 && vTileLook.z > 0.5) {
-      vec2 inside = min(vUv - vTileRect.xy, vTileRect.zw - vUv) * vec2(u_canvas_resolution.x / u_canvas_resolution.y, 1.0);
-      float pixel = 1.0 / u_canvas_resolution.y;
-      color.rgb = mix(vec3(u_split_frame.z), color.rgb, smoothstep(border - pixel, border + pixel, min(inside.x, inside.y)));
-    }
+    focalDepth = u_tile_light.y;
+    lyricInk = u_tile_lettering;
+    vec4 color = chromaticImage(depthView(vTileUv, vec2(0.0)), u_tile_tone);
+    color.rgb *= u_tile_light.x;
     return color;
   }
 `,
+    border: `
+  uniform vec4 u_tile_frame;
+  uniform vec4 u_split_frame;
+  uniform vec3 u_tile_lettering;
+
+  vec4 lookImage() {
+    lyricInk = u_tile_lettering;
+    return vec4(vec3(u_split_frame.z), 1.0);
+  }
+`,
+    borderMain: `
+  void main() {
+    vec4 background = clamp(computeBackground(), 0.0, 1.0);
+    vec2 inside = min(vUv - u_tile_frame.xy, u_tile_frame.zw - vUv) * vec2(u_canvas_resolution.x / u_canvas_resolution.y, 1.0);
+    float pixel = 1.0 / u_canvas_resolution.y;
+    float cover = 1.0 - smoothstep(u_split_frame.y - pixel, u_split_frame.y + pixel, min(inside.x, inside.y));
+    gl_FragColor = vec4(applyAmbientGlow(background.rgb, vUv, 0.0), cover);
+  }
+`,
+    isBorder: group => group > TILES,
+    uniformsFor(uniforms, group) {
+      const tile = group > TILES ? group - TILES - 1 : group
+      const frame = { value: tile < TILES ? uniforms.u_tile_rect.value[tile] : WHOLE_SCREEN }
+      const lettering = { value: uniforms.u_tile_ink.value[tile] }
+      if (group > TILES) return { u_tile_frame: frame, u_tile_lettering: lettering }
+      return {
+        u_tile_frame: frame,
+        u_tile_lettering: lettering,
+        u_tile_cropping: { value: uniforms.u_tile_crop.value[tile] },
+        u_tile_tone: { value: uniforms.u_tile_grade.value[tile] },
+        u_tile_light: { value: new Vector2(1, 0.5) },
+      }
+    },
+    layout(uniforms, materials, positions, uvs, ranges) {
+      for (let tile = 0; tile <= TILES; tile++) materials[tile].uniforms.u_tile_light.value.set(uniforms.u_tile_level.value[tile], uniforms.u_tile_focus.value[tile])
+      return tileQuads(uniforms, positions, uvs, ranges)
+    },
   },
   uniforms: () => ({
     u_tile_rect: { value: Array.from({ length: TILES }, () => new Vector4(0, 0, 0, 0)) },

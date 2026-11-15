@@ -4,12 +4,22 @@ const AIM_PERCENTILE = 0.8
 const SPRING = 60
 const DAMPING = 2 * Math.sqrt(SPRING) * 0.7
 const scratch = new Float32Array(GRID * GRID)
+const ANALYSIS_SIZE = 256
 
 export const FOCUS_RANGE = 0.05
 export const APERTURE = 7
 const APERTURE_PER_BLUR = 0.15
 const FLAT_BLUR_REACH = 0.0004
 const MAX_BLUR_LEVELS = 4.5
+
+export function analysisPixels(image, makeCanvas) {
+  const width = Math.min(ANALYSIS_SIZE, image.width)
+  const height = Math.min(ANALYSIS_SIZE, image.height)
+  const context = makeCanvas(width, height).getContext('2d', { willReadFrequently: true })
+  context.imageSmoothingQuality = 'medium'
+  context.drawImage(image, 0, 0, width, height)
+  return context.getImageData(0, 0, width, height)
+}
 
 export function depthGrid(data, width, height) {
   const grid = new Float32Array(GRID * GRID)

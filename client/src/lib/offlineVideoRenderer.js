@@ -22,7 +22,7 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
 import { LOOKS, LOOK_IDS, createLookContext, directLook, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
-import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
+import { analysisPixels, applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
 import { setGrade } from './scene/grade'
 import { createSoftener } from './scene/softPyramid'
@@ -580,8 +580,7 @@ async function loadTextures(packBlob) {
   depthTexture.wrapS = MirroredRepeatWrapping
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
-  const pixels = new OffscreenCanvas(color.width, color.height).getContext('2d', { willReadFrequently: true })
-  pixels.drawImage(color, 0, 0)
-  const detail = detailGrid(pixels.getImageData(0, 0, color.width, color.height).data, color.width, color.height)
+  const small = analysisPixels(color, (w, h) => new OffscreenCanvas(w, h))
+  const detail = detailGrid(small.data, small.width, small.height)
   return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, false) } }
 }

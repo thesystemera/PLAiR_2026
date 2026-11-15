@@ -30,9 +30,9 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, MAX_TILE_VERTICES, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms, tileQuads } from './scene/looks'
+import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
-import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
+import { analysisPixels, applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
 import { setGrade } from './scene/grade'
 import { createSoftener } from './scene/softPyramid'
@@ -66,6 +66,7 @@ const LIGHT_RELEASE_RATE = 0.35
 const LIGHT_WITHOUT_ANALYSIS = 0.5
 const LIGHT_KICK_FLOOR = 0.25
 const SIGNATURE_EPSILON = 1e-4
+const PLAN_DELAY_MS = 450
 const SIGNATURE_SIZE = 512
 const PARALLAX_SIGNATURE_SCALE = SIGNATURE_EPSILON / 0.05
 const UNDERLAY_LEVEL = 0x0a / 255 * 0.5
@@ -210,7 +211,8 @@ async function loadArtworkTextures(blob) {
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
-  const detail = detailGrid(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)
+  const small = analysisPixels(canvas, makeCanvas)
+  const detail = detailGrid(small.data, small.width, small.height)
   return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, true) } }
 }
 
@@ -433,6 +435,7 @@ export class SceneRenderer {
     this.depthGrid = null
     this.focus = createFocus()
     this.plan = null
+    this.planTimer = null
     this.directorCursor = createDirectorCursor()
     this.lookContext = createLookContext(this.focus.frame, true)
     this.softener = createSoftener(this.renderer)
@@ -561,6 +564,7 @@ export class SceneRenderer {
       uniforms: this.fgMaterial.uniforms,
     })
     this.lookMaterials = { cover: { capture: this.bgMaterial, full: this.fgMaterial, backdrop: this.backdropMaterial } }
+    this.lookTiles = {}
     for (const id of LOOK_IDS) {
       if (id === 'cover') continue
       const shaders = lookShaders(id)
@@ -569,16 +573,23 @@ export class SceneRenderer {
         full: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.scene, uniforms: this.fgMaterial.uniforms }),
         backdrop: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.backdrop, uniforms: this.backdropMaterial.uniforms }),
       }
-      if (shaders.tiledBackdrop) this.lookMaterials[id].tiled = new ShaderMaterial({ vertexShader: shaders.tiledVertex, fragmentShader: shaders.tiledBackdrop, uniforms: this.backdropMaterial.uniforms })
+      const tiled = LOOKS[id].tiled
+      if (!tiled) continue
+      const materials = Array.from({ length: tiled.groups }, (_, group) => new ShaderMaterial({
+        vertexShader: tiled.isBorder(group) ? shaders.vertex : shaders.tileVertex,
+        fragmentShader: tiled.isBorder(group) ? shaders.tileBorder : shaders.tilePicture,
+        uniforms: { ...this.backdropMaterial.uniforms, ...tiled.uniformsFor(this.bgMaterial.uniforms, group) },
+        transparent: tiled.isBorder(group),
+      }))
+      const geometry = new BufferGeometry()
+      geometry.setAttribute('position', new BufferAttribute(new Float32Array(tiled.vertices * 3), 3).setUsage(DynamicDrawUsage))
+      geometry.setAttribute('uv', new BufferAttribute(new Float32Array(tiled.vertices * 2), 2).setUsage(DynamicDrawUsage))
+      this.lookTiles[id] = { materials, geometry, ranges: new Int32Array(tiled.groups * 2), groups: materials.map((_, materialIndex) => ({ start: 0, count: 0, materialIndex })) }
     }
     this.lookSignatures = Object.fromEntries(LOOK_IDS.map(id => [id, id === 'cover' ? [] : lookSignature(id)]))
     this.lookIndex = Object.fromEntries(LOOK_IDS.map((id, i) => [id, i]))
     this.lookReady = { cover: true }
     this.look = 'cover'
-    this.tileGeometry = new BufferGeometry()
-    for (const [name, size] of [['position', 3], ['uv', 2], ['tile', 1]]) {
-      this.tileGeometry.setAttribute(name, new BufferAttribute(new Float32Array(MAX_TILE_VERTICES * size), size).setUsage(DynamicDrawUsage))
-    }
     this.glassGeometry = new BufferGeometry()
     this.glassInteriorGeometry = new BufferGeometry()
     this.glassButtonGeometry = new BufferGeometry()
@@ -638,7 +649,9 @@ export class SceneRenderer {
     for (const id of LOOK_IDS) {
       if (this.lookReady[id] || this.disposed) continue
       const scene = new Scene()
-      for (const material of Object.values(this.lookMaterials[id])) {
+      const tiles = this.lookTiles[id]
+      const programs = tiles ? [tiles.materials[0], tiles.materials[tiles.materials.length - 1]] : []
+      for (const material of [...Object.values(this.lookMaterials[id]), ...programs]) {
         const mesh = new Mesh(this.geometry, material)
         mesh.frustumCulled = false
         scene.add(mesh)
@@ -658,24 +671,31 @@ export class SceneRenderer {
   }
 
   setBackdrop() {
-    const materials = this.lookMaterials[this.look]
     const mesh = this.backdropMesh
-    if (!materials.tiled) {
+    const tiles = this.lookTiles[this.look]
+    if (!tiles) {
       mesh.geometry = this.geometry
-      mesh.material = materials.backdrop
+      mesh.material = this.lookMaterials[this.look].backdrop
       return
     }
-    const uniforms = this.bgMaterial.uniforms
-    const { position, uv, tile } = this.tileGeometry.attributes
-    const vertices = tileQuads(uniforms.u_tile_rect.value, uniforms.u_tile_count.value, position.array, uv.array, tile.array)
-    for (const attribute of [position, uv, tile]) {
+    const { geometry, materials, ranges, groups } = tiles
+    const { position, uv } = geometry.attributes
+    const vertices = LOOKS[this.look].tiled.layout(this.bgMaterial.uniforms, materials, position.array, uv.array, ranges)
+    for (const attribute of [position, uv]) {
       attribute.clearUpdateRanges()
       attribute.addUpdateRange(0, vertices * attribute.itemSize)
       attribute.needsUpdate = true
     }
-    this.tileGeometry.setDrawRange(0, vertices)
-    mesh.geometry = this.tileGeometry
-    mesh.material = materials.tiled
+    geometry.groups.length = 0
+    for (let group = 0; group < groups.length; group++) {
+      if (!ranges[group * 2 + 1]) continue
+      groups[group].start = ranges[group * 2]
+      groups[group].count = ranges[group * 2 + 1]
+      geometry.groups.push(groups[group])
+    }
+    geometry.setDrawRange(0, vertices)
+    mesh.geometry = geometry
+    mesh.material = materials
   }
 
   direct(at, reduceMotion, width, height, parallaxX, parallaxY) {
@@ -744,12 +764,19 @@ export class SceneRenderer {
   }
 
   setFeatures(features, sections, lines) {
+    clearTimeout(this.planTimer)
     this.audioFeatures = features || null
     this.lightCurve = buildLightCurve(features)
-    this.plan = features ? planShots(features, { sections, lines }) : null
+    this.plan = null
     this.directorCursor = createDirectorCursor()
     this.effects.lastBeat = -1
     this.effects.lastShot = -1
+    if (!features) return
+    this.planTimer = setTimeout(() => {
+      if (this.disposed) return
+      this.plan = planShots(features, { sections, lines })
+      this.directorCursor = createDirectorCursor()
+    }, PLAN_DELAY_MS)
   }
 
   setArtwork(url, blob) {
@@ -766,8 +793,7 @@ export class SceneRenderer {
       const old = this.layers[layer]
       this.layers[layer] = texture
       if (old !== this.transparentPixel) old.dispose()
-      this.layerSoft[layer]?.dispose()
-      this.layerSoft[layer] = this.softener.soften(texture)
+      this.layerSoft[layer] = this.softener.soften(texture, this.layerSoft[layer])
       this.layerDepth[layer]?.texture.dispose()
       this.layerDepth[layer] = depth
       this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
@@ -864,6 +890,7 @@ export class SceneRenderer {
 
   dispose() {
     this.disposed = true
+    clearTimeout(this.planTimer)
     this.stop()
     this.statsStop?.()
     for (const texture of [this.layers.A, this.layers.B, this.layerDepth.A?.texture, this.layerDepth.B?.texture, this.textTexture, this.noiseTexture, ...this.clips.textures]) {
@@ -882,7 +909,10 @@ export class SceneRenderer {
       if (id === 'cover') continue
       for (const material of Object.values(this.lookMaterials[id])) material.dispose()
     }
-    this.tileGeometry.dispose()
+    for (const tiles of Object.values(this.lookTiles)) {
+      tiles.geometry.dispose()
+      for (const material of tiles.materials) material.dispose()
+    }
     this.glassButtonGeometry.dispose()
     this.glassBackdropGeometry.dispose()
     this.glassGeometry.dispose()

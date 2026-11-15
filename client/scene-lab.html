@@ -72,7 +72,7 @@ const until = async (test, ms = 20000) => {
   }
 }
 
-await until(() => scene.programsReady && scene.lookReady.split && scene.lookReady.depth)
+await until(() => scene.programsReady && scene.lookReady.split && scene.lookReady.depth && scene.plan)
 compileWatch.looks = +(performance.now() - compileWatch.start).toFixed(0)
 await sleep(300)
 compileWatch.drawing = false
@@ -455,7 +455,7 @@ async function tilesCheck(seconds, prefer = {}, seed = 7) {
     return pixels
   }
   const searched = read(new PlaneGeometry(2, 2), scene.lookMaterials.split.backdrop)
-  const tiled = read(scene.tileGeometry, scene.lookMaterials.split.tiled)
+  const tiled = read(scene.backdropMesh.geometry, scene.backdropMesh.material)
   target.dispose()
   const layout = scene.plan.shots[scene.directorCursor.shot].variant.layout
   force(null)
@@ -466,7 +466,7 @@ async function tilesCheck(seconds, prefer = {}, seed = 7) {
     if (d > max) max = d
     if (d > 2) over2++
   }
-  return { layout, vertices: scene.tileGeometry.drawRange.count, max, over2, pixels: tiled.length / 4 }
+  return { layout, draws: scene.backdropMesh.geometry.groups.length, vertices: scene.backdropMesh.geometry.drawRange.count, max, over2, pixels: tiled.length / 4 }
 }
 
 window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, tilesCheck, ready: true }

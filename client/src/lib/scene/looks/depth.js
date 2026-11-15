@@ -1,6 +1,6 @@
 import { Matrix3, Vector2, Vector4 } from 'three'
 import { pickWeighted } from '../random'
-import { APERTURE, FOCUS_RANGE, depthGrid } from '../focus'
+import { APERTURE, FOCUS_RANGE, analysisPixels, depthGrid } from '../focus'
 import { gradeMatrix } from '../grade'
 import { FAR_LEVEL } from '../softPyramid'
 
@@ -67,11 +67,10 @@ function layerFocus(v, ctx, layers) {
 
 export function readDepth(map, makeCanvas) {
   const canvas = makeCanvas(map.width, map.height)
-  const context = canvas.getContext('2d', { willReadFrequently: true })
-  context.drawImage(map, 0, 0)
+  canvas.getContext('2d', { willReadFrequently: true }).drawImage(map, 0, 0)
+  const small = analysisPixels(map, makeCanvas)
   map.close()
-  const { data } = context.getImageData(0, 0, canvas.width, canvas.height)
-  return { canvas, bands: depthBands(data), grid: depthGrid(data, canvas.width, canvas.height) }
+  return { canvas, bands: depthBands(small.data), grid: depthGrid(small.data, small.width, small.height) }
 }
 
 export default {

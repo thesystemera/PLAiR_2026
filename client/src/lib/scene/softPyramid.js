@@ -77,14 +77,15 @@ export function createSoftener(renderer) {
   }
 
   return {
-    soften(source) {
+    soften(source, old) {
       const { width, height } = source.image
-      const near = target(width, height, false)
-      draw(near, 0, source, NEAR_LEVEL)
-      const far = target(width, height, true)
-      for (let level = 0; level < far.texture.mipmaps.length; level++) draw(far, level, source, level + FAR_LEVEL)
+      const fits = !!old && old.near.width === width && old.near.height === height
+      if (old && !fits) old.dispose()
+      const soft = fits ? old : { near: target(width, height, false), far: target(width, height, true), dispose() { this.near.dispose(); this.far.dispose() } }
+      draw(soft.near, 0, source, NEAR_LEVEL)
+      for (let level = 0; level < soft.far.texture.mipmaps.length; level++) draw(soft.far, level, source, level + FAR_LEVEL)
       renderer.setRenderTarget(null)
-      return { near, far, dispose: () => { near.dispose(); far.dispose() } }
+      return soft
     },
     dispose() {
       material.dispose()

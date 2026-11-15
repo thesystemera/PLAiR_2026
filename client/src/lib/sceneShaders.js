@@ -43,7 +43,11 @@ export function lookShaders(id) {
   const look = LOOKS[id]
   const body = IMAGE_BODY + (look.framing ? FRAMING : '') + look.glsl
   const tiled = look.tiled
-    ? { tiledVertex: backgroundVertex(look.tiled.vertexHead, look.tiled.vertexMain), tiledBackdrop: IMAGE_BODY + look.tiled.glsl + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN }
+    ? {
+      tileVertex: backgroundVertex(look.tiled.vertexHead, look.tiled.vertexMain),
+      tilePicture: IMAGE_BODY + look.tiled.picture + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,
+      tileBorder: IMAGE_BODY + look.tiled.border + BACKGROUND_FUNCTION + AMBIENT_GLOW + look.tiled.borderMain,
+    }
     : null
   return {
     ...tiled,

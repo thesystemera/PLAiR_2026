@@ -32,20 +32,27 @@ const smoothstep = (from, to, x) => {
   return k * k * (3 - 2 * k)
 }
 
-function ranks(values) {
-  const sorted = Array.from(values).sort(numericAscending)
+function ranksIn(sorted, values) {
+  const out = new Float32Array(values.length)
   const last = Math.max(1, sorted.length - 1)
-  return Float32Array.from(values, value => lowerBound(sorted, value) / last)
+  for (let i = 0; i < values.length; i++) out[i] = lowerBound(sorted, values[i]) / last
+  return out
+}
+
+function ranks(values) {
+  return ranksIn(Float64Array.from(values).sort(), values)
 }
 
 function boxAverage(values, half) {
   const sums = new Float64Array(values.length + 1)
   for (let i = 0; i < values.length; i++) sums[i + 1] = sums[i] + values[i]
-  return Float32Array.from(values, (_, i) => {
+  const out = new Float32Array(values.length)
+  for (let i = 0; i < values.length; i++) {
     const a = Math.max(0, i - half)
     const b = Math.min(values.length, i + half + 1)
-    return (sums[b] - sums[a]) / (b - a)
-  })
+    out[i] = (sums[b] - sums[a]) / (b - a)
+  }
+  return out
 }
 
 function loudnessCurve(segments, bins) {
@@ -69,21 +76,18 @@ function fineCurves(segments) {
   const n = segments.length
   if (n < 2) return { step: 0.1, swell: new Float32Array(1), level: new Float32Array(1), rise: new Float32Array(1), riseRank: new Float32Array(1), punchy: PUNCHY_FLOOR }
   const step = (segments[n - 1].start - segments[0].start) / (n - 1)
-  const mean = Float32Array.from(segments, segment => segment.loudness)
+  const mean = new Float32Array(n)
+  for (let i = 0; i < n; i++) mean[i] = segments[i].loudness
   const surround = boxAverage(mean, Math.round(SURROUND_S / step))
-  const rise = Float32Array.from(segments, (segment, i) => (segment.loudness_max ?? segment.loudness) - surround[i])
-  const riseRank = ranks(rise)
-  const sorted = Array.from(rise).sort(numericAscending)
+  const rise = new Float64Array(n)
+  for (let i = 0; i < n; i++) rise[i] = (segments[i].loudness_max ?? segments[i].loudness) - surround[i]
+  const sorted = Float64Array.from(rise).sort()
+  const riseRank = ranksIn(sorted, rise)
   const spread = sorted[Math.floor(n * 0.95)] - sorted[Math.floor(n * 0.5)]
   const punchy = Math.min(1, Math.max(PUNCHY_FLOOR, spread / PUNCHY_DB))
-  return {
-    step,
-    rise,
-    riseRank,
-    punchy,
-    swell: Float32Array.from(riseRank, rank => smoothstep(SWELL_FROM, SWELL_FULL, rank) * punchy),
-    level: ranks(boxAverage(mean, 1)),
-  }
+  const swell = new Float32Array(n)
+  for (let i = 0; i < n; i++) swell[i] = smoothstep(SWELL_FROM, SWELL_FULL, riseRank[i]) * punchy
+  return { step, rise, riseRank, punchy, swell, level: ranks(boxAverage(mean, 1)) }
 }
 
 function findOnsets(fine, beats) {
@@ -281,7 +285,7 @@ export function analyzeSong(features, lyricSections, lyrics) {
   }
 }
 
-function energyAt(song, t) {
+export function energyAt(song, t) {
   return song.energy[Math.max(0, Math.min(song.energy.length - 1, Math.floor(t / song.step)))]
 }
 

@@ -27,6 +27,18 @@ anything else is carried over as written.
   time), and the cover renderer spends 50-84 ms on some frames. To do: virtualise the Queue panel like the
   Catalog; decide what a search queues (owner: queue was never meant to get this big); clear the leftover picks.
 
+- **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
+  skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
+  background scene's own share was about 85 ms and is now about 5 ms in the rush (CLAUDE.md section 11, "What the
+  scene does at a track change"). What is left, from the long-animation-frame records (the positions are in the
+  17 Nov build; `tests/gpu_bench/perf/skipwatch.mjs` takes the record with one press of Next):
+  React re-rendering in the scheduler's tasks, 52-56 ms just before the press lands, then 52-59, 93 and 142 ms
+  within 0.75 s (`perf/renders2.mjs` charges re-renders to the root of each cascade); the cover-art renderer's
+  frame (`depthArtRenderer.tick` -> `drawFrame` / `processUploads`) 51-109 ms on the two frames after the new
+  packs arrive; the pack-decode worker's reply 54-70 ms in one task (every consumer of that pack runs in it); the
+  Queue's scroll-to-the-current-song timeout 5-72 ms; IndexedDB callbacks 14-19 ms and a `Response.blob().then`
+  25 ms; the player-height ResizeObserver 22 ms. Not started; the owner has another agent on this.
+
 ## 1. Quick wins
 
 - **Press PLAiR Start, then run the smoke test**, so the 30 Sep / 1 Oct work is live. The studio-message wording

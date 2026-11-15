@@ -1,5 +1,5 @@
 import { seededRandom } from './random'
-import { barPosition, signalsAt } from './structure'
+import { barPosition, energyAt, signalsAt } from './structure'
 import { lowerBound } from '../sceneEffects'
 
 const ROLE_LIGHT = { intro: -0.06, verse: 0, build: 0.03, chorus: 0.07, bridge: -0.02, solo: 0.06, interlude: -0.08, outro: -0.06 }
@@ -19,7 +19,6 @@ const GENTLE = 0.6
 const PARALLAX = 2.2
 const ORBIT_LIMIT = 0.11
 const DOLLY = { push: 0.18, hard: 0.3, limit: 0.35 }
-const NORM_FPS = 15
 const SWELL_RELEASE_S = 0.12
 const HIT_DECAY_BEATS = 0.45
 const ONSET_FRESH_S = 0.12
@@ -177,7 +176,6 @@ function spread(sorted, value, [min, max]) {
 
 function fire(fx, card, seed, b, accent, k, scale, norm) {
   const strength = (0.5 + 0.5 * accent) * k * scale
-  fx.kickLog?.[card].push(strength)
   const range = KICKS[card]
   const size = norm ? spread(norm.kicks[card], strength, range) : strength * range[1]
   switch (card) {
@@ -210,12 +208,24 @@ function fire(fx, card, seed, b, accent, k, scale, norm) {
 }
 
 export function measureSpread(plan, directorAt, createCursor) {
-  const fx = createFx()
-  fx.kickLog = Object.fromEntries(Object.keys(KICKS).map(card => [card, []]))
+  const { song, beats } = plan
+  const onsets = song.onsets
+  const kicks = Object.fromEntries(Object.keys(KICKS).map(card => [card, []]))
   const cursor = createCursor()
-  const dt = 1 / NORM_FPS
-  for (let t = 0; t < plan.song.duration; t += dt) stepFx(fx, plan, directorAt(plan, t, cursor), t, dt, true)
-  return { kicks: Object.fromEntries(Object.entries(fx.kickLog).map(([name, values]) => [name, Float32Array.from(values).sort()])) }
+  const onOnset = onset => {
+    const shot = directorAt(plan, onset.time, cursor).shot
+    if (shot.onsets) kicks[shot.lead].push((0.5 + 0.5 * (0.3 + 0.5 * onset.strength)) * (0.75 + 0.35 * energyAt(song, onset.time)) * 0.6)
+  }
+  let next = 0
+  for (let b = 1; b < beats.length; b++) {
+    while (next < onsets.length && onsets[next].time < beats[b]) onOnset(onsets[next++])
+    const shot = directorAt(plan, beats[b], cursor).shot
+    const strength = (0.5 + 0.5 * (song.accents[b] ?? 0.5)) * (0.75 + 0.35 * energyAt(song, beats[b]))
+    if (song.accents[b] >= shot.gate || b === shot.phraseBeat) kicks[shot.lead].push(strength * (shot.gate < 0 ? 1.2 : 1))
+    if (barPosition(song, b) === 0) kicks[shot.support].push(strength * 0.7)
+  }
+  while (next < onsets.length) onOnset(onsets[next++])
+  return { kicks: Object.fromEntries(Object.entries(kicks).map(([name, values]) => [name, Float32Array.from(values).sort()])) }
 }
 
 export function createFx() {

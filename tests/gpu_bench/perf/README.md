@@ -36,6 +36,7 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `lookfull.mjs [rounds] [extra] [programs]` - each scene program (`interior`, `cover.backdrop`, `split.full`, ...) drawn alone over the whole screen, which is what fullscreen visuals cost.
 - `lookstages.mjs <program> '<json {label: [[from, to], ...]}>' [rounds] [extra] ['<json pinned uniforms>']` - one program over the whole screen with its fragment source edited live, interleaved: the way to find what a shader stage costs before changing code.
 - `lookparts.mjs [panel] [rounds] [extra] [looks]` - one pass with a panel open, then with the interior, full and backdrop shaders each drawn flat.
+- `skipwatch.mjs [seconds]` - one press of Next: slow frames after it, the background scene's own steps and frames, and every long animation frame with the scripts in it (a script's position is its character offset in the built `index-*.js`).
 - `cdp.mjs` - shared helper: attach to the plair.live tab (`PAGE=<part of another address>`), `send`, `evaluate`, `sleep`, and `openPanel`, which never taps the tab that is already open (that toggles Radio between Talk and Text and the Catalog between tracks and shoutouts; a script did exactly that to the owner's setting on 14 Nov).
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.
