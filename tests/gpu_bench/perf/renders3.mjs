@@ -34,7 +34,10 @@ const HOOK = `(() => {
           const owner = ownerOf(top)
           const key = srcOf(top) + (owner ? ' < ' + srcOf(owner) : '')
           roots[key] = (roots[key] || 0) + 1
-          const type = srcOf(f) + ' IN ' + srcOf(top)
+          const before = f.alternate?.memoizedProps
+          const now = f.memoizedProps || {}
+          const changed = before ? Object.keys(now).filter(k => now[k] !== before[k]) : ['(mounted)']
+          const type = srcOf(f) + ' IN ' + srcOf(top) + '  props changed: ' + (changed.join(',') || 'none')
           types[type] = (types[type] || 0) + 1
         }
         if (f.child) stack.push(f.child)
@@ -60,7 +63,7 @@ const out = JSON.parse(await p.evaluate(`(async () => {
   document.querySelector('button[title="Next track"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, isPrimary: true, pointerType: 'touch' }))
   await sleep(${seconds * 1000})
   window.__commitWatch = false
-  return JSON.stringify(window.__commits.map(c => ({ at: Math.round(c.t - pressed), total: c.total, roots: Object.entries(c.roots).sort((a, b) => b[1] - a[1]).slice(0, 6), types: Object.entries(c.types).sort((a, b) => b[1] - a[1]).slice(0, 40) })))
+  return JSON.stringify(window.__commits.map(c => ({ at: Math.round(c.t - pressed), total: c.total, roots: Object.entries(c.roots).sort((a, b) => b[1] - a[1]).slice(0, 6), types: Object.entries(c.types).sort((a, b) => b[1] - a[1]).slice(0, 60) })))
 })()`))
 let total = 0
 for (const commit of out) {

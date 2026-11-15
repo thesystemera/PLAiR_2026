@@ -61,7 +61,7 @@ export function useBitratePicker(onReloadTrackQuality) {
     reloadRef.current()
   }, [detectedBitrate, currentBitrate, actionLoading])
 
-  const detectQuality = async () => {
+  const detectQuality = useCallback(async () => {
     try {
       const result = await networkDetectQuality()
       if (result?.quality) showInfo(`Network checked: ${result.quality}${result.bitrate ? `, ${result.bitrate} suits it` : ''}`)
@@ -69,9 +69,9 @@ export function useBitratePicker(onReloadTrackQuality) {
       logger.error('[BitratePicker] Failed to detect quality:', error)
       showError("Couldn't test the network")
     }
-  }
+  }, [networkDetectQuality, showInfo, showError])
 
-  const handleSelectBitrate = async (bitrate) => {
+  const handleSelectBitrate = useCallback(async (bitrate) => {
     if (bitrate === currentBitrate) {
       setIsOpen(false)
       return
@@ -94,7 +94,7 @@ export function useBitratePicker(onReloadTrackQuality) {
     } finally {
       setActionLoading(false)
     }
-  }
+  }, [currentBitrate, isAuthenticated, publishSettings, onReloadTrackQuality, showInfo, showError])
 
   const getBitrateIcon = useCallback((bitrate) => {
     switch (bitrate) {

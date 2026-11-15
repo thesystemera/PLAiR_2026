@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { X, Loader2, Trash2, CheckCircle2, XCircle, Video } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useGenerationQueue } from '../contexts/GenerationQueueContext'
@@ -130,7 +131,7 @@ function JobItem({ job, onCancel, onRemove, onOpen }) {
   )
 }
 
-export function GenerationQueuePanel() {
+export const GenerationQueuePanel = memo(function GenerationQueuePanel() {
   const { jobs: generationJobs, isOpen, setIsOpen, cancelJob, removeJob, clearCompleted } = useGenerationQueue()
   const { status, title, stage, progress, etaSeconds, error, shareTrack, openShareModal } = useUISelector(state => ({
     status: state.shareVideoState.status,
@@ -198,4 +199,4 @@ export function GenerationQueuePanel() {
         </div>
     </Expandable>
   )
-}
+})

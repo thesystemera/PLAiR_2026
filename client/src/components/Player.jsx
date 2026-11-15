@@ -102,6 +102,11 @@ const PLAYER_HEIGHT_SETTLE_MS = 140
 const PLAYER_STILL_FRAMES = 12
 
 const PLAY_BUTTON_HOVER = PRESETS.hoverPressLarge.whileHover
+const SKIP_BACK_ICON = <SkipBack size={20} />
+const SKIP_FORWARD_ICON = <SkipForward size={20} />
+const PLAYER_HIDDEN = { y: 100 }
+const PLAYER_SHOWN = { y: 0 }
+const stopPropagation = event => event.stopPropagation()
 
 const PlayerIconButton = memo(function PlayerIconButton({ onClick, onMouseEnter, onMouseLeave, title, children, direction = null, style = {} }) {
   const handlePointerDown = useCallback((e) => {
@@ -566,7 +571,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     </>
   ) : null
 
-  const transportControls = (
+  const transportControls = useMemo(() => (
     <div className={`flex items-center justify-center ${compact ? 'gap-1 flex-shrink-0' : 'gap-2'}`}>
       <div>
         <PlayerIconButton
@@ -576,7 +581,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           direction="left"
           title={isPastRestartThreshold ? 'Restart track' : 'Previous track'}
         >
-          <SkipBack size={20} />
+          {SKIP_BACK_ICON}
         </PlayerIconButton>
       </div>
 
@@ -625,11 +630,11 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           direction="right"
           title="Next track"
         >
-          <SkipForward size={20} />
+          {SKIP_FORWARD_ICON}
         </PlayerIconButton>
       </div>
     </div>
-  )
+  ), [compact, handlePrevious, handleNext, handleTogglePlay, handleMouseEnterButton, handleMouseLeaveButton, isPastRestartThreshold, isCrossfading, is_playing, getAccentColor])
 
   const progressRow = currentTrack ? (
     <div className={`relative flex items-center ${compact ? 'gap-1.5 flex-1 min-w-0' : 'gap-2'}`}>
@@ -737,7 +742,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     </div>
   ) : null
 
-  const sideControls = (
+  const sideControls = useMemo(() => (
     <div className={`flex items-center justify-end min-w-0 ${compact ? 'gap-1.5 flex-shrink-0' : 'gap-1.5 md:gap-3'}`}>
       <div className={`${compact ? 'hidden' : 'hidden md:flex'} items-center gap-2 flex-1 max-w-[120px]`}>
         <PlayerIconButton
@@ -810,7 +815,11 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         />
       )}
     </div>
-  )
+  ), [
+    compact, handleMuteToggle, handleMouseEnterButton, handleMouseLeaveButton, isMuted, volume, handleVolumeMouseDown, getGrey800, getWhite,
+    isDraggingVolume, bitratePicker.currentBitrate, bitratePicker.effectiveBitrate, bitratePicker.dataSaverMode, bitratePicker.isOpen,
+    bitratePicker.setIsOpen, isCached, devicePicker,
+  ])
 
   return (
     <>
@@ -826,12 +835,12 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         <motion.div
           ref={playerRef}
           data-shader-panel="player"
-          initial={{ y: 100 }}
-          animate={{ y: 0 }}
-          exit={{ y: 100 }}
+          initial={PLAYER_HIDDEN}
+          animate={PLAYER_SHOWN}
+          exit={PLAYER_HIDDEN}
           className="fixed bottom-0 left-0 right-0 z-50 overflow-hidden"
           style={PLAYER_SAFE_AREA_STYLE}
-          onClick={(e) => e.stopPropagation()}
+          onClick={stopPropagation}
         >
 
           {devicePicker.isAuthenticated && (

@@ -258,6 +258,58 @@ ResizeObserver loop errors (74 in the server log on 14 Nov): the player's size o
 its callback (the 14 Nov afternoon change). Now the height is passed on after framer-motion's render step: 104 errors
 -> 0 for four panel toggles in headless Chrome, panels within 6 px of the player for two frames of a 418 px move.
 
+## 3i. Pressing Next (17-18 Nov)
+
+Measure with `perf/skipseries.mjs [skips] [panel] [warm-up]`: single skips vary by 150 ms, a series of ten is
+steady to about 20 ms. It prints the frame time lost in the 1.5 s after the press, the worst frame, and the long
+frames split into script (by source), end-of-frame style and layout, and the rest. `skipprof.mjs` gives the CPU
+profile of one skip as a call tree with snippets of the built file (`SELF=40` for self time with native calls
+charged to their callers, `ENTRIES=1` for app functions by inclusive time), `skipstyle.mjs` the style
+recalculations and what invalidated them, `renders3.mjs` every React commit with the roots of its cascades
+(`TYPES=1`: the components in the biggest commit and which props changed).
+
+Baseline, phone, Now Playing tab: 515 ms lost, worst frame 159 ms, 5.7 frames over 50 ms; about 700 ms of
+main-thread work in 1.6 s (profile). What it was made of and what was done:
+
+- **Two restyles of the whole page.** Changing any custom property on `<html>` restyles every element: 70 ms for
+  2,576 elements, timed alone with an unused variable. The theme wrote its variables in a layout effect and two
+  accent variables in a later passive effect, so a track change did it twice; the profile showed them as 91 ms
+  inside framer-motion's `measureScroll` and 88 ms inside the cover renderer's `checkVisibility` (whoever reads
+  layout first pays). Now one write. The one that remains is the worst frame of a skip (80-100 ms).
+- **The player's waveform** was 420 bar elements (two layers of about 210) rebuilt at every track change. Now two
+  canvases drawn from the same bar data (`drawWaveform` in `Player.jsx`; bar edges on whole device pixels, the
+  played layer's glow as a canvas shadow). Against a screenshot of the old one the bars differ by about one
+  level (`waveshot.mjs`, `wavediff.py`). The page went from 2,362 to about 1,950 elements.
+- **The scene's cover analysis** (depth bands, depth grid, detail grid, points of interest) ran on the main thread
+  in the decode worker's reply: 63-104 ms in one task. It now runs in the worker (`coverAnalysis` in
+  `scene/focus.js`, asked for with `decodePack(blob, { analysis: true })`): 11-14 ms left in the reply.
+- **React.** 23 commits and 1,087 component renders per skip, in two big passes (the instant step at the press
+  and the server's state about 100 ms later) that each re-rendered the Player, Queue, Now Playing and the
+  Catalog. The Catalog re-rendered because it selected the queue and the current track for its cards: each card
+  now subscribes to its own two flags. The Player re-rendered about 75 components four times: its panels'
+  `memo` never held (five handlers of `useDevicePicker` and two of `useBitratePicker` were new on every
+  render), `GenerationQueuePanel` had no `memo`, the icon buttons got new icon elements; fixed, and the
+  transport and side-control blocks are memoised. Now about 780 renders a skip, the Player 27-32 per render.
+- **IndexedDB.** Every consumer read the downloaded track's whole record itself; lookups within three seconds now
+  share one read (`cacheManager.getCachedTrack`).
+
+After: 410-425 ms lost, worst frame 121-131 ms, 3.7-4.5 frames over 50 ms. Long frames per skip: script about
+160-180 ms (React 70-125), end-of-frame style and layout 95-115, the rest (paint, commit) 80-90.
+
+Tried and not kept:
+
+- `content-visibility: auto` on the panels: skips only the farthest panel (Chrome counts the neighbours as near
+  the screen); no change. `content-visibility: hidden` on the four off-screen panels: 482 -> 408 ms and the
+  worst frame 131 -> 107, but the cover renderer's `checkVisibility` / `getBoundingClientRect` on covers inside
+  hidden panels then force their style (its frame went 38 -> 76 ms). Doing it properly means every measurer
+  knows which panels are hidden: the owner's call.
+- Switching the colour fades off (injected CSS): 450 -> 428 ms, median 426 -> 360. They stay.
+
+Left, biggest first: the one page restyle (it scales with the number of elements: the Catalog's 16 cards are 638
+of them, the User panel 311); the colour fade (about 800 elements restyled per frame for 0.7 s); the two React
+passes (the Queue's rows with their `layout` / `popLayout` wrappers are half of each); the cover's texture uploads
+(`texImage2D`, 10-40 ms); the Queue's follow-the-song timeout, whose 5-72 ms is the pending style work it forces.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

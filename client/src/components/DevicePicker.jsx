@@ -82,7 +82,7 @@ export function useDevicePicker() {
     is_active: !!activeDeviceId && device.device_id === activeDeviceId
   })), [deviceList, activeDeviceId])
 
-  const handleActivateDevice = async (deviceId = null) => {
+  const handleActivateDevice = useCallback(async (deviceId = null) => {
     try {
       setActionLoading(true)
       await transferPlayback(deviceId)
@@ -97,9 +97,9 @@ export function useDevicePicker() {
     } finally {
       setActionLoading(false)
     }
-  }
+  }, [transferPlayback, isAuthenticated, loadDevices, toastError])
 
-  const handleRemoveDevice = async (deviceId) => {
+  const handleRemoveDevice = useCallback(async (deviceId) => {
     const device = deviceList.find(d => d.device_id === deviceId)
     const confirmed = await showConfirm({
       title: `Remove ${device?.device_name || 'this device'}?`,
@@ -121,19 +121,19 @@ export function useDevicePicker() {
     } finally {
       setActionLoading(false)
     }
-  }
+  }, [deviceList, showConfirm, loadDevices, toastSuccess, toastError])
 
-  const handleStartEdit = (deviceId, currentName) => {
+  const handleStartEdit = useCallback((deviceId, currentName) => {
     setEditingDeviceId(deviceId)
     setEditingName(currentName)
-  }
+  }, [])
 
-  const handleCancelEdit = () => {
+  const handleCancelEdit = useCallback(() => {
     setEditingDeviceId(null)
     setEditingName('')
-  }
+  }, [])
 
-  const handleSaveEdit = async (deviceId) => {
+  const handleSaveEdit = useCallback(async (deviceId) => {
     if (!editingName.trim()) {
       handleCancelEdit()
       return
@@ -157,7 +157,7 @@ export function useDevicePicker() {
     } finally {
       setActionLoading(false)
     }
-  }
+  }, [editingName, handleCancelEdit, loadDevices, toastSuccess, toastError])
 
   const getDeviceIcon = useCallback((type) => {
     switch (type) {
@@ -175,12 +175,13 @@ export function useDevicePicker() {
     setBannerDismissed(true)
   }, [])
 
-  return {
+  const showInactive = !isActiveDevice && !!activeDeviceId
+  return useMemo(() => ({
     isAuthenticated,
     devices,
     isOpen,
     setIsOpen,
-    showInactive: !isActiveDevice && !!activeDeviceId,
+    showInactive,
     bannerDismissed,
     handleDismissBanner,
     loading,
@@ -201,7 +202,11 @@ export function useDevicePicker() {
     connectionMode,
     storageInfo,
     isPlaying
-  }
+  }), [
+    isAuthenticated, devices, isOpen, showInactive, bannerDismissed, handleDismissBanner, loading, loadFailed, loadDevices,
+    actionLoading, activeDevice, currentDevice, handleActivateDevice, handleRemoveDevice, getDeviceIcon, editingDeviceId,
+    editingName, handleStartEdit, handleCancelEdit, handleSaveEdit, connectionMode, storageInfo, isPlaying,
+  ])
 }
 
 const DEVICE_BADGE_CLASS = 'text-white rounded-full w-4 h-4 flex items-center justify-center shadow-md'

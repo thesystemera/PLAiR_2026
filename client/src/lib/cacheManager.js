@@ -18,6 +18,7 @@ const CHUNK_SIZE = 256 * 1024
 const MAX_ACTIVE_STREAMS = 3
 const MP3_BITRATE = '192k'
 const TYPICAL_TRACK_BYTES = 8 * 1024 * 1024
+const LOOKUP_HOLD_MS = 3000
 
 class CacheManager {
   constructor() {
@@ -26,6 +27,7 @@ class CacheManager {
     this.activeStreams = new Map()
     this.listCache = null
     this.listPromise = null
+    this.lookups = new Map()
     this.evictionGuard = null
     this.changeListeners = new Set()
     this.cacheLimit = FALLBACK_CACHE_BYTES
@@ -77,6 +79,7 @@ class CacheManager {
   _invalidateList() {
     this.listCache = null
     this.listPromise = null
+    this.lookups.clear()
     this.changeListeners.forEach(listener => {
       try {
         listener()
@@ -167,14 +170,17 @@ class CacheManager {
 
   async getCachedTrack(trackId) {
     if (!this.initialized) await this.initialize()
-
-    try {
-      const cached = await audioCacheDB.getTrack(trackId)
-      return cached || null
-    } catch (error) {
+    const held = this.lookups.get(trackId)
+    if (held) return held
+    const lookup = audioCacheDB.getTrack(trackId).then(cached => cached || null).catch((error) => {
       logger.error(`[CacheManager] Error getting cached track ${trackId}:`, error)
       return null
-    }
+    })
+    this.lookups.set(trackId, lookup)
+    setTimeout(() => {
+      if (this.lookups.get(trackId) === lookup) this.lookups.delete(trackId)
+    }, LOOKUP_HOLD_MS)
+    return lookup
   }
 
   async isCached(trackId) {

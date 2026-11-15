@@ -37,7 +37,21 @@ anything else is carried over as written.
   frame (`depthArtRenderer.tick` -> `drawFrame` / `processUploads`) 51-109 ms on the two frames after the new
   packs arrive; the pack-decode worker's reply 54-70 ms in one task (every consumer of that pack runs in it); the
   Queue's scroll-to-the-current-song timeout 5-72 ms; IndexedDB callbacks 14-19 ms and a `Response.blob().then`
-  25 ms; the player-height ResizeObserver 22 ms. Not started; the owner has another agent on this.
+  25 ms; the player-height ResizeObserver 22 ms.
+  **17-18 Nov, first pass done** (`perf/skipseries.mjs`, ten presses, Now Playing tab, 1.5 s after the press):
+  515 -> about 410-425 ms lost, worst frame 159 -> 121-131 ms, frames over 50 ms 5.7 -> 3.7-4.5 a skip. Done: one
+  write of the theme's root variables instead of two; the player's waveform on two canvases (420 fewer elements);
+  the scene's cover analysis in the pack-decode worker (its reply on the main thread 79 -> 11 ms); Catalog cards
+  subscribe to their own playing / queued state; the player's transport, side controls and panels no longer
+  re-render with it (stable handlers, memoised blocks); lookups of a downloaded track share one database read.
+  Numbers and what was tried: `docs/NEXT_SESSION_PERFORMANCE.md` section 3i. **What is left is mostly not script:**
+  the one restyle of the whole page when the colours change (a root custom property restyles every element:
+  about 70 ms for 2,576 elements, measured alone), the colour fade restyling about 800 elements a frame for
+  0.7 s, two React passes (the instant step and the server's state, 200-250 component renders each, half of them
+  the Queue's rows and their animation wrappers), paint and commit (about 80 ms), and the cover's texture
+  uploads. Owner's call needed for the next big step: letting off-screen panels skip style and layout on phones
+  (`content-visibility: hidden`, 482 -> 408 ms in a crude test, but it needs the cover renderer and anything else
+  that measures inside a panel to know which panels are hidden).
 
 ## 1. Quick wins
 
