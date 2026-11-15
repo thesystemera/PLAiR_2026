@@ -109,11 +109,12 @@ function backgroundAt(u, v, p) {
   if (tile >= 0) {
     const rect = split.u_tile_rect.value[tile]
     const crop = split.u_tile_crop.value[tile]
-    const width = rect.z - rect.x
-    const height = rect.w - rect.y
-    let localU = (u - rect.x) / width
-    if (crop.w > 0.5) localU = 1 - localU
-    coverFit(localU, (v - rect.y) / height, (p.width * width) / (p.height * height), p.texWidth / p.texHeight, fitted)
+    const whole = crop.w > 1.5
+    const width = whole ? 1 : rect.z - rect.x
+    const height = whole ? 1 : rect.w - rect.y
+    let localU = whole ? u : (u - rect.x) / width
+    if (crop.w % 2 > 0.5) localU = whole ? rect.x + rect.z - u : 1 - localU
+    coverFit(localU, whole ? v : (v - rect.y) / height, (p.width * width) / (p.height * height), p.texWidth / p.texHeight, fitted)
     framedX = (fitted[0] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetX + crop.x
     framedY = (fitted[1] - 0.5) / (p.frameScale * crop.z) + p.frameOffsetY + crop.y
     hueCos = split.u_tile_hue.value[tile].x

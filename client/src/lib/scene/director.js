@@ -2,6 +2,7 @@ import { LOOKS } from './looks'
 import { lowerBound } from '../sceneEffects'
 import { pickWeighted, seededRandom } from './random'
 import { analyzeSong, lineAt } from './structure'
+import { measureSpread } from './beatFx'
 
 const RECIPES = {
   intro: { looks: [['cover', 3], ['depth', 2], ['split', 1]], cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
@@ -50,6 +51,10 @@ const CHORUS_FAMILIES = [
   [['split', { layout: 'quad' }], ['cover', {}]],
   [['depth', { motion: 'pulse' }], ['split', { layout: 'wipe' }]],
   [['split', { layout: 'wipe' }], ['split', { layout: 'boxes' }]],
+  [['split', { layout: 'slices' }], ['cover', {}]],
+  [['split', { layout: 'tunnel' }], ['depth', { motion: 'pulse' }]],
+  [['split', { layout: 'columns' }], ['split', { layout: 'boxes' }]],
+  [['split', { layout: 'blinds' }], ['split', { layout: 'tunnel' }]],
 ]
 
 const PULSE_DECAY_S = 0.18
@@ -208,7 +213,9 @@ export function planShots(features, { sections, lines, still = false } = {}) {
   if (!shots.length) return STILL
   shots[0].start = 0
   for (let i = 0; i < shots.length - 1; i++) shots[i].end = shots[i + 1].start
-  return { shots, beats, song }
+  const plan = { shots, beats, song }
+  plan.norm = measureSpread(plan, directorAt, createDirectorCursor)
+  return plan
 }
 
 export function createDirectorCursor() {
