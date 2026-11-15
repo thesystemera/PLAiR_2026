@@ -32,6 +32,10 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `roloop.mjs install|read|remove` - what was written in the frames where Chrome raised a ResizeObserver loop error.
 - `insetsync.mjs [button title]` - opens and closes a player panel and checks frame by frame that the panels keep their distance to the player.
 - Any of these also drive the desktop: `node ../headless.mjs <url>` keeps headless Chrome open on the P6000, then run the script with `CDP_PORT=9338 PAGE=<part of the url>`.
+- `lookpass.mjs [panel] [rounds] [extra] [looks]` - ms per main scene pass for each background look (cover, split, depth) with the colour split forced on and off; every shot of the song's plan is given the look, the plan is put back at the end. All the look scripts take the slope between two loaded points (N and 2N extra passes): a frame that is not GPU-bound reads as free.
+- `lookfull.mjs [rounds] [extra] [programs]` - each scene program (`interior`, `cover.backdrop`, `split.full`, ...) drawn alone over the whole screen, which is what fullscreen visuals cost.
+- `lookstages.mjs <program> '<json {label: [[from, to], ...]}>' [rounds] [extra] ['<json pinned uniforms>']` - one program over the whole screen with its fragment source edited live, interleaved: the way to find what a shader stage costs before changing code.
+- `lookparts.mjs [panel] [rounds] [extra] [looks]` - one pass with a panel open, then with the interior, full and backdrop shaders each drawn flat.
 - `cdp.mjs` - shared helper: attach to the plair.live tab (`PAGE=<part of another address>`), `send`, `evaluate`, `sleep`, and `openPanel`, which never taps the tab that is already open (that toggles Radio between Talk and Text and the Catalog between tracks and shoutouts; a script did exactly that to the owner's setting on 14 Nov).
 - `interleave.mjs <panel> '<variants json>' <rounds> [reload]` - interleaved A/B under simulated hand-held tilt; medians.
 - `tiltsurvey.mjs <panels> <seconds>` - fps per panel under simulated tilt, with the renderer's draw-mode counts.

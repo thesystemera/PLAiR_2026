@@ -262,7 +262,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
     const features = ui.audioFeatures || null
     const timing = ui.lyricTimestamps
     const matched = features && timing?.id === features.id ? timing : null
-    const lines = matched?.lyrics?.map(line => ({ start: line.start, end: line.end, line: line.line })) || null
+    const lines = matched?.lyrics?.map(line => ({ start: line.start, end: line.end, line: line.line, words: line.words?.map(word => word.start) })) || null
     send({ type: 'features', features, sections: matched?.timed_sections || null, lines })
   }, [send, ui.audioFeatures, ui.lyricTimestamps])
 

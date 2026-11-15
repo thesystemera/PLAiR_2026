@@ -9,6 +9,7 @@ import {
   LinearSRGBColorSpace,
   MathUtils,
   MirroredRepeatWrapping,
+  Matrix3,
   Mesh,
   NoToneMapping,
   OrthographicCamera,
@@ -27,10 +28,12 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
-import { createFx, stepFx } from './scene/beatFx'
+import { createFx, setCamera, stepFx } from './scene/beatFx'
+import { setGrade } from './scene/grade'
+import { createSoftener } from './scene/softPyramid'
 import { lowerBound, numericAscending } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -83,7 +86,7 @@ export const LYRIC_HEIGHT = 512
 
 const BG_SIGNATURE_UNIFORMS = [
   'u_has_depth_map', 'u_focal_depth', 'u_focal_range', 'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
-  'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_brightness', 'u_contrast', 'u_saturation',
+  'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_orbit', 'u_brightness', 'u_contrast', 'u_saturation',
   'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution', 'u_text_empty',
 ]
 
@@ -423,12 +426,14 @@ export class SceneRenderer {
     this.transitionProgress = 1
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
     this.layerDepth = { A: null, B: null }
+    this.layerSoft = { A: null, B: null }
     this.bands = null
     this.depthGrid = null
     this.focus = createFocus()
     this.plan = null
     this.directorCursor = createDirectorCursor()
-    this.lookContext = { t: 0, aspect: 1, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: null, energy: 0, bands: null, grid: null, frame: this.focus.frame, flipY: true, tilt: { x: 0, y: 0 } }
+    this.lookContext = createLookContext(this.focus.frame, true)
+    this.softener = createSoftener(this.renderer)
     this.frontLayer = 'A'
     this.artworkUrl = null
     this.artworkTokens = { A: 0, B: 0 }
@@ -449,7 +454,11 @@ export class SceneRenderer {
       uniforms: {
         u_texture: { value: this.transparentPixel },
         u_texture_prev: { value: this.transparentPixel },
+        u_texture_near: { value: this.transparentPixel },
+        u_texture_far: { value: this.transparentPixel },
+        u_texture_prev_far: { value: this.transparentPixel },
         u_depth_map: { value: this.transparentPixel },
+        u_orbit: { value: new Vector3(0, 0, 0) },
         u_text_texture: { value: this.transparentPixel },
         u_text_empty: { value: 0.0 },
         u_video_clip: { value: this.transparentPixel },
@@ -468,6 +477,8 @@ export class SceneRenderer {
         u_contrast: { value: 1.0 },
         u_saturation: { value: 1.0 },
         u_hue: { value: 0.0 },
+        u_grade: { value: new Matrix3() },
+        u_grade_lift: { value: 0.0 },
         u_max_blur: { value: 0.0 },
         u_chromatic: { value: 0.0 },
         u_flicker: { value: 1.0 },
@@ -640,7 +651,7 @@ export class SceneRenderer {
     this.look = id
   }
 
-  direct(at, reduceMotion, energy, width, height, parallaxX, parallaxY) {
+  direct(at, reduceMotion, width, height, parallaxX, parallaxY) {
     const plan = this.plan
     if (!plan || !at || reduceMotion) {
       this.setLook('cover')
@@ -648,18 +659,13 @@ export class SceneRenderer {
     }
     const bgUniforms = this.bgMaterial.uniforms
     const ctx = this.lookContext
-    ctx.t = this.interpolatedProgress / 1000
     let look = at.shot.look
-    if (!this.lookReady[look] || (LOOKS[look].needsDepth && !this.bands)) look = 'cover'
+    if (!this.lookReady[look] || (LOOKS[look].needsDepth && (!this.bands || this.transitionProgress < 1))) look = 'cover'
     if (look !== 'cover') {
+      directLook(ctx, plan, at, this.effects, this.interpolatedProgress / 1000)
       ctx.aspect = width / Math.max(height, 1)
       ctx.hue = bgUniforms.u_hue.value
       ctx.rotation = bgUniforms.u_rotation.value
-      ctx.pulse = at.pulse
-      ctx.beatsSince = at.beatsSince
-      ctx.firstBeat = at.firstBeat
-      ctx.beats = plan.beats
-      ctx.energy = energy
       ctx.bands = this.bands
       ctx.grid = bgUniforms.u_has_depth_map.value > 0.5 ? this.depthGrid : null
       ctx.tilt.x = -parallaxX / Math.max(width, 1)
@@ -733,6 +739,8 @@ export class SceneRenderer {
       const old = this.layers[layer]
       this.layers[layer] = texture
       if (old !== this.transparentPixel) old.dispose()
+      this.layerSoft[layer]?.dispose()
+      this.layerSoft[layer] = this.softener.soften(texture)
       this.layerDepth[layer]?.texture.dispose()
       this.layerDepth[layer] = depth
       this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
@@ -749,6 +757,11 @@ export class SceneRenderer {
     const img = tex.image
     u.u_tex_resolution.value.set(img && img.width ? img.width : 1, img && img.height ? img.height : 1)
     u.u_texture_prev.value = prev
+    const soft = this.layerSoft[this.frontLayer]
+    const prevSoft = this.layerSoft[this.frontLayer === 'A' ? 'B' : 'A']
+    u.u_texture_near.value = soft ? soft.near.texture : this.transparentPixel
+    u.u_texture_far.value = soft ? soft.far.texture : this.transparentPixel
+    u.u_texture_prev_far.value = prevSoft ? prevSoft.far.texture : this.transparentPixel
     u.u_has_depth_map.value = 0.0
     const depth = this.layerDepth[this.frontLayer]
     u.u_depth_map.value = depth ? depth.texture : this.transparentPixel
@@ -829,6 +842,9 @@ export class SceneRenderer {
     for (const texture of [this.layers.A, this.layers.B, this.layerDepth.A?.texture, this.layerDepth.B?.texture, this.textTexture, this.noiseTexture, ...this.clips.textures]) {
       if (texture && texture !== this.transparentPixel) texture.dispose()
     }
+    this.layerSoft.A?.dispose()
+    this.layerSoft.B?.dispose()
+    this.softener.dispose()
     this.captureTarget.dispose()
     this.bgMaterial.dispose()
     this.fgMaterial.dispose()
@@ -1103,23 +1119,20 @@ export class SceneRenderer {
       bgUniforms.u_frame_scale.value = 1.0
       bgUniforms.u_scale.value = 1.0
       bgUniforms.u_rotation.value = 0.0
+      bgUniforms.u_orbit.value.set(0, 0, 0)
     } else {
       bgUniforms.u_parallax.value.set(pX, pY)
-      bgUniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
-      bgUniforms.u_frame_offset.value.set(effects.frameOffsetX, effects.frameOffsetY)
-      bgUniforms.u_frame_scale.value = effects.frameScale
-      bgUniforms.u_scale.value = effects.scale || 1.0
-      bgUniforms.u_rotation.value = effects.rotation * Math.PI / 180
+      setCamera(bgUniforms, effects, -pX / Math.max(logicalWidth, 1), -pY / Math.max(logicalHeight, 1))
     }
     bgUniforms.u_brightness.value = effects.brightness
     bgUniforms.u_contrast.value = effects.contrast
     bgUniforms.u_saturation.value = effects.saturation
     bgUniforms.u_hue.value = effects.hue * Math.PI / 180
-    bgUniforms.u_max_blur.value = visualQuality === 'high' ? effects.blur : 0
+    setGrade(bgUniforms)
     bgUniforms.u_chromatic.value = visualQuality === 'high' && !reduceMotion ? effects.chromatic : 0
-    applyFocus(bgUniforms, this.focus, visualQuality === 'high' ? this.depthGrid : null, true, delta, effects.blur)
+    applyFocus(bgUniforms, this.focus, this.depthGrid, true, delta, effects, visualQuality === 'high')
     bgUniforms.u_flicker.value = effects.flicker
-    this.direct(at, reduceMotion, effects.currentEnergy || 0, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
+    this.direct(at, reduceMotion, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
 
     const clips = this.clips
     if (clips.count > 0 && visualQuality === 'high') {

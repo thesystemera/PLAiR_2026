@@ -1,6 +1,8 @@
-import { Vector2, Vector4 } from 'three'
+import { Matrix3, Vector2, Vector4 } from 'three'
 import { pickWeighted, seededRandom } from '../random'
 import { focusTarget } from '../focus'
+import { gradeMatrix } from '../grade'
+import { lowerBound } from '../../sceneEffects'
 
 const TILES = 8
 const DEG = Math.PI / 180
@@ -141,18 +143,23 @@ function layoutTunnel(v, ctx, rects, crops, start) {
   return v.count
 }
 
-function layoutBoxes(v, ctx, rects, crops) {
+function layoutBoxes(v, ctx, rects, crops, sung) {
   const set = Math.floor(ctx.beatsSince / (4 * BOX_SET_BARS))
   const rand = seededRandom(v.seed + set * 7919)
   const count = 2 + Math.floor(rand() * 3)
   const firstBeat = ctx.firstBeat + set * 4 * BOX_SET_BARS
+  const setStart = beatTime(ctx, firstBeat)
+  const setEnd = beatTime(ctx, firstBeat + 4 * BOX_SET_BARS)
+  const words = sung ? ctx.words : null
+  const firstWord = words ? lowerBound(words, setStart - 0.05) : 0
   for (let i = 0; i < count; i++) {
     const halfHeight = 0.11 + rand() * 0.1
     const halfWidth = Math.min(0.48, halfHeight * (0.8 + rand() * 0.8) / ctx.aspect)
     const cx = halfWidth + rand() * (1 - 2 * halfWidth)
     const cy = halfHeight + rand() * (1 - 2 * halfHeight)
     crops[i] = crop(rand, 1.3, 2.4)
-    const start = beatTime(ctx, firstBeat + i)
+    const word = i > 0 && words && firstWord + i - 1 < words.length && words[firstWord + i - 1] < setEnd ? words[firstWord + i - 1] : null
+    const start = word ?? beatTime(ctx, firstBeat + i)
     const s = ctx.t < start ? 0 : easeOutBack(clamp01((ctx.t - start) / POP_S))
     rects[i].set(cx - halfWidth * s, cy - halfHeight * s, cx + halfWidth * s, cy + halfHeight * s)
   }
@@ -164,42 +171,35 @@ export default {
   framing: true,
   glsl: `
   uniform vec4 u_tile_rect[${TILES}];
-  uniform vec4 u_tile_crop[${TILES}];
-  uniform vec2 u_tile_hue[${TILES}];
-  uniform float u_tile_level[${TILES}];
-  uniform float u_tile_focus[${TILES}];
+  uniform vec4 u_tile_crop[${TILES + 1}];
+  uniform mat3 u_tile_grade[${TILES + 1}];
+  uniform float u_tile_level[${TILES + 1}];
+  uniform float u_tile_focus[${TILES + 1}];
   uniform vec4 u_split_frame;
+  uniform int u_tile_count;
 
   vec4 lookImage() {
-    vec2 local = vUv;
-    vec2 size = vec2(1.0);
-    vec4 frame = vec4(0.0, 0.0, 1.0, 1.0);
-    vec4 crop = vec4(0.0, 0.0, 1.0, 0.0);
-    vec2 hue = vHue;
-    float level = u_split_frame.x;
-    float edge = 1.0;
-    focalDepth = u_focal_depth;
-    float aspect = u_canvas_resolution.x / u_canvas_resolution.y;
-    for (int i = 0; i < ${TILES}; i++) {
+    int tile = ${TILES};
+    for (int i = 0; i < u_tile_count; i++) {
       vec4 rect = u_tile_rect[i];
-      if (vUv.x >= rect.x && vUv.x < rect.z && vUv.y >= rect.y && vUv.y < rect.w) {
-        frame = rect;
-        size = rect.zw - rect.xy;
-        local = (vUv - rect.xy) / size;
-        crop = u_tile_crop[i];
-        hue = u_tile_hue[i];
-        level = u_tile_level[i];
-        focalDepth = u_tile_focus[i];
-        vec2 inside = min(vUv - rect.xy, rect.zw - vUv) * vec2(aspect, 1.0);
-        edge = min(inside.x, inside.y);
-      }
+      if (vUv.x >= rect.x && vUv.x < rect.z && vUv.y >= rect.y && vUv.y < rect.w) tile = i;
     }
+    bool framed = tile < ${TILES};
+    vec4 frame = vec4(0.0, 0.0, 1.0, 1.0);
+    if (framed) frame = u_tile_rect[tile];
+    vec2 size = frame.zw - frame.xy;
+    vec2 local = (vUv - frame.xy) / size;
+    vec4 crop = u_tile_crop[tile];
+    focalDepth = u_tile_focus[tile];
+    float aspect = u_canvas_resolution.x / u_canvas_resolution.y;
+    vec2 inside = min(vUv - frame.xy, frame.zw - vUv) * vec2(aspect, 1.0);
+    float edge = framed ? min(inside.x, inside.y) : 1.0;
     bool whole = crop.w > 1.5;
     vec2 base = whole ? vUv : local;
     if (mod(crop.w, 2.0) > 0.5) base.x = whole ? frame.x + frame.z - base.x : 1.0 - base.x;
     vec2 uv = framedUv(base, whole ? u_canvas_resolution : u_canvas_resolution * size, crop.xy, crop.z);
-    vec4 color = chromaticImage(uv, getBlurAmount(uv), hue);
-    color.rgb *= level;
+    vec4 color = chromaticImage(depthView(uv, vec2(0.0)), u_tile_grade[tile]);
+    color.rgb *= u_tile_level[tile];
     float border = u_split_frame.y;
     if (border > 0.0) {
       float pixel = 1.0 / u_canvas_resolution.y;
@@ -210,13 +210,15 @@ export default {
 `,
   uniforms: () => ({
     u_tile_rect: { value: Array.from({ length: TILES }, () => new Vector4(0, 0, 0, 0)) },
-    u_tile_crop: { value: Array.from({ length: TILES }, () => new Vector4(0, 0, 1, 0)) },
+    u_tile_crop: { value: Array.from({ length: TILES + 1 }, () => new Vector4(0, 0, 1, 0)) },
     u_tile_hue: { value: Array.from({ length: TILES }, () => new Vector2(1, 0)) },
-    u_tile_level: { value: new Array(TILES).fill(1) },
-    u_tile_focus: { value: new Array(TILES).fill(0.5) },
+    u_tile_grade: { value: Array.from({ length: TILES + 1 }, () => new Matrix3()) },
+    u_tile_level: { value: new Array(TILES + 1).fill(1) },
+    u_tile_focus: { value: new Array(TILES + 1).fill(0.5) },
     u_split_frame: { value: new Vector4(0, 0, 0, 0) },
+    u_tile_count: { value: 0 },
   }),
-  signature: ['u_tile_rect', 'u_tile_crop', 'u_tile_hue', 'u_tile_level', 'u_tile_focus', 'u_split_frame'],
+  signature: ['u_tile_rect', 'u_tile_crop', 'u_tile_hue', 'u_tile_level', 'u_tile_focus', 'u_split_frame', 'u_tile_count'],
 
   variant(rand, level, prefer = {}) {
     const layout = prefer.layout || pickWeighted(rand, LAYOUTS)
@@ -252,14 +254,21 @@ export default {
     const rects = u.u_tile_rect.value
     const crops = v.crops.slice()
     let count
-    if (v.layout === 'boxes') count = layoutBoxes(v, ctx, rects, crops)
+    if (v.layout === 'boxes') count = layoutBoxes(v, ctx, rects, crops, shot.vocal)
     else if (v.layout === 'slices' || v.layout === 'blinds') count = layoutSlices(v, ctx, rects, crops)
     else if (v.layout === 'tunnel') count = layoutTunnel(v, ctx, rects, crops, shot.start)
     else count = layoutPanels(v, ctx, rects)
     for (let i = count; i < TILES; i++) rects[i].set(0, 0, 0, 0)
+    u.u_tile_count.value = count
     u.u_split_frame.value.set(v.back, v.border, v.tone, 0)
+    const brightness = u.u_brightness.value
+    const contrast = u.u_contrast.value
+    const saturation = u.u_saturation.value
+    u.u_tile_grade.value[TILES].copy(u.u_grade.value)
+    u.u_tile_level.value[TILES] = v.back
+    u.u_tile_focus.value[TILES] = u.u_focal_depth.value
     const since = Math.max(0, ctx.t - shot.start)
-    const lit = ctx.beatsSince % Math.max(1, count)
+    const lit = (shot.vocal && ctx.words?.length ? ctx.wordsSince : ctx.beatsSince) % Math.max(1, count)
     for (let i = 0; i < TILES; i++) {
       const c = crops[i]
       const zoom = c.zoom * (1 + 0.015 * ctx.pulse)
@@ -270,6 +279,7 @@ export default {
       u.u_tile_crop.value[i].set(x, y, zoom, flags)
       const angle = ctx.hue + v.hues[(c.hue ?? i) % v.hues.length] * DEG
       u.u_tile_hue.value[i].set(Math.cos(angle), Math.sin(angle))
+      gradeMatrix(u.u_tile_grade.value[i], brightness, contrast, saturation, angle)
       u.u_tile_level.value[i] = v.chase ? (i === lit ? 1 + 0.2 * ctx.pulse : CHASE_DIM) : 1 + 0.1 * ctx.pulse
       u.u_tile_focus.value[i] = ctx.grid ? focusTarget(ctx.grid, ctx.frame, ctx.flipY, x, y, zoom) : 0.5
     }

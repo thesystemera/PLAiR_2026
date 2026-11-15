@@ -113,7 +113,7 @@ async function at(seconds, capture) {
 }
 
 function describe(shot) {
-  return `${shot.role}${shot.drop ? '!' : ''} ${shot.rhythm || ''}${shot.hook >= 0 ? ` hook${shot.hook}` : ''} ${lookDetail(shot)}`
+  return `${shot.role}${shot.drop ? '!' : ''} ${Math.round((shot.density ?? 0) * 100)}% ${shot.camera} ${shot.patch.primary}${shot.hook >= 0 ? ` hook${shot.hook}` : ''} ${lookDetail(shot)}`
 }
 
 function lookDetail(shot) {
@@ -171,16 +171,20 @@ function plan() {
 }
 
 function structure() {
-  const { song, shots } = planShots(features, { sections, lines })
+  const { song, shots, coverage } = planShots(features, { sections, lines })
+  const pct = x => Math.round(x * 100)
   return {
-    meter: `${song.bpb}/4, downbeat phase ${song.phase}, ${(60 / song.period).toFixed(1)} bpm`,
+    meter: `${song.bpb}/4, downbeat phase ${song.phase}, ${(60 / song.period).toFixed(1)} bpm, punchiness ${song.punchy.toFixed(2)}, ${song.onsets.length} off-beat hits, ${song.words.length} words`,
+    coverage,
     sections: song.sections.map(s => {
       const inside = shots.filter(shot => shot.start >= s.start - 0.01 && shot.start < s.end - 0.01)
       const looks = {}
       for (const shot of inside) looks[shot.look] = (looks[shot.look] || 0) + 1
-      const rhythms = s.phrases.map(p => shots.find(shot => shot.phraseBeat === p.start && shot.rhythm !== 'fill')?.rhythm || '-').join(' > ')
-      const hooks = inside.filter(shot => shot.hook >= 0).length
-      return `${s.start.toFixed(0)}-${s.end.toFixed(0)}s ${s.type} -> ${s.role}${s.final ? ' (final)' : ''} energy ${s.energy.toFixed(2)}, ${s.phrases.length} phrases [${rhythms}]: ${inside.length} shots, ${hooks} on hook lines ${JSON.stringify(looks)}`
+      const phrases = s.phrases.map(p => {
+        const shot = shots.find(candidate => candidate.phraseBeat === p.start && candidate.gate >= 0) || shots.find(candidate => candidate.phraseBeat === p.start)
+        return `${pct(shot?.density ?? 0)}%${shot?.drop ? '!' : ''} ${shot?.patch.primary}+${shot?.patch.secondary} e${pct(p.energy)} p${pct(p.punchy)} sung${pct(p.sung)} w${p.wordRate.toFixed(1)} lift${pct(p.lift)}`
+      })
+      return { section: `${s.start.toFixed(0)}-${s.end.toFixed(0)}s ${s.type} -> ${s.role}${s.final ? ' (final)' : ''} energy ${s.energy.toFixed(2)}: ${inside.length} shots ${JSON.stringify(looks)}`, phrases }
     }),
   }
 }
@@ -315,81 +319,123 @@ async function video(seconds, times, width = 360, height = 640) {
   return { image: out.toDataURL('image/png'), stats, megabytes: +(buffer.byteLength / 1e6).toFixed(2) }
 }
 
-async function phraseTrace(fps = 30) {
-  const { createFx, stepFx } = await import('/src/lib/scene/beatFx.js')
-  const { directorAt } = await import('/src/lib/scene/director.js')
-  const plan = planShots(features, { sections, lines })
-  const fx = createFx()
-  const cursor = { shot: 0, beat: 0 }
-  const rows = []
-  for (const s of plan.song.sections) for (const p of s.phrases) rows.push({ from: p.from, to: p.to, label: `${p.from.toFixed(0)}s ${s.role} p${p.index + 1}`, events: 0, cuts: 0, rhythm: new Set() })
-  const prev = { punch: 0, twist: 0, chroma: 0, flash: 0, hue: 0 }
-  for (let frame = 0; frame < features.duration * fps; frame++) {
-    const t = frame / fps
-    const at = directorAt(plan, t, cursor)
-    const out = stepFx(fx, plan, at, t, 1 / fps, true)
-    const row = rows.find(r => t >= r.from && t < r.to)
-    if (!row) continue
-    row.rhythm.add(at.shot.rhythm)
-    if (out.cut) row.cuts++
-    if (fx.punch > prev.punch + 0.005 || Math.abs(fx.twist) > Math.abs(prev.twist) + 0.5 || fx.chromaKick > prev.chroma + 5 || fx.flash > prev.flash + 0.02 || Math.abs(fx.hueKick) > Math.abs(prev.hue) + 5) row.events++
-    Object.assign(prev, { punch: fx.punch, twist: fx.twist, chroma: fx.chromaKick, flash: fx.flash, hue: fx.hueKick })
-  }
-  return rows.map(r => `${r.label.padEnd(18)} ${(r.to - r.from).toFixed(0).padStart(2)}s ${[...r.rhythm].join('/').padEnd(18)} cuts ${String(r.cuts).padStart(2)}  hits ${String(r.events).padStart(3)} (${(r.events / Math.max(1, r.to - r.from)).toFixed(1)}/s)`)
-}
-
 async function trace(fps = 30) {
   const { createFx, stepFx } = await import('/src/lib/scene/beatFx.js')
   const { directorAt } = await import('/src/lib/scene/director.js')
   const plan = planShots(features, { sections, lines })
   const fx = createFx()
   const cursor = { shot: 0, beat: 0 }
-  const rows = plan.song.sections.map(s => ({ section: `${s.start.toFixed(0)}s ${s.role}`, seconds: s.end - s.start, cuts: 0, punch: 0, twitch: 0, glitch: 0, hue: 0, flash: 0, bright: [9, 0], oldHits: 0, oldTwitch: 0, frames: 0, split: 0, turn: 0, hueSum: 0, moves: 0, palettes: new Set() }))
-  const rowAt = t => rows[Math.max(0, plan.song.sections.findIndex(s => t >= s.start && t < s.end))]
-  const prev = { punch: 0, rotation: 0, glitch: 0, hue: 0, flash: 0 }
-  const beats = features.beats
-  const segs = features.loudness_segments
-  const history = []
-  let seg = 0
-  let oldBeat = 0
+  const channels = { zoom: f => f.scale - 1, split: f => f.chromatic, turn: f => Math.abs(f.rotation), light: f => f.brightness, orbit: f => Math.hypot(f.orbitX, f.orbitY), dolly: f => Math.abs(f.dolly), swell: f => f.swell }
+  const rows = []
+  for (const s of plan.song.sections) for (const p of s.phrases) rows.push({ from: p.from, to: p.to, label: `${p.from.toFixed(0)}s ${s.role} p${p.index + 1}`, cuts: 0, hits: 0, shots: new Set(), values: Object.fromEntries(Object.keys(channels).map(name => [name, []])) })
+  const prev = { punch: 0, twist: 0, chroma: 0, flash: 0, hue: 0, gx: 0 }
   for (let frame = 0; frame < features.duration * fps; frame++) {
     const t = frame / fps
     const at = directorAt(plan, t, cursor)
     const out = stepFx(fx, plan, at, t, 1 / fps, true)
-    const row = rowAt(t)
+    const row = rows.find(r => t >= r.from && t < r.to)
+    if (!row) continue
+    row.shots.add(`${at.shot.look === 'split' ? at.shot.variant.layout : at.shot.look}/${at.shot.camera}`)
+    row.patch = `${at.shot.patch.primary}+${at.shot.patch.secondary}`
+    row.kicks = `${at.shot.lead}/${at.shot.support}`
     if (out.cut) row.cuts++
-    row.frames++
-    if (fx.chromatic > 8) row.split++
-    row.turn += Math.abs(fx.rotation)
-    row.hueSum += Math.abs(fx.hue)
-    if (Math.abs(fx.frameScale - (prev.zoom ?? fx.frameScale)) > 0.05) row.moves++
-    prev.zoom = fx.frameScale
-    row.palettes.add(at.shot.fx.palette)
-    if (fx.punch > prev.punch + 0.005) row.punch++
-    if (Math.abs(fx.rotation) > Math.abs(prev.rotation) + 0.5) row.twitch++
-    if (Math.abs(fx.glitchX) > Math.abs(prev.glitch) + 5) row.glitch++
-    if (Math.abs(fx.hue) > Math.abs(prev.hue) + 5) row.hue++
-    if (fx.flash > prev.flash + 0.02) row.flash++
-    row.bright[0] = Math.min(row.bright[0], fx.brightness)
-    row.bright[1] = Math.max(row.bright[1], fx.brightness)
-    Object.assign(prev, { punch: fx.punch, rotation: fx.rotation, glitch: fx.glitchX, hue: fx.hue, flash: fx.flash })
-    while (seg < segs.length - 1 && segs[seg + 1].start <= t) seg++
-    const raw = Math.max(0, Math.min(1, (segs[seg].loudness - (features.min_loudness || -60)) / ((features.peak_loudness || -1) - (features.min_loudness || -60))))
-    history.push([t, raw])
-    while (history.length && t - history[0][0] > 1.667) history.shift()
-    const sorted = history.map(h => h[1]).sort((a, b) => a - b)
-    const threshold = Math.max(0.65, sorted[Math.floor(sorted.length * 0.8)] || 0.65)
-    const intensity = Math.max(0, (raw - threshold) / (1 - threshold))
-    while (oldBeat < beats.length && beats[oldBeat] < t - 0.5 / fps) oldBeat++
-    if (oldBeat < beats.length && Math.abs(beats[oldBeat] - t) < 0.5 / fps) {
-      if (raw > threshold && intensity > 0.4) row.oldHits++
-      if (oldBeat % 2 === 1) row.oldTwitch++
-    }
+    if (fx.punch > prev.punch + 0.005 || Math.abs(fx.twist) > Math.abs(prev.twist) + 0.5 || fx.chromaKick > prev.chroma + 5 || fx.flash > prev.flash + 0.02 || Math.abs(fx.hueKick) > Math.abs(prev.hue) + 5 || Math.abs(fx.gx) > Math.abs(prev.gx) + 5) row.hits++
+    Object.assign(prev, { punch: fx.punch, twist: fx.twist, chroma: fx.chromaKick, flash: fx.flash, hue: fx.hueKick, gx: fx.gx })
+    for (const [name, read] of Object.entries(channels)) row.values[name].push(read(fx))
   }
-  return rows.map(r => `${r.section.padEnd(15)} ${r.seconds.toFixed(0).padStart(3)}s cuts ${r.cuts} reframes ${r.moves} punch ${r.punch} twitch ${r.twitch} glitch ${r.glitch} flash ${r.flash} | colour split ${Math.round(100 * r.split / Math.max(1, r.frames))}% of frames, sway ${(r.turn / Math.max(1, r.frames)).toFixed(1)} deg, hue ${(r.hueSum / Math.max(1, r.frames)).toFixed(0)} deg | ${[...r.palettes].join('/')} | old hits ${r.oldHits}`)
+  const stat = values => {
+    const sorted = values.slice().sort((a, b) => a - b)
+    const at = q => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] || 0
+    return `${at(0.1).toFixed(2)}/${at(0.5).toFixed(2)}/${at(0.95).toFixed(2)}`
+  }
+  return rows.map(r => `${r.label.padEnd(18)} ${(r.to - r.from).toFixed(0).padStart(2)}s cuts ${String(r.cuts).padStart(2)} hits ${(r.hits / Math.max(1, r.to - r.from)).toFixed(1)}/s ${String(r.patch).padEnd(12)} ${String(r.kicks).padEnd(14)} | ${Object.keys(channels).map(name => `${name} ${stat(r.values[name])}`).join('  ')} | ${[...r.shots].join(' ')}`)
 }
 
-window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, phraseTrace, force, timing, identity, ready: true }
+const SPLINE_BLUR = `  vec4 softColor(vec2 uv, float lod) {
+    if (lod < 0.75) return textureLod(u_texture, uv, lod);
+    float level = floor(lod);
+    return mix(splineLevel(u_texture, uv, level), splineLevel(u_texture, uv, level + 1.0), lod - level);
+  }
+
+`
+
+function splineReference(source) {
+  const start = source.indexOf('  vec4 softColor(vec2 uv, float lod) {')
+  const end = source.indexOf('  vec4 leavingColor(vec2 uv, float lod) {')
+  if (start < 0 || end < 0) throw new Error('the blur function was not found in the shader')
+  return (source.slice(0, start) + SPLINE_BLUR + source.slice(end)).replace(/textureLod\(u_texture_far, uv, ([0-9.]+)\)/g, (_, level) => `splineLevel(u_texture, uv, ${(Number(level) + 2).toFixed(1)})`)
+}
+
+async function blurCheck(seconds, look, pins = null, crop = 150, zoom = 3) {
+  if (look) force(look)
+  scene.bench.uniforms = pins
+  await at(seconds)
+  const material = scene.lookMaterials[scene.look].backdrop
+  const reference = new ShaderMaterial({ vertexShader: material.vertexShader, fragmentShader: splineReference(material.fragmentShader), uniforms: material.uniforms })
+  const target = new WebGLRenderTarget(canvas.width, canvas.height)
+  const quad = new Mesh(new PlaneGeometry(2, 2))
+  quad.frustumCulled = false
+  const stage = new Scene()
+  stage.add(quad)
+  const read = shader => {
+    quad.material = shader
+    scene.renderer.setRenderTarget(target)
+    scene.renderer.render(stage, scene.captureCamera)
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4)
+    scene.renderer.readRenderTargetPixels(target, 0, 0, canvas.width, canvas.height, pixels)
+    scene.renderer.setRenderTarget(null)
+    return pixels
+  }
+  const now = read(material)
+  const spline = read(reference)
+  reference.dispose()
+  target.dispose()
+  scene.bench.uniforms = null
+  if (look) force(null)
+  let max = 0
+  let total = 0
+  let over2 = 0
+  let over4 = 0
+  let worst = 0
+  for (let i = 0; i < now.length; i += 4) {
+    const d = Math.max(Math.abs(now[i] - spline[i]), Math.abs(now[i + 1] - spline[i + 1]), Math.abs(now[i + 2] - spline[i + 2]))
+    total += d
+    if (d > 2) over2++
+    if (d > 4) over4++
+    if (d > max) { max = d; worst = i / 4 }
+  }
+  const pixels = now.length / 4
+  const cx = Math.min(canvas.width - crop, Math.max(0, (worst % canvas.width) - crop / 2))
+  const cy = Math.min(canvas.height - crop, Math.max(0, Math.floor(worst / canvas.width) - crop / 2))
+  const out = document.createElement('canvas')
+  out.width = crop * zoom * 3
+  out.height = crop * zoom
+  const ctx = out.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  const tile = document.createElement('canvas')
+  tile.width = crop
+  tile.height = crop
+  const tileCtx = tile.getContext('2d')
+  const panel = (index, pixelAt) => {
+    const image = tileCtx.createImageData(crop, crop)
+    for (let y = 0; y < crop; y++) {
+      for (let x = 0; x < crop; x++) {
+        const from = ((cy + crop - 1 - y) * canvas.width + cx + x) * 4
+        const to = (y * crop + x) * 4
+        for (let c = 0; c < 3; c++) image.data[to + c] = pixelAt(from + c)
+        image.data[to + 3] = 255
+      }
+    }
+    tileCtx.putImageData(image, 0, 0)
+    ctx.drawImage(tile, index * crop * zoom, 0, crop * zoom, crop * zoom)
+  }
+  panel(0, i => now[i])
+  panel(1, i => spline[i])
+  panel(2, i => Math.min(255, Math.abs(now[i] - spline[i]) * 16))
+  return { look: scene.look, max, mean: +(total / pixels).toFixed(3), over2: +(100 * over2 / pixels).toFixed(2), over4: +(100 * over4 / pixels).toFixed(2), image: out.toDataURL('image/png') }
+}
+
+window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, ready: true }
 info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
 </script>
 </body>

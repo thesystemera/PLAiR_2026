@@ -19,3 +19,27 @@ export function setLookUniforms(uniforms, shot, ctx) {
   uniforms.u_fx_rot.value.set(Math.cos(ctx.rotation), Math.sin(ctx.rotation))
   LOOKS[shot.look].frame(shot, ctx, uniforms)
 }
+
+export function createLookContext(frame, flipY) {
+  return {
+    t: 0, aspect: 1, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, wordsSince: 0, firstBeat: 0, beats: null, words: null,
+    energy: 0, depthSwell: 0, aperture: 0, dolly: 0, orbit: { x: 0, y: 0 }, bands: null, grid: null, frame, flipY, tilt: { x: 0, y: 0 },
+  }
+}
+
+export function directLook(ctx, plan, at, fx, t) {
+  ctx.t = t
+  ctx.pulse = fx.hit
+  ctx.beatsSince = at.beatsSince
+  ctx.wordsSince = at.wordsSince
+  ctx.firstBeat = at.firstBeat
+  ctx.beats = plan.beats
+  ctx.words = plan.song?.words || null
+  ctx.energy = fx.currentEnergy
+  ctx.depthSwell = fx.depthSwell
+  ctx.aperture = fx.aperture
+  ctx.dolly = fx.dolly
+  ctx.orbit.x = fx.orbitX
+  ctx.orbit.y = fx.orbitY
+  return ctx
+}

@@ -1,9 +1,9 @@
 export const backgroundVertex = (head = '', main = '') => `
   varying vec2 vUv;
   varying vec2 vFxUv;
+  varying vec2 vLocal;
   varying vec2 vFallbackUv;
   varying vec2 vTextUv;
-  varying vec2 vHue;
   uniform vec2 u_canvas_resolution;
   uniform vec2 u_tex_resolution;
   uniform vec2 u_parallax;
@@ -12,7 +12,6 @@ export const backgroundVertex = (head = '', main = '') => `
   uniform vec2 u_frame_offset;
   uniform float u_frame_scale;
   uniform float u_rotation;
-  uniform float u_hue;
 
   vec2 getCoverUV(vec2 uv, vec2 canvasRes, vec2 texRes) {
     float canvasAspect = canvasRes.x / canvasRes.y;
@@ -35,9 +34,9 @@ ${head}
     vec2 glitchOffset = u_glitch / u_canvas_resolution;
     vec2 framed = (corrected - center) / u_frame_scale + u_frame_offset;
     vFxUv = rotationMatrix * (framed - u_parallax / u_canvas_resolution - glitchOffset) / u_scale + center;
+    vLocal = rotationMatrix * (corrected - center) / (u_frame_scale * u_scale);
     vFallbackUv = rotationMatrix * framed / (u_scale + 0.2) + center;
     vTextUv = uv - glitchOffset;
-    vHue = vec2(cos(u_hue), sin(u_hue));
 ${main}    gl_Position = vec4(position, 1.0);
   }
 `
@@ -47,12 +46,16 @@ export const BACKGROUND_VERTEX = backgroundVertex()
 export const IMAGE_BODY = `
   varying vec2 vUv;
   varying vec2 vFxUv;
+  varying vec2 vLocal;
   varying vec2 vFallbackUv;
   varying vec2 vTextUv;
-  varying vec2 vHue;
   uniform sampler2D u_texture;
   uniform sampler2D u_texture_prev;
+  uniform sampler2D u_texture_near;
+  uniform sampler2D u_texture_far;
+  uniform sampler2D u_texture_prev_far;
   uniform sampler2D u_depth_map;
+  uniform vec3 u_orbit;
   uniform sampler2D u_text_texture;
   uniform float u_text_empty;
   uniform sampler2D u_video_clip;
@@ -61,10 +64,8 @@ export const IMAGE_BODY = `
   uniform vec2 u_canvas_resolution;
   uniform vec2 u_glitch;
   uniform float u_time;
-  uniform float u_brightness;
-  uniform float u_contrast;
-  uniform float u_saturation;
-  uniform float u_hue;
+  uniform mat3 u_grade;
+  uniform float u_grade_lift;
   uniform float u_max_blur;
   uniform float u_chromatic;
   uniform float u_flicker;
@@ -75,18 +76,7 @@ export const IMAGE_BODY = `
   uniform vec2 u_tex_resolution;
 
   float focalDepth;
-
-  const vec2 BOKEH_DIR_1 = vec2(1.0, 0.0);
-  const vec2 BOKEH_DIR_2 = vec2(-0.5, 0.8660254);
-  const vec2 BOKEH_DIR_3 = vec2(-0.5, -0.8660254);
-
-  float getBlurAmount(vec2 uv) {
-    if (u_has_depth_map < 0.5) {
-       if (u_is_capture > 0.5) return 0.0;
-       return u_max_blur;
-    }
-    return 0.0;
-  }
+  float focusLod;
 
   vec4 splineLevel(sampler2D tex, vec2 uv, float level) {
     vec2 size = max(vec2(1.0), floor(u_tex_resolution / exp2(level)));
@@ -97,7 +87,6 @@ export const IMAGE_BODY = `
     vec2 f3 = f2 * f;
     vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
     vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-    vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
     vec2 g0 = w0 + w1;
     vec2 g1 = 1.0 - g0;
     vec2 c0 = (i + 0.5 - 1.0 + w1 / g0) / size;
@@ -106,80 +95,44 @@ export const IMAGE_BODY = `
          + g1.y * (g0.x * textureLod(tex, vec2(c0.x, c1.y), level) + g1.x * textureLod(tex, c1, level));
   }
 
-  vec4 textureSmooth(sampler2D tex, vec2 uv, float lod) {
-    if (lod < 0.75) return textureLod(tex, uv, lod);
-    float level = floor(lod);
-    return mix(splineLevel(tex, uv, level), splineLevel(tex, uv, level + 1.0), lod - level);
+  vec4 softColor(vec2 uv, float lod) {
+    if (lod < 0.75) return textureLod(u_texture, uv, lod);
+    if (lod < 1.0) return mix(textureLod(u_texture, uv, 0.0), textureLod(u_texture_near, uv, 0.0), lod);
+    if (lod < 2.0) return mix(textureLod(u_texture_near, uv, 0.0), textureLod(u_texture_far, uv, 0.0), lod - 1.0);
+    return textureLod(u_texture_far, uv, lod - 2.0);
   }
 
-  vec4 sampleFocus(vec2 uv, float transition) {
+  vec4 leavingColor(vec2 uv, float lod) {
+    if (lod < 0.75) return textureLod(u_texture_prev, uv, lod);
+    return textureLod(u_texture_prev_far, uv, max(lod - 2.0, 0.0));
+  }
+
+  vec2 depthView(vec2 uv, vec2 local) {
     vec2 texel = uv * u_tex_resolution;
     float lod = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
-    float depth = splineLevel(u_depth_map, uv, 2.0).g;
-    lod += clamp((abs(depth - focalDepth) - u_focal_range) * u_max_blur, 0.0, 4.5);
-    vec4 color = textureSmooth(u_texture, uv, lod);
-    if (transition >= 1.0) return color;
-    return mix(textureSmooth(u_texture_prev, uv, lod), color, transition * transition * (3.0 - 2.0 * transition));
-  }
-
-  vec4 sampleBlend(vec2 uv, float transition) {
-    return mix(texture2D(u_texture_prev, uv), texture2D(u_texture, uv), transition);
-  }
-
-  vec4 sampleBokeh(vec2 uv, float blur, float transition) {
-    float radius = min(blur, 60.0) * 0.0016;
-    vec4 color = sampleBlend(uv + BOKEH_DIR_1 * radius, transition);
-    color += sampleBlend(uv + BOKEH_DIR_2 * radius, transition);
-    color += sampleBlend(uv + BOKEH_DIR_3 * radius, transition);
-    return color / 3.0;
-  }
-
-  vec4 sampleBokehCurrent(vec2 uv, float blur) {
-    float radius = min(blur, 60.0) * 0.0016;
-    vec4 color = texture2D(u_texture, uv + BOKEH_DIR_1 * radius);
-    color += texture2D(u_texture, uv + BOKEH_DIR_2 * radius);
-    color += texture2D(u_texture, uv + BOKEH_DIR_3 * radius);
-    return color / 3.0;
-  }
-
-  vec4 sampleImage(vec2 uv, float blurAmount, float transition) {
-    if (u_has_depth_map > 0.5) return sampleFocus(uv, transition);
-    vec4 color;
-    float blendFactor = transition * transition * (3.0 - 2.0 * transition);
-    if (blurAmount > 1.0 && u_is_capture < 0.5) {
-      if (transition < 1.0) {
-        color = sampleBokeh(uv, blurAmount, blendFactor);
-      } else {
-        color = sampleBokehCurrent(uv, blurAmount);
-      }
-    } else if (transition < 1.0) {
-      color = sampleBlend(uv, blendFactor);
-    } else {
-      color = texture2D(u_texture, uv);
+    if (u_has_depth_map < 0.5) {
+      focusLod = lod + (u_is_capture > 0.5 ? 0.0 : u_max_blur);
+      return uv;
     }
+    float away = splineLevel(u_depth_map, uv, 2.0).g - focalDepth;
+    focusLod = lod + clamp((abs(away) - u_focal_range) * u_max_blur, 0.0, 4.5);
+    return uv + (u_orbit.xy + local * u_orbit.z) * away;
+  }
+
+  vec4 gradeColor(vec4 color, mat3 grade) {
+    color.rgb = clamp(grade * color.rgb + u_grade_lift, 0.0, 1.0);
     return color;
   }
 
-  vec4 gradeColor(vec4 color, vec2 hue, bool rotateHue) {
-    color.rgb = (color.rgb - 0.5) * u_contrast + 0.5;
-    color.rgb *= u_brightness;
-    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-    color.rgb = mix(vec3(luma), color.rgb, u_saturation);
-    if (rotateHue) {
-      float cosHue = hue.x;
-      float sinHue = hue.y;
-      color.rgb = vec3(
-        dot(color.rgb, vec3(0.213, 0.715, 0.072)) + cosHue * dot(color.rgb, vec3(0.787, -0.715, -0.072)) - sinHue * dot(color.rgb, vec3(-0.213, -0.715, 0.928)),
-        dot(color.rgb, vec3(0.213, 0.715, 0.072)) + cosHue * dot(color.rgb, vec3(-0.213, 0.285, -0.072)) + sinHue * dot(color.rgb, vec3(0.143, -0.285, 0.142)),
-        dot(color.rgb, vec3(0.213, 0.715, 0.072)) + cosHue * dot(color.rgb, vec3(-0.213, -0.715, 0.928)) + sinHue * dot(color.rgb, vec3(-0.787, 0.715, 0.072))
-      );
+  vec4 chromaticImage(vec2 uv, mat3 grade) {
+    vec4 color = gradeColor(softColor(uv, focusLod), grade);
+    if (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) {
+      vec2 offset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
+      color.r = clamp(dot(vec3(grade[0].r, grade[1].r, grade[2].r), softColor(uv + offset, focusLod).rgb) + u_grade_lift, 0.0, 1.0);
+      color.b = clamp(dot(vec3(grade[0].b, grade[1].b, grade[2].b), softColor(uv - offset, focusLod).rgb) + u_grade_lift, 0.0, 1.0);
     }
-    color.rgb = clamp(color.rgb, 0.0, 1.0);
+    if (u_transition < 1.0) color = mix(gradeColor(leavingColor(uv, focusLod), grade), color, u_transition * u_transition * (3.0 - 2.0 * u_transition));
     return color;
-  }
-
-  vec4 applyEffects(vec2 uv, float blurAmount, float transition) {
-    return gradeColor(sampleImage(uv, blurAmount, transition), vHue, abs(u_hue) > 0.001);
   }
 
   float scanline(vec2 uv, float time, float glitch) {
@@ -196,19 +149,8 @@ export const IMAGE_BODY = `
 
   vec4 coverImage() {
     focalDepth = u_focal_depth;
-    vec2 uv = vFxUv;
-    float blurAmount = getBlurAmount(uv);
-    vec4 finalColor;
-
-    int chromaticTaps = (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) ? 3 : 1;
-    vec2 chromaticOffset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
-    for (int k = 0; k < chromaticTaps; k++) {
-      vec2 tapUv = k == 0 ? uv : (k == 1 ? uv + chromaticOffset : uv - chromaticOffset);
-      vec4 tap = applyEffects(tapUv, blurAmount, u_transition);
-      if (k == 0) finalColor = tap;
-      else if (k == 1) finalColor.r = tap.r;
-      else finalColor.b = tap.b;
-    }
+    vec2 uv = depthView(vFxUv, vLocal);
+    vec4 finalColor = chromaticImage(uv, u_grade);
 
     if (u_video_clip_blend > 0.01) {
       vec4 clipColor = texture2D(u_video_clip, uv);
@@ -241,20 +183,6 @@ export const FRAMING = `
     vec2 framed = (coverFit(local, res) - 0.5) / (u_frame_scale * zoom) + u_frame_offset + offset;
     vec2 p = framed - (u_parallax + u_glitch) / u_canvas_resolution;
     return mat2(u_fx_rot.x, -u_fx_rot.y, u_fx_rot.y, u_fx_rot.x) * p / u_scale + 0.5;
-  }
-
-  vec4 chromaticImage(vec2 uv, float blurAmount, vec2 hue) {
-    vec4 color;
-    int taps = (abs(u_chromatic) > 0.5 && u_is_capture < 0.5) ? 3 : 1;
-    vec2 chromaticOffset = vec2(u_chromatic, 0.0) / u_canvas_resolution;
-    for (int k = 0; k < taps; k++) {
-      vec2 tapUv = k == 0 ? uv : (k == 1 ? uv + chromaticOffset : uv - chromaticOffset);
-      vec4 tap = gradeColor(sampleImage(tapUv, blurAmount, u_transition), hue, true);
-      if (k == 0) color = tap;
-      else if (k == 1) color.r = tap.r;
-      else color.b = tap.b;
-    }
-    return color;
   }
 `
 

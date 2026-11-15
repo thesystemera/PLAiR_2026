@@ -5,6 +5,7 @@ import {
   DoubleSide,
   LinearFilter,
   LinearMipmapLinearFilter,
+  Matrix3,
   MirroredRepeatWrapping,
   Mesh,
   OrthographicCamera,
@@ -13,15 +14,18 @@ import {
   Scene,
   ShaderMaterial,
   Vector2,
+  Vector3,
   VideoFrameTexture,
   WebGLRenderer,
 } from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { LOOKS, LOOK_IDS, createLookContext, directLook, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
-import { createFx, stepFx } from './scene/beatFx'
+import { createFx, setCamera, stepFx } from './scene/beatFx'
+import { setGrade } from './scene/grade'
+import { createSoftener } from './scene/softPyramid'
 import {
   processLyricTimestamps,
   getLyricAt,
@@ -127,6 +131,7 @@ export async function renderVideo({
     lookMaterials: [],
     artworkTexture: null,
     depthTexture: null,
+    soft: null,
     lyricTexture: null,
     transparentPixel: null,
     videoEncoder: null,
@@ -177,6 +182,10 @@ export async function renderVideo({
   const { texture: artworkTexture, depth } = await loadTextures(artworkBlob)
   resources.artworkTexture = artworkTexture
   resources.depthTexture = depth?.texture || null
+  const softener = createSoftener(renderer)
+  const soft = softener.soften(artworkTexture)
+  softener.dispose()
+  resources.soft = soft
   const texWidth = artworkTexture.image.width
   const texHeight = artworkTexture.image.height
 
@@ -192,7 +201,11 @@ export async function renderVideo({
     uniforms: {
       u_texture: { value: artworkTexture },
       u_texture_prev: { value: artworkTexture },
+      u_texture_near: { value: soft.near.texture },
+      u_texture_far: { value: soft.far.texture },
+      u_texture_prev_far: { value: soft.far.texture },
       u_depth_map: { value: depth?.texture || transparentPixel },
+      u_orbit: { value: new Vector3(0, 0, 0) },
       u_text_texture: { value: lyricTexture },
       u_video_clip: { value: transparentPixel },
       u_video_clip_blend: { value: 0.0 },
@@ -210,6 +223,8 @@ export async function renderVideo({
       u_contrast: { value: 1.0 },
       u_saturation: { value: 1.0 },
       u_hue: { value: 0.0 },
+      u_grade: { value: new Matrix3() },
+      u_grade_lift: { value: 0.0 },
       u_max_blur: { value: 0.0 },
       u_chromatic: { value: 0.0 },
       u_flicker: { value: 1.0 },
@@ -240,7 +255,7 @@ export async function renderVideo({
   const plan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections, lines: lyricTimestamps?.lyrics })
   const directorCursor = createDirectorCursor()
   const focus = createFocus()
-  const lookContext = { t: 0, aspect: width / height, hue: 0, rotation: 0, pulse: 0, beatsSince: 0, firstBeat: 0, beats: plan?.beats || null, energy: 0, bands: depth?.bands || null, grid: depth?.grid || null, frame: focus.frame, flipY: false, tilt: { x: 0, y: 0 } }
+  const lookContext = Object.assign(createLookContext(focus.frame, false), { aspect: width / height, bands: depth?.bands || null, grid: depth?.grid || null })
 
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
@@ -370,31 +385,23 @@ export async function renderVideo({
     const effectsDone = performance.now()
 
     material.uniforms.u_time.value = currentTime
-    material.uniforms.u_glitch.value.set(effects.glitchX, effects.glitchY)
-    material.uniforms.u_frame_offset.value.set(effects.frameOffsetX, effects.frameOffsetY)
-    material.uniforms.u_frame_scale.value = effects.frameScale
-    material.uniforms.u_scale.value = effects.scale
-    material.uniforms.u_rotation.value = (effects.rotation * Math.PI) / 180
+    setCamera(material.uniforms, effects)
     material.uniforms.u_brightness.value = effects.brightness
     material.uniforms.u_contrast.value = effects.contrast
     material.uniforms.u_saturation.value = effects.saturation
     material.uniforms.u_hue.value = (effects.hue * Math.PI) / 180
-    material.uniforms.u_max_blur.value = effects.blur
+    setGrade(material.uniforms)
     material.uniforms.u_chromatic.value = effects.chromatic
     material.uniforms.u_flicker.value = effects.flicker
-    applyFocus(material.uniforms, focus, depth?.grid || null, false, delta, effects.blur)
+    applyFocus(material.uniforms, focus, depth?.grid || null, false, delta, effects, true)
 
     let look = 'cover'
     if (at) {
       look = LOOKS[at.shot.look].needsDepth && !lookContext.bands ? 'cover' : at.shot.look
       if (look !== 'cover') {
-        lookContext.t = currentTime
+        directLook(lookContext, plan, at, effects, currentTime)
         lookContext.hue = material.uniforms.u_hue.value
         lookContext.rotation = material.uniforms.u_rotation.value
-        lookContext.pulse = at.pulse
-        lookContext.beatsSince = at.beatsSince
-        lookContext.firstBeat = at.firstBeat
-        lookContext.energy = rawEnergy
         setLookUniforms(material.uniforms, at.shot, lookContext)
       }
     }
@@ -539,6 +546,7 @@ export async function renderVideo({
     try {
       if (resources.artworkTexture) resources.artworkTexture.dispose()
       if (resources.depthTexture) resources.depthTexture.dispose()
+      resources.soft?.dispose()
     } catch { /* ignore */ }
 
     try {

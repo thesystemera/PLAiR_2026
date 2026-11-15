@@ -8,6 +8,8 @@ const scratch = new Float32Array(GRID * GRID)
 export const FOCUS_RANGE = 0.05
 export const APERTURE = 7
 const APERTURE_PER_BLUR = 0.15
+const FLAT_BLUR_REACH = 0.0004
+const MAX_BLUR_LEVELS = 4.5
 
 export function depthGrid(data, width, height) {
   const grid = new Float32Array(GRID * GRID)
@@ -88,13 +90,16 @@ function frameOf(uniforms, out) {
   return out
 }
 
-export function applyFocus(uniforms, focus, grid, flipY, dt, blur) {
+export function applyFocus(uniforms, focus, grid, flipY, dt, fx, depthOfField) {
   uniforms.u_has_depth_map.value = grid ? 1 : 0
-  if (!grid) return
+  if (!grid) {
+    uniforms.u_max_blur.value = depthOfField ? Math.min(MAX_BLUR_LEVELS, Math.log2(1 + fx.blur * FLAT_BLUR_REACH * uniforms.u_tex_resolution.value.y)) : 0
+    return
+  }
   const frame = frameOf(uniforms, focus.frame)
   uniforms.u_focal_depth.value = stepFocus(focus, focusTarget(grid, frame, flipY), dt)
   uniforms.u_focal_range.value = FOCUS_RANGE
-  uniforms.u_max_blur.value = APERTURE + blur * APERTURE_PER_BLUR
+  uniforms.u_max_blur.value = depthOfField ? APERTURE * (1 + fx.aperture) + fx.blur * APERTURE_PER_BLUR : 0
 }
 
 export function detailGrid(data, width, height) {
