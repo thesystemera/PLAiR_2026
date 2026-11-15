@@ -5,14 +5,14 @@ import { analyzeSong, lineAt } from './structure'
 import { measureSpread } from './beatFx'
 
 const RECIPES = {
-  intro: { looks: [['cover', 3], ['depth', 2], ['split', 1]], cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
-  verse: { looks: [['cover', 2], ['depth', 2], ['split', 2]], cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
-  build: { looks: [['split', 3], ['cover', 2], ['depth', 1]], cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
-  chorus: { looks: null, cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
-  bridge: { looks: [['depth', 3], ['split', 2], ['cover', 1]], cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
-  solo: { looks: [['split', 3], ['depth', 1], ['cover', 1]], cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
-  interlude: { looks: [['depth', 3], ['cover', 1], ['split', 1]], cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
-  outro: { looks: [['cover', 3], ['depth', 1]], cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
+  intro: { cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
+  verse: { cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
+  build: { cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
+  chorus: { cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
+  bridge: { cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
+  solo: { cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
+  interlude: { cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
+  outro: { cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
 }
 
 const PALETTES = {
@@ -42,8 +42,19 @@ const RHYTHMS = {
 }
 
 const MIN_GAP = { sparse: 8, down: 4, off: 4, half: 4, beat: 2, eighth: 2 }
-const GAP_LOOKS = [['split', 3], ['depth', 2], ['cover', 1]]
-const FILL_LOOKS = [['split', 2], ['cover', 1], ['depth', 1]]
+const EFFECT_CARDS = ['twitch', 'rotate', 'prism', 'punch', 'hue', 'strobe']
+const LOOK_CARDS = [
+  ['cover', {}],
+  ['depth', {}],
+  ['split', { layout: 'wipe' }],
+  ['split', { layout: 'quad' }],
+  ['split', { layout: 'strips' }],
+  ['split', { layout: 'columns' }],
+  ['split', { layout: 'slices' }],
+  ['split', { layout: 'blinds' }],
+  ['split', { layout: 'boxes' }],
+  ['split', { layout: 'tunnel' }],
+]
 
 const CHORUS_FAMILIES = [
   [['split', { layout: 'boxes' }], ['cover', {}]],
@@ -129,13 +140,21 @@ function phraseCuts(song, phrase, role, rhythm, fill, lineStarts) {
   return kept
 }
 
-function chooseLook(rand, weights, previous) {
-  let look = null
-  for (let tries = 0; !look && tries < 4; tries++) {
-    const candidate = pickWeighted(rand, weights)
-    if (candidate !== previous || tries === 3) look = candidate
+function createDeck(cards, rand) {
+  let pile = []
+  let last = null
+  return () => {
+    if (!pile.length) {
+      pile = cards.slice()
+      for (let i = pile.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1))
+        ;[pile[i], pile[j]] = [pile[j], pile[i]]
+      }
+      if (pile.length > 1 && pile[pile.length - 1] === last) [pile[0], pile[pile.length - 1]] = [pile[pile.length - 1], pile[0]]
+    }
+    last = pile.pop()
+    return last
   }
-  return look
 }
 
 export function planShots(features, { sections, lines, still = false } = {}) {
@@ -147,6 +166,9 @@ export function planShots(features, { sections, lines, still = false } = {}) {
   const lineStarts = song.lines.map(line => ({ beat: snapToBeat(beats, line.start), line }))
   const motifs = new Map()
   const shots = []
+  const dealEffect = createDeck(EFFECT_CARDS, rand)
+  const dealLook = createDeck(LOOK_CARDS, rand)
+  const coverage = { effects: {}, looks: {} }
   let chorusShots = 0
   song.sections.forEach((section, sectionIndex) => {
     const recipe = RECIPES[section.role]
@@ -158,6 +180,9 @@ export function planShots(features, { sections, lines, still = false } = {}) {
       const lastPhrase = phrase.index === phrase.count - 1
       const fill = lastPhrase ? nextIsChorus || role === 'chorus' || role === 'solo' || rand() < 0.3 : role === 'chorus' && rand() < 0.4
       const cuts = phraseCuts(song, phrase, role, rhythm, fill, lineStarts)
+      const lead = dealEffect()
+      const support = dealEffect()
+      coverage.effects[lead] = (coverage.effects[lead] || 0) + 1
       for (const [b, reason] of cuts) {
         const opening = sectionIndex === 0 && phrase.index === 0 && b === phrase.start
         const start = opening ? 0 : beats[b]
@@ -179,7 +204,11 @@ export function planShots(features, { sections, lines, still = false } = {}) {
             const pick = family[chorusShots++ % family.length]
             look = pick[0]
             prefer = pick[1]
-          } else look = chooseLook(rand, filled ? FILL_LOOKS : vocal ? recipe.looks : GAP_LOOKS, previous?.look)
+          } else {
+            const card = dealLook()
+            look = card[0]
+            prefer = card[1]
+          }
           variant = LOOKS[look].variant(rand, level, prefer)
           const held = typeof reason === 'object' && reason.end - reason.start > 2 * song.bpb * song.period
           if (b === phrase.start) camera = role === 'chorus' || role === 'solo' ? 'coverage' : 'push'
@@ -198,6 +227,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           energy: phrase.energy,
           fx: shotFx(filled ? (rand() < 0.5 ? 'glitch' : 'jolt') : palette, recipe.gain, phrase.energy, section.final),
           rhythm: filled ? 'fill' : rhythm,
+          lead,
+          support,
           phraseBeat: phrase.start,
           camera,
           drop: role === 'chorus' && phrase.index === 0 && b === phrase.start,
@@ -206,14 +237,18 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           seed: Math.floor(rand() * 1e9),
           variant,
         }
-        if (!previous || shot.start > previous.start + 0.05) shots.push(shot)
+        if (!previous || shot.start > previous.start + 0.05) {
+          shots.push(shot)
+          const name = look === 'split' ? variant.layout : look
+          coverage.looks[name] = (coverage.looks[name] || 0) + 1
+        }
       }
     })
   })
   if (!shots.length) return STILL
   shots[0].start = 0
   for (let i = 0; i < shots.length - 1; i++) shots[i].end = shots[i + 1].start
-  const plan = { shots, beats, song }
+  const plan = { shots, beats, song, coverage }
   plan.norm = measureSpread(plan, directorAt, createDirectorCursor)
   return plan
 }
