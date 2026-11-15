@@ -83,6 +83,11 @@ function coverFit(u, v, aspect, texAspect, out) {
 
 const fitted = new Float32Array(2)
 
+function mirror(x) {
+  const m = ((x % 2) + 2) % 2
+  return m > 1 ? 2 - m : m
+}
+
 function tileAt(rects, u, v) {
   let found = -1
   for (let i = 0; i < rects.length; i++) {
@@ -123,8 +128,8 @@ function backgroundAt(u, v, p) {
   }
   const px = framedX - p.shiftX
   const py = framedY - p.shiftY
-  const fxU = (p.cos * px + p.sin * py) / p.scale + 0.5
-  const fxV = (-p.sin * px + p.cos * py) / p.scale + 0.5
+  const fxU = mirror((p.cos * px + p.sin * py) / p.scale + 0.5)
+  const fxV = mirror((-p.sin * px + p.cos * py) / p.scale + 0.5)
 
   if (p.transition < 1) {
     sample(p.previous, fxU, fxV, blended)

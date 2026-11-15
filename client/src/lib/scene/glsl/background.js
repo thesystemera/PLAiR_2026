@@ -91,7 +91,7 @@ export const IMAGE_BODY = `
   vec4 sampleFocus(vec2 uv, float transition) {
     vec2 texel = uv * u_tex_resolution;
     float lod = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
-    vec2 clamped = clamp(uv, 0.0, 1.0);
+    vec2 clamped = uv;
     float depth = textureLod(u_depth_map, clamped, lod + 2.5).g;
     lod += clamp((abs(depth - focalDepth) - u_focal_range) * u_max_blur, 0.0, 4.5);
     vec4 color = textureLod(u_texture, clamped, lod);
@@ -105,17 +105,17 @@ export const IMAGE_BODY = `
 
   vec4 sampleBokeh(vec2 uv, float blur, float transition) {
     float radius = min(blur, 60.0) * 0.0016;
-    vec4 color = sampleBlend(clamp(uv + BOKEH_DIR_1 * radius, 0.0, 1.0), transition);
-    color += sampleBlend(clamp(uv + BOKEH_DIR_2 * radius, 0.0, 1.0), transition);
-    color += sampleBlend(clamp(uv + BOKEH_DIR_3 * radius, 0.0, 1.0), transition);
+    vec4 color = sampleBlend(uv + BOKEH_DIR_1 * radius, transition);
+    color += sampleBlend(uv + BOKEH_DIR_2 * radius, transition);
+    color += sampleBlend(uv + BOKEH_DIR_3 * radius, transition);
     return color / 3.0;
   }
 
   vec4 sampleBokehCurrent(vec2 uv, float blur) {
     float radius = min(blur, 60.0) * 0.0016;
-    vec4 color = texture2D(u_texture, clamp(uv + BOKEH_DIR_1 * radius, 0.0, 1.0));
-    color += texture2D(u_texture, clamp(uv + BOKEH_DIR_2 * radius, 0.0, 1.0));
-    color += texture2D(u_texture, clamp(uv + BOKEH_DIR_3 * radius, 0.0, 1.0));
+    vec4 color = texture2D(u_texture, uv + BOKEH_DIR_1 * radius);
+    color += texture2D(u_texture, uv + BOKEH_DIR_2 * radius);
+    color += texture2D(u_texture, uv + BOKEH_DIR_3 * radius);
     return color / 3.0;
   }
 

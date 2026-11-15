@@ -5,6 +5,7 @@ import {
   DoubleSide,
   LinearFilter,
   LinearMipmapLinearFilter,
+  MirroredRepeatWrapping,
   Mesh,
   OrthographicCamera,
   PlaneGeometry,
@@ -325,6 +326,8 @@ export async function renderVideo({
     clipTexture.minFilter = LinearFilter
     clipTexture.magFilter = LinearFilter
     clipTexture.flipY = false
+    clipTexture.wrapS = MirroredRepeatWrapping
+    clipTexture.wrapT = MirroredRepeatWrapping
     resources.clipTextures.push(clipTexture)
   }
 
@@ -591,10 +594,14 @@ async function loadTextures(packBlob) {
   const texture = new CanvasTexture(color)
   texture.image = color
   texture.flipY = false
+  texture.wrapS = MirroredRepeatWrapping
+  texture.wrapT = MirroredRepeatWrapping
   const depth = map ? readDepth(map, (w, h) => new OffscreenCanvas(w, h)) : null
   if (!depth?.bands) return { texture, depth: null }
   const depthTexture = new CanvasTexture(depth.canvas)
   depthTexture.flipY = false
+  depthTexture.wrapS = MirroredRepeatWrapping
+  depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
 }

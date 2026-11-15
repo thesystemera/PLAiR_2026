@@ -1,7 +1,6 @@
 import {
   BufferGeometry,
   CanvasTexture,
-  ClampToEdgeWrapping,
   ColorManagement,
   DataTexture,
   Float32BufferAttribute,
@@ -9,6 +8,7 @@ import {
   LinearMipmapLinearFilter,
   LinearSRGBColorSpace,
   MathUtils,
+  MirroredRepeatWrapping,
   Mesh,
   NoToneMapping,
   OrthographicCamera,
@@ -192,15 +192,15 @@ async function loadArtworkTextures(blob) {
   canvas.getContext('2d').drawImage(color, 0, 0)
   color.close()
   const texture = new CanvasTexture(canvas)
-  texture.wrapS = ClampToEdgeWrapping
-  texture.wrapT = ClampToEdgeWrapping
+  texture.wrapS = MirroredRepeatWrapping
+  texture.wrapT = MirroredRepeatWrapping
   texture.generateMipmaps = true
   texture.needsUpdate = true
   const depth = map ? readDepth(map, makeCanvas) : null
   if (!depth?.bands) return { texture, depth: null }
   const depthTexture = new CanvasTexture(depth.canvas)
-  depthTexture.wrapS = ClampToEdgeWrapping
-  depthTexture.wrapT = ClampToEdgeWrapping
+  depthTexture.wrapS = MirroredRepeatWrapping
+  depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
   return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
@@ -812,6 +812,8 @@ export class SceneRenderer {
       texture = video ? new VideoTexture(video) : new VideoFrameTexture()
       texture.minFilter = LinearFilter
       texture.magFilter = LinearFilter
+      texture.wrapS = MirroredRepeatWrapping
+      texture.wrapT = MirroredRepeatWrapping
       clips.textures[index] = texture
     }
     if (frame) texture.setFrame(frame)

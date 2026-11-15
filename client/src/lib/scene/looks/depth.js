@@ -100,12 +100,12 @@ export default {
   varying vec4 vFarShadow;
 
   float layerDepth(vec2 uv, float lod) {
-    return textureLod(u_depth_map, clamp(uv, 0.0, 1.0), lod + ${DEPTH_BIAS.toFixed(1)}).g;
+    return textureLod(u_depth_map, uv, lod + ${DEPTH_BIAS.toFixed(1)}).g;
   }
 
   vec3 layerColor(vec2 uv, int k, float lod) {
     vec4 grade = u_layer_grade[k];
-    vec4 color = gradeColor(textureLod(u_texture, clamp(uv, 0.0, 1.0), lod + u_layers[k].w), grade.xy, true);
+    vec4 color = gradeColor(textureLod(u_texture, uv, lod + u_layers[k].w), grade.xy, true);
     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     return mix(vec3(luma), color.rgb, grade.w) * grade.z;
   }
