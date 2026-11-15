@@ -88,15 +88,38 @@ export const IMAGE_BODY = `
     return 0.0;
   }
 
+  vec4 splineLevel(sampler2D tex, vec2 uv, float level) {
+    vec2 size = max(vec2(1.0), floor(u_tex_resolution / exp2(level)));
+    vec2 p = uv * size - 0.5;
+    vec2 f = fract(p);
+    vec2 i = p - f;
+    vec2 f2 = f * f;
+    vec2 f3 = f2 * f;
+    vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+    vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+    vec2 g0 = w0 + w1;
+    vec2 g1 = 1.0 - g0;
+    vec2 c0 = (i + 0.5 - 1.0 + w1 / g0) / size;
+    vec2 c1 = (i + 0.5 + 1.0 + (f3 / 6.0) / g1) / size;
+    return g0.y * (g0.x * textureLod(tex, c0, level) + g1.x * textureLod(tex, vec2(c1.x, c0.y), level))
+         + g1.y * (g0.x * textureLod(tex, vec2(c0.x, c1.y), level) + g1.x * textureLod(tex, c1, level));
+  }
+
+  vec4 textureSmooth(sampler2D tex, vec2 uv, float lod) {
+    if (lod < 0.75) return textureLod(tex, uv, lod);
+    float level = floor(lod);
+    return mix(splineLevel(tex, uv, level), splineLevel(tex, uv, level + 1.0), lod - level);
+  }
+
   vec4 sampleFocus(vec2 uv, float transition) {
     vec2 texel = uv * u_tex_resolution;
     float lod = max(0.0, 0.5 * log2(max(dot(dFdx(texel), dFdx(texel)), dot(dFdy(texel), dFdy(texel)))));
-    vec2 clamped = uv;
-    float depth = textureLod(u_depth_map, clamped, lod + 2.5).g;
+    float depth = splineLevel(u_depth_map, uv, 2.0).g;
     lod += clamp((abs(depth - focalDepth) - u_focal_range) * u_max_blur, 0.0, 4.5);
-    vec4 color = textureLod(u_texture, clamped, lod);
+    vec4 color = textureSmooth(u_texture, uv, lod);
     if (transition >= 1.0) return color;
-    return mix(textureLod(u_texture_prev, clamped, lod), color, transition * transition * (3.0 - 2.0 * transition));
+    return mix(textureSmooth(u_texture_prev, uv, lod), color, transition * transition * (3.0 - 2.0 * transition));
   }
 
   vec4 sampleBlend(vec2 uv, float transition) {

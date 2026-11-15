@@ -10,7 +10,7 @@ const RACK_BEATS = 8
 const RACK_S = 0.6
 const MAX_LAYER_BLUR = 3
 const FLAT_SPREAD = 0.12
-const FILL_BIAS = 4.0
+const FILL_LEVEL = 4
 const DEPTH_BIAS = 2.5
 const SHADOW_REACH = 0.004
 const TILT = [-0.25, 0.4, 1]
@@ -105,7 +105,14 @@ export default {
 
   vec3 layerColor(vec2 uv, int k, float lod) {
     vec4 grade = u_layer_grade[k];
-    vec4 color = gradeColor(textureLod(u_texture, uv, lod + u_layers[k].w), grade.xy, true);
+    vec4 color = gradeColor(textureSmooth(u_texture, uv, lod + u_layers[k].w), grade.xy, true);
+    float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    return mix(vec3(luma), color.rgb, grade.w) * grade.z;
+  }
+
+  vec3 fillColor(vec2 uv) {
+    vec4 grade = u_layer_grade[0];
+    vec4 color = gradeColor(splineLevel(u_texture, uv, ${FILL_LEVEL.toFixed(1)}), grade.xy, true);
     float luma = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     return mix(vec3(luma), color.rgb, grade.w) * grade.z;
   }
@@ -130,7 +137,7 @@ export default {
         vec2 farUv = vFarShadow.xy;
         float hole = smoothstep(u_layer_bands.y - soft, u_layer_bands.y + soft, layerDepth(farUv, lod));
         vec3 far = hole < 0.998 ? layerColor(farUv, 0, lod) : vec3(0.0);
-        if (hole > 0.002) far = mix(far, layerColor(farUv, 0, lod + ${FILL_BIAS.toFixed(1)}), hole);
+        if (hole > 0.002) far = mix(far, fillColor(farUv), hole);
         behind += far * (1.0 - midAlpha);
       }
       color += behind * (1.0 - shadow) * (1.0 - nearAlpha);
