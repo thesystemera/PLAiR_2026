@@ -96,3 +96,126 @@ export function applyFocus(uniforms, focus, grid, flipY, dt, blur) {
   uniforms.u_focal_range.value = FOCUS_RANGE
   uniforms.u_max_blur.value = APERTURE + blur * APERTURE_PER_BLUR
 }
+
+export function detailGrid(data, width, height) {
+  const detail = new Float32Array(GRID * GRID)
+  const colour = new Float32Array(GRID * GRID * 3)
+  for (let gy = 0; gy < GRID; gy++) {
+    const y0 = Math.floor(gy * height / GRID)
+    const y1 = Math.max(y0 + 1, Math.floor((gy + 1) * height / GRID))
+    for (let gx = 0; gx < GRID; gx++) {
+      const x0 = Math.floor(gx * width / GRID)
+      const x1 = Math.max(x0 + 1, Math.floor((gx + 1) * width / GRID))
+      let sum = 0
+      let squares = 0
+      let r = 0
+      let g = 0
+      let b = 0
+      let n = 0
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const i = (y * width + x) * 4
+          const luma = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114
+          sum += luma
+          squares += luma * luma
+          r += data[i]
+          g += data[i + 1]
+          b += data[i + 2]
+          n++
+        }
+      }
+      const cell = gy * GRID + gx
+      detail[cell] = Math.sqrt(Math.max(0, squares / n - (sum / n) ** 2))
+      colour[cell * 3] = r / n
+      colour[cell * 3 + 1] = g / n
+      colour[cell * 3 + 2] = b / n
+    }
+  }
+  return { detail, colour }
+}
+
+function rankGrid(values) {
+  const sorted = Float32Array.from(values).sort()
+  return Float32Array.from(values, value => {
+    let lo = 0
+    let hi = sorted.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (sorted[mid] < value) lo = mid + 1
+      else hi = mid
+    }
+    return lo / (sorted.length - 1)
+  })
+}
+
+function boxMean(values, radius) {
+  const out = new Float32Array(values.length)
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      let total = 0
+      let n = 0
+      for (let yy = Math.max(0, y - radius); yy <= Math.min(GRID - 1, y + radius); yy++) {
+        for (let xx = Math.max(0, x - radius); xx <= Math.min(GRID - 1, x + radius); xx++) {
+          total += values[yy * GRID + xx]
+          n++
+        }
+      }
+      out[y * GRID + x] = total / n
+    }
+  }
+  return out
+}
+
+function colourDistinctness(colour) {
+  const mean = [0, 0, 0]
+  const cells = GRID * GRID
+  for (let i = 0; i < cells; i++) for (let c = 0; c < 3; c++) mean[c] += colour[i * 3 + c] / cells
+  const channels = [0, 1, 2].map(c => boxMean(Float32Array.from({ length: cells }, (_, i) => colour[i * 3 + c]), 1))
+  return Float32Array.from({ length: cells }, (_, i) => Math.hypot(channels[0][i] - mean[0], channels[1][i] - mean[1], channels[2][i] - mean[2]))
+}
+
+export function interestPoints(depth, cover, flipY, count = 5) {
+  const margin = Math.round(GRID / 20)
+  const surroundings = boxMean(depth, GRID / 8)
+  const cues = [
+    rankGrid(depth.map((value, i) => value - surroundings[i])),
+    rankGrid(boxMean(cover.detail, 1)),
+    rankGrid(colourDistinctness(cover.colour)),
+  ]
+  const interest = boxMean(Float32Array.from(depth, (_, i) => (cues[0][i] + cues[1][i] + cues[2][i]) / 3), 1)
+  const inside = cell => {
+    const x = cell % GRID
+    const y = Math.floor(cell / GRID)
+    return x >= margin && y >= margin && x < GRID - margin && y < GRID - margin
+  }
+  const sorted = Array.from(interest.keys()).filter(inside).sort((a, b) => interest[b] - interest[a])
+  const strong = interest[sorted[Math.floor(sorted.length * 0.15)]]
+  const points = []
+  const taken = new Set()
+  for (const cell of sorted) {
+    if (points.length >= count) break
+    const x = cell % GRID
+    const y = Math.floor(cell / GRID)
+    if (taken.has(cell) || points.some(p => Math.hypot(p.x - x, p.y - y) < GRID / 5)) continue
+    const region = new Set([cell])
+    const queue = [cell]
+    while (queue.length) {
+      const at = queue.pop()
+      const ax = at % GRID
+      const ay = Math.floor(at / GRID)
+      for (const [nx, ny] of [[ax + 1, ay], [ax - 1, ay], [ax, ay + 1], [ax, ay - 1]]) {
+        const next = ny * GRID + nx
+        if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID || region.has(next) || interest[next] < strong) continue
+        region.add(next)
+        queue.push(next)
+      }
+    }
+    for (const member of region) taken.add(member)
+    points.push({ x, y, size: Math.sqrt(region.size) / GRID })
+  }
+  return points.map(({ x, y, size }) => ({
+    u: (x + 0.5) / GRID,
+    v: flipY ? 1 - (y + 0.5) / GRID : (y + 0.5) / GRID,
+    zoom: Math.min(2.4, Math.max(1.1, 0.6 / Math.max(size, 0.05))),
+  }))
+}

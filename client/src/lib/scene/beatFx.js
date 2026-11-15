@@ -27,12 +27,18 @@ function hash(seed, beat, k) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296
 }
 
-function keyFrame(seed, energy) {
+function keyFrame(seed, energy, interest) {
   const rand = seededRandom(seed)
+  if (interest?.length) {
+    const point = interest[Math.floor(rand() * interest.length)]
+    return { x: point.u - 0.5, y: point.v - 0.5, z: point.zoom * (0.9 + 0.2 * energy) }
+  }
   if (rand() < 0.2) return { x: 0, y: 0, z: 1 }
   const magnitude = 0.3 + 0.4 * energy
   return { z: 1 + rand() * magnitude, x: (rand() - 0.5) * magnitude * 0.5, y: (rand() - 0.5) * magnitude * 0.5 }
 }
+
+const WIDE = Object.freeze({ x: 0, y: 0, z: 1 })
 
 function hold(out, key, zoom = 0) {
   out.z = key.z + zoom
@@ -41,27 +47,33 @@ function hold(out, key, zoom = 0) {
   return out
 }
 
-function cameraAt(shot, at, t, bpb, out) {
+function cameraAt(shot, at, t, bpb, out, interest) {
   const span = Number.isFinite(shot.end) ? Math.max(0.5, shot.end - shot.start) : 8
   const p = clamp01((t - shot.start) / span)
   const energy = shot.energy ?? 0.5
-  const start = keyFrame(shot.seed, energy)
+  const start = keyFrame(shot.seed, energy, interest)
   switch (shot.camera) {
-    case 'push':
-      return hold(out, start, 0.15 * ease(p))
+    case 'push': {
+      const from = interest?.length ? WIDE : start
+      const k = ease(p)
+      out.z = lerp(from.z, start.z, k) + (interest?.length ? 0 : 0.15 * k)
+      out.x = lerp(from.x, start.x, k)
+      out.y = lerp(from.y, start.y, k)
+      return out
+    }
     case 'pushHard':
       return hold(out, start, 0.5 * p * p)
     case 'drift': {
-      const goal = keyFrame(shot.seed + 1, energy)
+      const goal = keyFrame(shot.seed + 1, energy, interest)
       out.z = lerp(start.z, goal.z, p)
       out.x = lerp(start.x, goal.x, p)
       out.y = lerp(start.y, goal.y, p)
       return out
     }
     case 'coverage':
-      return hold(out, keyFrame(shot.seed + 7 * Math.floor(at.beatsSince / bpb), energy))
+      return hold(out, keyFrame(shot.seed + 7 * Math.floor(at.beatsSince / bpb), energy, interest))
     case 'shake':
-      return hold(out, keyFrame(shot.seed + 13 * Math.floor(at.beatsSince / 2), energy))
+      return hold(out, keyFrame(shot.seed + 13 * Math.floor(at.beatsSince / 2), energy, interest))
     case 'float':
       hold(out, start, 0.04 * Math.sin(t * 0.3))
       out.x += 0.03 * Math.sin(t * 0.21)
@@ -135,7 +147,8 @@ export function createFx() {
     brightness: REST.brightness, saturation: REST.saturation, contrast: REST.contrast,
     frameOffsetX: 0, frameOffsetY: 0, frameScale: 1, beatPulse: 0, currentEnergy: 0,
     punch: 0, flash: 0, twist: 0, hueKick: 0, chromaKick: 0, gx: 0, gy: 0, tempoTime: 0,
-    raw: { chromatic: 0, rotation: 0, hue: 0, glitch: 0, punch: 0, flash: 0 }, lastBeat: -1, lastHalf: -1, lastShot: -1, camera: { x: 0, y: 0, z: 1 },
+    raw: { chromatic: 0, rotation: 0, hue: 0, glitch: 0, punch: 0, flash: 0 },
+    interest: null, lastBeat: -1, lastHalf: -1, lastShot: -1, camera: { x: 0, y: 0, z: 1 },
   }
 }
 
@@ -238,7 +251,7 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   const punch = norm ? impulse(norm.punch, raw.punch, 'punch') : raw.punch
   const flash = norm ? impulse(norm.flash, raw.flash, 'flash') : raw.flash
 
-  const camera = cameraAt(shot, at, t, song.bpb, fx.camera)
+  const camera = cameraAt(shot, at, t, song.bpb, fx.camera, fx.interest)
   fx.frameOffsetX = camera.x
   fx.frameOffsetY = camera.y
   fx.frameScale = camera.z

@@ -20,7 +20,7 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
 import { LOOKS, LOOK_IDS, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
-import { applyFocus, createFocus } from './scene/focus'
+import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, stepFx } from './scene/beatFx'
 import {
   processLyricTimestamps,
@@ -310,6 +310,7 @@ export async function renderVideo({
   pcm = null
 
   const effects = createFx()
+  effects.interest = depth?.interest || null
 
   for (let index = 0; index < clipDurations.length; index++) {
     const clipTexture = new VideoFrameTexture()
@@ -571,5 +572,8 @@ async function loadTextures(packBlob) {
   depthTexture.wrapS = MirroredRepeatWrapping
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
-  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
+  const pixels = new OffscreenCanvas(color.width, color.height).getContext('2d', { willReadFrequently: true })
+  pixels.drawImage(color, 0, 0)
+  const detail = detailGrid(pixels.getImageData(0, 0, color.width, color.height).data, color.width, color.height)
+  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, false) } }
 }

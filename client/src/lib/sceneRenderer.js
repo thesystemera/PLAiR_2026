@@ -29,7 +29,7 @@ import {
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
 import { LOOKS, LOOK_IDS, lookSignature, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
-import { applyFocus, createFocus } from './scene/focus'
+import { applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, stepFx } from './scene/beatFx'
 import { lowerBound, numericAscending } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
@@ -190,7 +190,8 @@ function generateNoiseTexture() {
 async function loadArtworkTextures(blob) {
   const { color, map } = await decodePack(blob, { map: true })
   const canvas = makeCanvas(color.width, color.height)
-  canvas.getContext('2d').drawImage(color, 0, 0)
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  context.drawImage(color, 0, 0)
   color.close()
   const texture = new CanvasTexture(canvas)
   texture.wrapS = MirroredRepeatWrapping
@@ -204,7 +205,8 @@ async function loadArtworkTextures(blob) {
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
-  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid } }
+  const detail = detailGrid(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)
+  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, true) } }
 }
 
 function addRect(out, n, x0, y0, x1, y1) {
@@ -752,6 +754,7 @@ export class SceneRenderer {
     u.u_depth_map.value = depth ? depth.texture : this.transparentPixel
     this.bands = depth ? depth.bands : null
     this.depthGrid = depth ? depth.grid : null
+    this.effects.interest = depth ? depth.interest : null
     this.focus.primed = false
   }
 
