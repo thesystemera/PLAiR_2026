@@ -5,14 +5,14 @@ import { analyzeSong, lineAt } from './structure'
 import { measureSpread } from './beatFx'
 
 const RECIPES = {
-  intro: { cameras: [['push', 2], ['coverage', 1]], palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
-  verse: { cameras: [['coverage', 2], ['drift', 1]], palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
-  build: { cameras: [['pushHard', 1]], palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
-  chorus: { cameras: [['coverage', 1]], palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
-  bridge: { cameras: [['drift', 1], ['coverage', 1]], palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
-  solo: { cameras: [['shake', 1]], palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
-  interlude: { cameras: [['float', 1]], palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
-  outro: { cameras: [['pull', 1]], palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
+  intro: { camera: 'deck', palettes: [['sway', 2], ['prism', 2], ['colour', 1]], gain: 0.8, level: 'low' },
+  verse: { camera: 'deck', palettes: [['prism', 2], ['sway', 2], ['colour', 2], ['jolt', 1], ['glitch', 1]], gain: 0.95, level: 'mid' },
+  build: { camera: 'pushHard', palettes: [['glitch', 2], ['prism', 2], ['jolt', 1]], gain: 1.1, level: 'high', accelerate: true },
+  chorus: { camera: 'deck', palettes: [['jolt', 2], ['prism', 2], ['glitch', 2], ['colour', 1]], gain: 1.2, level: 'high' },
+  bridge: { camera: 'deck', palettes: [['colour', 2], ['sway', 2], ['prism', 1]], gain: 0.9, level: 'mid' },
+  solo: { camera: 'shake', palettes: [['glitch', 2], ['jolt', 2], ['prism', 1]], gain: 1.3, level: 'high' },
+  interlude: { camera: 'float', palettes: [['sway', 2], ['colour', 2], ['prism', 1]], gain: 0.75, level: 'low' },
+  outro: { camera: 'deck', palettes: [['sway', 2], ['colour', 1], ['prism', 1]], gain: 0.75, level: 'low' },
 }
 
 const PALETTES = {
@@ -43,8 +43,10 @@ const RHYTHMS = {
 
 const MIN_GAP = { sparse: 8, down: 4, off: 4, half: 4, beat: 2, eighth: 2 }
 const EFFECT_CARDS = ['twitch', 'rotate', 'prism', 'punch', 'hue', 'strobe']
+const CAMERA_CARDS = ['push', 'pull', 'pan', 'mid', 'closePan', 'wide']
 const LOOK_CARDS = [
   ['cover', {}],
+  ['depth', {}],
   ['depth', {}],
   ['split', { layout: 'wipe' }],
   ['split', { layout: 'quad' }],
@@ -168,6 +170,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
   const shots = []
   const dealEffect = createDeck(EFFECT_CARDS, rand)
   const dealLook = createDeck(LOOK_CARDS, rand)
+  const dealCamera = createDeck(CAMERA_CARDS, rand)
+  let subject = 0
   const coverage = { effects: {}, looks: {} }
   let chorusShots = 0
   song.sections.forEach((section, sectionIndex) => {
@@ -182,6 +186,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
       const cuts = phraseCuts(song, phrase, role, rhythm, fill, lineStarts)
       const lead = dealEffect()
       const support = dealEffect()
+      const phraseSubject = subject++
+      let step = 0
       coverage.effects[lead] = (coverage.effects[lead] || 0) + 1
       for (const [b, reason] of cuts) {
         const opening = sectionIndex === 0 && phrase.index === 0 && b === phrase.start
@@ -193,10 +199,12 @@ export function planShots(features, { sections, lines, still = false } = {}) {
         let look
         let variant
         let camera
+        let shotSubject = phraseSubject
+        let shotStep = step++
         const level = filled ? 'high' : recipe.level
         const motif = hook >= 0 ? motifs.get(hook) : null
         if (motif) {
-          ;({ look, variant, camera } = motif)
+          ;({ look, variant, camera, subject: shotSubject, step: shotStep } = motif)
         } else {
           let prefer = {}
           if (opening) look = 'cover'
@@ -210,12 +218,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
             prefer = card[1]
           }
           variant = LOOKS[look].variant(rand, level, prefer)
-          const held = typeof reason === 'object' && reason.end - reason.start > 2 * song.bpb * song.period
-          if (b === phrase.start) camera = role === 'chorus' || role === 'solo' ? 'coverage' : 'push'
-          else if (held) camera = 'push'
-          else if (!vocal) camera = role === 'solo' ? 'shake' : 'coverage'
-          else camera = pickWeighted(rand, recipe.cameras)
-          if (hook >= 0) motifs.set(hook, { look, variant, camera })
+          camera = recipe.camera === 'deck' ? dealCamera() : recipe.camera
+          if (hook >= 0) motifs.set(hook, { look, variant, camera, subject: shotSubject, step: shotStep })
         }
         const shot = {
           start,
@@ -231,6 +235,8 @@ export function planShots(features, { sections, lines, still = false } = {}) {
           support,
           phraseBeat: phrase.start,
           camera,
+          subject: shotSubject,
+          step: shotStep,
           drop: role === 'chorus' && phrase.index === 0 && b === phrase.start,
           hook,
           vocal: !!vocal,

@@ -27,66 +27,92 @@ function hash(seed, beat, k) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296
 }
 
-function keyFrame(seed, energy, interest) {
+function randomPoint(seed, energy) {
   const rand = seededRandom(seed)
-  if (interest?.length) {
-    const point = interest[Math.floor(rand() * interest.length)]
-    return { x: point.u - 0.5, y: point.v - 0.5, z: point.zoom * (0.9 + 0.2 * energy) }
-  }
-  if (rand() < 0.2) return { x: 0, y: 0, z: 1 }
+  if (rand() < 0.2) return { u: 0.5, v: 0.5, zoom: 1 }
   const magnitude = 0.3 + 0.4 * energy
-  return { z: 1 + rand() * magnitude, x: (rand() - 0.5) * magnitude * 0.5, y: (rand() - 0.5) * magnitude * 0.5 }
+  const zoom = 1 + rand() * magnitude
+  return { u: 0.5 + (rand() - 0.5) * magnitude * 0.5, v: 0.5 + (rand() - 0.5) * magnitude * 0.5, zoom }
 }
 
-const WIDE = Object.freeze({ x: 0, y: 0, z: 1 })
+function subjectPoint(shot, interest, n) {
+  if (interest?.length) return interest[((n % interest.length) + interest.length) % interest.length]
+  return randomPoint(shot.seed + 101 * n, shot.energy ?? 0.5)
+}
 
-function hold(out, key, zoom = 0) {
-  out.z = key.z + zoom
-  out.x = key.x
-  out.y = key.y
+function framing(point, size, out) {
+  const toward = 0.3 + 0.7 * size
+  out.x = (point.u - 0.5) * toward
+  out.y = (point.v - 0.5) * toward
+  out.z = 1 + (point.zoom - 1) * size
   return out
 }
 
-function cameraAt(shot, at, t, bpb, out, interest) {
+const STACK = [0, 0.5, 1, 0.5]
+const from = { x: 0, y: 0, z: 1 }
+const to = { x: 0, y: 0, z: 1 }
+
+function blend(out, a, b, k) {
+  out.x = lerp(a.x, b.x, k)
+  out.y = lerp(a.y, b.y, k)
+  out.z = lerp(a.z, b.z, k)
+  return out
+}
+
+function handheld(out, shot, t) {
+  const phase = (shot.seed % 997) / 97
+  out.x += 0.01 * Math.sin(t * 0.83 + phase) + 0.006 * Math.sin(t * 2.1 + 2 * phase)
+  out.y += 0.01 * Math.sin(t * 0.71 + 3 * phase) + 0.006 * Math.sin(t * 1.7 + phase)
+  out.z += 0.012 * Math.sin(t * 0.53 + 2 * phase)
+  return out
+}
+
+function cameraAt(shot, at, t, out, interest) {
   const span = Number.isFinite(shot.end) ? Math.max(0.5, shot.end - shot.start) : 8
   const p = clamp01((t - shot.start) / span)
-  const energy = shot.energy ?? 0.5
-  const start = keyFrame(shot.seed, energy, interest)
+  const subject = subjectPoint(shot, interest, shot.subject ?? 0)
+  const size = STACK[(shot.step ?? 0) % STACK.length]
   switch (shot.camera) {
-    case 'push': {
-      const from = interest?.length ? WIDE : start
-      const k = ease(p)
-      out.z = lerp(from.z, start.z, k) + (interest?.length ? 0 : 0.15 * k)
-      out.x = lerp(from.x, start.x, k)
-      out.y = lerp(from.y, start.y, k)
-      return out
-    }
-    case 'pushHard':
-      return hold(out, start, 0.5 * p * p)
-    case 'drift': {
-      const goal = keyFrame(shot.seed + 1, energy, interest)
-      out.z = lerp(start.z, goal.z, p)
-      out.x = lerp(start.x, goal.x, p)
-      out.y = lerp(start.y, goal.y, p)
-      return out
-    }
-    case 'coverage':
-      return hold(out, keyFrame(shot.seed + 7 * Math.floor(at.beatsSince / bpb), energy, interest))
-    case 'shake':
-      return hold(out, keyFrame(shot.seed + 13 * Math.floor(at.beatsSince / 2), energy, interest))
-    case 'float':
-      hold(out, start, 0.04 * Math.sin(t * 0.3))
-      out.x += 0.03 * Math.sin(t * 0.21)
-      out.y += 0.03 * Math.cos(t * 0.17)
-      return out
+    case 'push':
+      blend(out, framing(subject, size, from), framing(subject, Math.min(1, size + 0.5), to), ease(p))
+      break
     case 'pull':
-      out.z = lerp(start.z + 0.3, 1, ease(p))
-      out.x = lerp(start.x, 0, ease(p))
-      out.y = lerp(start.y, 0, ease(p))
-      return out
+      blend(out, framing(subject, Math.min(1, size + 0.5), from), framing(subject, size, to), ease(p))
+      break
+    case 'pan': {
+      const next = subjectPoint(shot, interest, (shot.subject ?? 0) + 1)
+      const shotSize = Math.max(size, 0.5)
+      blend(out, framing(subject, shotSize, from), framing(next, shotSize, to), p)
+      break
+    }
+    case 'mid':
+      framing(subject, 0.5, out)
+      break
+    case 'closePan': {
+      framing(subject, 1, out)
+      const side = shot.seed % 2 ? 1 : -1
+      out.x += side * 0.06 * (p - 0.5)
+      out.y += side * 0.02 * (p - 0.5)
+      break
+    }
+    case 'wide':
+      framing(subject, 0, out)
+      break
+    case 'pushHard':
+      framing(subject, Math.min(1, p * p * 1.2), out)
+      break
+    case 'shake':
+      framing(subjectPoint(shot, interest, (shot.subject ?? 0) + Math.floor(at.beatsSince / 2)), 1, out)
+      break
+    case 'float':
+      framing(subject, 0.3, out)
+      out.z += 0.04 * Math.sin(t * 0.3)
+      break
     default:
-      return hold(out, start)
+      framing(subject, size, out)
+      return out
   }
+  return handheld(out, shot, t)
 }
 
 function onRhythm(shot, song, b) {
@@ -260,7 +286,7 @@ export function stepFx(fx, plan, at, t, dt, playing) {
   const punch = fx.punch
   const flash = fx.flash
 
-  const camera = cameraAt(shot, at, t, song.bpb, fx.camera, fx.interest)
+  const camera = cameraAt(shot, at, t, fx.camera, fx.interest)
   fx.frameOffsetX = camera.x
   fx.frameOffsetY = camera.y
   fx.frameScale = camera.z
