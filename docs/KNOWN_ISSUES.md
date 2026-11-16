@@ -322,6 +322,16 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   the original lead), and without the loudness contour Seed-VC sang notes into quiet moments and murmured in
   the pauses 25 dB over the original. About 3.5 min of P6000 time per song (2.9 GB). Not yet heard in a full mix.
   `scripts/music_lab/resing_ab.py`, runner `scripts/voice_restoration/seedvc_dir.py`.
+- **SonicMaster and the vocal (16 Nov, owner to revisit later; chain unchanged).** (1) SonicMaster 100% on the
+  RoFormer vocal stem alone (Digital Dollhouse, Carbon Copy; station prompt and a vocal prompt) takes Suno's decoder
+  lock from 0.12-0.16 to 0.025-0.036 and removes nothing, but the owner hears a flange on the solo vocal; it also cuts
+  everything above about 16 kHz, and the vocal prompt is 3-3.5 dB darker at 4-16 kHz. (2) SonicMaster 50% on the
+  music stem only, the vocal through Lew's vocal Apollo only, then the rest of the chain, against today's order from
+  the same stems (4 super likes): tone within 0.8 dB in every band, nothing removed, but the master's decoder lock
+  rises from 0.045-0.068 to 0.073-0.098, since Apollo leaves the vocal's lock as it is (0.146 vs 0.147 on Faded
+  Signal). Owner: a little cleaner and less compressed, but more artifacts; SonicMaster does less damage on the whole
+  mix than on the vocal alone, and it seems to clean up choruses. `scripts/music_lab/sonic_split_ab.py <track ids>`
+  (needs the song's stems in `demucs_stems/<id>/roformer`; renders and MP3s in `E:\scratch\plair\sonic_split`).
 - **Between-track talk and stings (owner, 1 Oct):** the station clock doesn't come in as often as it could,
   some transitions have nothing between the tracks, and the cool-offs between announcer, stings and Radio Mode
   breaks are tangled. Look at it as one schedule. The announcer's window still assumes the next song starts when
