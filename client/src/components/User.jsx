@@ -20,7 +20,7 @@ import { PanelHeader } from './Panel'
 import { ProfileArt, TrackArt } from './DepthArt'
 import { Scroller } from './Scroller'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
-import { ExpandSection, Expandable, ExpandChevron, Fade, FadeSwap, Pop } from './Motion'
+import { ArriveImage, ExpandSection, Expandable, ExpandChevron, Fade, FadeSwap, Pop } from './Motion'
 import { SettingRow, ToggleChip } from './SettingRow'
 import { RadioModeSettings } from './RadioModeSettings'
 import { AccountSettings } from './AccountSettings'
@@ -204,7 +204,7 @@ const getNetworkQualityLabel = (networkQuality) => {
 function ArtFor({ art, ...props }) {
   if (art?.kind === 'track') return <TrackArt trackId={art.id} hasArtwork={art.hasArtwork} {...props} />
   if (art?.kind === 'profile') return <ProfileArt userId={art.id} {...props} />
-  return <img src={props.image} alt={props.alt} className="w-full h-full object-cover" />
+  return <ArriveImage src={props.image} alt={props.alt} className="w-full h-full object-cover" />
 }
 
 const MediaRow = memo(function MediaRow({
@@ -1571,7 +1571,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
           </div>
         </ExpandSection>
 
-        {!loading && (
+        <Fade show={!loading}>
           <ExpandSection
             className="p-4 md:p-6 border-b border-gray-800"
             open={libraryExpanded}
@@ -1604,9 +1604,9 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
             <PreferenceList title="Banned Shoutouts" items={filteredBannedShoutouts} icon={Ban} iconColor="text-red-500" expanded={expandedBannedShoutouts} onToggleExpand={setExpandedBannedShoutouts} scrollRef={panelScrollRef} emptyMessage="No banned shoutouts"
               renderItem={(shoutout) => <ShoutoutItem key={shoutout.id} shoutout={shoutout} icon={Ban} iconColor="text-red-500" onPlayShoutout={handlePlayShoutout} onRemovePreference={(id) => handleRemovePreference('shoutout', id)} isLoading={isPending('shoutout', shoutout.id)} isPlaying={playingShoutout?.id === shoutout.id} />} />
           </ExpandSection>
-        )}
+        </Fade>
 
-        {!loading && isAuthenticated && (
+        <Fade show={!loading && isAuthenticated}>
           <ExpandSection
             className="p-4 md:p-6 border-b border-gray-800"
             open={postsExpanded}
@@ -1631,7 +1631,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
               </>
             )}
           </ExpandSection>
-        )}
+        </Fade>
 
         {isAuthenticated && (
           <ExpandSection

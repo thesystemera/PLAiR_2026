@@ -12,7 +12,7 @@ import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { Scroller } from './Scroller'
 import { MOTION, PRESETS, TWEEN } from '../lib/motion'
-import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad } from '../lib/microMotion'
+import { arrivalGlow, arrivalPulse } from '../lib/microMotion'
 import { TrackArt } from './DepthArt'
 import { LoadingRing, MediaEmptyState, PlayingPill } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
@@ -129,9 +129,7 @@ const TrackArtwork = memo(function TrackArtwork({ track }) {
         hasArtwork={track.has_artwork}
         alt={track.title || 'Track artwork'}
         className="relative w-12 h-12 rounded overflow-hidden flex-shrink-0"
-        artRef={noteImageMount}
         artProps={QUEUE_ART_PROPS}
-        onLoad={revealOnLoad}
         onError={() => setArtworkError(true)}
       />
     )

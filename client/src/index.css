@@ -114,6 +114,8 @@ textarea,
   --dur-badge: 220ms;
   --dur-enter: 260ms;
   --dur-art: 280ms;
+  --dur-arrive: 500ms;
+  --arrive-delay: 90ms;
   --dur-pop: 340ms;
   --dur-theme: 700ms;
   --dur-breathe: 2400ms;
@@ -234,6 +236,18 @@ textarea,
 
   .ui-breathe[data-paused="true"] {
     animation: none;
+  }
+
+  .ui-arrive {
+    transition: opacity var(--dur-arrive) var(--ease-standard);
+  }
+
+  .ui-arrive[data-arrived="false"] {
+    opacity: 0;
+  }
+
+  .ui-placeholder {
+    animation: ui-arrive-in var(--dur-arrive) var(--ease-standard) var(--arrive-delay) backwards;
   }
 
   .ui-task-ring {
@@ -506,6 +520,12 @@ textarea,
   }
 }
 
+@keyframes ui-arrive-in {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes ui-task-spin {
   from {
     rotate: -90deg;
@@ -549,7 +569,8 @@ textarea,
   .ui-badge-in,
   .ui-eq,
   .ui-eq > span,
-  .ui-breathe {
+  .ui-breathe,
+  .ui-placeholder {
     animation: none !important;
   }
 

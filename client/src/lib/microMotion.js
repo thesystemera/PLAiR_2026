@@ -111,14 +111,6 @@ export function artPop(el, variant = 'artPop') {
   replace(el, scaleFrames(spec.frames, [0, 0.6, 1]), { duration: secondsToMs(spec.duration), easing: CSS_EASE.decelerate })
 }
 
-function artReveal(img) {
-  const { artReveal: spec } = MICRO
-  replace(img, [
-    { opacity: 0, transform: `scale(${spec.fromScale})` },
-    { opacity: 1, transform: 'scale(1)' },
-  ], { duration: secondsToMs(spec.duration), easing: CSS_EASE.decelerate })
-}
-
 export function arrivalGlow(el, strong = false) {
   const { arrival } = MICRO
   const values = strong ? arrival.strongGlow : arrival.glow
@@ -244,20 +236,7 @@ export function installPressFeedback() {
   document.documentElement.dataset.motion = motionLevel()
 }
 
-const readyImages = new WeakSet()
-
 const isImageReady = (img) => !!img && img.complete && img.naturalWidth > 0
-
-export function noteImageMount(img) {
-  if (isImageReady(img)) readyImages.add(img)
-}
-
-export function revealOnLoad(event) {
-  const img = event.currentTarget
-  if (!img || readyImages.has(img)) return
-  readyImages.add(img)
-  artReveal(img)
-}
 
 const artSeen = new Set()
 const artStates = new WeakMap()
@@ -268,15 +247,10 @@ function rememberArt(id) {
   artSeen.add(id)
 }
 
-function finishArt(box, state, reveal) {
+function finishArt(box, state, arrivedOnScreen) {
   artStates.delete(box)
   rememberArt(state.id)
-  if (reveal) {
-    if (state.img) artReveal(state.img)
-    artPop(box, 'artBump')
-  } else if (policy.tier >= MICRO.artScrollTier) {
-    artPop(box)
-  }
+  if (!arrivedOnScreen && policy.tier >= MICRO.artScrollTier) artPop(box)
 }
 
 function onArtIntersect(entries) {
@@ -298,9 +272,7 @@ export function watchArt(box, id, skip = false) {
     return noop
   }
   const img = box.querySelector('img')
-  const loaded = isImageReady(img)
-  if (loaded) readyImages.add(img)
-  artStates.set(box, { id, img, loaded, visible: false })
+  artStates.set(box, { id, loaded: isImageReady(img), visible: false })
   artObserver.observe(box)
   return () => {
     artObserver.unobserve(box)
@@ -308,12 +280,10 @@ export function watchArt(box, id, skip = false) {
   }
 }
 
-export function artLoaded(box, img) {
+export function artLoaded(box) {
   const state = box ? artStates.get(box) : null
   if (!state || state.loaded) return
   state.loaded = true
-  state.img = img
-  readyImages.add(img)
   if (state.visible) finishArt(box, state, true)
 }
 

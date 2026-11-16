@@ -6,7 +6,7 @@ export function useArtPop(id, skip = false) {
 
   useEffect(() => watchArt(boxRef.current, id, skip), [id, skip])
 
-  const onLoad = useCallback((event) => artLoaded(boxRef.current, event.currentTarget), [])
+  const onLoad = useCallback(() => artLoaded(boxRef.current), [])
 
   return { boxRef, onLoad }
 }

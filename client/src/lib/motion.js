@@ -20,6 +20,7 @@ export const DURATION = {
   base: 0.3,
   pop: 0.34,
   burst: 0.46,
+  arrive: 0.5,
   fade: 0.5,
   slow: 0.6,
   theme: 0.7,
@@ -367,14 +368,6 @@ export const MICRO = {
   artPopLarge: {
     duration: DURATION.art + 0.06,
     frames: [0.97, 1.01, 1],
-  },
-  artBump: {
-    duration: DURATION.art,
-    frames: [1, 1.03, 1],
-  },
-  artReveal: {
-    duration: DURATION.art,
-    fromScale: 1.06,
   },
   arrival: {
     delay: DURATION.base * 0.8,

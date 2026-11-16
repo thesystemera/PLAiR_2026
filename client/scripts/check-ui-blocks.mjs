@@ -27,6 +27,11 @@ const RULES = [
     except: (file) => file === join('components', 'modals', 'CompatibilityWarningModal.jsx'),
   },
   {
+    test: /<img\s(?![^>]*src="\/images\/)/,
+    why: 'image that loads in with a hard cut: use ArriveImage (Motion.jsx)',
+    except: (file) => file === join('components', 'Auth', 'DeviceLinkQR.jsx') || file === join('components', 'Motion.jsx'),
+  },
+  {
     test: /GLASS\.expandPanel\b/,
     why: 'pull-up panel built by hand: use PlayerSheet',
     except: (file) => file === SHEET_HOME,

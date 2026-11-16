@@ -9,8 +9,6 @@ import { getFallbackGradientClass } from '../lib/themeManager'
 import { DURATION } from '../lib/motion'
 import { PACK_SIZES, isMemoryKey, packCache, profilePackCache } from '../lib/mediaCache'
 
-const HIDDEN = { opacity: 0 }
-const SHOWN = { transition: 'opacity var(--dur-quick) var(--ease-decelerate)' }
 const PLACEHOLDER = { containerType: 'size' }
 const PLACEHOLDER_NOTE = { width: '40cqmin', height: '40cqmin' }
 const FRONT = { zIndex: 1 }
@@ -99,7 +97,7 @@ const DepthArt = memo(function DepthArt({
 
   useEffect(() => {
     if (!shown) return
-    const timer = setTimeout(() => setCoveredFor(identity), DURATION.quick * 1000)
+    const timer = setTimeout(() => setCoveredFor(identity), DURATION.arrive * 1000)
     return () => clearTimeout(timer)
   }, [shown, identity])
 
@@ -110,8 +108,8 @@ const DepthArt = memo(function DepthArt({
         ref={setCanvas}
         role="img"
         aria-label={alt}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-        style={shown ? SHOWN : HIDDEN}
+        className="ui-arrive absolute inset-0 w-full h-full pointer-events-none"
+        data-arrived={shown ? 'true' : 'false'}
         {...artProps}
       />
     </div>
@@ -138,7 +136,7 @@ function usePackSize(intensity) {
 
 const TrackPlaceholder = memo(function TrackPlaceholder({ trackId }) {
   return (
-    <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br ${getFallbackGradientClass(trackId)}`} style={PLACEHOLDER}>
+    <div className={`ui-placeholder absolute inset-0 flex items-center justify-center bg-gradient-to-br ${getFallbackGradientClass(trackId)}`} style={PLACEHOLDER}>
       <Music className="text-white opacity-80" style={PLACEHOLDER_NOTE} strokeWidth={1.5} aria-hidden="true" />
     </div>
   )

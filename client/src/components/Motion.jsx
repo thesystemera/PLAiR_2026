@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { ChevronDown } from 'lucide-react'
 import { CSS_TRANSITION, PRESETS, VARIANTS } from '../lib/motion'
@@ -93,4 +93,19 @@ export function Fade({ show, children, as = 'div', preset = PRESETS.fade, layout
 
 export function Pop(props) {
   return <Fade as="span" preset={PRESETS.pop} {...props} />
+}
+
+export function ArriveImage({ className = '', onLoad, ...props }) {
+  const [loadedSrc, setLoadedSrc] = useState(null)
+  return (
+    <img
+      {...props}
+      className={`ui-arrive ${className}`}
+      data-arrived={loadedSrc === props.src ? 'true' : 'false'}
+      onLoad={(event) => {
+        setLoadedSrc(props.src)
+        onLoad?.(event)
+      }}
+    />
+  )
 }
