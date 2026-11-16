@@ -4,6 +4,23 @@ import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { memo } from 'react'
 import demoContent from '../../content/DEMO_MODE_INFO.md?raw'
 
+const INLINE = /\*\*(.+?)\*\*|`(.+?)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+
+function inline(text) {
+  const parts = []
+  let last = 0
+  for (const match of text.matchAll(INLINE)) {
+    if (match.index > last) parts.push(text.slice(last, match.index))
+    const [, bold, code, label, href] = match
+    if (bold !== undefined) parts.push(<strong key={match.index} className="font-semibold text-white/95">{bold}</strong>)
+    else if (code !== undefined) parts.push(<code key={match.index} className="rounded bg-white/10 px-1.5 py-0.5 text-[0.9em]">{code}</code>)
+    else parts.push(<a key={match.index} href={href} target="_blank" rel="noopener noreferrer" className="text-white/90 underline decoration-white/30 underline-offset-2 transition-colors hover:decoration-white">{label}</a>)
+    last = match.index + match[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
 function parseMarkdownToJSX(markdown, getWhite, getGrey400) {
   const lines = markdown.split('\n')
   const elements = []
@@ -57,16 +74,14 @@ function parseMarkdownToJSX(markdown, getWhite, getGrey400) {
         flushList()
         listType = 'ul'
       }
-      const content = line.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      currentList.push(<span dangerouslySetInnerHTML={{ __html: content }} />)
+      currentList.push(inline(line.slice(2)))
     }
     else if (/^\d+\.\s/.test(line)) {
       if (listType !== 'ol') {
         flushList()
         listType = 'ol'
       }
-      const content = line.replace(/^\d+\.\s/, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      currentList.push(<span dangerouslySetInnerHTML={{ __html: content }} />)
+      currentList.push(inline(line.replace(/^\d+\.\s/, '')))
     }
     else if (line.trim() === '---') {
       flushList()
@@ -79,17 +94,10 @@ function parseMarkdownToJSX(markdown, getWhite, getGrey400) {
     }
     else if (line.trim()) {
       flushList()
-      let content = line
-        .replace(/\*\*(.*?)\*\*/g, '<strong style="color: white; opacity: 0.95;">$1</strong>')
-        .replace(/`(.*?)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 0.9em;">$1</code>')
-
       elements.push(
-        <p
-          key={`p-${key++}`}
-          className="text-sm leading-relaxed mb-3"
-          style={{ color: getGrey400() }}
-          dangerouslySetInnerHTML={{ __html: content }}
-        />
+        <p key={`p-${key++}`} className="text-sm leading-relaxed mb-3" style={{ color: getGrey400() }}>
+          {inline(line)}
+        </p>
       )
     }
   })
