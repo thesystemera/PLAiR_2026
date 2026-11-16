@@ -105,6 +105,12 @@ const PLAY_BUTTON_HOVER = PRESETS.hoverPressLarge.whileHover
 const SKIP_BACK_ICON = <SkipBack size={20} />
 const SKIP_FORWARD_ICON = <SkipForward size={20} />
 const PLAYER_HIDDEN = { y: 100 }
+const PLAY_BUTTON_PULSE = { scale: [1, 1.05, 1], transition: MOTION.pulse }
+const PLAY_BUTTON_REST = { scale: 1 }
+const BUFFERED_POLL_MS = 1000
+const BUFFERED_WAVE_STYLE = { transform: 'scaleX(0)', transition: CSS_TRANSITION.buffered }
+const trackTitle = track => track?.title || track?.generation_params?.title || 'Unknown'
+const trackStyle = track => track?.generation_params?.style_canonical || track?.generation_params?.style || track?.style || ''
 const PLAYER_SHOWN = { y: 0 }
 const stopPropagation = event => event.stopPropagation()
 
@@ -205,12 +211,82 @@ const WaveformLayer = memo(function WaveformLayer({ bars, variant }) {
   return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 })
 
+const PlayButton = memo(function PlayButton({ compact, onToggle }) {
+  const { isPlaying, isCrossfading } = useUISelector(state => ({
+    isPlaying: state.engineState.is_playing,
+    isCrossfading: state.engineState.isCrossfading,
+  }))
+  const { getAccentColor } = useDynamicTheme()
+
+  return (
+    <motion.div animate={isCrossfading ? PLAY_BUTTON_PULSE : PLAY_BUTTON_REST} whileHover={PLAY_BUTTON_HOVER}>
+      <button
+        onPointerDown={onToggle}
+        className={`ui-tap ${compact ? 'p-2.5' : 'p-3'} text-black rounded-full shadow-lg`}
+        style={{
+          background: getAccentColor(1),
+          transition: CSS_TRANSITION.themeBackground
+        }}
+        title={isPlaying ? 'Pause' : 'Play'}
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+      >
+        <AnimatePresence mode="wait" initial={false}>
+          {isPlaying ? (
+            <motion.div
+              key="pause"
+              {...PRESETS.iconSwap}
+            >
+              <Pause size={24} fill="currentColor" />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="play"
+              {...PRESETS.iconSwap}
+            >
+              <Play size={24} fill="currentColor" className="ml-0.5" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </button>
+    </motion.div>
+  )
+})
+
+const BufferedFill = memo(function BufferedFill({ audio, trackId, durationMs, active, className, style }) {
+  const fillRef = useRef(null)
+
+  useLayoutEffect(() => {
+    if (!active) return
+    const show = (percent) => {
+      if (fillRef.current) fillRef.current.style.transform = `scaleX(${percent / 100})`
+    }
+    const update = () => {
+      const element = audio?.getCurrentElement?.()
+      if (!element || !element.src || !trackId || durationMs <= 0 || !element.buffered?.length) {
+        show(0)
+        return
+      }
+      try {
+        show(Math.min(100, (element.buffered.end(element.buffered.length - 1) / (durationMs / 1000)) * 100))
+      } catch {
+        show(0)
+      }
+    }
+    const interval = setInterval(update, BUFFERED_POLL_MS)
+    update()
+    return () => clearInterval(interval)
+  }, [audio, trackId, durationMs, active])
+
+  return <div ref={fillRef} className={className} style={style} />
+})
+
 export const Player = memo(function Player({ onSeek, onArtworkClick }) {
   const playback = usePlaybackActions()
   const { togglePlay, next, previous, audio, talkBreakProgress } = playback
   const {
     audioFeatures: latestFeatures, trackDataFor, isCached, engineRef, notificationsMuted, ttsMuted, publishSettings, toastSuccess,
-    isScreenVisible, reportInterfaceState, currentTrack, is_playing, isCrossfading, talkBreak, volume, isMuted,
+    isScreenVisible, reportInterfaceState, hasTrack, trackId, hasArtwork, titleText, styleText, trackDurationMs, infoDurationMs,
+    talkBreak, volume, isMuted,
   } = useUISelector(state => ({
     audioFeatures: state.audioFeatures,
     trackDataFor: state.trackDataFor,
@@ -224,18 +300,26 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     toastSuccess: state.toastSuccess,
     isScreenVisible: state.isScreenVisible,
     reportInterfaceState: state.reportInterfaceState,
-    currentTrack: state.engineState.currentTrack,
-    is_playing: state.engineState.is_playing,
-    isCrossfading: state.engineState.isCrossfading,
+    hasTrack: !!state.engineState.currentTrack,
+    trackId: state.engineState.currentTrack?.id,
+    hasArtwork: state.engineState.currentTrack?.has_artwork,
+    titleText: trackTitle(state.engineState.currentTrack),
+    styleText: trackStyle(state.engineState.currentTrack),
+    trackDurationMs: state.engineState.currentTrack?.duration_ms || 0,
+    infoDurationMs: state.engineState.currentTrack?.track_info?.duration || 0,
     talkBreak: state.engineState.talkBreak,
   }))
   const onAir = !!talkBreak
-  const audioFeatures = currentTrack && trackDataFor === currentTrack.id ? latestFeatures : null
+  const audioFeatures = hasTrack && trackDataFor === trackId ? latestFeatures : null
   const { isPhoneLandscape } = useViewport()
   const compact = isPhoneLandscape
   const controlSizeClass = compact ? 'w-10 h-10' : 'w-10 h-10 md:w-12 md:h-12'
   const { getGradient, getAccentColor, getGrey800, getGrey500, getWhite, getGrey400, getErrorColor } = useDynamicTheme()
-  const [bufferedPercent, setBufferedPercent] = useState(0)
+  const bufferedLineStyle = useMemo(() => ({
+    transform: 'scaleX(0)',
+    backgroundColor: getGrey500(),
+    transition: CSS_TRANSITION.themeBackgroundScale
+  }), [getGrey500])
   const [isPastRestartThreshold, setIsPastRestartThreshold] = useState(false)
   const progressPercentRef = useRef(0)
   const progressWidthRef = useRef(0)
@@ -319,7 +403,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     }
   }, [reportInterfaceState])
 
-  const durationMs = currentTrack?.duration_ms || currentTrack?.track_info?.duration || 0
+  const durationMs = trackDurationMs || infoDurationMs
   const actualDuration = audioFeatures?.duration ? audioFeatures.duration * 1000 : durationMs
 
   useEffect(() => {
@@ -345,7 +429,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         return
       }
       const progress = engineRef.current.progress_ms || 0
-      const duration = currentTrack?.duration_ms || 0
+      const duration = trackDurationMs
       const percent = duration > 0 ? Math.min(100, Math.max(0, (progress / duration) * 100)) : 0
       const displayMs = actualDuration ? Math.floor((percent / 100) * actualDuration) : 0
       progressMsRef.current = displayMs
@@ -366,7 +450,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     const intervalId = setInterval(updateProgress, 100)
 
     return () => clearInterval(intervalId)
-  }, [engineRef, currentTrack, isScreenVisible, actualDuration, writeProgressStyles, onAir, talkBreakProgress])
+  }, [engineRef, trackId, trackDurationMs, isScreenVisible, actualDuration, writeProgressStyles, onAir, talkBreakProgress])
 
   const handleSeek = useCallback((e) => {
     if (!durationMs) return
@@ -445,7 +529,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     if (mode.id === 'ping') return { icon: 'bell', title, color: 'warning' }
     return { icon: 'muted', title, color: 'error' }
   }, [ttsMuted, notificationsMuted])
-  const SoundIcon = SOUND_ICONS[soundState.icon]
 
   const handleMouseEnterButton = useCallback((e) => {
     e.currentTarget.style.backgroundColor = getGrey800()
@@ -455,37 +538,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
     e.currentTarget.style.backgroundColor = 'transparent'
   }, [])
 
-
-  const currentTrackId = currentTrack?.id
-
-  useEffect(() => {
-    if (!isScreenVisible) return
-
-    const updateBuffered = () => {
-      const element = audio?.getCurrentElement?.()
-
-      if (!element || !element.src || !currentTrackId || actualDuration <= 0) {
-        setBufferedPercent(0)
-        return
-      }
-
-      if (element.buffered && element.buffered.length > 0) {
-        try {
-          const bufferedEnd = element.buffered.end(element.buffered.length - 1)
-          const percent = Math.min(100, (bufferedEnd / (actualDuration / 1000)) * 100)
-          setBufferedPercent(percent)
-        } catch {
-          setBufferedPercent(0)
-        }
-      } else {
-        setBufferedPercent(0)
-      }
-    }
-
-    const interval = setInterval(updateBuffered, 1000)
-    updateBuffered()
-    return () => clearInterval(interval)
-  }, [audio, actualDuration, currentTrackId, isScreenVisible])
 
   const waveformBars = useMemo(() => {
     if (!audioFeatures?.loudness_segments || !durationMs) return []
@@ -529,11 +581,14 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
       })
   }, [audioFeatures, durationMs])
 
-  const trackInfo = currentTrack ? (
+  const trackInfo = useMemo(() => {
+    if (!hasTrack) return null
+    const SoundIcon = SOUND_ICONS[soundState.icon]
+    return (
     <>
       <TrackArtwork
-        trackId={currentTrack.id}
-        hasArtwork={currentTrack.has_artwork}
+        trackId={trackId}
+        hasArtwork={hasArtwork}
         onClick={onArtworkClick}
         sizeClass={controlSizeClass}
       />
@@ -554,22 +609,26 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           {!compact && <SoundIcon size={20} className="hidden md:block" />}
         </FadeSwap>
       </button>
-      <FadeSwap swapKey={currentTrack.id} preset={PRESETS.trackSwap} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
+      <FadeSwap swapKey={trackId} preset={PRESETS.trackSwap} className={`${compact ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
         <div
           className={`font-semibold truncate transition-colors duration-theme ${compact ? 'text-sm' : 'text-base'}`}
           style={{ color: getWhite() }}
         >
-          {currentTrack.title || currentTrack.generation_params?.title || 'Unknown'}
+          {titleText}
         </div>
         <div
           className={`truncate transition-colors duration-theme ${compact ? 'text-xs' : 'text-sm'}`}
           style={{ color: getGrey400() }}
         >
-          {currentTrack.generation_params?.style_canonical || currentTrack.generation_params?.style || currentTrack.style || ''}
+          {styleText}
         </div>
       </FadeSwap>
     </>
-  ) : null
+    )
+  }, [
+    hasTrack, trackId, hasArtwork, titleText, styleText, onArtworkClick, controlSizeClass, compact, handleToggleSounds, soundState,
+    getGradient, getErrorColor, getAccentColor, getWhite, getGrey400,
+  ])
 
   const transportControls = useMemo(() => (
     <div className={`flex items-center justify-center ${compact ? 'gap-1 flex-shrink-0' : 'gap-2'}`}>
@@ -585,42 +644,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         </PlayerIconButton>
       </div>
 
-      <motion.div
-        animate={isCrossfading ? {
-          scale: [1, 1.05, 1],
-          transition: MOTION.pulse
-        } : { scale: 1 }}
-        whileHover={PLAY_BUTTON_HOVER}
-      >
-      <button
-        onPointerDown={handleTogglePlay}
-        className={`ui-tap ${compact ? 'p-2.5' : 'p-3'} text-black rounded-full shadow-lg`}
-        style={{
-          background: getAccentColor(1),
-          transition: CSS_TRANSITION.themeBackground
-        }}
-        title={is_playing ? 'Pause' : 'Play'}
-        aria-label={is_playing ? 'Pause' : 'Play'}
-      >
-        <AnimatePresence mode="wait" initial={false}>
-          {is_playing ? (
-            <motion.div
-              key="pause"
-              {...PRESETS.iconSwap}
-            >
-              <Pause size={24} fill="currentColor" />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="play"
-              {...PRESETS.iconSwap}
-            >
-              <Play size={24} fill="currentColor" className="ml-0.5" />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </button>
-      </motion.div>
+      <PlayButton compact={compact} onToggle={handleTogglePlay} />
 
       <div>
         <PlayerIconButton
@@ -634,9 +658,9 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         </PlayerIconButton>
       </div>
     </div>
-  ), [compact, handlePrevious, handleNext, handleTogglePlay, handleMouseEnterButton, handleMouseLeaveButton, isPastRestartThreshold, isCrossfading, is_playing, getAccentColor])
+  ), [compact, handlePrevious, handleNext, handleTogglePlay, handleMouseEnterButton, handleMouseLeaveButton, isPastRestartThreshold])
 
-  const progressRow = currentTrack ? (
+  const progressRow = hasTrack ? (
     <div className={`relative flex items-center ${compact ? 'gap-1.5 flex-1 min-w-0' : 'gap-2'}`}>
       <span
         ref={progressTimeRef}
@@ -671,13 +695,17 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
         </div>
       ) : audioFeatures ? (
         <div
-          key={currentTrack?.id}
+          key={trackId}
           className={`ui-track-in flex-1 relative cursor-pointer group overflow-hidden rounded-md bg-gray-900/50 ${compact ? 'h-7' : 'h-8'}`}
           onClick={handleSeek}
         >
-          <div
+          <BufferedFill
+            audio={audio}
+            trackId={trackId}
+            durationMs={actualDuration}
+            active={isScreenVisible}
             className="absolute inset-0 bg-yellow-500/20 origin-left"
-            style={{ transform: `scaleX(${bufferedPercent / 100})`, transition: CSS_TRANSITION.buffered }}
+            style={BUFFERED_WAVE_STYLE}
           />
 
           <WaveformLayer bars={waveformBars} variant="unplayed" />
@@ -707,13 +735,13 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
             transition: CSS_TRANSITION.themeBackgroundColor
           }}
         >
-          <div
+          <BufferedFill
+            audio={audio}
+            trackId={trackId}
+            durationMs={actualDuration}
+            active={isScreenVisible}
             className="absolute inset-0 rounded-full origin-left"
-            style={{
-              transform: `scaleX(${bufferedPercent / 100})`,
-              backgroundColor: getGrey500(),
-              transition: CSS_TRANSITION.themeBackgroundScale
-            }}
+            style={bufferedLineStyle}
           />
           <div
             ref={progressRefCallbacks.bar}
@@ -870,7 +898,7 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
           <GenerationQueuePanel />
           <div className={`will-change-transform ${compact ? 'px-3 py-1.5' : 'px-3 py-2 md:px-4 md:py-3'}`}>
             <div className="max-w-screen-2xl mx-auto">
-              {!currentTrack ? (
+              {!hasTrack ? (
                 <div className="ui-fade-in flex items-center justify-center text-gray-500 py-2">
                   Select a track to start playing
                 </div>

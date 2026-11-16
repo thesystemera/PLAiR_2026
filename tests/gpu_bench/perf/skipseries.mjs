@@ -1,14 +1,18 @@
 // node skipseries.mjs [skips] [panel] [warm-up skips] — presses Next several times on the phone (6 s apart) and prints,
 // per skip and on average: frame time lost in the 1.5 s after the press, worst frame, frames over 50 ms, and the
 // long-animation-frame scripts summed by source (ms per skip). Single skips are noisy; compare series. It changes the
-// owner's song once per skip.
-import { page, sleep, openPanel } from './cdp.mjs'
+// owner's song once per skip. CPU=6 slows the page's CPU six times (for a desktop Chrome standing in for a phone).
+import { page, sleep, openPanel, closeDialogs } from './cdp.mjs'
 
 const skips = Number(process.argv[2] || 5)
 const panel = process.argv[3] || 'Playing'
 const warm = Number(process.argv[4] || 1)
 const WINDOW_MS = 1500
 const p = await page()
+if (process.env.CPU) {
+  await p.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CPU) })
+  await closeDialogs(p)
+}
 await openPanel(p, panel)
 await sleep(1500)
 await p.evaluate(`(() => {

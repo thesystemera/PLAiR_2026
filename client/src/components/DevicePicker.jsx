@@ -285,7 +285,7 @@ export const DevicePickerButton = memo(function DevicePickerButton(props) {
 
 const DEVICE_NOTICE = 'other-device'
 
-export function DeviceNotice({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
+export const DeviceNotice = memo(function DeviceNotice({ showInactive, bannerDismissed, actionLoading, handleActivateDevice, handleDismissBanner }) {
   const { activeDeviceOnline, showNotice, hideNotice } = useUISelector(state => ({
     activeDeviceOnline: state.engineState.activeDeviceOnline,
     showNotice: state.showNotice,
@@ -327,7 +327,7 @@ export function DeviceNotice({ showInactive, bannerDismissed, actionLoading, han
   useEffect(() => () => hideNotice(DEVICE_NOTICE), [hideNotice])
 
   return null
-}
+})
 
 export const DevicePickerPanel = memo(function DevicePickerPanel({ isOpen, setIsOpen, devices, loading, loadFailed, loadDevices, actionLoading, handleActivateDevice, handleRemoveDevice, getDeviceIcon, editingDeviceId, editingName, setEditingName, handleStartEdit, handleCancelEdit, handleSaveEdit, connectionMode, storageInfo, isPlaying }) {
   const isFullMode = connectionMode === 'full'

@@ -328,6 +328,20 @@ of them, the User panel 311); the colour fade (about 800 elements restyled per f
 passes (the Queue's rows with their `layout` / `popLayout` wrappers are half of each); the cover's texture uploads
 (`texImage2D`, 10-40 ms); the Queue's follow-the-song timeout, whose 5-72 ms is the pending style work it forces.
 
+Second pass, 18 Nov (the React passes; `renders3.mjs` with `TYPES=all`, headless Chrome in the phone layout): one
+press re-rendered 596 components, the Player root seven times (about 29 each: the track, play state, crossfade
+flag, features, cache badge and the buffered bar's once-a-second state all lived in the root), Now Playing four
+times (about 31 each: features, lyrics and analytics arrived through the root) and the Queue's header and every
+row's `AnimatePresence` wrappers although two rows changed. Now each part subscribes for itself (`QueueRow`,
+`QueueModes`, `PlayButton`, `BufferedFill`, `CurrentAudioFeatures`, `CurrentLyrics`, `TrackAnalytics`; the Player
+selects the track's fields, not the object): 363 renders a press, the Player 28 + 5 + two small play-button
+updates, Now Playing two passes. The pass where the server's queue arrives still re-renders every Queue row: the
+rows glide to their new places (`layout`), and framer needs each one rendered to measure it. Measured on desktop
+only (`skipcpu.mjs`: CPU profile of the 1.5 s after the press, old and new builds pressed in turn, 18 skips
+each): script 181 -> 162 ms a skip, busy time 542 -> 528. Frame-time series on desktop with the CPU slowed six
+times (`CPU=6 skipseries.mjs`) swing by 150 ms between rounds and show nothing either way. **Not yet measured on
+the phone** (it was not connected): run `skipseries.mjs 10` there against the 410-425 ms above.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

@@ -350,41 +350,29 @@ const CoverBadge = memo(function CoverBadge({ trackId, side, colorClass, childre
   )
 })
 
-export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal }) {
-  const [analyticsState, setAnalyticsState] = useState(null)
-  const artBoxRef = useRef(null)
+function useLastValue(value) {
+  const [shown, setShown] = useState(value)
+  if (value && value !== shown) setShown(value)
+  return shown
+}
 
-  const { togglePanel: toggleQueuePanel } = useGenerationQueue()
-  const {
-    audioFeatures,
-    lyricTimestamps,
-    trackDataFor,
-    hasActiveJobs,
-    playerHeight,
-    isFullscreen,
-    track,
-    openShareModal,
-  } = useUISelector(state => ({
-    audioFeatures: state.audioFeatures,
-    lyricTimestamps: state.lyricTimestamps,
-    trackDataFor: state.trackDataFor,
-    hasActiveJobs: state.queueState.hasActiveJobs,
-    playerHeight: state.interfaceState.playerHeight,
-    isFullscreen: state.interfaceState.isFullscreenVisuals,
-    track: state.engineState.currentTrack,
-    openShareModal: state.openShareModal,
-  }))
-  const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
-  const isSplit = isMobile && isLandscape
-  const splitOffset = playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32
-  const hasTrack = !!track
-  useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])
+const CurrentAudioFeatures = memo(function CurrentAudioFeatures({ trackId }) {
+  const audioFeatures = useLastValue(useUISelector(state => (state.trackDataFor === trackId ? state.audioFeatures : null)))
+  return <TrackAudioFeatures audioFeatures={audioFeatures} />
+})
+
+const CurrentLyrics = memo(function CurrentLyrics({ trackId }) {
+  const lyricTimestamps = useLastValue(useUISelector(state => (state.trackDataFor === trackId ? state.lyricTimestamps : null)))
+  return <SyncedLyrics lyricTimestamps={lyricTimestamps} />
+})
+
+const TrackAnalytics = memo(function TrackAnalytics({ trackId }) {
+  const [analyticsState, setAnalyticsState] = useState(null)
 
   useEffect(() => {
-    if (!track?.id) return
+    if (!trackId) return
 
     let cancelled = false
-    const trackId = track.id
     const fetchAnalytics = async () => {
       try {
         const data = await api.getTrackAnalytics(trackId)
@@ -398,7 +386,108 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
     void fetchAnalytics()
     return () => { cancelled = true }
-  }, [track?.id])
+  }, [trackId])
+
+  const analytics = analyticsState?.trackId === trackId ? analyticsState.data : null
+  if (!analytics || !(analytics.total_plays > 0)) return null
+
+  return (
+    <motion.div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4 rounded-lg mb-6" {...ARRIVE}>
+      <div className="text-xs text-purple-300 mb-3 font-semibold">TRACK ANALYTICS</div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-black/20 p-3 rounded-lg">
+          <div className="text-xs text-gray-400 mb-1">Total Plays</div>
+          <div className="font-bold text-lg text-purple-300">
+            {analytics.total_plays}
+          </div>
+          {analytics.unique_listeners > 0 && (
+            <div className="text-xs text-gray-500">
+              {analytics.unique_listeners} listener{analytics.unique_listeners !== 1 ? 's' : ''}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-black/20 p-3 rounded-lg">
+          <div className="text-xs text-gray-400 mb-1">👍 Likes</div>
+          <div className="font-bold text-lg text-green-400">
+            {analytics.likes || 0}
+          </div>
+        </div>
+
+        <div className="bg-black/20 p-3 rounded-lg">
+          <div className="text-xs text-gray-400 mb-1">⭐ Super Likes</div>
+          <div className="font-bold text-lg text-yellow-400">
+            {analytics.superlikes || 0}
+          </div>
+        </div>
+
+        <div className="bg-black/20 p-3 rounded-lg">
+          <div className="text-xs text-gray-400 mb-1">🚫 Bans</div>
+          <div className="font-bold text-lg text-red-400">
+            {analytics.bans || 0}
+          </div>
+        </div>
+
+        {analytics.avg_completion_pct > 0 && (
+          <div className="bg-black/20 p-3 rounded-lg">
+            <div className="text-xs text-gray-400 mb-1">Avg Completion</div>
+            <div className="font-bold text-lg text-blue-300">
+              {Math.round(analytics.avg_completion_pct)}%
+            </div>
+          </div>
+        )}
+
+        {analytics.skip_count > 0 && (
+          <div className="bg-black/20 p-3 rounded-lg">
+            <div className="text-xs text-gray-400 mb-1">Skips</div>
+            <div className="font-bold text-lg text-orange-300">
+              {analytics.skip_count}
+            </div>
+            <div className="text-xs text-gray-500">
+              {Math.round(analytics.skip_rate * 100)}% skip rate
+            </div>
+          </div>
+        )}
+
+        {analytics.percentile !== undefined && (
+          <div className="bg-black/20 p-3 rounded-lg col-span-2">
+            <div className="text-xs text-gray-400 mb-1">Popularity Ranking</div>
+            <div className="font-bold text-2xl bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+              {analytics.percentile >= 95 ? '🔥 ' : analytics.percentile >= 75 ? '⭐ ' : ''}
+              Top {Math.round(100 - analytics.percentile)}%
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Score: {analytics.popularity_score.toFixed(1)}
+            </div>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  )
+})
+
+export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenGenerationModal }) {
+  const artBoxRef = useRef(null)
+
+  const { togglePanel: toggleQueuePanel } = useGenerationQueue()
+  const {
+    hasActiveJobs,
+    playerHeight,
+    isFullscreen,
+    track,
+    openShareModal,
+  } = useUISelector(state => ({
+    hasActiveJobs: state.queueState.hasActiveJobs,
+    playerHeight: state.interfaceState.playerHeight,
+    isFullscreen: state.interfaceState.isFullscreenVisuals,
+    track: state.engineState.currentTrack,
+    openShareModal: state.openShareModal,
+  }))
+  const { isMobile, isLandscape, isPhoneLandscape } = useViewport()
+  const isSplit = isMobile && isLandscape
+  const splitOffset = playerHeight + (isPhoneLandscape ? 0 : 64) + PANEL.headerHeight + 32
+  const hasTrack = !!track
+  useEffect(() => watchOffscreen(artBoxRef.current), [hasTrack])
 
   if (!track) {
     return (
@@ -412,8 +501,6 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
   }
 
   const params = track.generation_params || {}
-  const dataReady = trackDataFor === track.id
-  const analytics = analyticsState?.trackId === track.id ? analyticsState.data : null
 
   return (
     <div className="flex flex-col h-full relative">
@@ -528,81 +615,9 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
         {track.artist_profile_id && <ArtistInfo artistId={track.artist_profile_id} currentTrackId={track.id} />}
 
-        {analytics && analytics.total_plays > 0 && (
-          <motion.div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-4 rounded-lg mb-6" {...ARRIVE}>
-            <div className="text-xs text-purple-300 mb-3 font-semibold">TRACK ANALYTICS</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-black/20 p-3 rounded-lg">
-                <div className="text-xs text-gray-400 mb-1">Total Plays</div>
-                <div className="font-bold text-lg text-purple-300">
-                  {analytics.total_plays}
-                </div>
-                {analytics.unique_listeners > 0 && (
-                  <div className="text-xs text-gray-500">
-                    {analytics.unique_listeners} listener{analytics.unique_listeners !== 1 ? 's' : ''}
-                  </div>
-                )}
-              </div>
+        <TrackAnalytics trackId={track.id} />
 
-              <div className="bg-black/20 p-3 rounded-lg">
-                <div className="text-xs text-gray-400 mb-1">👍 Likes</div>
-                <div className="font-bold text-lg text-green-400">
-                  {analytics.likes || 0}
-                </div>
-              </div>
-
-              <div className="bg-black/20 p-3 rounded-lg">
-                <div className="text-xs text-gray-400 mb-1">⭐ Super Likes</div>
-                <div className="font-bold text-lg text-yellow-400">
-                  {analytics.superlikes || 0}
-                </div>
-              </div>
-
-              <div className="bg-black/20 p-3 rounded-lg">
-                <div className="text-xs text-gray-400 mb-1">🚫 Bans</div>
-                <div className="font-bold text-lg text-red-400">
-                  {analytics.bans || 0}
-                </div>
-              </div>
-
-              {analytics.avg_completion_pct > 0 && (
-                <div className="bg-black/20 p-3 rounded-lg">
-                  <div className="text-xs text-gray-400 mb-1">Avg Completion</div>
-                  <div className="font-bold text-lg text-blue-300">
-                    {Math.round(analytics.avg_completion_pct)}%
-                  </div>
-                </div>
-              )}
-
-              {analytics.skip_count > 0 && (
-                <div className="bg-black/20 p-3 rounded-lg">
-                  <div className="text-xs text-gray-400 mb-1">Skips</div>
-                  <div className="font-bold text-lg text-orange-300">
-                    {analytics.skip_count}
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    {Math.round(analytics.skip_rate * 100)}% skip rate
-                  </div>
-                </div>
-              )}
-
-              {analytics.percentile !== undefined && (
-                <div className="bg-black/20 p-3 rounded-lg col-span-2">
-                  <div className="text-xs text-gray-400 mb-1">Popularity Ranking</div>
-                  <div className="font-bold text-2xl bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                    {analytics.percentile >= 95 ? '🔥 ' : analytics.percentile >= 75 ? '⭐ ' : ''}
-                    Top {Math.round(100 - analytics.percentile)}%
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Score: {analytics.popularity_score.toFixed(1)}
-                  </div>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-
-        <TrackAudioFeatures audioFeatures={dataReady ? audioFeatures : null} />
+        <CurrentAudioFeatures trackId={track.id} />
 
         {track.derived_tags && (
           <>
@@ -708,7 +723,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         })()}
 
         {!params.instrumental && (
-          <SyncedLyrics lyricTimestamps={dataReady ? lyricTimestamps : null} />
+          <CurrentLyrics trackId={track.id} />
         )}
         </FadeSwap>
         </div>

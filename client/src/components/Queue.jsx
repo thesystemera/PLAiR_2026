@@ -174,15 +174,14 @@ const TrackArtwork = memo(function TrackArtwork({ track }) {
   )
 })
 
+const REMOVE_ICON = <X size={16} />
+
 const QueueRow = memo(forwardRef(function QueueRow({
   track,
   uniqueKey,
   layoutKey,
   entering,
-  isPlaying,
-  isLoading,
   isReselectFlashing,
-  playing,
   showPreference,
   preference,
   colors,
@@ -193,6 +192,14 @@ const QueueRow = memo(forwardRef(function QueueRow({
   onRemovePointerDown,
   onRemovePointerMove,
 }, ref) {
+  const { isPlaying, isLoading, playing } = useUISelector(state => {
+    const current = state.engineState.currentTrack?.id === track.id
+    return {
+      isPlaying: current,
+      isLoading: !current && state.engineState.pendingTrackId === track.id,
+      playing: current && state.engineState.is_playing,
+    }
+  })
   const variants = useMemo(() => queueRowVariants(uniqueKey), [uniqueKey])
   return (
     <motion.div
@@ -250,7 +257,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
             onMouseEnter={(e) => e.currentTarget.style.color = colors.dangerActionText}
             onMouseLeave={(e) => e.currentTarget.style.color = colors.grey400}
           >
-            <X size={16} />
+            {REMOVE_ICON}
           </button>
         </div>
       </div>
@@ -308,17 +315,53 @@ function QueueModeButton({ icon: Icon, iconKey, label, active, color, disabled, 
   )
 }
 
+const QueueModes = memo(function QueueModes({ show, onSeedRadio, onList }) {
+  const { isAuthenticated } = useAuth()
+  const activeSeedMode = useUISelector(state => state.radioState.activeSeedMode)
+  const { getCategoryMetadata } = useDynamicTheme()
+  const openMine = useCallback(() => onList('mine'), [onList])
+  const openCharts = useCallback(() => onList('charts'), [onList])
+  const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
+  const activeCamp = activeSeedMode ? MODE_CAMPS[activeSeedMode] || 'seed' : null
+  const campLabel = (camp, name) => (activeCamp === camp ? `${name}: ${seedMeta.label}` : name)
+  const campIcon = (camp, icon) => (activeCamp === camp ? { icon: seedMeta.icon, iconKey: activeSeedMode } : { icon, iconKey: camp })
+
+  return (
+    <Fade show={show} className="flex items-center gap-2">
+      <QueueModeButton
+        {...campIcon('mine', Library)}
+        label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
+        active={activeCamp === 'mine'}
+        color={seedMeta?.color}
+        disabled={!isAuthenticated}
+        onOpen={openMine}
+      />
+      <QueueModeButton
+        {...campIcon('seed', Sprout)}
+        label={campLabel('seed', 'Seed radio')}
+        active={activeCamp === 'seed'}
+        color={seedMeta?.color}
+        onOpen={onSeedRadio}
+      />
+      <QueueModeButton
+        {...campIcon('charts', TrendingUp)}
+        label={campLabel('charts', 'Charts')}
+        active={activeCamp === 'charts'}
+        color={seedMeta?.color}
+        onOpen={openCharts}
+      />
+    </Fade>
+  )
+})
+
 function QueueComponent({ onSeedRadio, onList }) {
   const playback = usePlaybackActions()
   const { isAuthenticated } = useAuth()
   const { getPreference } = usePreferences()
-  const { queue, currentTrackId, currentIndex, isPlayingNow, activeSeedMode, loadingTrackId, toastError } = useUISelector(state => ({
+  const { queue, currentTrackId, currentIndex, toastError } = useUISelector(state => ({
     queue: state.engineState.queue,
     currentTrackId: state.engineState.currentTrack?.id,
     currentIndex: state.engineState.currentIndex,
-    isPlayingNow: state.engineState.is_playing,
-    activeSeedMode: state.radioState.activeSeedMode,
-    loadingTrackId: state.engineState.pendingTrackId,
     toastError: state.toastError,
   }))
   const {
@@ -331,7 +374,6 @@ function QueueComponent({ onSeedRadio, onList }) {
     getPlayingBackground,
     getLoadingSpinner,
     getDangerActionText,
-    getCategoryMetadata,
     triggerEffect
   } = useDynamicTheme()
 
@@ -560,31 +602,25 @@ function QueueComponent({ onSeedRadio, onList }) {
   }, [currentKey, reduceMotion])
 
 
-  const renderRow = useCallback(({ track, key: uniqueKey }) => {
-    const isPlaying = track.id === currentTrackId
-    return (
-      <QueueRow
-        key={uniqueKey}
-        track={track}
-        uniqueKey={uniqueKey}
-        layoutKey={layoutKey}
-        entering={removalState.addedKeys.has(uniqueKey)}
-        isPlaying={isPlaying}
-        isLoading={loadingTrackId === track.id && !isPlaying}
-        isReselectFlashing={reselectFlash === track.id}
-        playing={isPlaying && isPlayingNow}
-        showPreference={isAuthenticated}
-        preference={isAuthenticated ? getPreference('track', track.id) : null}
-        colors={rowColors}
-        onPlay={handlePlay}
-        onRemove={handleRemove}
-        onPlayPointerDown={onPlayPointerDown}
-        onPlayPointerMove={onPlayPointerMove}
-        onRemovePointerDown={onRemovePointerDown}
-        onRemovePointerMove={onRemovePointerMove}
-      />
-    )
-  }, [currentTrackId, layoutKey, removalState.addedKeys, loadingTrackId, reselectFlash, isPlayingNow, isAuthenticated, getPreference, rowColors, handlePlay, handleRemove, onPlayPointerDown, onPlayPointerMove, onRemovePointerDown, onRemovePointerMove])
+  const renderRow = useCallback(({ track, key: uniqueKey }) => (
+    <QueueRow
+      key={uniqueKey}
+      track={track}
+      uniqueKey={uniqueKey}
+      layoutKey={layoutKey}
+      entering={removalState.addedKeys.has(uniqueKey)}
+      isReselectFlashing={reselectFlash === track.id}
+      showPreference={isAuthenticated}
+      preference={isAuthenticated ? getPreference('track', track.id) : null}
+      colors={rowColors}
+      onPlay={handlePlay}
+      onRemove={handleRemove}
+      onPlayPointerDown={onPlayPointerDown}
+      onPlayPointerMove={onPlayPointerMove}
+      onRemovePointerDown={onRemovePointerDown}
+      onRemovePointerMove={onRemovePointerMove}
+    />
+  ), [layoutKey, removalState.addedKeys, reselectFlash, isAuthenticated, getPreference, rowColors, handlePlay, handleRemove, onPlayPointerDown, onPlayPointerMove, onRemovePointerDown, onRemovePointerMove])
 
   const wrapRows = useCallback((rows) => (
     <AnimatePresence initial={false} custom={removal} mode="popLayout" presenceAffectsLayout={false}>
@@ -592,38 +628,10 @@ function QueueComponent({ onSeedRadio, onList }) {
     </AnimatePresence>
   ), [removal])
 
-  const seedMeta = activeSeedMode ? getCategoryMetadata(activeSeedMode) : null
-  const activeCamp = activeSeedMode ? MODE_CAMPS[activeSeedMode] || 'seed' : null
-  const campLabel = (camp, name) => (activeCamp === camp ? `${name}: ${seedMeta.label}` : name)
-  const campIcon = (camp, icon) => (activeCamp === camp ? { icon: seedMeta.icon, iconKey: activeSeedMode } : { icon, iconKey: camp })
-
   return (
     <div className="flex flex-col h-full relative">
         <PanelHeader title="Queue">
-          <Fade show={hasQueue} className="flex items-center gap-2">
-            <QueueModeButton
-              {...campIcon('mine', Library)}
-              label={isAuthenticated ? campLabel('mine', 'Your music') : 'Sign in for your music'}
-              active={activeCamp === 'mine'}
-              color={seedMeta?.color}
-              disabled={!isAuthenticated}
-              onOpen={() => onList('mine')}
-            />
-            <QueueModeButton
-              {...campIcon('seed', Sprout)}
-              label={campLabel('seed', 'Seed radio')}
-              active={activeCamp === 'seed'}
-              color={seedMeta?.color}
-              onOpen={onSeedRadio}
-            />
-            <QueueModeButton
-              {...campIcon('charts', TrendingUp)}
-              label={campLabel('charts', 'Charts')}
-              active={activeCamp === 'charts'}
-              color={seedMeta?.color}
-              onOpen={() => onList('charts')}
-            />
-          </Fade>
+          <QueueModes show={hasQueue} onSeedRadio={onSeedRadio} onList={onList} />
         </PanelHeader>
 
       <AnimatePresence>
