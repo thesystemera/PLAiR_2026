@@ -29,5 +29,6 @@ def simplify_track_info(track: Dict[str, Any], catalog_service=None) -> Dict[str
         "is_ai_generated": track.get("is_ai_generated") is not False,
         "style": params.get("style", ""),
         "duration_ms": track_info.get("duration", 0),
-        "has_artwork": has_artwork
+        "has_artwork": has_artwork,
+        "master_rendered_at": track.get("master_rendered_at"),
     }

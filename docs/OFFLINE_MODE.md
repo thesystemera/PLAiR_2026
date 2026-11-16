@@ -61,6 +61,7 @@
   - They skip when offline, IndexedDB is unavailable, Data Saver is on, or Chrome reports `saveData`, cellular, or 2g/3g.
   - `cacheManager.canMakeRoomFor()` pauses downloads (30 min) when the cache is full of liked tracks, instead of evicting one liked track to download another.
   - Liking a track, or the server coming back, wakes the downloader at once (it used to sleep up to 60 s).
+- **Downloads follow remasters (17 Nov):** one rule, `isRemastered(download, track)` in `cacheManager.js`: a download is out of date when the track's `master_rendered_at` is newer than the one saved with it (or, for a copy saved without one, newer than when it was saved). Every track summary carries the stamp (`simplify_track_info`). The downloader queues remastered liked songs after new ones (`buildPriorityQueue`), `downloadAndCacheTrack` re-fetches them (audio, cover, features and lyric timing together), and online playback streams the new master instead of an out-of-date download, which the stream then saves over (`getTrackSource`). Offline and with Data Saver the old download still plays.
 
 ### Storage and downloads (decided by the owner, 28 Sep)
 - **Same experience on iPhone as on Android:** the download space is sized from the browser's own quota on every platform: `navigator.storage.estimate()`, half the quota, at most 2 GB, at least 200 MB where the quota allows (`cacheManager._sizeFromQuota`). Without an estimate it falls back to 500 MB on iOS and 2 GB elsewhere. The old fixed 50 MB iOS cap is gone.

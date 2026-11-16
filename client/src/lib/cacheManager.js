@@ -20,6 +20,15 @@ const MP3_BITRATE = '192k'
 const TYPICAL_TRACK_BYTES = 8 * 1024 * 1024
 const LOOKUP_HOLD_MS = 3000
 
+const renderedAt = (track) => Date.parse(track?.master_rendered_at || '') || 0
+
+export function isRemastered(download, track) {
+  const current = renderedAt(track)
+  if (!download || !current) return false
+  const saved = renderedAt(download.metadata)
+  return saved ? current > saved : current > (download.addedAt || 0)
+}
+
 class CacheManager {
   constructor() {
     this.initialized = false
@@ -307,7 +316,9 @@ class CacheManager {
       const existingQuality = this._getBitrateValue(existing.bitrate)
       const requestedQuality = this._getBitrateValue(bitrate)
 
-      if (existingQuality >= requestedQuality) {
+      if (isRemastered(existing, fullTrackData)) {
+        logger.info(`[CacheManager] Re-downloading ${trackId}: remastered since it was downloaded`)
+      } else if (existingQuality >= requestedQuality) {
         logger.info(`[CacheManager] Track ${trackId} already cached at ${existing.bitrate} (>= ${bitrate})`)
         return existing
       } else {

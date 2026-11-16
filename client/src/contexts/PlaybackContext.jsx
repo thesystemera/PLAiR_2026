@@ -3,7 +3,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, us
 import { api } from '../lib/api'
 import { useAudio } from '../hooks/useAudio'
 import { useWebSocketSubscribe, WebSocketContext } from './WebSocketContext'
-import { cacheManager } from '../lib/cacheManager'
+import { cacheManager, isRemastered } from '../lib/cacheManager'
 import { useAuth } from './AuthContext'
 import { useUISelector, uiState } from './UIStateContext'
 import { useNetwork } from './NetworkContext'
@@ -296,9 +296,10 @@ export function PlaybackProvider({ children }) {
         return { url: URL.createObjectURL(cached.audioBlob), isBlobUrl: true, bitrate: cached.bitrate, fromCache: true }
       }
 
-      const dominated = isOnline &&
-                        requestedBitrate !== 'auto' &&
-                        bitrateToNumber(requestedBitrate) > bitrateToNumber(cached.bitrate)
+      const dominated = isOnline && (
+        isRemastered(cached, trackMetadata) ||
+        (requestedBitrate !== 'auto' && bitrateToNumber(requestedBitrate) > bitrateToNumber(cached.bitrate))
+      )
 
       if (!dominated) {
         return { url: URL.createObjectURL(cached.audioBlob), isBlobUrl: true, bitrate: cached.bitrate, fromCache: true }

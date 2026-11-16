@@ -1,6 +1,6 @@
 import { logger } from './logger'
 import { safeStorage } from './safeStorage'
-import { cacheManager } from './cacheManager'
+import { cacheManager, isRemastered } from './cacheManager'
 import { api } from './api'
 import { uiState, updateDownloadState, onAuthStateChange } from '../contexts/UIStateContext'
 import { triggerStorageRefresh } from '../contexts/StorageContext'
@@ -131,20 +131,26 @@ class BackgroundDownloader {
 
       const superLiked = preferences.super_likes || []
       const liked = preferences.likes || []
+      const downloads = new Map((await cacheManager.getCachedTrackList())
+        .filter(entry => entry.playable)
+        .map(entry => [entry.trackId, entry]))
+      let remastered = 0
 
-      for (const track of superLiked) {
-        if (track?.id && !(await cacheManager.isCached(track.id))) {
-          queue.push({ track, priority: 3 })
+      const consider = (track, priority) => {
+        if (!track?.id) return
+        const download = downloads.get(track.id)
+        if (!download) {
+          queue.push({ track, priority })
+        } else if (isRemastered(download, track)) {
+          queue.push({ track, priority: 1 })
+          remastered++
         }
       }
 
-      for (const track of liked) {
-        if (track?.id && !(await cacheManager.isCached(track.id))) {
-          queue.push({ track, priority: 2 })
-        }
-      }
+      superLiked.forEach(track => consider(track, 3))
+      liked.forEach(track => consider(track, 2))
 
-      logger.info(`[BackgroundDownloader] Built priority queue: ${superLiked.length} super-likes, ${liked.length} likes`)
+      logger.info(`[BackgroundDownloader] Built priority queue: ${superLiked.length} super-likes, ${liked.length} likes, ${remastered} remastered since downloaded`)
     } catch (error) {
       logger.error('[BackgroundDownloader] Failed to build priority queue:', error)
       return null
