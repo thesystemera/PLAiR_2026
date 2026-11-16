@@ -7,16 +7,7 @@ import { FadeSwap, Pop } from '../Motion'
 import { PRESETS } from '../../lib/motion'
 import { artistByline } from '../../lib/utils'
 
-const ARTIST_COLORS = [
-  { bg: '#8b5cf620', border: '#8b5cf6', text: '#a78bfa' },
-  { bg: '#ec489920', border: '#ec4899', text: '#f472b6' },
-  { bg: '#3b82f620', border: '#3b82f6', text: '#60a5fa' },
-  { bg: '#10b98120', border: '#10b981', text: '#34d399' },
-  { bg: '#f59e0b20', border: '#f59e0b', text: '#fbbf24' },
-  { bg: '#ef444420', border: '#ef4444', text: '#f87171' },
-  { bg: '#06b6d420', border: '#06b6d4', text: '#22d3ee' },
-  { bg: '#8b5cf620', border: '#8b5cf6', text: '#a78bfa' },
-]
+const ARTIST_COLORS = ['#a78bfa', '#f472b6', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#22d3ee']
 
 export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
   const [remixSelected, setRemixSelected] = useState(false)
@@ -94,10 +85,10 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
           onClick={() => setRemixSelected(!remixSelected)}
           icon={Shuffle}
           iconColor="#a78bfa"
-          iconBgColor="#8b5cf620"
           title="Remix This Track"
           description="Generate a remix with similar style"
           isSelected={remixSelected}
+          toggle
         />
       </ModalSection>
 
@@ -107,10 +98,10 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
             onClick={() => setArtistSelected(!artistSelected)}
             icon={User}
             iconColor="#34d399"
-            iconBgColor="#10b98120"
             title={`More like ${artistName}`}
             description="Generate new tracks in this artist's style"
             isSelected={artistSelected}
+            toggle
           />
         </ModalSection>
       )}
@@ -120,19 +111,17 @@ export function GenerationModal({ isOpen, onClose, track, onGenerate }) {
           <div className="grid grid-cols-2 gap-2">
             {similarArtists.map((artist, idx) => {
               const isSelected = selectedSimilarArtists.includes(artist)
-              const colorScheme = ARTIST_COLORS[idx % ARTIST_COLORS.length]
 
               return (
                 <ModalOptionButton
                   key={artist}
                   onClick={() => handleToggleSimilarArtist(artist)}
                   icon={Users}
-                  iconColor={colorScheme.text}
-                  iconBgColor={colorScheme.bg}
+                  iconColor={ARTIST_COLORS[idx % ARTIST_COLORS.length]}
                   title={artist}
                   isSelected={isSelected}
-                  isMobile={true}
-                  className="!p-2"
+                  isMobile
+                  toggle
                 />
               )
             })}

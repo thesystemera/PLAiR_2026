@@ -56,11 +56,12 @@ export const OptionCard = memo(function OptionCard({
   footer = null,
   selected = false,
   disabled = false,
+  toggle = false,
   tone,
   onSelect,
   hint,
 }) {
-  const interactive = !!onSelect && !disabled && !selected
+  const interactive = !!onSelect && !disabled && (toggle || !selected)
   return (
     <div
       className="ui-card flex flex-col gap-2 p-3"

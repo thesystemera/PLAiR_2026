@@ -13,9 +13,10 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { artistCredit, blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
-import { MediaLoadError, MediaOfflineState } from '../MediaShared'
+import { LoadingRing, MediaEmptyState, MediaLoadError, MediaOfflineState } from '../MediaShared'
+import { StatusPill } from '../Notice'
 import { useDeletePost } from '../../hooks/useDeletePost'
-import { Modal, ModalSection } from './Modal'
+import { Modal, ModalSection, ModalTitle } from './Modal'
 import { MOTION, PRESETS } from '../../lib/motion'
 import { FadeSwap, Pop } from '../Motion'
 
@@ -270,36 +271,14 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
       onClose={handleClose}
       maxWidth="max-w-lg"
       maxHeight="max-h-[85vh]"
-      showCloseButton={false}
+      title={(
+        <ModalTitle
+          title="Reviews"
+          subtitleHighlight={`${label.title || 'This track'}${label.artist ? ` · ${label.artist}` : ''}`}
+        />
+      )}
     >
-      <div className="relative pb-6">
-        <div className="relative pb-6 border-b mb-6" style={{ borderColor: getBorder(0.1) }}>
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500/60 to-pink-500/60 flex items-center justify-center flex-shrink-0">
-              <MessageSquareText size={22} style={{ color: getWhite() }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="text-xl font-bold mb-1 transition-colors duration-theme" style={{ color: getWhite() }}>
-                Reviews
-              </h2>
-              <p className="text-sm truncate transition-colors duration-theme" style={{ color: getGrey300() }}>
-                {label.title || 'This track'}
-                {label.artist && <span style={{ color: getGrey400() }}> · {label.artist}</span>}
-              </p>
-            </div>
-            <motion.button
-              whileHover={PRESETS.hoverPressLarge.whileHover}
-              whileTap={PRESETS.hoverPressLarge.whileTap}
-              onClick={handleClose}
-              className="p-2 rounded-full transition-colors flex-shrink-0"
-              style={{ backgroundColor: getBorder(0.1), color: getGrey400() }}
-              aria-label="Close"
-            >
-              <X size={20} />
-            </motion.button>
-          </div>
-        </div>
-
+      <div>
         <ModalSection title="Your review">
           {user ? (
             <div className="space-y-2">
@@ -407,9 +386,7 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
             <MessageSquareText size={14} />
             What listeners said
             <Pop show={shownReviews.length > 0} className="flex">
-              <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300">
-                {shownReviews.length}
-              </span>
+              <StatusPill>{shownReviews.length}</StatusPill>
             </Pop>
           </div>
         }>
@@ -420,24 +397,14 @@ export function ReviewModal({ isOpen, onClose, trackId, track, onLogin }) {
           >
             {loading && shownReviews.length === 0 ? (
               <div className="flex items-center justify-center py-6">
-                <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
+                <LoadingRing />
               </div>
             ) : loadFailed ? (
               <MediaLoadError what="the reviews" onRetry={retryReviews} compact />
             ) : shownReviews.length === 0 && offlineMode ? (
               <MediaOfflineState icon={MessageSquareText} title="Reviews need a connection" compact />
             ) : shownReviews.length === 0 ? (
-              <div className="text-center py-6">
-                <MessageSquareText size={24} className="mx-auto mb-2 opacity-30" style={{ color: getGrey400() }} />
-                <p className="text-sm" style={{ color: getGrey400() }}>
-                  No reviews yet
-                </p>
-                {user && (
-                  <p className="text-xs mt-1" style={{ color: getGrey400() }}>
-                    Be the first to say what you think!
-                  </p>
-                )}
-              </div>
+              <MediaEmptyState compact icon={MessageSquareText} title="No reviews yet" subtitle={user ? 'Be the first to say what you think' : null} />
             ) : (
               <div className="space-y-2">
                 <AnimatePresence>

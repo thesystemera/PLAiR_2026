@@ -12,6 +12,7 @@ import { useViewport } from '../../contexts/ViewportContext'
 import { useQuality } from '../../contexts/QualityContext'
 import { MODAL_CLOSE_PAUSE_MS, MODAL_OPEN_PAUSE_MS } from '../../lib/renderPause'
 import { Pop } from '../Motion'
+import { CardIconButton, OptionCard } from '../PlayerSheet'
 
 const MODAL_BACKDROP_SAFE_STYLE = {
   backgroundColor: 'rgba(0,0,0,0.75)',
@@ -28,8 +29,9 @@ const MODAL_BACKDROP_STYLE = {
 const MODAL_TITLE_TRANSITION = { ...PRESETS.fadeSlide.animate.transition, delay: 0.08 }
 const MODAL_CLOSE_TRANSITION = { ...PRESETS.fadeSlide.animate.transition, delay: 0.12 }
 
+const FOOTER_SURFACE = { backgroundColor: 'rgba(10, 10, 12, 0.94)' }
+const DIALOG_SURFACE = { backgroundColor: 'rgba(10, 10, 12, 0.88)', border: '1px solid rgba(255, 255, 255, 0.1)', overflow: 'hidden' }
 const REST_TRANSFORM = 'translateY(0px) scale(1)'
-const HOVER_SPRING = SPRING.hover
 
 const DIALOG_MOTION = {
   initial: { opacity: 0, transform: 'translateY(18px) scale(0.94)' },
@@ -52,8 +54,6 @@ const SECTION_VARIANTS = {
   show: { opacity: 1, transform: REST_TRANSFORM, transition: { ...TWEEN.enter, staggerChildren: 0.03, delayChildren: 0.02 } },
 }
 
-const OPTION_HOVER = { transform: 'translateY(-2px) scale(1.02)', transition: HOVER_SPRING }
-const OPTION_TAP = { transform: 'translateY(0px) scale(0.98)', transition: HOVER_SPRING }
 
 const TITLE_MOTION = {
   initial: { opacity: 0, transform: 'translateX(-10px)' },
@@ -61,10 +61,8 @@ const TITLE_MOTION = {
 }
 
 const CLOSE_MOTION = {
-  initial: { opacity: 0, transform: 'rotate(-90deg) scale(1)' },
-  animate: { opacity: 1, transform: 'rotate(0deg) scale(1)' },
-  whileHover: { transform: 'rotate(0deg) scale(1.1)', transition: HOVER_SPRING },
-  whileTap: { transform: 'rotate(0deg) scale(0.9)', transition: HOVER_SPRING },
+  initial: { opacity: 0, transform: 'rotate(-90deg)' },
+  animate: { opacity: 1, transform: 'rotate(0deg)' },
 }
 
 const blurCache = new Map()
@@ -196,12 +194,11 @@ export function Modal({
 }) {
   const { currentTrack, activeSeedMode } = useUISelector(state => ({ currentTrack: state.engineState.currentTrack, activeSeedMode: state.radioState.activeSeedMode }))
   const { isShortViewport } = useViewport()
-  const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
+  const { getCategoryMetadata } = useDynamicTheme()
   const { pauseRendering } = useQuality()
   const [isClosing, setIsClosing] = useState(false)
 
   const backdropInteraction = usePointerInteraction()
-  const closeButtonInteraction = usePointerInteraction()
   const dialogRef = useRef(null)
 
   const artTrackId = currentTrack?.has_artwork !== false ? currentTrack?.id || null : null
@@ -269,10 +266,8 @@ export function Modal({
     handleClose()
   }
 
-  const handleCloseButtonClick = (e) => {
-    e?.preventDefault()
-    e?.stopPropagation()
-    if (!closeButtonInteraction.shouldTrigger() || isClosing) return
+  const handleCloseButtonClick = () => {
+    if (isClosing) return
     triggerHaptic('light')
     handleClose()
   }
@@ -313,11 +308,7 @@ export function Modal({
           aria-label={typeof title === 'string' ? title : undefined}
           tabIndex={-1}
           className={`rounded-2xl shadow-2xl w-full ${maxWidth} ${isShortViewport ? 'max-h-full' : maxHeight} flex flex-col relative focus:outline-none`}
-          style={{
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
-            border: `1px solid ${getBorder(0.3)}`,
-            overflow: 'hidden',
-          }}
+          style={DIALOG_SURFACE}
           onPointerDown={stopAllEvents}
           onPointerMove={stopAllEvents}
           onPointerUp={stopAllEvents}
@@ -334,39 +325,20 @@ export function Modal({
 
           <div className="relative z-10 flex flex-col" style={{ height: '100%', minHeight: 0 }}>
             {(title || showCloseButton) && (
-              <div
-                className={`flex items-center justify-between border-b flex-shrink-0 relative overflow-hidden ${isShortViewport ? 'px-4 py-2' : 'px-6 py-4'}`}
-                style={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  borderColor: getBorder(0.2)
-                }}
-              >
+              <div className={`flex items-start justify-between gap-3 flex-shrink-0 ${isShortViewport ? 'px-4 pt-3 pb-2' : 'px-5 pt-5 pb-3'}`}>
                 {title && (
                   <motion.div
                     {...TITLE_MOTION}
                     transition={MODAL_TITLE_TRANSITION}
-                    className="text-lg md:text-xl font-bold relative z-10"
-                    style={{ color: getWhite() }}
+                    className="flex-1 min-w-0 text-lg font-semibold text-white"
                   >
                     {title}
                   </motion.div>
                 )}
                 {showCloseButton && (
-                  <motion.button
-                    {...CLOSE_MOTION}
-                    transition={MODAL_CLOSE_TRANSITION}
-                    onPointerDown={closeButtonInteraction.onPointerDown}
-                    onPointerMove={closeButtonInteraction.onPointerMove}
-                    onPointerUp={handleCloseButtonClick}
-                    aria-label="Close"
-                    className="p-2 rounded-full transition-colors relative z-10"
-                    style={{
-                      backgroundColor: 'rgba(255,255,255,0.1)',
-                      color: getWhite()
-                    }}
-                  >
-                    <X size={20} />
-                  </motion.button>
+                  <motion.div {...CLOSE_MOTION} transition={MODAL_CLOSE_TRANSITION} className="flex -mr-1.5 -mt-0.5">
+                    <CardIconButton icon={X} size={20} onClick={handleCloseButtonClick} title="Close" />
+                  </motion.div>
                 )}
               </div>
             )}
@@ -381,15 +353,8 @@ export function Modal({
                 scrollbarColor: `${categoryColor}60 transparent`,
               }}
             >
-              <div
-                className="p-6 min-h-full relative overflow-hidden"
-                style={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.4)',
-                }}
-              >
-                <div className="relative z-10">
-                  {children}
-                </div>
+              <div className={`relative ${isShortViewport ? 'px-4 pb-4' : 'px-5 pb-5'} ${title || showCloseButton ? 'pt-1' : isShortViewport ? 'pt-4' : 'pt-5'}`}>
+                {children}
               </div>
             </motion.div>
           </div>
@@ -401,17 +366,13 @@ export function Modal({
 }
 
 export const ModalTitle = memo(function ModalTitle({ title, subtitle, subtitleHighlight }) {
-  const { getWhite, getGrey400 } = useDynamicTheme()
-
   return (
-    <div>
-      <div className="text-xl font-bold">{title}</div>
-      {subtitle && (
-        <p className="text-sm mt-1 font-normal" style={{ color: getGrey400() }}>
+    <div className="min-w-0">
+      <div className="text-lg font-semibold leading-tight text-white">{title}</div>
+      {(subtitle || subtitleHighlight) && (
+        <p className="mt-1 text-sm font-normal text-white/55 line-clamp-2">
           {subtitle}
-          {subtitleHighlight && (
-            <span style={{ color: getWhite(), opacity: 0.7 }}>{subtitleHighlight}</span>
-          )}
+          {subtitleHighlight && <span className="text-white/80">{subtitleHighlight}</span>}
         </p>
       )}
     </div>
@@ -419,18 +380,25 @@ export const ModalTitle = memo(function ModalTitle({ title, subtitle, subtitleHi
 })
 
 export const ModalFooter = memo(function ModalFooter({ children, className = '' }) {
-  const { getBorder } = useDynamicTheme()
+  const { isShortViewport } = useViewport()
+  const edge = isShortViewport ? '-mx-4 -mb-4 px-4 pb-4' : '-mx-5 -mb-5 px-5 pb-5'
 
   return (
     <motion.div
       variants={ITEM_VARIANTS}
-      className={`flex items-center justify-between pt-4 border-t ${className}`}
-      style={{ borderColor: getBorder(0.1) }}
+      className={`sticky bottom-0 z-10 mt-5 flex items-center justify-between gap-3 border-t border-white/10 pt-3 ${edge} ${className}`}
+      style={FOOTER_SURFACE}
     >
       {children}
     </motion.div>
   )
 })
+
+const MODAL_BUTTONS = {
+  primary: 'text-white border border-[color-mix(in_srgb,var(--theme-accent)_70%,transparent)] bg-[color-mix(in_srgb,var(--theme-accent)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--theme-accent)_55%,transparent)]',
+  secondary: 'text-white border border-white/15 bg-white/10 hover:bg-white/15',
+  danger: 'text-white border border-red-500/70 bg-red-500/35 hover:bg-red-500/50',
+}
 
 export const ModalButton = memo(function ModalButton({
   onClick,
@@ -440,68 +408,29 @@ export const ModalButton = memo(function ModalButton({
   className = '',
   ...props
 }) {
-  const { activeSeedMode } = useUISelector(state => ({ activeSeedMode: state.radioState.activeSeedMode }))
-  const { getCategoryMetadata, getWhite, getBorder } = useDynamicTheme()
-
-  const activeCategory = activeSeedMode || 'all'
-  const categoryMeta = getCategoryMetadata(activeCategory)
-  const categoryColor = categoryMeta?.color || '#6366f1'
-
   const handleClick = (e) => {
     if (disabled) return
     triggerHaptic('medium')
     onClick?.(e)
   }
 
-  const variantStyles = {
-    primary: {
-      backgroundColor: `${categoryColor}60`,
-      border: `1px solid ${categoryColor}`,
-      color: getWhite(),
-      boxShadow: `0 2px 15px ${categoryColor}30`
-    },
-    secondary: {
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      border: `1px solid ${getBorder(0.5)}`,
-      color: getWhite(),
-    },
-    danger: {
-      backgroundColor: '#ef444460',
-      border: '1px solid #ef4444',
-      color: getWhite(),
-      boxShadow: '0 2px 15px #ef444430'
-    }
-  }
-
   return (
-    <motion.button
-      whileHover={disabled ? undefined : PRESETS.softPress.whileHover}
-      whileTap={disabled ? undefined : PRESETS.softPress.whileTap}
+    <button
       onClick={handleClick}
       disabled={disabled}
-      className={`px-5 py-2.5 rounded-xl font-medium transition-[background-color,border-color,color,box-shadow,opacity] ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
-      style={variantStyles[variant]}
+      className={`ui-press px-5 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${MODAL_BUTTONS[variant] || MODAL_BUTTONS.primary} ${className}`}
       {...props}
     >
       {children}
-    </motion.button>
+    </button>
   )
 })
 
 export const ModalSection = memo(function ModalSection({ title, children, className = '' }) {
-  const { getWhite } = useDynamicTheme()
-
   return (
-    <motion.div variants={SECTION_VARIANTS} className={`mb-6 ${className}`}>
+    <motion.div variants={SECTION_VARIANTS} className={`mb-5 last:mb-0 ${className}`}>
       {title && (
-        <h3
-          className="text-sm font-bold uppercase tracking-wide mb-3"
-          style={{
-            color: getWhite(),
-            opacity: 0.9,
-            textShadow: '0 1px 3px rgba(0,0,0,0.8)'
-          }}
-        >
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/55">
           {title}
         </h3>
       )}
@@ -512,92 +441,46 @@ export const ModalSection = memo(function ModalSection({ title, children, classN
 
 export const ModalOptionButton = memo(function ModalOptionButton({
   onClick,
-  icon: Icon,
+  icon,
   iconColor,
-  iconBgColor,
   title,
   description,
   isSelected = false,
   isDisabled = false,
   isMobile = false,
-  className = '',
-  ...props
+  toggle = false,
 }) {
-  const { getWhite, getGrey400, getBorder } = useDynamicTheme()
-  const interaction = usePointerInteraction()
-
-  const handleClick = (e) => {
-    if (isDisabled || !interaction.shouldTrigger()) return
+  const handleSelect = (e) => {
     triggerHaptic(isSelected ? 'light' : 'medium')
     onClick?.(e)
   }
 
-  const resolvedIconBgColor = iconBgColor || `${iconColor}20`
-
   return (
-    <motion.button
-      variants={ITEM_VARIANTS}
-      whileHover={isDisabled ? undefined : OPTION_HOVER}
-      whileTap={isDisabled ? undefined : OPTION_TAP}
-      onPointerDown={interaction.onPointerDown}
-      onPointerMove={interaction.onPointerMove}
-      onPointerUp={handleClick}
-      disabled={isDisabled}
-      className={`rounded-xl border transition-[background-color,border-color,box-shadow,opacity] duration-micro group relative overflow-hidden ${
-        isMobile ? 'p-3 flex flex-col items-center justify-center text-center gap-2' : 'p-4 text-left'
-      } ${isDisabled ? 'cursor-not-allowed opacity-30' : 'cursor-pointer'} ${className}`}
-      style={{
-        backgroundColor: isSelected ? `${iconColor}15` : 'rgba(255,255,255,0.03)',
-        borderColor: isSelected ? iconColor : getBorder(0.1),
-        boxShadow: isSelected ? `0 4px 20px ${iconColor}30` : 'none',
-      }}
-      {...props}
-    >
-      {isMobile ? (
-        <>
-          <div
-            className="p-2 rounded-lg transition-transform duration-quick group-hover:scale-110 relative z-10"
-            style={{ backgroundColor: resolvedIconBgColor }}
-          >
-            <Icon size={24} style={{ color: iconColor }} />
-          </div>
-          <div className="text-xs font-semibold relative z-10" style={{ color: getWhite() }}>
-            {title}
-          </div>
-        </>
-      ) : (
-        <div className="flex items-start gap-3 relative z-10">
-          <div
-            className="p-2 rounded-lg transition-transform duration-quick group-hover:scale-110 flex-shrink-0"
-            style={{ backgroundColor: resolvedIconBgColor }}
-          >
-            <Icon size={24} style={{ color: iconColor }} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold mb-1" style={{ color: getWhite() }}>
-              {title}
-            </div>
-            {description && (
-              <div className="text-sm" style={{ color: getGrey400() }}>
-                {description}
-              </div>
-            )}
-          </div>
-          <div
-            className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 transition-[transform,opacity] duration-micro"
-            style={{
-              backgroundColor: iconColor,
-              transform: isSelected ? 'scale(1)' : 'scale(0)',
-              opacity: isSelected ? 1 : 0,
-            }}
-          >
-            <Check size={14} strokeWidth={3} className="text-white" />
-          </div>
-        </div>
-      )}
-    </motion.button>
+    <motion.div variants={ITEM_VARIANTS}>
+      <OptionCard
+        icon={icon}
+        tint={iconColor}
+        title={title}
+        subtitle={isMobile ? null : description}
+        selected={isSelected}
+        disabled={isDisabled}
+        toggle={toggle}
+        onSelect={handleSelect}
+        badge={toggle ? <ToggleMark on={isSelected} /> : null}
+      />
+    </motion.div>
   )
 })
+
+function ToggleMark({ on }) {
+  return (
+    <Pop show={on} className="flex flex-shrink-0">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--theme-accent)] text-black">
+        <Check size={13} strokeWidth={3} />
+      </span>
+    </Pop>
+  )
+}
 
 export const ModalCard = memo(function ModalCard({
   children,

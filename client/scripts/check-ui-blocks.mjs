@@ -18,6 +18,15 @@ const RULES = [
     why: 'card that grows on hover: interactive cards are OptionCard (ui-card)',
   },
   {
+    test: /border-t-transparent|borderTopColor:\s*'transparent'/,
+    why: 'spinner drawn by hand: use LoadingRing',
+  },
+  {
+    test: /showCloseButton=\{false\}/,
+    why: 'pop-up header built by hand: pass the title to Modal and use its close button',
+    except: (file) => file === join('components', 'modals', 'CompatibilityWarningModal.jsx'),
+  },
+  {
     test: /GLASS\.expandPanel\b/,
     why: 'pull-up panel built by hand: use PlayerSheet',
     except: (file) => file === SHEET_HOME,

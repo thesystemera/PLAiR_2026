@@ -36,7 +36,7 @@ export function ListModal({ isOpen, kind, onClose, onSelect }) {
       maxWidth="max-w-md"
     >
       <ModalSection>
-        <div className="grid gap-3 grid-cols-1">
+        <div className="grid grid-cols-1 gap-2">
           {(list?.options || []).map((option) => {
             const metadata = getCategoryMetadata(option.id)
 

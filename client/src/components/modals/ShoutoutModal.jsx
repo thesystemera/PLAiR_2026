@@ -13,9 +13,9 @@ import { api } from '../../lib/api'
 import { triggerHaptic } from '../../lib/haptics'
 import { blobToBase64, formatTimeAgo } from '../../lib/utils'
 import MediaActions from '../MediaActions'
-import { MediaLoadError, MediaOfflineState } from '../MediaShared'
+import { LoadingRing, MediaLoadError, MediaOfflineState } from '../MediaShared'
 import { useDeletePost } from '../../hooks/useDeletePost'
-import { Modal, ModalSection, ModalMetadataField, ModalCard } from './Modal'
+import { Modal, ModalCard, ModalMetadataField, ModalSection, ModalTitle } from './Modal'
 import { CSS_TRANSITION, MOTION, PRESETS } from '../../lib/motion'
 import { Fade, FadeSwap, Pop } from '../Motion'
 
@@ -675,63 +675,34 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
 
       <Modal
         isOpen={isOpen}
-        onClose={onClose}
+        onClose={handleClose}
         maxWidth="max-w-lg"
         maxHeight="max-h-[85vh]"
-        showCloseButton={false}
-      >
-        <div className="relative pb-6">
-          <div className="relative pb-6 border-b mb-6" style={{ borderColor: getBorder(0.1) }}>
-            <div className="flex items-start gap-4">
-              <div className="relative w-16 h-16 flex-shrink-0">
-                <FadeSwap swapKey={profilePictureUrl ? 'picture' : 'initial'} preset={PRESETS.fade} className="absolute inset-0">
-                  {profilePictureUrl ? (
-                    <ProfileArt
-                      userId={shoutout.user_id}
-                      alt={shoutout.username || 'User'}
-                      className="relative w-16 h-16 rounded-full overflow-hidden shadow-lg flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg flex-shrink-0">
-                      {getUserInitial()}
-                    </div>
-                  )}
-                </FadeSwap>
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <h2
-                  className="text-xl font-bold mb-1 transition-colors duration-theme"
-                  style={{ color: getWhite() }}
-                >
-                  {KIND_TITLES[shoutout.kind] || 'Shoutout'}
-                </h2>
-                <p
-                  className="text-sm transition-colors duration-theme"
-                  style={{ color: getGrey300() }}
-                >
-                  {shoutout.username || 'Anonymous'}
-                  {shoutout.kind === 'review' && shoutout.track?.title && (
-                    <span style={{ color: getGrey400() }}> · on {shoutout.track.title}</span>
-                  )}
-                </p>
-              </div>
-
-              <motion.button
-                whileHover={PRESETS.hoverPressLarge.whileHover}
-                whileTap={PRESETS.hoverPressLarge.whileTap}
-                onClick={handleClose}
-                className="p-2 rounded-full transition-colors flex-shrink-0"
-                style={{
-                  backgroundColor: getBorder(0.1),
-                  color: getGrey400()
-                }}
-              >
-                <X size={20} />
-              </motion.button>
+        title={(
+          <div className="flex items-center gap-3">
+            <div className="relative w-11 h-11 flex-shrink-0">
+              <FadeSwap swapKey={profilePictureUrl ? 'picture' : 'initial'} preset={PRESETS.fade} className="absolute inset-0">
+                {profilePictureUrl ? (
+                  <ProfileArt
+                    userId={shoutout.user_id}
+                    alt={shoutout.username || 'User'}
+                    className="relative w-11 h-11 rounded-full overflow-hidden flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-lg font-bold flex-shrink-0">
+                    {getUserInitial()}
+                  </div>
+                )}
+              </FadeSwap>
             </div>
+            <ModalTitle
+              title={KIND_TITLES[shoutout.kind] || 'Shoutout'}
+              subtitleHighlight={`${shoutout.username || 'Anonymous'}${shoutout.kind === 'review' && shoutout.track?.title ? ` · on ${shoutout.track.title}` : ''}`}
+            />
           </div>
-
+        )}
+      >
+        <div>
           {durationSeconds > 0 && (
             <ShoutoutProgressBar
               durationSeconds={durationSeconds}
@@ -997,7 +968,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                 >
                   {repliesLoading ? (
                     <div className="flex items-center justify-center py-6">
-                      <div className="animate-spin w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full" />
+                      <LoadingRing />
                     </div>
                   ) : repliesFailed ? (
                     <MediaLoadError what="the replies" onRetry={retryReplies} compact />

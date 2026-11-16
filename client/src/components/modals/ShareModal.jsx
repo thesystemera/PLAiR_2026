@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Modal, ModalProgress, ModalErrorState } from './Modal'
+import { Modal, ModalButton, ModalErrorState, ModalProgress, ModalSection } from './Modal'
 import { Fade, FadeSwap } from '../Motion'
 import { PRESETS } from '../../lib/motion'
 import { useUISelector } from '../../contexts/UIStateContext'
@@ -198,8 +198,8 @@ export function ShareModal({ isOpen, onClose, track }) {
       title="Share Track"
       maxWidth="max-w-md"
     >
-      <div className="space-y-6">
-        <div className="flex items-center gap-4">
+      <div>
+        <ModalSection className="flex items-center gap-4">
           {currentTrack?.has_artwork && (
             <div className="relative w-16 h-16 rounded-lg overflow-hidden flex-shrink-0">
               <TrackArt trackId={trackId} alt={trackTitle} />
@@ -209,10 +209,9 @@ export function ShareModal({ isOpen, onClose, track }) {
             <div className="font-semibold text-white truncate">{trackTitle}</div>
             <div className="text-sm text-gray-400 truncate">{trackArtist}</div>
           </div>
-        </div>
+        </ModalSection>
 
-        <div>
-          <div className="text-sm text-gray-400 mb-2">Track Link</div>
+        <ModalSection title="Track link">
           <div className="flex gap-2">
             <div className="flex-1 bg-white/5 rounded-lg px-3 py-2 text-sm text-gray-300 truncate">
               {getShareLink()}
@@ -242,22 +241,21 @@ export function ShareModal({ isOpen, onClose, track }) {
               </button>
             )}
           </div>
-        </div>
+        </ModalSection>
 
-        <div>
-          <div className="text-sm text-gray-400 mb-2">Share as Video</div>
+        <ModalSection title="Share as video">
 
           <FadeSwap swapKey={isRendering ? 'rendering' : status} mode="wait" preset={PRESETS.stepSwap}>
             {status === 'idle' && (
               <div className="space-y-3">
-                <button
+                <ModalButton
                   onClick={handleGenerateVideo}
                   disabled={!currentTrack || otherTrackRendering}
-                  className="ui-press-soft w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors font-medium"
+                  className="w-full flex items-center justify-center gap-2"
                 >
                   <Video className="w-5 h-5" />
-                  Generate Video{includeVideoClips ? ' + Clips' : ''}
-                </button>
+                  Generate video{includeVideoClips ? ' + clips' : ''}
+                </ModalButton>
                 {otherTrackRendering && (
                   <InlineNote tone="info">A video of “{jobTitle}” is rendering. This one can start when it is done.</InlineNote>
                 )}
@@ -347,7 +345,7 @@ export function ShareModal({ isOpen, onClose, track }) {
               />
             )}
           </FadeSwap>
-        </div>
+        </ModalSection>
       </div>
     </Modal>
   )
