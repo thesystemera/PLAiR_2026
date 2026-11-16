@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback, useMemo, useSyncExternalStore } from 'react'
-import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff } from 'lucide-react'
+import { User as UserIcon, Heart, Star, Ban, LogIn, LogOut, X, Music, Loader2, HardDrive, Wifi, WifiOff, Trash2, Database, TrendingDown, Mic2, Volume2, MapPin, Cloud, Clock, Edit2, Radio, Gauge, Camera, Download, Sparkles, Headphones, Library, Settings, Upload, Play, Video, Image, DollarSign, Smartphone, Megaphone, MessageSquareText, Plus, Lock, EyeOff, Rocket } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 import { usePreferences } from '../contexts/PreferencesContext'
 import { useStorage } from '../contexts/StorageContext'
@@ -28,7 +28,7 @@ import { useDynamicTheme, PANEL } from '../contexts/DynamicThemeContext'
 import { CSS_TRANSITION, PRESETS } from '../lib/motion'
 import { formatTimeAgo } from '../lib/utils'
 import { InlineNote } from './Notice'
-import { MediaLoadError, MediaOfflineState } from './MediaShared'
+import { Equalizer, MediaLoadError, MediaOfflineState } from './MediaShared'
 import { backgroundDownloader } from '../lib/backgroundDownloader'
 
 const DOWNLOAD_PAUSE_NOTES = {
@@ -222,10 +222,8 @@ const MediaRow = memo(function MediaRow({
   isLoading,
   isPlaying
 }) {
-  const { getButtonHoverBg } = useDynamicTheme()
   const playInteraction = usePointerInteraction()
   const removeInteraction = usePointerInteraction()
-  const hoverBg = useMemo(() => getButtonHoverBg(), [getButtonHoverBg])
   const hasArt = art?.kind === 'track' ? art.hasArtwork !== false : !!image
 
   const handlePlay = () => {
@@ -241,9 +239,8 @@ const MediaRow = memo(function MediaRow({
 
   return (
     <div
-      className={`flex items-center gap-3 p-3 rounded-lg transition-[background-color,box-shadow] duration-quick group mb-1 ${isPlaying ? 'bg-white/10 ring-1 ring-purple-500/50' : ''}`}
-      onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = hoverBg)}
-      onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
+      className="ui-row flex items-center gap-3 p-3 rounded-lg group mb-1"
+      data-current={isPlaying ? 'true' : 'false'}
     >
       <div
         onPointerDown={playInteraction.onPointerDown}
@@ -258,22 +255,22 @@ const MediaRow = memo(function MediaRow({
                 art={art}
                 image={image}
                 alt={title}
-                className={`relative w-12 h-12 rounded overflow-hidden flex-shrink-0 ${isPlaying ? 'opacity-50' : ''}`}
+                className="relative w-12 h-12 rounded overflow-hidden flex-shrink-0"
               />
-              <Pop show={!!isPlaying} className="absolute inset-0 flex items-center justify-center">
-                <Loader2 size={20} className="animate-spin text-white" />
+              <Pop show={!!isPlaying} className="absolute inset-0 flex items-center justify-center rounded bg-black/55 text-white">
+                <Equalizer />
               </Pop>
             </div>
           ) : (
             <div className="w-12 h-12 rounded bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center flex-shrink-0 text-white">
               <FadeSwap swapKey={isPlaying ? 'playing' : 'idle'} preset={PRESETS.iconSwap} mode="wait" className="flex">
-                {isPlaying ? <Loader2 size={20} className="animate-spin" /> : fallbackIcon}
+                {isPlaying ? <Equalizer /> : fallbackIcon}
               </FadeSwap>
             </div>
           )}
         </FadeSwap>
         <div className="flex-1 min-w-0">
-          <div className={`font-medium truncate ${isPlaying ? 'text-purple-300' : ''}`}>{title}</div>
+          <div className={`font-medium truncate ${isPlaying ? 'ui-current-text' : ''}`}>{title}</div>
           <div className="text-sm text-gray-400 truncate">{subtitle}</div>
         </div>
         <TypeIcon size={16} className={typeIconColor} />
@@ -543,7 +540,7 @@ const TrackItem = memo(function TrackItem({ track, icon, iconColor, onPlayTrack,
   return (
     <MediaRow
       art={{ kind: 'track', id: track?.id, hasArtwork: track?.has_artwork }}
-      fallbackIcon={<span className="text-lg">🎵</span>}
+      fallbackIcon={<Music size={20} />}
       title={title}
       subtitle={style}
       typeIcon={icon}
@@ -1765,7 +1762,7 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
         {user?.tier === 'premium' ? (
           <div className="p-4 md:p-6 border-b border-gray-800">
             <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
-              <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">PLAiR Premium</h3></div>
+              <div className="flex items-center gap-2 mb-2"><Star size={22} className="text-yellow-400" fill="currentColor" /><h3 className="font-bold text-yellow-400">PLAiR Premium</h3></div>
               <Fade as="p" show={!!generationUsage} className="text-sm text-gray-300 mb-1">{generationUsage?.remaining} of {generationUsage?.limit} AI generations left this {generationUsage?.period}</Fade>
               <Fade as="p" show={!!periodEnd && !Number.isNaN(periodEnd.getTime())} className="text-xs text-gray-400 mb-1">Current period ends {periodEnd?.toLocaleDateString()}</Fade>
               <Fade show={billingStatus?.status === 'past_due'} className="mb-1">
@@ -1792,11 +1789,11 @@ export const User = memo(function User({ onLogin, onRegister, onLogout, onPlayTr
         ) : (
           <div className="p-4 md:p-6 border-b border-gray-800">
             <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 p-4 rounded-lg border border-yellow-500/30">
-              <div className="flex items-center gap-2 mb-2"><span className="text-2xl">⭐</span><h3 className="font-bold text-yellow-400">Upgrade to Premium</h3></div>
+              <div className="flex items-center gap-2 mb-2"><Star size={22} className="text-yellow-400" fill="currentColor" /><h3 className="font-bold text-yellow-400">Upgrade to Premium</h3></div>
               <p className="text-sm text-gray-300 mb-3">Get ~100 AI tracks per month and support development!</p>
               <button onClick={handleUpgradeToPremium} disabled={billingBusy} className="ui-press-soft w-full px-4 py-3 text-white rounded-lg font-semibold transition flex items-center justify-center gap-2 disabled:opacity-60" style={{ background: getPremiumGradient() }}>
                 <FadeSwap swapKey={billingBusy ? 'busy' : 'idle'} preset={PRESETS.iconSwap} mode="wait" className="flex">
-                  {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <span>🚀</span>}
+                  {billingBusy ? <Loader2 size={18} className="animate-spin" /> : <Rocket size={18} />}
                 </FadeSwap>
                 Upgrade to Premium - {priceLabel}
               </button>

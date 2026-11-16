@@ -591,7 +591,7 @@ export const ModalOptionButton = memo(function ModalOptionButton({
               opacity: isSelected ? 1 : 0,
             }}
           >
-            <span className="text-white text-sm">✓</span>
+            <Check size={14} strokeWidth={3} className="text-white" />
           </div>
         </div>
       )}

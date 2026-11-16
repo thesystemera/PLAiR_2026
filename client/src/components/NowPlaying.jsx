@@ -13,10 +13,11 @@ import {api} from '../lib/api'
 import {useViewport} from '../contexts/ViewportContext'
 import {PANEL} from '../lib/themeManager'
 import {watchOffscreen} from '../lib/microMotion'
-import {ExternalLink, MessageSquareText, Music} from 'lucide-react'
+import { ExternalLink, MessageSquareText, Music, Share2, Sparkles, ThumbsUp, Star, Ban, Flame, Palette, Clapperboard } from 'lucide-react'
 import {AnimatePresence, motion} from 'framer-motion'
 import {PRESETS} from '../lib/motion'
 import {FadeSwap} from './Motion'
+import {TaskRing} from './TaskRing'
 import {artistCredit} from '../lib/utils'
 
 const NO_LYRICS = []
@@ -408,21 +409,21 @@ const TrackAnalytics = memo(function TrackAnalytics({ trackId }) {
         </div>
 
         <div className="bg-black/20 p-3 rounded-lg">
-          <div className="text-xs text-gray-400 mb-1">👍 Likes</div>
+          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><ThumbsUp size={12} /> Likes</div>
           <div className="font-bold text-lg text-green-400">
             {analytics.likes || 0}
           </div>
         </div>
 
         <div className="bg-black/20 p-3 rounded-lg">
-          <div className="text-xs text-gray-400 mb-1">⭐ Super Likes</div>
+          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Star size={12} /> Super Likes</div>
           <div className="font-bold text-lg text-yellow-400">
             {analytics.superlikes || 0}
           </div>
         </div>
 
         <div className="bg-black/20 p-3 rounded-lg">
-          <div className="text-xs text-gray-400 mb-1">🚫 Bans</div>
+          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Ban size={12} /> Bans</div>
           <div className="font-bold text-lg text-red-400">
             {analytics.bans || 0}
           </div>
@@ -453,7 +454,7 @@ const TrackAnalytics = memo(function TrackAnalytics({ trackId }) {
           <div className="bg-black/20 p-3 rounded-lg col-span-2">
             <div className="text-xs text-gray-400 mb-1">Popularity Ranking</div>
             <div className="font-bold text-2xl bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-              {analytics.percentile >= 95 ? '🔥 ' : analytics.percentile >= 75 ? '⭐ ' : ''}
+              {analytics.percentile >= 95 ? <Flame className="inline w-6 h-6 mr-1 -mt-1 text-orange-300" /> : analytics.percentile >= 75 ? <Star className="inline w-6 h-6 mr-1 -mt-1 text-yellow-300" /> : null}
               Top {Math.round(100 - analytics.percentile)}%
             </div>
             <div className="text-xs text-gray-500 mt-1">
@@ -560,45 +561,36 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
 
           <div className="absolute top-4 right-4 flex gap-2 z-10">
             <ReviewsButton track={track} />
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                openShareModal(track)
-              }}
-              disabled={!track}
-              className={`${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`}
-              title="Share track"
-            >
-              <svg className={BUTTON.icon.small} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                if (hasActiveJobs) {
-                  toggleQueuePanel()
-                } else {
-                  onOpenGenerationModal(track)
-                }
-              }}
-              disabled={!track}
-              className={`${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`}
-              title={hasActiveJobs ? 'View generation queue' : 'Generate music'}
-            >
-              <FadeSwap swapKey={hasActiveJobs ? 'queue' : 'generate'} preset={PRESETS.iconSwap} mode="wait">
-                {hasActiveJobs ? (
-                  <svg className={`animate-spin ${BUTTON.icon.small}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                ) : (
-                  <svg className={BUTTON.icon.small} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                )}
-              </FadeSwap>
-            </button>
+            <TaskRing jobType="share_video">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  openShareModal(track)
+                }}
+                disabled={!track}
+                className={`${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`}
+                title="Share track"
+              >
+                <Share2 className={BUTTON.icon.small} />
+              </button>
+            </TaskRing>
+            <TaskRing jobType="generation">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (hasActiveJobs) {
+                    toggleQueuePanel()
+                  } else {
+                    onOpenGenerationModal(track)
+                  }
+                }}
+                disabled={!track}
+                className={`${BUTTON.overlay.base} ${BUTTON.overlay.padding.small} ${BUTTON.overlay.rounded} ${BUTTON.overlay.shadow} ${BUTTON.overlay.transition} ${BUTTON.overlay.disabled} text-white`}
+                title={hasActiveJobs ? 'See the songs being made' : 'Generate music'}
+              >
+                <Sparkles className={BUTTON.icon.small} />
+              </button>
+            </TaskRing>
           </div>
         </div>
 
@@ -695,7 +687,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
         {track.artwork_prompt && track.is_ai_generated === false && (
           <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border-l-4 border-amber-500/50 p-4 rounded-lg mb-4">
             <div className="text-xs text-amber-400/80 mb-2 flex items-center gap-2">
-              <span>🎨</span>
+              <Palette size={14} />
               <span>AI Artwork Description</span>
             </div>
             <p className="text-sm text-gray-300 italic leading-relaxed">{track.artwork_prompt}</p>
@@ -708,7 +700,7 @@ export const NowPlaying = memo(function NowPlaying({ onToggleFullscreen, onOpenG
           return (
             <div className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border-l-4 border-cyan-500/50 p-4 rounded-lg mb-4">
               <div className="text-xs text-cyan-400/80 mb-2 flex items-center gap-2">
-                <span>🎬</span>
+                <Clapperboard size={14} />
                 <span>Video Search Terms</span>
               </div>
               <div className="flex flex-wrap gap-2">

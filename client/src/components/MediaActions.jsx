@@ -6,13 +6,15 @@ import { useUIActions } from '../contexts/UIStateContext'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { triggerHaptic } from '../lib/haptics'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
-import { CSS_TRANSITION } from '../lib/motion'
 import { burst, nope, pop } from '../lib/microMotion'
 
 const BURST_COLORS = {
   like: '#ec4899',
   super_like: '#facc15'
 }
+
+const OVERLAY_BUTTON = 'bg-black/60 text-white/90 hover:bg-black/80'
+const PANEL_BUTTON = 'bg-[var(--theme-panel-background)] text-[var(--theme-secondary-text)] hover:bg-[var(--theme-card-hover-background)]'
 
 const ACTIONS = [
   { type: 'like', icon: Heart, title: 'Like', activeClassName: 'bg-pink-600 text-white', fill: true },
@@ -40,7 +42,7 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
   const { isAuthenticated, user } = useAuth()
   const { getPreference, setPreference, removePreference } = usePreferences()
   const { toastError } = useUIActions()
-  const { getGrey800, getGrey700, getGrey400, triggerEffect } = useDynamicTheme()
+  const { triggerEffect } = useDynamicTheme()
   const likeInteraction = usePointerInteraction()
   const superLikeInteraction = usePointerInteraction()
   const banInteraction = usePointerInteraction()
@@ -100,25 +102,10 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
     return null
   }
 
-  const baseButtonStyle = (compact || overlay) ? {
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    color: 'rgba(255, 255, 255, 0.9)',
-    transition: CSS_TRANSITION.quick
-  } : {
-    backgroundColor: getGrey800(),
-    color: getGrey400(),
-    transition: CSS_TRANSITION.theme
-  }
-
-  const hoverStyle = (compact || overlay) ? {
-    backgroundColor: 'rgba(0, 0, 0, 0.8)'
-  } : {
-    backgroundColor: getGrey700()
-  }
+  const restClasses = (compact || overlay) ? OVERLAY_BUTTON : PANEL_BUTTON
 
   const iconSize = overlay ? 20 : (compact ? 14 : 16)
   const buttonPadding = overlay ? 'p-2.5' : (compact ? 'p-1.5' : 'p-2')
-  const activeStyle = { transition: CSS_TRANSITION.quick }
 
   if (ownPost) {
     return (
@@ -131,10 +118,7 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
             e.stopPropagation()
             if (deleteInteraction.shouldTrigger()) onDelete()
           }}
-          className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg hover:text-red-400`}
-          style={baseButtonStyle}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, hoverStyle)}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, baseButtonStyle)}
+          className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg ${restClasses} hover:text-red-400`}
           title="Delete"
           aria-label="Delete"
         >
@@ -157,10 +141,7 @@ export default function MediaActions({ type = 'track', itemId, compact = false, 
             onPointerDown={interaction.onPointerDown}
             onPointerMove={interaction.onPointerMove}
             onPointerUp={(e) => handleAction(e, actionType, interaction)}
-            className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg ${active ? activeClassName : ''}`}
-            style={active ? activeStyle : baseButtonStyle}
-            onMouseEnter={(e) => !active && Object.assign(e.currentTarget.style, hoverStyle)}
-            onMouseLeave={(e) => !active && Object.assign(e.currentTarget.style, baseButtonStyle)}
+            className={`ui-tap relative flex items-center justify-center leading-none ${buttonPadding} rounded-lg ${active ? activeClassName : restClasses}`}
             title={title}
             aria-label={title}
             aria-pressed={active}

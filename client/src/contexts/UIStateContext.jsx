@@ -595,6 +595,9 @@ export function UIStateProvider({ children }) {
 
   const [queueState, setQueueState] = useState({
     hasActiveJobs: false,
+    generationProgress: null,
+    uploadActive: false,
+    uploadProgress: null,
   })
 
   const publishQueueState = useCallback((updates) => {

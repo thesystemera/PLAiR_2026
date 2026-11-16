@@ -889,10 +889,6 @@ export const Player = memo(function Player({ onSeek, onArtworkClick }) {
             detecting={bitratePicker.detecting}
             handleSelectBitrate={bitratePicker.handleSelectBitrate}
             detectQuality={bitratePicker.detectQuality}
-            getBitrateIcon={bitratePicker.getBitrateIcon}
-            getBitrateLabel={bitratePicker.getBitrateLabel}
-            getBitrateDescription={bitratePicker.getBitrateDescription}
-            getQualityColor={bitratePicker.getQualityColor}
             isAuthenticated={bitratePicker.isAuthenticated}
           />
           <GenerationQueuePanel />

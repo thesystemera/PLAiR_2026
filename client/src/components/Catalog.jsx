@@ -147,7 +147,7 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
       index={index}
       shouldAnimate={shouldAnimate}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} group/card cursor-pointer ${
-        isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
+        isPlaying ? 'ui-current-outline' : ''
       } ${isQueued && !isPlaying ? 'ring-1 ring-blue-400/40' : ''}`}
       onPointerDown={cardInteraction.onPointerDown}
       onPointerMove={cardInteraction.onPointerMove}

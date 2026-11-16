@@ -48,6 +48,7 @@ try {
         Invoke-QualityStep 'Frontend lint' { & npm run --silent lint }
         Invoke-QualityStep 'Frontend UI state (selectors and engine keys)' { & npm run --silent check:ui-state }
         Invoke-QualityStep 'Frontend motion (no CSS transitions on animated elements)' { & npm run --silent check:motion }
+        Invoke-QualityStep 'Frontend UI blocks (no emoji icons, hand-written hovers, growing cards or hand-built pull-up panels)' { & npm run --silent check:ui-blocks }
         Invoke-QualityStep 'Frontend dead code (files, exports, dependencies)' { & npm run --silent dead-code }
         if (-not $SkipBuild) {
             Invoke-QualityStep 'Frontend production build' { & npm run --silent build }

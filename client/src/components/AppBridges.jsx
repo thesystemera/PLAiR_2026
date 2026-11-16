@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CloudOff, Video } from 'lucide-react'
+import { CloudOff } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
@@ -15,7 +15,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 import { artistCredit } from '../lib/utils'
-import { NoticeAction, NoticeClose } from './Notice'
+import { useTaskNotices } from './TaskNotice'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -222,12 +222,12 @@ export function ConnectionNotice() {
 }
 
 export function UploadNotice() {
-  const { success, errorToast, info, publishContentUpdate } = useUISelector(state => ({
-    success: state.toastSuccess,
-    errorToast: state.toastError,
+  const { info, publishContentUpdate } = useUISelector(state => ({
     info: state.toastInfo,
     publishContentUpdate: state.publishContentUpdate,
   }))
+  const { playTrack } = usePlaybackActions()
+  const { taskDone, taskFailed } = useTaskNotices()
   const getUIState = useUIStateGetter()
   const handledRef = useRef(new Set())
 
@@ -242,74 +242,69 @@ export function UploadNotice() {
     const watched = () => getUIState().uploadWatchId === uploadId
     if (watched()) return
     const key = `upload:${uploadId}`
+    const failed = (error) => taskFailed({ jobType: 'upload', key, text: error || 'Your upload could not be processed' })
+    const live = (title, trackId) => taskDone({
+      jobType: 'upload',
+      text: `“${title}” is live`,
+      actionLabel: 'Play',
+      onAction: trackId ? () => void playTrack(trackId) : undefined,
+    })
     if (status === 'failed') {
-      errorToast(data.error || 'Your upload could not be processed', 8000, 'top', key)
+      failed(data.error)
       return
     }
     fetchFinishedUploadJob(uploadId)
       .then(job => {
         if (watched()) return
         if (job?.status === 'failed') {
-          errorToast(job.error || 'Your upload could not be processed', 8000, 'top', key)
+          failed(job.error)
           return
         }
         const title = uploadJobTitle(job)
         if (job?.result?.duplicate) info(`Already uploaded: “${title}”`, 6000, 'top', key)
-        else success(`“${title}” is live`, 6000, 'top', key)
+        else live(title, job?.result?.track_id)
       })
       .catch(err => {
         logger.warn('[Upload] Could not load the finished upload:', err)
-        if (!watched()) success('Your upload is live', 6000, 'top', key)
+        if (!watched()) live(uploadJobTitle(null), null)
       })
-  }, [getUIState, publishContentUpdate, errorToast, info, success]))
+  }, [getUIState, publishContentUpdate, info, taskDone, taskFailed, playTrack]))
 
   return null
 }
 
-const SHARE_VIDEO_NOTICE = 'share-video'
-
 export function ShareVideoNotice() {
-  const { status, modalOpen, showNotice, hideNotice, toastError } = useUISelector(state => ({
+  const { status, modalOpen } = useUISelector(state => ({
     status: state.shareVideoState.status,
     modalOpen: state.shareModalState.isOpen,
-    showNotice: state.showNotice,
-    hideNotice: state.hideNotice,
-    toastError: state.toastError,
   }))
+  const { taskDone, taskFailed, hideTaskDone } = useTaskNotices()
   const getUIState = useUIStateGetter()
   const lastStatusRef = useRef(status)
 
   useEffect(() => {
-    if (modalOpen) hideNotice(SHARE_VIDEO_NOTICE)
-  }, [modalOpen, hideNotice])
+    if (modalOpen) hideTaskDone('share_video')
+  }, [modalOpen, hideTaskDone])
 
   useEffect(() => {
     if (lastStatusRef.current === status) return
     lastStatusRef.current = status
     const { shareVideoState: job, shareModalState, openShareModal } = getUIState()
     if (shareModalState.isOpen || (status !== 'complete' && status !== 'error')) {
-      hideNotice(SHARE_VIDEO_NOTICE)
+      hideTaskDone('share_video')
       return
     }
     if (status === 'error') {
-      toastError(`The video of “${job.title}” could not be made: ${job.error}`, 8000, 'top', SHARE_VIDEO_NOTICE)
+      taskFailed({ jobType: 'share_video', text: `The video of “${job.title}” could not be made: ${job.error}` })
       return
     }
-    showNotice({
-      key: SHARE_VIDEO_NOTICE,
-      sticky: true,
-      dismissible: false,
-      tone: 'success',
-      icon: Video,
+    taskDone({
+      jobType: 'share_video',
       text: `Video ready: “${job.title}”`,
-      content: (
-        <>
-          <NoticeAction onClick={() => openShareModal(job.track)}>Open</NoticeAction>
-          <NoticeClose onClick={() => hideNotice(SHARE_VIDEO_NOTICE)} />
-        </>
-      ),
+      actionLabel: 'Open',
+      onAction: () => openShareModal(job.track),
     })
-  }, [status, getUIState, showNotice, hideNotice, toastError])
+  }, [status, getUIState, taskDone, taskFailed, hideTaskDone])
 
   return null
 }

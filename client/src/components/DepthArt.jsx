@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Music } from 'lucide-react'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useQuality } from '../contexts/QualityContext'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
@@ -11,7 +12,7 @@ import { PACK_SIZES, isMemoryKey, packCache, profilePackCache } from '../lib/med
 const HIDDEN = { opacity: 0 }
 const SHOWN = { transition: 'opacity var(--dur-quick) var(--ease-decelerate)' }
 const PLACEHOLDER = { containerType: 'size' }
-const PLACEHOLDER_NOTE = { fontSize: '40cqmin', lineHeight: 1 }
+const PLACEHOLDER_NOTE = { width: '40cqmin', height: '40cqmin' }
 const FRONT = { zIndex: 1 }
 const BACK = { zIndex: 0 }
 const SWAP_LIMIT_MS = 1500
@@ -138,7 +139,7 @@ function usePackSize(intensity) {
 const TrackPlaceholder = memo(function TrackPlaceholder({ trackId }) {
   return (
     <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br ${getFallbackGradientClass(trackId)}`} style={PLACEHOLDER}>
-      <span className="text-white opacity-80 select-none" style={PLACEHOLDER_NOTE} aria-hidden="true">🎵</span>
+      <Music className="text-white opacity-80" style={PLACEHOLDER_NOTE} strokeWidth={1.5} aria-hidden="true" />
     </div>
   )
 })

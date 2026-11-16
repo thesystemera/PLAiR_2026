@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { PANEL, TRANSITIONS, useDynamicTheme, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
+import { PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { useUISelector, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
 import { featheredFill } from '../lib/themeManager'
 import { PRESETS } from '../lib/motion'
@@ -179,8 +179,6 @@ export function Panel({
   isFlexible = false,
   contentWidth = null
 }) {
-  const { getSecondaryText, getPrimaryText } = useDynamicTheme()
-
   return (
     <motion.div
       data-shader-panel={id}
@@ -234,12 +232,7 @@ export function Panel({
           className="h-full flex flex-col items-center justify-center gap-2 py-4"
         >
           {icon}
-          <span
-            className="text-xs transition writing-mode-vertical"
-            style={{ color: getSecondaryText() }}
-            onMouseEnter={(e) => e.currentTarget.style.color = getPrimaryText()}
-            onMouseLeave={(e) => e.currentTarget.style.color = getSecondaryText()}
-          >
+          <span className="text-xs transition-colors writing-mode-vertical text-[var(--theme-secondary-text)] hover:text-[var(--theme-primary-text)]">
             {label}
           </span>
         </motion.div>

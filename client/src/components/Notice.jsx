@@ -25,6 +25,28 @@ export const InlineNote = memo(function InlineNote({ tone = 'neutral', children,
   )
 })
 
+const PILL_TONES = {
+  success: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30',
+  error: 'bg-red-400/15 text-red-200 border-red-400/30',
+  warning: 'bg-amber-400/15 text-amber-200 border-amber-400/30',
+  info: 'bg-sky-400/15 text-sky-200 border-sky-400/30',
+  neutral: 'bg-white/10 text-white/80 border-white/15',
+}
+
+export const StatusPill = memo(function StatusPill({ tone = 'neutral', color, icon: Icon, children, title }) {
+  const tinted = color ? { backgroundColor: `color-mix(in srgb, ${color} 18%, transparent)`, borderColor: `color-mix(in srgb, ${color} 40%, transparent)`, color } : undefined
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-tight whitespace-nowrap ${tinted ? '' : PILL_TONES[tone] || PILL_TONES.neutral}`}
+      style={tinted}
+    >
+      {Icon && <Icon className="w-3 h-3 shrink-0" aria-hidden="true" />}
+      {children}
+    </span>
+  )
+})
+
 export const NoticeAction = memo(function NoticeAction({ onClick, disabled = false, children }) {
   return (
     <button

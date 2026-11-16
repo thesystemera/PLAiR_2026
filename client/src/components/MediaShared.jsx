@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { memo, useState, useCallback } from 'react'
+import { memo, useState, useCallback, useEffect, useRef } from 'react'
 import { useDynamicTheme, BUTTON, CatalogIcon, ShoutoutsIcon, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { Play, Pause, AlertCircle, RotateCw } from 'lucide-react'
 import { formatDuration } from '../lib/utils'
@@ -7,6 +7,7 @@ import { CATEGORY_FALLBACK_COLORS, getCategoryColorIndex } from '../lib/themeMan
 import { MOTION, PRESETS, staggerDelay } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
 import { FadeSwap } from './Motion'
+import { watchOffscreen } from '../lib/microMotion'
 
 export function useMediaGridColumns() {
   const { isMobile, isLandscape } = useViewport()
@@ -127,13 +128,18 @@ export const MediaOfflineState = memo(function MediaOfflineState({ icon, title, 
   )
 })
 
+const PLAYING_OVERLAY_STYLE = {
+  background: 'linear-gradient(135deg, color-mix(in srgb, var(--theme-playing-ring, #a855f7) 55%, transparent), transparent 85%)',
+}
+
 export const MediaPlayingOverlay = memo(function MediaPlayingOverlay({ active }) {
   return (
     <AnimatePresence initial={false}>
       {active && (
         <motion.div key="playing" className="absolute inset-0 z-10 pointer-events-none" {...PRESETS.fadeSlow}>
           <motion.div
-            className="absolute inset-0 bg-gradient-to-br from-purple-600/50 to-blue-600/50"
+            className="absolute inset-0"
+            style={PLAYING_OVERLAY_STYLE}
             animate={{ opacity: [0.3, 0.5, 0.3] }}
             transition={MOTION.shimmer}
           />
@@ -143,6 +149,33 @@ export const MediaPlayingOverlay = memo(function MediaPlayingOverlay({ active })
   )
 })
 
+export const Equalizer = memo(function Equalizer({ playing = true }) {
+  const ref = useRef(null)
+
+  useEffect(() => watchOffscreen(ref.current), [])
+
+  return (
+    <span ref={ref} className="ui-eq" data-playing={playing ? 'true' : 'false'} aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  )
+})
+
+export const PlayingPill = memo(function PlayingPill({ playing = true, className = '' }) {
+  return (
+    <span className={`ui-playing-pill ui-badge-in ${className}`}>
+      <Equalizer playing={playing} />
+      {playing ? 'Playing' : 'Paused'}
+    </span>
+  )
+})
+
+export const LoadingRing = memo(function LoadingRing({ className = 'w-5 h-5' }) {
+  return <motion.div animate={{ rotate: 360 }} transition={MOTION.spin} className={`ui-loading-ring ${className}`} />
+})
+
 export const MediaStatusSlot = memo(function MediaStatusSlot({ status, className = '' }) {
   return (
     <AnimatePresence initial={false}>
@@ -150,12 +183,10 @@ export const MediaStatusSlot = memo(function MediaStatusSlot({ status, className
         <motion.div key={status} className={className} {...PRESETS.fade}>
           {status === 'loading' ? (
             <div className="px-2 py-1">
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={MOTION.spin}
-                className="w-4 h-4 md:w-5 md:h-5 border-2 border-purple-500 border-t-transparent rounded-full"
-              />
+              <LoadingRing className="w-4 h-4 md:w-5 md:h-5" />
             </div>
+          ) : status === 'playing' ? (
+            <PlayingPill />
           ) : (
             <MediaStatusBadge variant={status} />
           )}
@@ -166,18 +197,16 @@ export const MediaStatusSlot = memo(function MediaStatusSlot({ status, className
 })
 
 export const MediaStatusBadge = memo(function MediaStatusBadge({
-  variant = 'playing',
+  variant = 'queued',
   text,
   className = ''
 }) {
   const variantStyles = {
-    playing: 'bg-purple-600 text-white',
     queued: 'bg-blue-500/80 text-white',
     new: 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
   }
 
   const displayText = text || {
-    playing: 'Playing',
     queued: 'Queued',
     new: 'NEW'
   }[variant]

@@ -1,6 +1,6 @@
 import { logger } from '../lib/logger'
 import { useState, useRef, useEffect, memo } from 'react'
-import { Search, X, Sparkles, Loader, Upload } from 'lucide-react'
+import { Search, X, Sparkles, Upload } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { api } from '../lib/api'
 import { triggerHaptic } from '../lib/haptics'
@@ -10,6 +10,7 @@ import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
 import { Pop } from './Motion'
+import { TaskRing } from './TaskRing'
 import { MOTION, VARIANTS } from '../lib/motion'
 import { useViewport } from '../contexts/ViewportContext'
 
@@ -248,37 +249,32 @@ export const MediaSearch = memo(function MediaSearch({
         >
           <div className={`flex items-center ${compact ? 'gap-1.5 pl-1.5' : 'gap-2 pl-2'}`}>
             {type === 'track' && (
-              <button
-                type="button"
-                onClick={() => {
-                  triggerHaptic('light')
-                  openUploadModal()
-                }}
-                className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
-                title="Upload your music"
-              >
-                <Upload className="w-4 h-4" />
-              </button>
+              <TaskRing jobType="upload">
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic('light')
+                    openUploadModal()
+                  }}
+                  className={`ui-press flex-shrink-0 ${actionButtonSize} bg-emerald-600 text-white rounded-full hover:bg-emerald-700 transition flex items-center justify-center`}
+                  title="Upload your music"
+                >
+                  <Upload className="w-4 h-4" />
+                </button>
+              </TaskRing>
             )}
             {type === 'track' && onGenerate && onToggleQueue && (
-              <button
-                type="button"
-                onClick={isGenerating ? onToggleQueue : handleGenerate}
-                disabled={!isGenerating && !query.trim()}
-                className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
-                title={isGenerating ? 'View generation queue' : 'Generate tracks'}
-              >
-                {isGenerating ? (
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={MOTION.spin}
-                  >
-                    <Loader className="w-4 h-4" />
-                  </motion.div>
-                ) : (
+              <TaskRing jobType="generation">
+                <button
+                  type="button"
+                  onClick={isGenerating ? onToggleQueue : handleGenerate}
+                  disabled={!isGenerating && !query.trim()}
+                  className={`ui-press flex-shrink-0 ${actionButtonSize} bg-purple-600 text-white rounded-full hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center`}
+                  title={isGenerating ? 'See the songs being made' : 'Generate tracks'}
+                >
                   <Sparkles className="w-4 h-4" />
-                )}
-              </button>
+                </button>
+              </TaskRing>
             )}
             {!isMobile && (
               <button

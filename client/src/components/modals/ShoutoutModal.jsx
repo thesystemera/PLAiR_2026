@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo, useCallback } from 'react'
-import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Meh, Smile, MessageCircle, Mic, ChevronRight, Play, Pause, Square, Loader, Send, Keyboard } from 'lucide-react'
+import { X, Calendar, Clock, Tag, AlertCircle, Volume2, MapPin, Users, Frown, Meh, Smile, MessageCircle, Mic, ChevronRight, Play, Pause, Square, Loader, Send, Keyboard, ThumbsUp, Star, Ban, Flame, AlarmClock } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useDynamicTheme } from '../../contexts/DynamicThemeContext'
 import { useProfilePicture } from '../../hooks/useProfilePicture'
@@ -644,7 +644,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
       icon: AlertCircle,
       label: 'Urgency',
       value: metadata.urgency_label,
-      extraLabel: metadata.time_sensitive ? <span title="Time Sensitive">⏰</span> : null
+      extraLabel: metadata.time_sensitive ? <span title="Time Sensitive" className="inline-flex"><AlarmClock size={14} /></span> : null
     },
     { icon: AlertCircle, label: 'Importance', value: metadata.importance_label?.replace(/_/g, ' ') },
     { icon: Users, label: 'Audience', value: metadata.target_audience },
@@ -830,21 +830,21 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                   </ModalCard>
 
                   <ModalCard background="rgba(0,0,0,0.2)" className="p-2.5">
-                    <div className="text-xs text-gray-400 mb-0.5">👍 Likes</div>
+                    <div className="text-xs text-gray-400 mb-0.5 flex items-center gap-1"><ThumbsUp size={12} /> Likes</div>
                     <div className="font-bold text-base text-green-400">
                       {analytics.likes || 0}
                     </div>
                   </ModalCard>
 
                   <ModalCard background="rgba(0,0,0,0.2)" className="p-2.5">
-                    <div className="text-xs text-gray-400 mb-0.5">⭐ Super Likes</div>
+                    <div className="text-xs text-gray-400 mb-0.5 flex items-center gap-1"><Star size={12} /> Super Likes</div>
                     <div className="font-bold text-base text-yellow-400">
                       {analytics.superlikes || 0}
                     </div>
                   </ModalCard>
 
                   <ModalCard background="rgba(0,0,0,0.2)" className="p-2.5">
-                    <div className="text-xs text-gray-400 mb-0.5">🚫 Bans</div>
+                    <div className="text-xs text-gray-400 mb-0.5 flex items-center gap-1"><Ban size={12} /> Bans</div>
                     <div className="font-bold text-base text-red-400">
                       {analytics.bans || 0}
                     </div>
@@ -875,7 +875,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                     <ModalCard background="rgba(0,0,0,0.2)" className="p-2.5 col-span-2">
                       <div className="text-xs text-gray-400 mb-0.5">Popularity Ranking</div>
                       <div className="font-bold text-xl bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                        {analytics.percentile >= 95 ? '🔥 ' : analytics.percentile >= 75 ? '⭐ ' : ''}
+                        {analytics.percentile >= 95 ? <Flame className="inline w-5 h-5 mr-1 -mt-1 text-orange-300" /> : analytics.percentile >= 75 ? <Star className="inline w-5 h-5 mr-1 -mt-1 text-yellow-300" /> : null}
                         Top {Math.round(100 - analytics.percentile)}%
                       </div>
                       <div className="text-xs text-gray-500 mt-0.5">
@@ -908,7 +908,7 @@ export function ShoutoutModal({ isOpen, onClose, shoutout: activeShoutout }) {
                         style={{ backgroundColor: getBorder(0.1), color: getGrey400() }}
                       >
                         <FadeSwap swapKey={replySortBy} preset={PRESETS.fade}>
-                          {replySortBy === 'popularity' ? '🔥 Top' : '🕐 Recent'}
+                          <span className="flex items-center gap-1">{replySortBy === 'popularity' ? <><Flame size={12} /> Top</> : <><Clock size={12} /> Recent</>}</span>
                         </FadeSwap>
                       </button>
                     </Pop>

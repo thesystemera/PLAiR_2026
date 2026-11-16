@@ -10,8 +10,9 @@
     "lint": "eslint .",
     "check:ui-state": "node scripts/check-ui-state.mjs",
     "check:motion": "node scripts/check-motion.mjs",
+    "check:ui-blocks": "node scripts/check-ui-blocks.mjs",
     "dead-code": "knip --no-progress",
-    "quality": "npm run lint && npm run check:ui-state && npm run check:motion && npm run dead-code && npm run build"
+    "quality": "npm run lint && npm run check:ui-state && npm run check:motion && npm run check:ui-blocks && npm run dead-code && npm run build"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^14.0.0",

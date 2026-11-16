@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, memo } from 'react'
-import { Upload, Loader2, Check, X, FileAudio, FileVideo, Mic2, Wand2, Info } from 'lucide-react'
+import { Upload, Loader2, Check, X, FileAudio, FileVideo, Mic2, Wand2, Info, Clapperboard } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PRESETS, VARIANTS } from '../../lib/motion'
 import { Fade, FadeSwap, Pop } from '../Motion'
@@ -941,7 +941,7 @@ export const UploadMusicModal = memo(function UploadMusicModal({ isOpen, onClose
                 {(metadata.video_search_terms?.length > 0 || metadata.derived_tags?.video_search_terms?.length > 0) && (
                   <div className="mt-3">
                     <p className="text-xs font-medium mb-2 flex items-center gap-2" style={{ color: getGrey400() }}>
-                      <span>🎬</span>
+                      <Clapperboard size={14} />
                       <span>Video Search Terms</span>
                     </p>
                     <div className="flex flex-wrap gap-1.5">

@@ -1,4 +1,4 @@
-import { X, Heart, Star, Ban, TrendingUp, Library, Sprout, ListMusic } from 'lucide-react'
+import { X, Heart, Star, Ban, TrendingUp, Library, Sprout, ListMusic, Music } from 'lucide-react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { forwardRef, useState, useCallback, memo, useMemo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
@@ -12,9 +12,9 @@ import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { usePointerInteraction } from '../hooks/usePointerInteraction'
 import { Scroller } from './Scroller'
 import { MOTION, PRESETS, TWEEN } from '../lib/motion'
-import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad, watchOffscreen } from '../lib/microMotion'
+import { arrivalGlow, arrivalPulse, noteImageMount, revealOnLoad } from '../lib/microMotion'
 import { TrackArt } from './DepthArt'
-import { MediaEmptyState } from './MediaShared'
+import { LoadingRing, MediaEmptyState, PlayingPill } from './MediaShared'
 import { MemoizedVirtualScroller as VirtualScroller } from './VirtualScroller'
 import { Fade, FadeSwap, Pop } from './Motion'
 import { artistCredit } from '../lib/utils'
@@ -40,7 +40,9 @@ const FOLLOW_RELEASE_MS = 900
 const HIGHLIGHT_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: { duration: 0 } }
 const HIGHLIGHT_FLASH_TRANSITION = { layout: TWEEN.layout, opacity: TWEEN.fade, scale: MOTION.settle }
 
-const NowPlayingHighlight = memo(function NowPlayingHighlight({ box, ringColor, background, flashing, glowRef }) {
+const mix = (color, percent, base = 'transparent') => `color-mix(in srgb, ${color} ${percent}%, ${base})`
+
+const NowPlayingHighlight = memo(function NowPlayingHighlight({ box, ringColor, flashing, glowRef }) {
   useEffect(() => {
     if (flashing) arrivalGlow(glowRef.current, true)
   }, [flashing, glowRef])
@@ -58,62 +60,30 @@ const NowPlayingHighlight = memo(function NowPlayingHighlight({ box, ringColor, 
       className="absolute left-0 right-0 pointer-events-none"
       style={{ top: box.top, height: box.height }}
     >
-      <div
-        className="absolute inset-0 rounded-md transition-colors"
-        style={{ backgroundColor: background, boxShadow: `0 0 0 2px ${ringColor}` }}
-      />
+      <div className="ui-current-fill absolute inset-0 rounded-md" />
       <div
         ref={glowRef}
         className="absolute inset-0 rounded-md opacity-0"
-        style={{ boxShadow: `0 0 0 6px ${ringColor}80, 0 0 20px ${ringColor}40` }}
+        style={{ boxShadow: `0 0 0 6px ${mix(ringColor, 50)}, 0 0 20px ${mix(ringColor, 25)}` }}
       />
     </motion.div>
   )
 })
 
-const Equalizer = memo(function Equalizer({ playing }) {
-  const ref = useRef(null)
-
-  useEffect(() => watchOffscreen(ref.current), [])
-
-  return (
-    <span ref={ref} className="ui-eq" data-playing={playing ? 'true' : 'false'} aria-hidden="true">
-      <span />
-      <span />
-      <span />
-    </span>
-  )
-})
-
 const BADGE_EXIT = { opacity: 0, transition: TWEEN.exit }
 
-const QueueStatus = memo(function QueueStatus({ loading, active, playing, background, spinnerColor, color }) {
+const QueueStatus = memo(function QueueStatus({ loading, active, playing }) {
   const status = active ? 'playing' : loading ? 'loading' : null
   return (
     <AnimatePresence initial={false} mode="popLayout">
       {status === 'loading' && (
         <motion.div key="loading" className="w-5 h-5" {...PRESETS.fade}>
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={MOTION.spin}
-            className="w-5 h-5 rounded-full"
-            style={{
-              border: `2px solid ${spinnerColor}`,
-              borderTopColor: 'transparent'
-            }}
-          />
+          <LoadingRing />
         </motion.div>
       )}
       {status === 'playing' && (
-        <motion.div
-          key="playing"
-          initial={false}
-          exit={BADGE_EXIT}
-          className="ui-badge-in flex items-center gap-1.5 px-2 py-1 text-xs rounded-full font-semibold"
-          style={{ backgroundColor: background, color }}
-        >
-          <Equalizer playing={playing} />
-          Playing
+        <motion.div key="playing" initial={false} exit={BADGE_EXIT} className="flex">
+          <PlayingPill playing={playing} />
         </motion.div>
       )}
     </AnimatePresence>
@@ -168,8 +138,8 @@ const TrackArtwork = memo(function TrackArtwork({ track }) {
   }
 
   return (
-    <div data-queue-art className={`w-12 h-12 rounded flex-shrink-0 bg-gradient-to-br ${getFallbackGradientClass(track.id)} flex items-center justify-center text-2xl`}>
-      🎵
+    <div data-queue-art className={`w-12 h-12 rounded flex-shrink-0 bg-gradient-to-br ${getFallbackGradientClass(track.id)} flex items-center justify-center text-white/80`}>
+      <Music size={22} />
     </div>
   )
 })
@@ -216,13 +186,9 @@ const QueueRow = memo(forwardRef(function QueueRow({
       variants={variants}
       exit="exit"
       transition={isReselectFlashing ? QUEUE_ROW_FLASH_TRANSITION : QUEUE_ROW.transition}
-      className="relative p-4 transition-colors cursor-pointer rounded-md"
-      style={{
-        borderBottom: `1px solid ${colors.panelBorder}`,
-        ...(isPlaying ? { backgroundColor: 'transparent' } : {})
-      }}
-      onMouseEnter={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = colors.buttonHoverBg)}
-      onMouseLeave={(e) => !isPlaying && (e.currentTarget.style.backgroundColor = 'transparent')}
+      className="ui-row p-4 cursor-pointer rounded-md"
+      data-active={isPlaying ? 'true' : 'false'}
+      style={{ borderBottom: `1px solid ${colors.panelBorder}` }}
       onPointerDown={onPlayPointerDown}
       onPointerMove={onPlayPointerMove}
       onPointerUp={(e) => onPlay(e, track.id)}
@@ -231,7 +197,7 @@ const QueueRow = memo(forwardRef(function QueueRow({
         <TrackArtwork track={track} />
 
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate transition-colors duration-theme" style={{ color: colors.white }}>{track.title || 'Untitled'}</div>
+          <div className={`truncate transition-colors duration-theme ${isPlaying ? 'ui-current-text font-semibold' : 'font-medium'}`} style={isPlaying ? undefined : { color: colors.white }}>{track.title || 'Untitled'}</div>
           <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey300 }}>{artistCredit(track) || ' '}</div>
           <div className="text-sm truncate transition-colors duration-theme" style={{ color: colors.grey400 }}>{track.style || 'No style'}</div>
         </div>
@@ -241,9 +207,6 @@ const QueueRow = memo(forwardRef(function QueueRow({
             loading={isLoading}
             active={isPlaying}
             playing={playing}
-            background={colors.loadingSpinner}
-            spinnerColor={colors.loadingSpinner}
-            color={colors.white}
           />
 
           {showPreference && <PreferenceBadge preference={preference} />}
@@ -252,10 +215,9 @@ const QueueRow = memo(forwardRef(function QueueRow({
             onPointerDown={onRemovePointerDown}
             onPointerMove={onRemovePointerMove}
             onPointerUp={(e) => onRemove(e, track.id)}
-            className="ui-tap p-1 transition-colors"
-            style={{ color: colors.grey400 }}
-            onMouseEnter={(e) => e.currentTarget.style.color = colors.dangerActionText}
-            onMouseLeave={(e) => e.currentTarget.style.color = colors.grey400}
+            className="ui-tap p-1 rounded-lg text-white/50 hover:text-red-300 hover:bg-red-500/15 transition-colors"
+            title="Remove from queue"
+            aria-label="Remove from queue"
           >
             {REMOVE_ICON}
           </button>
@@ -273,10 +235,11 @@ const MODE_CAMPS = {
   top_hits_day: 'charts',
 }
 
+const MODE_BUTTON_ON = 'text-[var(--mode-color)] border-[color-mix(in_srgb,var(--mode-color)_30%,transparent)] bg-[color-mix(in_srgb,var(--mode-color)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--mode-color)_20%,transparent)]'
+const MODE_BUTTON_OFF = 'border-transparent text-[var(--theme-secondary-text)] hover:text-[var(--theme-primary-text)] hover:bg-[var(--theme-button-hover-bg)]'
+
 function QueueModeButton({ icon: Icon, iconKey, label, active, color, disabled, onOpen }) {
   const { onPointerDown, onPointerMove, shouldTrigger } = usePointerInteraction()
-  const { getGrey400, getWhite, getButtonHoverBg } = useDynamicTheme()
-  const restBackground = active ? `${color}15` : 'transparent'
 
   const handlePointerUp = (e) => {
     e?.preventDefault()
@@ -293,20 +256,8 @@ function QueueModeButton({ icon: Icon, iconKey, label, active, color, disabled, 
       disabled={disabled}
       aria-label={label}
       title={label}
-      className="ui-tap p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border"
-      style={{
-        color: active ? color : getGrey400(),
-        backgroundColor: restBackground,
-        borderColor: active ? `${color}30` : 'transparent'
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.backgroundColor = active ? `${color}25` : getButtonHoverBg()
-        if (!active) e.currentTarget.style.color = getWhite()
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = restBackground
-        if (!active) e.currentTarget.style.color = getGrey400()
-      }}
+      className={`ui-tap p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed border ${active ? MODE_BUTTON_ON : MODE_BUTTON_OFF}`}
+      style={active ? { '--mode-color': color } : undefined}
     >
       <FadeSwap swapKey={iconKey} preset={PRESETS.badgeSwap} className="block">
         <Icon size={16} />
@@ -368,12 +319,8 @@ function QueueComponent({ onSeedRadio, onList }) {
     getWhite,
     getGrey400,
     getGrey300,
-    getButtonHoverBg,
     getPanelBorder,
     getPlayingRingColor,
-    getPlayingBackground,
-    getLoadingSpinner,
-    getDangerActionText,
     triggerEffect
   } = useDynamicTheme()
 
@@ -437,13 +384,10 @@ function QueueComponent({ onSeedRadio, onList }) {
 
   const rowColors = useMemo(() => ({
     panelBorder: getPanelBorder(),
-    buttonHoverBg: getButtonHoverBg(),
     white: getWhite(),
     grey300: getGrey300(),
     grey400: getGrey400(),
-    loadingSpinner: getLoadingSpinner(),
-    dangerActionText: getDangerActionText(),
-  }), [getPanelBorder, getButtonHoverBg, getWhite, getGrey300, getGrey400, getLoadingSpinner, getDangerActionText])
+  }), [getPanelBorder, getWhite, getGrey300, getGrey400])
 
   const visibleQueue = useMemo(() => {
     const occurrences = new Map()
@@ -649,7 +593,6 @@ function QueueComponent({ onSeedRadio, onList }) {
               <NowPlayingHighlight
                 box={highlightBox}
                 ringColor={getPlayingRingColor()}
-                background={getPlayingBackground()}
                 flashing={reselectFlash !== null && reselectFlash === currentTrackId}
                 glowRef={glowRef}
               />

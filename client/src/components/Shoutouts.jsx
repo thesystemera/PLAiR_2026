@@ -125,7 +125,7 @@ const ShoutoutCard = memo(function ShoutoutCard({ shoutout, isPlaying, onPlayPau
       shouldAnimate={shouldAnimate}
       onClick={hasAudio ? undefined : (e) => onPlayPause(e, shoutout)}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} cursor-pointer group/card ${
-        isPlaying ? 'ring-2 ring-purple-500 shadow-lg shadow-purple-500/20' : ''
+        isPlaying ? 'ui-current-outline' : ''
       }`}
     >
       <div className="aspect-square bg-gradient-to-br from-purple-500/20 to-blue-500/20 rounded-lg mb-2 flex items-center justify-center relative overflow-hidden">

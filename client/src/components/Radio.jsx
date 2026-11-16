@@ -138,10 +138,10 @@ export function Radio() {
       errorToast('Failed to process audio', 3000)
       return
     }
-    void talkToDJ({ audio }, '🎤 Voice message (not sent, you are offline)')
+    void talkToDJ({ audio }, 'Voice message (not sent, you are offline)')
   }, [talkToDJ, errorToast])
 
-  const sendTextToDJ = useCallback((text) => talkToDJ({ text }, `💬 ${text} (not sent, you are offline)`), [talkToDJ])
+  const sendTextToDJ = useCallback((text) => talkToDJ({ text }, `${text} (not sent, you are offline)`), [talkToDJ])
 
   useEffect(() => {
     registerKeyboardRecordingCallback(sendToDJ)
