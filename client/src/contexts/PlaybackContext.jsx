@@ -210,6 +210,7 @@ export function PlaybackProvider({ children }) {
   const appliedSeekVersionRef = useRef(null)
   const forceSeekRef = useRef(false)
   const manualSwitchRef = useRef(false)
+  const scratchedRef = useRef(false)
   const boundEngineRef = useRef(null)
   const gestureRetryRef = useRef(null)
 
@@ -720,6 +721,8 @@ export function PlaybackProvider({ children }) {
 
       const manual = manualSwitchRef.current
       manualSwitchRef.current = false
+      const scratched = scratchedRef.current
+      scratchedRef.current = false
       const startsNearZero = expectedProgressMs(startDesired) < SEEK_TOLERANCE_MS
 
       try {
@@ -728,6 +731,7 @@ export function PlaybackProvider({ children }) {
           metadata: { ...track, crossfade_hint: startDesired.crossfadeHint || track.crossfade_hint || null },
           fadeTimeMs: manual ? 50 : 3000,
           preloadedFadeMs: 50,
+          scratch: !(manual && scratched),
           shouldPlay: startDesired.isPlaying && startsNearZero && !forceSeekRef.current,
         })
       } catch (error) {
@@ -1270,8 +1274,14 @@ export function PlaybackProvider({ children }) {
     return () => clearInterval(progressInterval)
   }, [isActiveDevice, audio, setProgressMs, stepAside])
 
+  const scratchNow = useCallback(() => {
+    if (!isActiveDeviceRef.current) return
+    if (audio.getEngine()?.playVinylScratch()) scratchedRef.current = true
+  }, [audio])
+
   const playTrack = useCallback(async (trackId) => {
     takeOverFromYield()
+    if (trackId && trackId !== stateRef.current.current_track?.id) scratchNow()
     if (localRef.current) {
       localRef.current.used = true
       const response = await offlineBackend.play(trackId)
@@ -1291,7 +1301,7 @@ export function PlaybackProvider({ children }) {
       pickRef.current = { trackId, seq }
       reportEngineStatus({ pendingTrackId: trackId })
     }
-  }, [applyLocalState, sendCommand, takeOverFromYield, talkBreak, reportEngineStatus])
+  }, [applyLocalState, sendCommand, takeOverFromYield, talkBreak, reportEngineStatus, scratchNow])
 
   useEffect(() => { playTrackRef.current = playTrack }, [playTrack])
 
@@ -1379,6 +1389,7 @@ export function PlaybackProvider({ children }) {
 
   const next = useCallback(async () => {
     takeOverFromYield()
+    scratchNow()
     if (localRef.current) {
       await localStep(1)
       return
@@ -1389,7 +1400,7 @@ export function PlaybackProvider({ children }) {
     sendCommand('next', { skip_reason: 'manual_skip' })
     optimisticTrackRef.current = true
     queueMicrotask(() => setState(prev => stepDisplayTrack(prev, 1)))
-  }, [localStep, sendCommand, takeOverFromYield, talkBreak])
+  }, [localStep, sendCommand, takeOverFromYield, talkBreak, scratchNow])
 
   const seek = useCallback(async (positionMs) => {
     takeOverFromYield()
@@ -1430,6 +1441,7 @@ export function PlaybackProvider({ children }) {
       }
     }
 
+    scratchNow()
     if (localRef.current) {
       await localStep(-1)
       return
@@ -1440,7 +1452,7 @@ export function PlaybackProvider({ children }) {
     sendCommand('previous')
     optimisticTrackRef.current = true
     queueMicrotask(() => setState(prev => stepDisplayTrack(prev, -1)))
-  }, [audio, localStep, seek, sendCommand, takeOverFromYield, talkBreak])
+  }, [audio, localStep, seek, sendCommand, takeOverFromYield, talkBreak, scratchNow])
 
   const transferPlayback = useCallback(async (targetDeviceId = null) => {
     const target = targetDeviceId || deviceId

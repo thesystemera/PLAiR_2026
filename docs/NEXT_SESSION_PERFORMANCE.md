@@ -348,6 +348,47 @@ ten-skip series of the same build differ by about 50 ms, so nothing smaller show
 were cheap ones: fewer renders is not fewer milliseconds here. Kept for the pattern, and because the Player no
 longer re-renders once a second while a song buffers. Do not promise frame time from a render count again.
 
+## 3j. The Catalog: scrolling and picking a track (17 Nov)
+
+The owner felt a regression after the 17 Nov UI commits (f5f0546 -> d150f05: shared blocks, one theme builder,
+700 ms colour fades, arrival fades on covers). Measured on the phone with the builds switched in turn (copy each
+build into `client/dist`, reload): **no difference between the build before them (1d40f3a), the 15 Nov build and
+the current one** on any measure below. The Catalog has been this slow all along; it had never been measured.
+
+- **Read the phone's own state before trusting absolute numbers.** During this session Android reported thermal
+  status 3 (`adb shell dumpsys thermalservice`), the fast cores were capped at 2.2 of 2.8 GHz
+  (`/sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq` against `cpuinfo_max_freq`) and another app held
+  1.4 cores (`adb shell top -n 1 -b -m 12`): Next on Now Playing lost 715-800 ms where the day before it lost
+  404-449. Comparisons taken in turn stay valid; absolute figures do not. A page that is not in front returns no
+  frames at all (`document.visibilityState`), and the phone may be a remote (`Playing on another device`).
+- **Scrolling** (`catalogpick.mjs SCROLL=1800`, `scrollab.mjs`: a synthetic finger at 2500 px/s, about 12 rows a
+  second): 15-16 frames per second as is; the same with the arrival fades off (they cost nothing measurable);
+  25 with the covers flat or not redrawn at all (lit covers redraw every frame while they move: about 9 fps);
+  27 with the scene off as well. So the floor is the page's own work to bring a row on screen: about 13 slow
+  frames a second, one per row, about 40 ms of main thread for a row of two cards (React mount, style, layout,
+  paint, layerize). Trace (`scrolltrace.mjs`): the page's main thread 680 ms/s busy, Chrome's GPU main thread
+  590-720 ms/s.
+- **Forced layouts are not extra work here.** 84-99 of about 110 layouts in a five-second scroll are forced by
+  script (each new cover measuring itself, 260-300 ms; the scroller; the cover renderer's `measure` and
+  `applyScrolls`). Taking the cover's read away (covers of one list sharing a measured size) moved the same
+  layout to the next reader: 126 layouts and 259 ms against 119 and 242, no change in frame rate. Reverted.
+- **The cover atlas** resizes three times in such a scroll and once per skip (about 25 ms each). Growing with
+  25% spare and shrinking after 6 s halves the resizes (6 -> 3 over a scroll and three skips) but leaves a
+  larger atlas for Chrome to copy every frame. Not a provable gain; reverted.
+- **Picking a track** (`catalogpick.mjs`, 5-6 picks a series): about 590-670 ms of frame time lost in the 1.5 s
+  after the tap with the phone cool, 715-850 with it limited; first answer on the card 20 ms, playing mark and
+  player 140-210 ms (the server's answer). Lit covers off or the scene off: no change. The 700 ms colour fade
+  costs about 140 ms of it (775 -> 635 with the fade off); switching transitions off only in the off-screen
+  panels saves about 25 (most of the fading elements are on screen). A whole-page restyle costs the same on old
+  and new builds (45-66 ms for about 2,000 elements, timed directly; a trace with invalidation tracking reports
+  112 ms, which is the tracer's own overhead).
+- **The scratch sound** was the one real fault found, and is fixed (CLAUDE.md section 6).
+
+What would move the Catalog, all larger than a fix and for the owner to choose: recycle the rows of the virtual
+list instead of unmounting and mounting cards (the mount is the floor; an update is far cheaper); hold the covers
+still while the list moves fast (16 -> 25 fps, a change of look); a shorter colour fade (up to 140 ms a pick, a
+change of look).
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

@@ -18,6 +18,7 @@ const STREAM_RETRY_LIMIT = 90
 const STREAM_APPEND_MIN_BYTES = 32 * 1024
 const SELF_PAUSE_WINDOW_MS = 2000
 const CONTEXT_RESUME_WAIT_MS = 300
+const TRACK_CHANGE_SOUND = '/audio/interface/spotify_track_change.mp3'
 const PROGRESSIVE_READY_TIMEOUT_MS = 4000
 const PROGRESSIVE_TRACE_EVENTS = ['loadstart', 'loadedmetadata', 'canplay', 'playing', 'waiting', 'stalled', 'suspend', 'error']
 const NETWORK_STATES = ['empty', 'idle', 'loading', 'no source']
@@ -101,6 +102,8 @@ export class AudioEngine {
 
     this.sfxElement = null
     this.sfxSource = null
+    this.scratchBuffer = null
+    this.scratchLoading = null
 
     this.currentTrackId = null
     this.nextTrackId = null
@@ -478,6 +481,7 @@ export class AudioEngine {
     this.nextSlot = this.slots.B
 
     this.initialized = true
+    this._loadScratch()
   }
 
   _attachBufferMonitors(slot) {
@@ -1290,6 +1294,8 @@ export class AudioEngine {
         return { status: 'current' }
       }
 
+      if (scratch && this.hasCurrentSource()) this.playVinylScratch()
+
       if (this.isNextReady(trackId)) {
         logger.info(`[Audio] ⏭️ SWITCH to preloaded ${trackId.slice(0, 8)}`)
         await this._swapToNext(preloadedFadeMs, shouldPlay, 'user')
@@ -1310,7 +1316,6 @@ export class AudioEngine {
       await this._loadIntoSlot(this.nextSlot, trackId, source, { ...metadata, bitrate: source.bitrate ?? metadata.bitrate, fromCache: source.fromCache ?? metadata.fromCache }, signal, { waitForCanPlay: true })
       throwIfAborted(signal)
 
-      if (scratch) this.playVinylScratch()
       await this._swapToNext(fadeTimeMs, shouldPlay, 'user')
       logger.info(`[Audio] ✅ SWITCHED: ${trackId}`)
       return { status: 'loaded' }
@@ -1670,9 +1675,29 @@ export class AudioEngine {
     }
   }
 
+  _loadScratch() {
+    if (this.scratchBuffer || this.scratchLoading || !this.context) return
+    this.scratchLoading = fetch(TRACK_CHANGE_SOUND)
+      .then(response => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(`HTTP ${response.status}`))))
+      .then(data => this.context.decodeAudioData(data))
+      .then((buffer) => { this.scratchBuffer = buffer })
+      .catch((error) => {
+        this.scratchLoading = null
+        logger.warn('[AudioEngine] Track-change sound not loaded:', error?.message || error)
+      })
+  }
+
   playVinylScratch() {
-    const scratchUrl = '/audio/interface/spotify_track_change.mp3'
-    this.playSfx(scratchUrl)
+    if (this.scratchBuffer && this.context?.state === 'running' && this.uiSoundsGain) {
+      const source = this.context.createBufferSource()
+      source.buffer = this.scratchBuffer
+      source.connect(this.uiSoundsGain)
+      source.start()
+      return true
+    }
+    this._loadScratch()
+    this.playSfx(TRACK_CHANGE_SOUND)
+    return true
   }
 
   stopImmediately() {

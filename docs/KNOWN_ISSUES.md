@@ -27,6 +27,12 @@ anything else is carried over as written.
   time), and the cover renderer spends 50-84 ms on some frames. To do: virtualise the Queue panel like the
   Catalog; decide what a search queues (owner: queue was never meant to get this big); clear the leftover picks.
 
+- **The Catalog is slow to scroll and to pick from on the owner's phone (owner, 17 Nov; measured, not a
+  regression).** A fast scroll runs at 15-16 frames a second and a pick loses 590-850 ms of frames in the next
+  1.5 s; the builds before and after the 17 Nov UI commits measure the same. What it is made of, what was tried
+  and reverted, and the three larger options (recycle the virtual list's rows, hold covers still during a fast
+  scroll, a shorter colour fade): `docs/NEXT_SESSION_PERFORMANCE.md` section 3j. Owner to choose.
+
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
   background scene's own share was about 85 ms and is now about 5 ms in the rush (CLAUDE.md section 11, "What the
