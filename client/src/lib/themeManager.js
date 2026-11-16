@@ -129,6 +129,27 @@ function boostToBrightness(color, targetLum) {
   return hslToRgb(hsl.h, newS, newL)
 }
 
+const ON_AIR_LUMINANCE = 0.3
+const ON_AIR_MIN_SATURATION = 0.55
+const ON_AIR_MAX_SATURATION = 0.85
+const ON_AIR_GREY_BELOW = 0.15
+const ON_AIR_FALLBACK_HUE = 258
+
+function onAirColor(color, hueSource) {
+  const own = rgbToHsl(color)
+  const other = rgbToHsl(hueSource)
+  const hue = own.s >= ON_AIR_GREY_BELOW ? own.h : other.s >= ON_AIR_GREY_BELOW ? other.h : ON_AIR_FALLBACK_HUE
+  const saturation = Math.min(ON_AIR_MAX_SATURATION, Math.max(ON_AIR_MIN_SATURATION, own.s))
+  let low = 0
+  let high = 1
+  for (let step = 0; step < 24; step++) {
+    const lightness = (low + high) / 2
+    if (getLuminance(hslToRgb(hue, saturation, lightness)) < ON_AIR_LUMINANCE) low = lightness
+    else high = lightness
+  }
+  return hslToRgb(hue, saturation, (low + high) / 2)
+}
+
 function dimToBrightness(color, targetLum) {
   const hsl = rgbToHsl(color)
   const newL = Math.max(0.05, Math.min(targetLum, hsl.l * 0.5))
@@ -184,7 +205,7 @@ function analyzeColors(data) {
     overlayBackgroundRgb: hslToRgb(hue, Math.min(0.05, saturation * 0.3), 0.98),
 
     playingBackgroundRgb: dimToBrightness(palette.vibrant, 0.15),
-    playingRingRgb: palette.vibrant,
+    playingRingRgb: onAirColor(palette.vibrant, palette.accent),
     queuedRingRgb: hslToRgb(210, 0.7, 0.55),
     loadingSpinnerRgb: blendColors(palette.accent, hslToRgb(258, 0.7, 0.62), 0.5),
 
@@ -473,7 +494,7 @@ export function getDefaultColors() {
     overlayBackgroundRgb: hslToRgb(hue, 0.05, 0.98),
 
     playingBackgroundRgb: hslToRgb(258, 0.5, 0.15),
-    playingRingRgb: primary,
+    playingRingRgb: onAirColor(primary, primary),
     queuedRingRgb: hslToRgb(210, 0.7, 0.55),
     loadingSpinnerRgb: hslToRgb(258, 0.7, 0.62),
 
