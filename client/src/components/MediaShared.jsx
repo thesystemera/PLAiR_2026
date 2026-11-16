@@ -84,10 +84,10 @@ export const MediaEmptyState = memo(function MediaEmptyState({
       className={`flex flex-col items-center justify-center px-6 text-center transition-colors duration-theme ${compact ? 'py-6' : 'min-h-64 py-8'}`}
       style={{ color: getGrey400() }}
     >
-      {Icon && <Icon className="w-16 h-16 mb-4 opacity-50" />}
-      <div className="text-lg max-w-sm text-balance">{title}</div>
+      {Icon && <Icon className={compact ? 'w-10 h-10 mb-3 opacity-50' : 'w-16 h-16 mb-4 opacity-50'} />}
+      <div className={`max-w-sm text-balance ${compact ? 'text-base' : 'text-lg'}`} style={{ color: getGrey300() }}>{title}</div>
       {subtitle && (
-        <div className="text-sm mt-2 max-w-sm text-balance" style={{ color: getGrey300() }}>
+        <div className="text-sm mt-1.5 max-w-sm text-balance">
           {subtitle}
         </div>
       )}
