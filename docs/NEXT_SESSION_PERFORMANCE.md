@@ -339,8 +339,14 @@ updates, Now Playing two passes. The pass where the server's queue arrives still
 rows glide to their new places (`layout`), and framer needs each one rendered to measure it. Measured on desktop
 only (`skipcpu.mjs`: CPU profile of the 1.5 s after the press, old and new builds pressed in turn, 18 skips
 each): script 181 -> 162 ms a skip, busy time 542 -> 528. Frame-time series on desktop with the CPU slowed six
-times (`CPU=6 skipseries.mjs`) swing by 150 ms between rounds and show nothing either way. **Not yet measured on
-the phone** (it was not connected): run `skipseries.mjs 10` there against the 410-425 ms above.
+times (`CPU=6 skipseries.mjs`) swing by 150 ms between rounds and show nothing either way.
+
+**On the phone the gain is too small to measure** (builds switched in turn by copying each into `client/dist` and
+reloading): `skipseries.mjs 10`, frame time lost a skip, old 404 ms (and 643 right after the app was opened), new
+422 and 449; `skipcpu.mjs 7`, script in the 1.5 s after the press, old 446 and 372 ms, new 406 and 458. Two
+ten-skip series of the same build differ by about 50 ms, so nothing smaller shows, and the 233 renders removed
+were cheap ones: fewer renders is not fewer milliseconds here. Kept for the pattern, and because the Player no
+longer re-renders once a second while a song buffers. Do not promise frame time from a render count again.
 
 ## 4. Next steps, in order
 

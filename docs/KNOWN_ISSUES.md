@@ -39,8 +39,8 @@ anything else is carried over as written.
   Queue's scroll-to-the-current-song timeout 5-72 ms; IndexedDB callbacks 14-19 ms and a `Response.blob().then`
   25 ms; the player-height ResizeObserver 22 ms.
   **18 Nov, second pass (React):** the Queue's rows and header, the Player and Now Playing subscribe part by part
-  (596 -> 363 component renders a press, script 181 -> 162 ms a skip on desktop); the phone series is still to
-  run (`perf/skipseries.mjs 10`, expect it under the 410-425 ms below).
+  (596 -> 363 component renders a press, script 181 -> 162 ms a skip on desktop). On the phone the difference is
+  inside the noise: old 404 ms lost a skip, new 422-449 (ten-skip series of one build differ by about 50 ms).
   **17-18 Nov, first pass done** (`perf/skipseries.mjs`, ten presses, Now Playing tab, 1.5 s after the press):
   515 -> about 410-425 ms lost, worst frame 159 -> 121-131 ms, frames over 50 ms 5.7 -> 3.7-4.5 a skip. Done: one
   write of the theme's root variables instead of two; the player's waveform on two canvases (420 fewer elements);
