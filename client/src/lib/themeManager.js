@@ -33,21 +33,10 @@ function buildHistogram(data) {
 }
 
 function extractFunctionalPalette(allColors) {
-  if (allColors.length === 0) {
-    return {
-      accent: { r: 139, g: 92, b: 246 },
-      muted: { r: 100, g: 80, b: 180 },
-      dark: { r: 30, g: 25, b: 50 },
-      vibrant: { r: 139, g: 92, b: 246 },
-      dominant: { r: 139, g: 92, b: 246 }
-    }
-  }
-
   const dominant = allColors[0]
 
   const brightBin = allColors.filter(c => c.lum >= 0.4 && c.lum <= 0.75)
   const midBin = allColors.filter(c => c.lum >= 0.2 && c.lum < 0.4)
-  const darkBin = allColors.filter(c => c.lum >= 0.05 && c.lum < 0.2)
 
   const vibrantCandidates = allColors.filter(c => c.sat > 0.3)
   const vibrant = pickBestFromBin(vibrantCandidates, 'saturation') || pickBestFromBin(allColors, 'saturation') || dominant
@@ -75,12 +64,7 @@ function extractFunctionalPalette(allColors) {
     muted = dimToBrightness(accent, 0.3)
   }
 
-  let dark = pickBestFromBin(darkBin, 'balanced')
-  if (!dark) {
-    dark = dimToBrightness(muted || accent, 0.12)
-  }
-
-  return { accent, muted, dark, vibrant, dominant }
+  return { accent, muted, vibrant, dominant }
 }
 
 function pickBestFromBin(colors, strategy) {
@@ -129,22 +113,34 @@ function boostToBrightness(color, targetLum) {
   return hslToRgb(hsl.h, newS, newL)
 }
 
-const ON_AIR_LUMINANCE = 0.3
-const ON_AIR_MIN_SATURATION = 0.55
-const ON_AIR_MAX_SATURATION = 0.85
-const ON_AIR_GREY_BELOW = 0.15
-const ON_AIR_FALLBACK_HUE = 258
+const LEVELS = {
+  accent: { luminance: 0.5 },
+  secondary: { luminance: 0.2 },
+  onAir: { luminance: 0.3, minSaturation: 0.55, maxSaturation: 0.85 },
+}
+const GREY_BELOW = 0.15
+const FALLBACK_HUE = 258
+const SECONDARY_TEXT_LIGHTNESS = 0.65
+const MUTED_TEXT_LIGHTNESS = 0.85
 
-function onAirColor(color, hueSource) {
+const DEFAULT_PALETTE = {
+  accent: { r: 139, g: 92, b: 246 },
+  muted: { r: 59, g: 130, b: 246 },
+  vibrant: { r: 139, g: 92, b: 246 },
+  dominant: { r: 139, g: 92, b: 246 },
+}
+
+function atLuminance(color, { luminance, minSaturation = 0, maxSaturation = 1 }, hueSource = color) {
   const own = rgbToHsl(color)
   const other = rgbToHsl(hueSource)
-  const hue = own.s >= ON_AIR_GREY_BELOW ? own.h : other.s >= ON_AIR_GREY_BELOW ? other.h : ON_AIR_FALLBACK_HUE
-  const saturation = Math.min(ON_AIR_MAX_SATURATION, Math.max(ON_AIR_MIN_SATURATION, own.s))
+  const tinted = minSaturation > 0
+  const hue = !tinted || own.s >= GREY_BELOW ? own.h : other.s >= GREY_BELOW ? other.h : FALLBACK_HUE
+  const saturation = Math.min(maxSaturation, Math.max(minSaturation, own.s))
   let low = 0
   let high = 1
   for (let step = 0; step < 24; step++) {
     const lightness = (low + high) / 2
-    if (getLuminance(hslToRgb(hue, saturation, lightness)) < ON_AIR_LUMINANCE) low = lightness
+    if (getLuminance(hslToRgb(hue, saturation, lightness)) < luminance) low = lightness
     else high = lightness
   }
   return hslToRgb(hue, saturation, (low + high) / 2)
@@ -158,29 +154,33 @@ function dimToBrightness(color, targetLum) {
 
 function analyzeColors(data) {
   const allColors = buildHistogram(data)
+  return buildTheme(allColors.length === 0 ? DEFAULT_PALETTE : extractFunctionalPalette(allColors))
+}
 
-  if (allColors.length === 0) {
-    return getDefaultColors()
-  }
+export function getDefaultColors() {
+  return buildTheme(DEFAULT_PALETTE)
+}
 
-  const palette = extractFunctionalPalette(allColors)
+function filterLook(bg, text, border) {
+  return { bg, text, border }
+}
+
+function buildTheme(palette) {
+  const accent = atLuminance(palette.accent, LEVELS.accent)
+  const secondary = atLuminance(palette.muted, LEVELS.secondary)
+  const onAir = atLuminance(palette.vibrant, LEVELS.onAir, palette.accent)
 
   const dominantHsl = rgbToHsl(palette.dominant)
-  const accentHsl = rgbToHsl(palette.accent)
-
-  const hue = (dominantHsl.h * 0.6 + accentHsl.h * 0.4)
+  const accentHsl = rgbToHsl(accent)
+  const hue = dominantHsl.h * 0.6 + accentHsl.h * 0.4
   const saturation = Math.min(0.15, dominantHsl.s * 0.2)
-
-  const avgLuminance = (getLuminance(palette.accent) + getLuminance(palette.muted)) / 2
-  const isDarkArtwork = avgLuminance < 0.35
-
-  const textLightness = isDarkArtwork ? 0.65 : 0.55
-  const textLighterLightness = isDarkArtwork ? 0.85 : 0.75
+  const textSaturation = Math.min(0.1, saturation * 0.6)
+  const quietSaturation = Math.min(0.08, saturation * 0.5)
 
   const colors = {
-    primaryRgb: palette.accent,
-    secondaryRgb: palette.muted,
-    accentRgb: palette.accent,
+    primaryRgb: accent,
+    secondaryRgb: secondary,
+    accentRgb: accent,
 
     appBackgroundRgb: hslToRgb(hue, saturation, 0.08),
     cardBackgroundRgb: hslToRgb(hue, saturation, 0.12),
@@ -188,35 +188,35 @@ function analyzeColors(data) {
     panelBackgroundRgb: hslToRgb(hue, saturation, 0.15),
 
     primaryTextRgb: hslToRgb(hue, Math.min(0.05, saturation * 0.3), 0.98),
-    secondaryTextRgb: hslToRgb(hue, Math.min(0.1, saturation * 0.6), textLightness),
-    mutedTextRgb: hslToRgb(hue, Math.min(0.08, saturation * 0.5), textLighterLightness),
-    tertiaryTextRgb: hslToRgb(hue, Math.min(0.08, saturation * 0.5), 0.50),
+    secondaryTextRgb: hslToRgb(hue, textSaturation, SECONDARY_TEXT_LIGHTNESS),
+    mutedTextRgb: hslToRgb(hue, quietSaturation, MUTED_TEXT_LIGHTNESS),
+    tertiaryTextRgb: hslToRgb(hue, quietSaturation, 0.50),
 
     borderColorRgb: hslToRgb(hue, saturation, 0.3),
     subtleBorderRgb: hslToRgb(hue, saturation, 0.2),
-    activeBorderRgb: palette.accent,
+    activeBorderRgb: accent,
     panelBorderRgb: hslToRgb(hue, saturation, 0.15),
     inputBorderRgb: hslToRgb(hue, saturation, 0.2),
 
     buttonHoverBgRgb: hslToRgb(hue, saturation, 0.18),
-    buttonActiveBgRgb: blendColors(palette.vibrant, hslToRgb(258, 0.6, 0.55), 0.4),
+    buttonActiveBgRgb: blendColors(onAir, hslToRgb(258, 0.6, 0.55), 0.4),
     buttonInactiveBgRgb: hslToRgb(hue, saturation, 0.18),
     inputBackgroundRgb: hslToRgb(hue, saturation, 0.18),
     overlayBackgroundRgb: hslToRgb(hue, Math.min(0.05, saturation * 0.3), 0.98),
 
-    playingBackgroundRgb: dimToBrightness(palette.vibrant, 0.15),
-    playingRingRgb: onAirColor(palette.vibrant, palette.accent),
+    playingBackgroundRgb: dimToBrightness(onAir, 0.15),
+    playingRingRgb: onAir,
     queuedRingRgb: hslToRgb(210, 0.7, 0.55),
-    loadingSpinnerRgb: blendColors(palette.accent, hslToRgb(258, 0.7, 0.62), 0.5),
+    loadingSpinnerRgb: blendColors(accent, hslToRgb(258, 0.7, 0.62), 0.5),
 
-    purpleBaseRgb: blendColors(palette.accent, hslToRgb(258, 0.7, 0.62), 0.3),
-    purpleDarkRgb: blendColors(palette.muted, hslToRgb(258, 0.7, 0.45), 0.3),
-    purpleLightRgb: blendColors(palette.accent, hslToRgb(258, 0.6, 0.75), 0.3),
+    purpleBaseRgb: blendColors(accent, hslToRgb(258, 0.7, 0.62), 0.3),
+    purpleDarkRgb: blendColors(secondary, hslToRgb(258, 0.7, 0.45), 0.3),
+    purpleLightRgb: blendColors(accent, hslToRgb(258, 0.6, 0.75), 0.3),
 
     radioButtonBaseRgb: hslToRgb(140 * 0.7 + hue * 0.3, 0.7, 0.55),
 
-    primaryActionTextRgb: blendColors(palette.accent, hslToRgb(258, 0.6, 0.65), 0.4),
-    primaryActionHoverRgb: boostToBrightness(palette.accent, 0.7),
+    primaryActionTextRgb: blendColors(accent, hslToRgb(258, 0.6, 0.65), 0.4),
+    primaryActionHoverRgb: boostToBrightness(accent, 0.7),
     dangerActionTextRgb: hslToRgb(0, 0.65, 0.60),
     dangerActionBgRgb: hslToRgb(0, 0.5, 0.50),
 
@@ -234,39 +234,15 @@ function analyzeColors(data) {
     superLikeBadgeBgRgb: { r: 202, g: 138, b: 4 },
     banBadgeBgRgb: { r: 220, g: 38, b: 38 },
 
-    filterAllActiveRgb: {
-      bg: blendColors(palette.accent, hslToRgb(258, 0.5, 0.55), 0.4),
-      text: boostToBrightness(palette.accent, 0.75),
-      border: blendColors(palette.accent, hslToRgb(258, 0.5, 0.55), 0.4)
-    },
-    filterInteractiveActiveRgb: {
-      bg: hslToRgb(210, 0.5, 0.55),
-      text: hslToRgb(210, 0.5, 0.75),
-      border: hslToRgb(210, 0.5, 0.55)
-    },
-    filterAnnouncerActiveRgb: {
-      bg: hslToRgb(45, 0.5, 0.55),
-      text: hslToRgb(45, 0.5, 0.75),
-      border: hslToRgb(45, 0.5, 0.55)
-    },
-    filterExternalActiveRgb: {
-      bg: hslToRgb(140, 0.5, 0.55),
-      text: hslToRgb(140, 0.5, 0.75),
-      border: hslToRgb(140, 0.5, 0.55)
-    },
-    filterShoutoutsActiveRgb: {
-      bg: hslToRgb(330, 0.5, 0.55),
-      text: hslToRgb(330, 0.5, 0.75),
-      border: hslToRgb(330, 0.5, 0.55)
-    },
-    filterInactiveRgb: {
-      bg: hslToRgb(hue, saturation * 0.8, 0.25),
-      text: hslToRgb(hue, Math.min(0.1, saturation * 0.6), 0.55),
-      border: hslToRgb(hue, saturation * 0.8, 0.25)
-    },
+    filterAllActiveRgb: filterLook(blendColors(accent, hslToRgb(258, 0.5, 0.55), 0.4), boostToBrightness(accent, 0.75), blendColors(accent, hslToRgb(258, 0.5, 0.55), 0.4)),
+    filterInteractiveActiveRgb: filterLook(hslToRgb(210, 0.5, 0.55), hslToRgb(210, 0.5, 0.75), hslToRgb(210, 0.5, 0.55)),
+    filterAnnouncerActiveRgb: filterLook(hslToRgb(45, 0.5, 0.55), hslToRgb(45, 0.5, 0.75), hslToRgb(45, 0.5, 0.55)),
+    filterExternalActiveRgb: filterLook(hslToRgb(140, 0.5, 0.55), hslToRgb(140, 0.5, 0.75), hslToRgb(140, 0.5, 0.55)),
+    filterShoutoutsActiveRgb: filterLook(hslToRgb(330, 0.5, 0.55), hslToRgb(330, 0.5, 0.75), hslToRgb(330, 0.5, 0.55)),
+    filterInactiveRgb: filterLook(hslToRgb(hue, saturation * 0.8, 0.25), hslToRgb(hue, textSaturation, 0.55), hslToRgb(hue, saturation * 0.8, 0.25)),
 
     userAvatarGradientRgb: {
-      from: blendColors(palette.vibrant, hslToRgb(258, 0.7, 0.60), 0.4),
+      from: blendColors(onAir, hslToRgb(258, 0.7, 0.60), 0.4),
       to: hslToRgb(210, 0.7, 0.60)
     },
     premiumGradientRgb: {
@@ -275,15 +251,16 @@ function analyzeColors(data) {
     }
   }
 
-  return {
-    palette: [palette.accent, palette.vibrant, palette.muted, palette.dark, palette.dominant]
-      .filter(Boolean)
-      .slice(0, 5)
-      .map(c => rgbToHex(c)),
+  const filter = (look, backgroundAlpha) => ({
+    background: rgbToCss(look.bg, backgroundAlpha),
+    color: rgbToCss(look.text),
+    borderColor: rgbToCss(look.border, 0.5)
+  })
 
+  return {
     accent: rgbToCss(colors.accentRgb),
-    gradient: `linear-gradient(135deg, ${rgbToCss(colors.primaryRgb, 0.3)}, ${rgbToCss(colors.secondaryRgb, 0.3)})`,
-    gradientFull: `linear-gradient(135deg, ${rgbToCss(colors.primaryRgb)}, ${rgbToCss(colors.secondaryRgb)})`,
+    primary: rgbToCss(colors.primaryRgb),
+    secondary: rgbToCss(colors.secondaryRgb),
 
     appBackground: rgbToCss(colors.appBackgroundRgb),
     cardBackground: rgbToCss(colors.cardBackgroundRgb),
@@ -337,36 +314,12 @@ function analyzeColors(data) {
     superLikeBadgeBg: rgbToCss(colors.superLikeBadgeBgRgb),
     banBadgeBg: rgbToCss(colors.banBadgeBgRgb),
 
-    filterAllActive: {
-      background: rgbToCss(colors.filterAllActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterAllActiveRgb.text),
-      borderColor: rgbToCss(colors.filterAllActiveRgb.border, 0.5)
-    },
-    filterInteractiveActive: {
-      background: rgbToCss(colors.filterInteractiveActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterInteractiveActiveRgb.text),
-      borderColor: rgbToCss(colors.filterInteractiveActiveRgb.border, 0.5)
-    },
-    filterAnnouncerActive: {
-      background: rgbToCss(colors.filterAnnouncerActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterAnnouncerActiveRgb.text),
-      borderColor: rgbToCss(colors.filterAnnouncerActiveRgb.border, 0.5)
-    },
-    filterExternalActive: {
-      background: rgbToCss(colors.filterExternalActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterExternalActiveRgb.text),
-      borderColor: rgbToCss(colors.filterExternalActiveRgb.border, 0.5)
-    },
-    filterShoutoutsActive: {
-      background: rgbToCss(colors.filterShoutoutsActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterShoutoutsActiveRgb.text),
-      borderColor: rgbToCss(colors.filterShoutoutsActiveRgb.border, 0.5)
-    },
-    filterInactive: {
-      background: rgbToCss(colors.filterInactiveRgb.bg, 0.3),
-      color: rgbToCss(colors.filterInactiveRgb.text),
-      borderColor: rgbToCss(colors.filterInactiveRgb.border, 0.5)
-    },
+    filterAllActive: filter(colors.filterAllActiveRgb, 0.2),
+    filterInteractiveActive: filter(colors.filterInteractiveActiveRgb, 0.2),
+    filterAnnouncerActive: filter(colors.filterAnnouncerActiveRgb, 0.2),
+    filterExternalActive: filter(colors.filterExternalActiveRgb, 0.2),
+    filterShoutoutsActive: filter(colors.filterShoutoutsActiveRgb, 0.2),
+    filterInactive: filter(colors.filterInactiveRgb, 0.3),
 
     userAvatarGradient: `linear-gradient(to bottom right, ${rgbToCss(colors.userAvatarGradientRgb.from)}, ${rgbToCss(colors.userAvatarGradientRgb.to)})`,
     premiumGradient: `linear-gradient(to right, ${rgbToCss(colors.premiumGradientRgb.from)}, ${rgbToCss(colors.premiumGradientRgb.to)})`,
@@ -399,13 +352,6 @@ function getSaturation({ r, g, b }) {
   const max = Math.max(r, g, b)
   const min = Math.min(r, g, b)
   return max === 0 ? 0 : (max - min) / max
-}
-
-function rgbToHex({ r, g, b }) {
-  return '#' + [r, g, b].map(x => {
-    const hex = x.toString(16)
-    return hex.length === 1 ? '0' + hex : hex
-  }).join('')
 }
 
 function rgbToHsl({ r, g, b }) {
@@ -457,207 +403,6 @@ function hslToRgb(h, s, l) {
     r: Math.round((r + m) * 255),
     g: Math.round((g + m) * 255),
     b: Math.round((b + m) * 255)
-  }
-}
-
-export function getDefaultColors() {
-  const hue = 258
-  const saturation = 0.1
-  const primary = { r: 139, g: 92, b: 246 }
-  const secondary = { r: 59, g: 130, b: 246 }
-
-  const colors = {
-    primaryRgb: primary,
-    secondaryRgb: secondary,
-    accentRgb: primary,
-
-    appBackgroundRgb: hslToRgb(hue, saturation, 0.08),
-    cardBackgroundRgb: hslToRgb(hue, saturation, 0.12),
-    cardHoverBackgroundRgb: hslToRgb(hue, saturation, 0.18),
-    panelBackgroundRgb: hslToRgb(hue, saturation, 0.15),
-
-    primaryTextRgb: hslToRgb(hue, 0.05, 0.98),
-    secondaryTextRgb: hslToRgb(hue, 0.1, 0.55),
-    mutedTextRgb: hslToRgb(hue, 0.08, 0.75),
-    tertiaryTextRgb: hslToRgb(hue, 0.08, 0.50),
-
-    borderColorRgb: hslToRgb(hue, saturation, 0.3),
-    subtleBorderRgb: hslToRgb(hue, saturation, 0.2),
-    activeBorderRgb: primary,
-    panelBorderRgb: hslToRgb(hue, saturation, 0.15),
-    inputBorderRgb: hslToRgb(hue, saturation, 0.2),
-
-    buttonHoverBgRgb: hslToRgb(hue, saturation, 0.18),
-    buttonActiveBgRgb: hslToRgb(258, 0.6, 0.55),
-    buttonInactiveBgRgb: hslToRgb(hue, saturation, 0.18),
-    inputBackgroundRgb: hslToRgb(hue, saturation, 0.18),
-    overlayBackgroundRgb: hslToRgb(hue, 0.05, 0.98),
-
-    playingBackgroundRgb: hslToRgb(258, 0.5, 0.15),
-    playingRingRgb: onAirColor(primary, primary),
-    queuedRingRgb: hslToRgb(210, 0.7, 0.55),
-    loadingSpinnerRgb: hslToRgb(258, 0.7, 0.62),
-
-    purpleBaseRgb: hslToRgb(258, 0.7, 0.62),
-    purpleDarkRgb: hslToRgb(258, 0.7, 0.45),
-    purpleLightRgb: hslToRgb(258, 0.6, 0.75),
-
-    radioButtonBaseRgb: hslToRgb(140, 0.7, 0.55),
-
-    primaryActionTextRgb: hslToRgb(258, 0.6, 0.65),
-    primaryActionHoverRgb: hslToRgb(258, 0.5, 0.75),
-    dangerActionTextRgb: hslToRgb(0, 0.65, 0.60),
-    dangerActionBgRgb: hslToRgb(0, 0.5, 0.50),
-
-    successColorRgb: hslToRgb(140, 0.6, 0.45),
-    errorColorRgb: hslToRgb(0, 0.7, 0.50),
-    warningColorRgb: hslToRgb(45, 0.8, 0.55),
-    infoColorRgb: hslToRgb(210, 0.7, 0.55),
-
-    networkExcellentRgb: { r: 34, g: 197, b: 94 },
-    networkGoodRgb: { r: 59, g: 130, b: 246 },
-    networkFairRgb: { r: 234, g: 179, b: 8 },
-    networkPoorRgb: { r: 239, g: 68, b: 68 },
-
-    likeBadgeBgRgb: { r: 219, g: 39, b: 119 },
-    superLikeBadgeBgRgb: { r: 202, g: 138, b: 4 },
-    banBadgeBgRgb: { r: 220, g: 38, b: 38 },
-
-    filterAllActiveRgb: {
-      bg: hslToRgb(258, 0.5, 0.55),
-      text: hslToRgb(258, 0.5, 0.75),
-      border: hslToRgb(258, 0.5, 0.55)
-    },
-    filterInteractiveActiveRgb: {
-      bg: hslToRgb(210, 0.5, 0.55),
-      text: hslToRgb(210, 0.5, 0.75),
-      border: hslToRgb(210, 0.5, 0.55)
-    },
-    filterAnnouncerActiveRgb: {
-      bg: hslToRgb(45, 0.5, 0.55),
-      text: hslToRgb(45, 0.5, 0.75),
-      border: hslToRgb(45, 0.5, 0.55)
-    },
-    filterExternalActiveRgb: {
-      bg: hslToRgb(140, 0.5, 0.55),
-      text: hslToRgb(140, 0.5, 0.75),
-      border: hslToRgb(140, 0.5, 0.55)
-    },
-    filterShoutoutsActiveRgb: {
-      bg: hslToRgb(330, 0.5, 0.55),
-      text: hslToRgb(330, 0.5, 0.75),
-      border: hslToRgb(330, 0.5, 0.55)
-    },
-    filterInactiveRgb: {
-      bg: hslToRgb(hue, saturation * 0.8, 0.25),
-      text: hslToRgb(hue, 0.1, 0.55),
-      border: hslToRgb(hue, saturation * 0.8, 0.25)
-    },
-
-    userAvatarGradientRgb: {
-      from: hslToRgb(258, 0.7, 0.60),
-      to: hslToRgb(210, 0.7, 0.60)
-    },
-    premiumGradientRgb: {
-      from: { r: 234, g: 179, b: 8 },
-      to: { r: 249, g: 115, b: 22 }
-    }
-  }
-
-  return {
-    palette: ['#8b5cf6', '#3b82f6', '#6366f1', '#a855f7', '#7c3aed'],
-
-    accent: rgbToCss(colors.accentRgb),
-    gradient: `linear-gradient(135deg, ${rgbToCss(colors.primaryRgb, 0.3)}, ${rgbToCss(colors.secondaryRgb, 0.3)})`,
-    gradientFull: `linear-gradient(135deg, ${rgbToCss(colors.primaryRgb)}, ${rgbToCss(colors.secondaryRgb)})`,
-
-    appBackground: rgbToCss(colors.appBackgroundRgb),
-    cardBackground: rgbToCss(colors.cardBackgroundRgb),
-    cardHoverBackground: rgbToCss(colors.cardHoverBackgroundRgb),
-    panelBackground: rgbToCss(colors.panelBackgroundRgb),
-
-    primaryText: rgbToCss(colors.primaryTextRgb),
-    secondaryText: rgbToCss(colors.secondaryTextRgb),
-    mutedText: rgbToCss(colors.mutedTextRgb),
-    tertiaryText: rgbToCss(colors.tertiaryTextRgb),
-
-    border: rgbToCss(colors.borderColorRgb),
-    subtleBorder: rgbToCss(colors.subtleBorderRgb),
-    activeBorder: rgbToCss(colors.activeBorderRgb),
-    panelBorder: rgbToCss(colors.panelBorderRgb),
-    inputBorder: rgbToCss(colors.inputBorderRgb),
-
-    buttonHoverBg: rgbToCss(colors.buttonHoverBgRgb),
-    buttonActiveBg: rgbToCss(colors.buttonActiveBgRgb),
-    buttonInactiveBg: rgbToCss(colors.buttonInactiveBgRgb),
-    inputBackground: rgbToCss(colors.inputBackgroundRgb),
-    overlayBackground: rgbToCss(colors.overlayBackgroundRgb),
-
-    playingBackground: rgbToCss(colors.playingBackgroundRgb),
-    playingRing: rgbToCss(colors.playingRingRgb),
-    queuedRing: rgbToCss(colors.queuedRingRgb),
-    loadingSpinner: rgbToCss(colors.loadingSpinnerRgb),
-
-    purpleBase: rgbToCss(colors.purpleBaseRgb),
-    purpleDark: rgbToCss(colors.purpleDarkRgb),
-    purpleLight: rgbToCss(colors.purpleLightRgb),
-
-    radioButtonBase: rgbToCss(colors.radioButtonBaseRgb),
-
-    primaryActionText: rgbToCss(colors.primaryActionTextRgb),
-    primaryActionHover: rgbToCss(colors.primaryActionHoverRgb),
-    dangerActionText: rgbToCss(colors.dangerActionTextRgb),
-    dangerActionBg: rgbToCss(colors.dangerActionBgRgb),
-
-    success: rgbToCss(colors.successColorRgb),
-    error: rgbToCss(colors.errorColorRgb),
-    warning: rgbToCss(colors.warningColorRgb),
-    info: rgbToCss(colors.infoColorRgb),
-
-    networkExcellent: rgbToCss(colors.networkExcellentRgb),
-    networkGood: rgbToCss(colors.networkGoodRgb),
-    networkFair: rgbToCss(colors.networkFairRgb),
-    networkPoor: rgbToCss(colors.networkPoorRgb),
-
-    likeBadgeBg: rgbToCss(colors.likeBadgeBgRgb),
-    superLikeBadgeBg: rgbToCss(colors.superLikeBadgeBgRgb),
-    banBadgeBg: rgbToCss(colors.banBadgeBgRgb),
-
-    filterAllActive: {
-      background: rgbToCss(colors.filterAllActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterAllActiveRgb.text),
-      borderColor: rgbToCss(colors.filterAllActiveRgb.border, 0.5)
-    },
-    filterInteractiveActive: {
-      background: rgbToCss(colors.filterInteractiveActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterInteractiveActiveRgb.text),
-      borderColor: rgbToCss(colors.filterInteractiveActiveRgb.border, 0.5)
-    },
-    filterAnnouncerActive: {
-      background: rgbToCss(colors.filterAnnouncerActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterAnnouncerActiveRgb.text),
-      borderColor: rgbToCss(colors.filterAnnouncerActiveRgb.border, 0.5)
-    },
-    filterExternalActive: {
-      background: rgbToCss(colors.filterExternalActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterExternalActiveRgb.text),
-      borderColor: rgbToCss(colors.filterExternalActiveRgb.border, 0.5)
-    },
-    filterShoutoutsActive: {
-      background: rgbToCss(colors.filterShoutoutsActiveRgb.bg, 0.2),
-      color: rgbToCss(colors.filterShoutoutsActiveRgb.text),
-      borderColor: rgbToCss(colors.filterShoutoutsActiveRgb.border, 0.5)
-    },
-    filterInactive: {
-      background: rgbToCss(colors.filterInactiveRgb.bg, 0.3),
-      color: rgbToCss(colors.filterInactiveRgb.text),
-      borderColor: rgbToCss(colors.filterInactiveRgb.border, 0.5)
-    },
-
-    userAvatarGradient: `linear-gradient(to bottom right, ${rgbToCss(colors.userAvatarGradientRgb.from)}, ${rgbToCss(colors.userAvatarGradientRgb.to)})`,
-    premiumGradient: `linear-gradient(to right, ${rgbToCss(colors.premiumGradientRgb.from)}, ${rgbToCss(colors.premiumGradientRgb.to)})`,
-
-    _rgb: colors
   }
 }
 

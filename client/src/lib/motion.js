@@ -302,15 +302,16 @@ const ms = (seconds) => `${Math.round(seconds * 1000)}ms`
 
 const PRESS_SCALE = `scale ${ms(DURATION.micro)} ${CSS_EASE.decelerate}`
 const THEME_ALL = `all ${ms(DURATION.theme)} ${CSS_EASE.standard}`
+const THEME_GRADIENTS = 'var(--theme-fade-gradient)'
 
 export const CSS_TRANSITION = {
-  theme: `${THEME_ALL}, transform ${ms(DURATION.micro)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
+  theme: `${THEME_ALL}, ${THEME_GRADIENTS}, transform ${ms(DURATION.micro)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
   themeAll: `${THEME_ALL}, ${PRESS_SCALE}`,
   themeOpacity: `${THEME_ALL}, opacity ${ms(DURATION.micro)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
   themeBackground: `background ${ms(DURATION.theme)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
   themeBackgroundColor: `background-color ${ms(DURATION.theme)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
   themeBorder: `border-color ${ms(DURATION.theme)} ${CSS_EASE.standard}`,
-  themeBackgroundTransform: `background ${ms(DURATION.theme)} ${CSS_EASE.standard}, transform 100ms ${CSS_EASE.linear}`,
+  themeBackgroundTransform: `background ${ms(DURATION.theme)} ${CSS_EASE.standard}, ${THEME_GRADIENTS}, transform 100ms ${CSS_EASE.linear}`,
   themeBackgroundScale: `background-color ${ms(DURATION.theme)} ${CSS_EASE.standard}, transform ${ms(DURATION.base)} ${CSS_EASE.out}`,
   quick: `all ${ms(DURATION.micro)} ${CSS_EASE.standard}, ${PRESS_SCALE}`,
   fadeOpacity: `opacity ${ms(DURATION.base)} ${CSS_EASE.standard}`,

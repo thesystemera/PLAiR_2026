@@ -210,7 +210,8 @@ export function getCategoryMetadata(key) {
 const FILTER_KEYS = ['filterAllActive', 'filterInteractiveActive', 'filterAnnouncerActive', 'filterExternalActive', 'filterShoutoutsActive', 'filterInactive']
 const kebab = name => name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)
 const themeVar = name => `var(--theme-${kebab(name)})`
-const channels = ({ r, g, b }) => `${r} ${g} ${b}`
+const mix = (name, opacity) => (opacity >= 1 ? themeVar(name) : `color-mix(in srgb, ${themeVar(name)} ${Math.round(opacity * 1000) / 10}%, transparent)`)
+const themeGradient = (primaryOpacity, secondaryOpacity) => `linear-gradient(135deg, ${mix('primary', primaryOpacity)}, ${mix('secondary', secondaryOpacity)})`
 
 const FILTER_STYLES = Object.fromEntries(FILTER_KEYS.map(key => [key, {
   background: themeVar(`${key}Background`),
@@ -226,10 +227,6 @@ function themeCssVars(theme) {
   for (const key of FILTER_KEYS) {
     for (const [property, value] of Object.entries(theme[key] || {})) vars[`--theme-${kebab(key)}-${kebab(property)}`] = value
   }
-  const rgb = theme._rgb || {}
-  if (rgb.accentRgb) vars['--theme-accent-rgb'] = channels(rgb.accentRgb)
-  if (rgb.primaryRgb) vars['--theme-primary-rgb'] = channels(rgb.primaryRgb)
-  if (rgb.secondaryRgb) vars['--theme-secondary-rgb'] = channels(rgb.secondaryRgb)
   return vars
 }
 
@@ -353,10 +350,8 @@ export function DynamicThemeProvider({ children }) {
   const getters = useMemo(() => ({
     getCategoryMetadata,
 
-    getGradient: (opacity) => opacity === undefined
-      ? themeVar('gradient')
-      : `linear-gradient(135deg, rgb(var(--theme-primary-rgb) / ${opacity}), rgb(var(--theme-secondary-rgb) / 0.3))`,
-    getAccentColor: (opacity = 1) => `rgb(var(--theme-accent-rgb) / ${opacity})`,
+    getGradient: (opacity) => themeGradient(opacity === undefined ? 0.3 : opacity, 0.3),
+    getAccentColor: (opacity = 1) => mix('accent', opacity),
     getAccentRgb: () => colorsRef.current?._rgb?.accentRgb || { r: 139, g: 92, b: 246 },
 
     getBorder: () => themeVar('border'),
