@@ -250,6 +250,15 @@ textarea,
     animation: ui-arrive-in var(--dur-arrive) var(--ease-standard) var(--arrive-delay) backwards;
   }
 
+  [data-arrive="arrived"] .ui-placeholder,
+  [data-arrive="instant"] .ui-placeholder {
+    animation-play-state: paused;
+  }
+
+  [data-arrive="instant"] .ui-arrive {
+    transition: none;
+  }
+
   .ui-task-ring {
     display: block;
     width: 100%;

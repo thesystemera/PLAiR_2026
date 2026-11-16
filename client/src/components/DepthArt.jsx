@@ -41,19 +41,22 @@ export function DepthArtBridge() {
 }
 
 const DepthArt = memo(function DepthArt({
-  packUrl, identity, packMissing = false, intensity, scrollTilt = true, held = false, alt, onLoad, onError, onHost, placeholder = null, className = 'absolute inset-0', artRef, artProps,
+  packUrl, identity, packMissing = false, intensity, scrollTilt = true, held = false, covered = false, alt, onLoad, onError, onHost, placeholder = null, className = 'absolute inset-0', artRef, artProps,
 }) {
   const hostRef = useRef(null)
   const canvasRef = useRef(null)
   const callbacksRef = useRef({ onLoad, onError })
   const [drawnFor, setDrawnFor] = useState(null)
+  const [drawnHiddenFor, setDrawnHiddenFor] = useState(null)
   const [coveredFor, setCoveredFor] = useState(null)
+  const coveredRef = useRef(covered)
   const key = isLoadedImage(packUrl) ? packUrl : null
   const identityRef = useRef(identity)
 
   useLayoutEffect(() => {
     identityRef.current = identity
-  }, [identity])
+    coveredRef.current = covered
+  }, [identity, covered])
 
   useEffect(() => {
     callbacksRef.current = { onLoad, onError }
@@ -78,6 +81,7 @@ const DepthArt = memo(function DepthArt({
       intensity,
       scrollTilt,
       onDrawn: () => {
+        if (coveredRef.current) setDrawnHiddenFor(identityRef.current)
         setDrawnFor(identityRef.current)
         callbacksRef.current.onLoad?.({ currentTarget: canvasRef.current, target: canvasRef.current })
       },
@@ -94,15 +98,16 @@ const DepthArt = memo(function DepthArt({
   }, [packMissing])
 
   const shown = key !== null && drawnFor === identity
+  const instant = shown && drawnHiddenFor === identity
 
   useEffect(() => {
     if (!shown) return
-    const timer = setTimeout(() => setCoveredFor(identity), DURATION.arrive * 1000)
+    const timer = setTimeout(() => setCoveredFor(identity), instant ? 0 : DURATION.arrive * 1000)
     return () => clearTimeout(timer)
-  }, [shown, identity])
+  }, [shown, instant, identity])
 
   return (
-    <div ref={setHost} data-depth-art className={className}>
+    <div ref={setHost} data-depth-art data-arrive={instant ? 'instant' : shown ? 'arrived' : 'waiting'} className={className}>
       {(!shown || coveredFor !== identity) && placeholder}
       <canvas
         ref={setCanvas}
@@ -227,7 +232,7 @@ export const TrackArtCrossfade = memo(function TrackArtCrossfade({ trackId, hasA
         className={`absolute inset-0 transition-opacity duration-theme ease-emphasized ${front && layers.leaving ? 'opacity-0' : 'opacity-100'}`}
         style={front ? FRONT : BACK}
       >
-        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArt} intensity={intensity} scrollTilt={false} held={front && layers.leaving} alt={alt} onLoad={onDone} onError={onDone} />
+        <TrackArt trackId={layer.trackId} hasArtwork={layer.hasArt} intensity={intensity} scrollTilt={false} held={front && layers.leaving} covered={!front && !!layers.shown && !layers.leaving} alt={alt} onLoad={onDone} onError={onDone} />
       </div>
     )
   })
