@@ -32,7 +32,7 @@ MAX_LINE_WORDS = 14
 MAX_LINE_DURATION_S = 8.0
 MAX_WORD_GAP_S = 1.5
 LANGUAGE_DETECTION_SEGMENTS = 4
-SYNC_VERSION = "1.1"
+SYNC_VERSION = "1.2"
 VOICE_HOP_S = 0.01
 VOICE_REFERENCE_PERCENTILE = 95
 VOICE_AUDIBLE_DB = -80.0
@@ -41,6 +41,12 @@ VOICE_PRESENT_DB = -30.0
 VOICE_PROBE_S = 0.06
 VOICE_PREROLL_S = 0.02
 VOICE_PHRASE_GAP_S = 0.6
+VOICE_RISE_DB = 12.0
+VOICE_PAUSE_S = 0.25
+VOICE_ONSET_S = 0.1
+VOICE_ONSET_NEAR_S = 0.15
+VOICE_TAIL_S = 1.0
+VOICE_DECAY_DB = 6.0
 MIN_WORD_S = 0.08
 ENGLISH_RATIO_THRESHOLD = 0.12
 
@@ -104,40 +110,127 @@ def voice_levels(path: Path) -> np.ndarray:
     return levels - (np.percentile(audible, VOICE_REFERENCE_PERCENTILE) if audible.size else 0.0)
 
 
-def snap_to_voice(words: List[Dict[str, Any]], levels: np.ndarray) -> int:
-    """Whisper starts a word that follows a pause where the pause began. A word whose start falls in silence on the
-    vocal stem starts where the voice comes in instead (by the end of the next word: one Whisper heard in silence
-    lands with the next sung word), and ends no sooner than MIN_WORD_S after it."""
+def voice_onsets(levels: np.ndarray) -> np.ndarray:
+    """Frames where the voice comes back after a pause: at least VOICE_PAUSE_S at VOICE_RISE_DB or more under the
+    level the voice reaches within VOICE_ONSET_S, and that level loud enough to be singing. The dips of consonants
+    inside a word are shorter than a pause, the fading tail of a sung word is not a rise."""
+    ahead = round(VOICE_ONSET_S / VOICE_HOP_S)
+    behind = round(VOICE_PAUSE_S / VOICE_HOP_S)
+    if levels.size <= behind:
+        return np.zeros(0, dtype=int)
+    windows = np.lib.stride_tricks.sliding_window_view
+    peak = windows(np.concatenate([levels, np.full(ahead - 1, -np.inf)]), ahead).max(axis=1)
+    before = np.concatenate([np.full(behind, np.inf), windows(levels, behind).max(axis=1)[:-1]])
+    floor = peak - VOICE_RISE_DB
+    rising = np.nonzero((peak >= VOICE_PRESENT_DB) & (levels > floor) & (before <= floor))[0]
+    return np.array([frame + int(np.argmax(levels[frame:frame + ahead] >= VOICE_PRESENT_DB)) for frame in rising], dtype=int)
+
+
+def _pause_start(levels: np.ndarray, onset: int) -> int:
+    floor = max(float(levels[onset:onset + round(VOICE_ONSET_S / VOICE_HOP_S)].max()) - VOICE_RISE_DB, VOICE_PRESENT_DB)
+    frame = onset
+    while frame > 0 and levels[frame - 1] <= floor:
+        frame -= 1
+    return frame
+
+
+def snap_to_voice(words: List[Dict[str, Any]], levels: np.ndarray, line_starts: Optional[List[bool]] = None,
+                  after_missed: Optional[List[bool]] = None) -> int:
+    """Whisper gives a pause to the word after it, so a word sung after a pause often starts where the word before it
+    ended, and can stay on screen through the whole gap. A word whose own span holds a pause and the voice coming
+    back starts where the voice comes back (voice_onsets). A word that starts in silence, and the first word of a
+    lyric line that does not start where a voice comes in (line_starts), may move to where the voice comes back by
+    the end of the next word: one Whisper heard in silence lands with the next sung word, and a line is sung with its
+    first word, which Whisper sometimes puts on the end of the line before. A word
+    moves only when what sounds at its start is silence or the fading end of the singing before it (no louder than
+    VOICE_DECAY_DB over its start, at most VOICE_TAIL_S), never a word being sung, unless the lyric words just before
+    it were missed (after_missed): then what sounds there can be those words. Moves are decided from the last word
+    back, so a word follows the next one when that one moves; then words are put back in order."""
+    onsets = voice_onsets(levels)
+    near = round(VOICE_ONSET_NEAR_S / VOICE_HOP_S)
+    probe = round(VOICE_PROBE_S / VOICE_HOP_S)
     moved = 0
-    for index, word in enumerate(words):
+    for index in reversed(range(len(words))):
+        word = words[index]
         first = round(word["start"] / VOICE_HOP_S)
-        probe = levels[first:first + round(VOICE_PROBE_S / VOICE_HOP_S)]
-        if probe.size == 0 or float(np.median(probe)) >= VOICE_SILENT_DB:
-            continue
-        limit = max(word["end"], words[index + 1]["end"]) if index + 1 < len(words) else word["end"]
-        voiced = np.nonzero(levels[first:round(limit / VOICE_HOP_S)] >= VOICE_PRESENT_DB)[0]
-        if voiced.size == 0:
-            continue
-        start = round(max(word["start"], (first + int(voiced[0])) * VOICE_HOP_S - VOICE_PREROLL_S), 3)
-        if start > word["start"]:
-            word["start"] = start
-            word["end"] = round(max(word["end"], start + MIN_WORD_S), 3)
+        bound = word["end"] - MIN_WORD_S
+        if index + 1 < len(words):
+            silent = float(np.median(levels[first:first + probe])) < VOICE_SILENT_DB if first < levels.size else True
+            opens_line = bool(line_starts and line_starts[index]) and not np.any(np.abs(onsets - first) <= near)
+            if silent or opens_line:
+                bound = max(bound, words[index + 1]["end"])
+        later = onsets[(onsets > first) & (onsets <= round(bound / VOICE_HOP_S))]
+        if later.size:
+            pause = _pause_start(levels, int(later[0]))
+            sounding = levels[first:pause]
+            fading = sounding.size == 0 or bool(after_missed and after_missed[index]) or (
+                sounding.size * VOICE_HOP_S <= VOICE_TAIL_S
+                and float(sounding.max()) <= float(np.median(levels[first:first + probe])) + VOICE_DECAY_DB)
+            if fading:
+                word["start"] = round(int(later[0]) * VOICE_HOP_S - VOICE_PREROLL_S, 3)
+                word["end"] = round(max(word["end"], word["start"] + MIN_WORD_S), 3)
+                word["snapped"] = True
+                moved += 1
+    floor = 0.0
+    for word in words:
+        if word["start"] < floor:
+            word["start"] = round(floor, 3)
             word["snapped"] = True
-            moved += 1
+        word["end"] = round(max(word["end"], word["start"] + MIN_WORD_S), 3)
+        floor = word["end"] if word.get("snapped") else word["start"]
     return moved
 
 
-def voiced_frames(levels: np.ndarray, low: float, high: float, after: bool, before: bool) -> Optional[np.ndarray]:
-    """Where words Whisper missed were sung: the sung frames between the matched words around them. With a matched
-    word only after them, the phrase that ends nearest it; only before them, the phrase that starts nearest it."""
+def sung_phrases(levels: np.ndarray, low: float, high: float) -> List[np.ndarray]:
+    """The sung frames between two moments, split into phrases where the voice stops for over VOICE_PHRASE_GAP_S;
+    blips shorter than a word are left out."""
     first = max(0, round(low / VOICE_HOP_S))
     frames = np.nonzero(levels[first:max(first, round(high / VOICE_HOP_S))] >= VOICE_PRESENT_DB)[0] + first
     if frames.size == 0:
-        return None
-    if before and after:
-        return frames
+        return []
     phrases = np.split(frames, np.nonzero(np.diff(frames) * VOICE_HOP_S > VOICE_PHRASE_GAP_S)[0] + 1)
-    return phrases[-1] if after else phrases[0]
+    return [phrase for phrase in phrases if phrase.size * VOICE_HOP_S >= MIN_WORD_S]
+
+
+def place_missed_lines(groups: List[Tuple[str, List[int]]], phrases: List[np.ndarray],
+                       ringing: bool) -> List[Tuple[List[int], np.ndarray]]:
+    """Where words Whisper missed were sung, line by line: words from the line of the matched word before them go in
+    the first phrase after it, words from the line of the matched word after them in the last phrase before it, and
+    whole lines in between share the phrases left evenly, in order; each line takes from the start of its share only
+    as many phrases as its words need (INTERPOLATED_WORD_S a word), so ad-libs between lines stay empty. With no
+    words from the line before, a first phrase still ringing from the word before (ringing) is that word's own note.
+    Returns the words with the sung frames to spread them over."""
+    count = len(phrases)
+    lead = groups[0][1] if groups and groups[0][0] == "lead" else None
+    tail = groups[-1][1] if groups and groups[-1][0] == "tail" else None
+    middle = [words for kind, words in groups if kind == "middle"]
+    low = 1 if lead is not None or (middle and ringing and count > 1) else 0
+    high = count - 1 if tail is not None else count
+    spans: List[Tuple[List[int], List[int]]] = []
+    if lead is not None:
+        spans.append((lead, [0]))
+    room = high - low
+    for position, words in enumerate(middle):
+        if room <= 0:
+            spans.append((words, [count - 1] if tail is not None else [0] if lead is not None else list(range(count))))
+            continue
+        first = low + position * room // len(middle)
+        share = range(first, max(first + 1, low + (position + 1) * room // len(middle)))
+        taken: List[int] = []
+        for index in share:
+            taken.append(index)
+            if sum(phrases[k].size for k in taken) * VOICE_HOP_S >= len(words) * INTERPOLATED_WORD_S:
+                break
+        spans.append((words, taken))
+    if tail is not None:
+        spans.append((tail, [count - 1]))
+    blocks: List[Tuple[List[int], List[int]]] = []
+    for words, indexes in spans:
+        if blocks and set(indexes) & set(blocks[-1][1]):
+            blocks[-1] = (blocks[-1][0] + words, sorted(set(blocks[-1][1]) | set(indexes)))
+        else:
+            blocks.append((list(words), indexes))
+    return [(words, np.concatenate([phrases[index] for index in indexes])) for words, indexes in blocks if words]
 
 
 def detect_lyrics_language(metadata: Dict[str, Any], lyrics: str) -> Optional[str]:
@@ -353,8 +446,20 @@ class LyricalTimestampService(SingletonService):
         return mapping
 
     @staticmethod
-    def _interpolate_gaps(words: List[Optional[Dict[str, Any]]], ref_tokens: List[str],
-                          duration: Optional[float], levels: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
+    def _missed_groups(index: int, run_end: int, line_of: List[int]) -> List[Tuple[str, List[int]]]:
+        before = line_of[index - 1] if index > 0 else -1
+        after = line_of[run_end] if run_end < len(line_of) else -1
+        groups: List[Tuple[str, List[int]]] = []
+        for line in dict.fromkeys(line_of[index:run_end]):
+            members = [k for k in range(index, run_end) if line_of[k] == line]
+            kind = "middle" if before == after else "lead" if line == before else "tail" if line == after else "middle"
+            groups.append((kind, members))
+        return groups
+
+    @classmethod
+    def _interpolate_gaps(cls, words: List[Optional[Dict[str, Any]]], ref_tokens: List[str],
+                          duration: Optional[float], levels: Optional[np.ndarray] = None,
+                          line_of: Optional[List[int]] = None) -> List[Dict[str, Any]]:
         total = len(words)
         index = 0
         while index < total:
@@ -370,21 +475,28 @@ class LyricalTimestampService(SingletonService):
 
             if previous_end is None and next_start is None:
                 return []
-            voiced = None
-            if levels is not None:
-                voiced = voiced_frames(levels, previous_end or 0.0,
-                                       next_start if next_start is not None else len(levels) * VOICE_HOP_S,
-                                       after=next_start is not None, before=previous_end is not None)
-            if voiced is not None:
-                for offset in range(count):
-                    low, high = offset * len(voiced) // count, (offset + 1) * len(voiced) // count
-                    words[index + offset] = {
-                        "word": ref_tokens[index + offset],
-                        "start": round(voiced[low] * VOICE_HOP_S, 3),
-                        "end": round((voiced[max(low, high - 1)] + 1) * VOICE_HOP_S, 3),
-                        "confidence": 0.3,
-                        "aligned": True
-                    }
+            phrases: List[np.ndarray] = []
+            if levels is not None and line_of is not None:
+                phrases = sung_phrases(levels, previous_end or 0.0,
+                                       next_start if next_start is not None else len(levels) * VOICE_HOP_S)
+            if phrases:
+                ringing = previous_end is not None and int(phrases[0][0]) <= round(previous_end / VOICE_HOP_S) + 1
+                groups = cls._missed_groups(index, run_end, line_of)
+                for members, frames in place_missed_lines(groups, phrases, ringing):
+                    breaks = np.nonzero(np.diff(frames) * VOICE_HOP_S > VOICE_PHRASE_GAP_S)[0]
+                    for offset, ref_index in enumerate(members):
+                        low, high = offset * len(frames) // len(members), (offset + 1) * len(frames) // len(members)
+                        last = max(low, high - 1)
+                        cut = breaks[breaks >= low]
+                        if cut.size and cut[0] < last:
+                            last = int(cut[0])
+                        words[ref_index] = {
+                            "word": ref_tokens[ref_index],
+                            "start": round(frames[low] * VOICE_HOP_S, 3),
+                            "end": round((frames[last] + 1) * VOICE_HOP_S, 3),
+                            "confidence": 0.3,
+                            "aligned": True
+                        }
                 index = run_end
                 continue
             if previous_end is None:
@@ -449,6 +561,7 @@ class LyricalTimestampService(SingletonService):
         lines = self._lyric_lines(ground_truth_lyrics)
         hyp_tokens = self._whisper_tokens(whisper_words)
         ref_tokens = [token for _text, tokens in lines for token in tokens]
+        line_of = [number for number, (_text, tokens) in enumerate(lines) for _token in tokens]
         if not hyp_tokens or not ref_tokens:
             return [], [], 0
 
@@ -472,11 +585,19 @@ class LyricalTimestampService(SingletonService):
                 word["aligned"] = True
             words[ref_index] = word
 
-        aligned_words = self._interpolate_gaps(words, ref_tokens, duration, levels)
+        if levels is not None:
+            heard = [ref_index for ref_index, word in enumerate(words) if word is not None]
+            line_starts = [
+                (ref_index == 0 or line_of[ref_index - 1] != line_of[ref_index])
+                and ref_index + 1 < len(words) and words[ref_index + 1] is not None
+                and line_of[ref_index + 1] == line_of[ref_index]
+                for ref_index in heard
+            ]
+            after_missed = [ref_index > 0 and words[ref_index - 1] is None for ref_index in heard]
+            snap_to_voice([words[ref_index] for ref_index in heard], levels, line_starts, after_missed)
+        aligned_words = self._interpolate_gaps(words, ref_tokens, duration, levels, line_of)
         if not aligned_words:
             return [], [], 0
-        if levels is not None:
-            snap_to_voice(aligned_words, levels)
 
         grouped: List[Dict[str, Any]] = []
         offset = 0
