@@ -16,6 +16,7 @@ import { useThemeArtwork } from '../contexts/DynamicThemeContext'
 import { useDeviceLinkApproval } from '../hooks/useDeviceLinkApproval'
 import { artistCredit } from '../lib/utils'
 import { useTaskNotices } from './TaskNotice'
+import { NoticeClose } from './Notice'
 
 const DISCONNECT_NOTICE_GRACE_MS = 4000
 const MEDIA_POSITION_REFRESH_MS = 10000
@@ -249,37 +250,40 @@ export function LimitNotice() {
 const SERVER_LOAD_KEY = 'server_load'
 
 export function ServerLoadNotice() {
-  const { shown, muted, offline, showNotice, hideNotice } = useUISelector(state => ({
-    shown: state.notices.some(notice => notice.key === SERVER_LOAD_KEY),
+  const { muted, offline, showNotice, hideNotice } = useUISelector(state => ({
     muted: !!state.settingsState.ttsMuted,
     offline: !!state.audioState.offlineMode,
     showNotice: state.showNotice,
     hideNotice: state.hideNotice,
   }))
   const [load, setLoad] = useState(null)
-  const shownSinceRef = useRef(null)
-  const dismissedSinceRef = useRef(null)
+  const [dismissedSince, setDismissedSince] = useState(null)
   useWebSocketSubscribe('server_load', setLoad)
 
   const busySince = load?.state === 'busy' ? load.since : null
   const message = load?.message
 
   useEffect(() => {
-    if (!shown && shownSinceRef.current && shownSinceRef.current === busySince) {
-      dismissedSinceRef.current = busySince
-      shownSinceRef.current = null
-    }
-  }, [shown, busySince])
-
-  useEffect(() => {
-    if (!busySince || !message || muted || offline || dismissedSinceRef.current === busySince) {
-      shownSinceRef.current = null
+    if (!busySince || !message || muted || offline || dismissedSince === busySince) {
       hideNotice(SERVER_LOAD_KEY)
       return
     }
-    shownSinceRef.current = busySince
-    showNotice({ key: SERVER_LOAD_KEY, tone: 'info', icon: Gauge, priority: 2, sticky: true, text: message })
-  }, [busySince, message, muted, offline, showNotice, hideNotice])
+    showNotice({
+      key: SERVER_LOAD_KEY,
+      tone: 'info',
+      icon: Gauge,
+      priority: 2,
+      sticky: true,
+      dismissible: false,
+      text: message,
+      content: (
+        <NoticeClose
+          onClick={() => setDismissedSince(busySince)}
+          title="Hide (comes back the next time the studio is busy)"
+        />
+      ),
+    })
+  }, [busySince, message, muted, offline, dismissedSince, showNotice, hideNotice])
 
   return null
 }
