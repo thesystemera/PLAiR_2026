@@ -430,26 +430,43 @@ function VirtualScroller({
     }
   }
   const recycling = recycle && !measured
+  const cellAt = (index) => {
+    const item = items[index - windowStart]
+    return { item, element: item ? renderItem(item, index) : renderPlaceholder ? renderPlaceholder(index) : defaultPlaceholder(index, itemHeight) }
+  }
+  if (!measured && !recycling) {
+    for (let i = startIndex; i < endIndex; i++) visibleItems.push(cellAt(i).element)
+  }
   let slots = slotState
-  if (recycling && (slots.start !== startIndex || slots.end !== endIndex)) {
-    slots = assignSlots(slots, startIndex, endIndex)
+  if (recycling && (slots.start !== startRow || slots.end !== endRow)) {
+    slots = assignSlots(slots, startRow, endRow)
     setSlotState(slots)
   }
-  const slotted = []
-  for (let i = startIndex; i < endIndex && !measured; i++) {
-    const item = items[i - windowStart]
-    const element = item ? renderItem(item, i) : renderPlaceholder ? renderPlaceholder(i) : defaultPlaceholder(i, itemHeight)
-    if (!recycling) {
-      visibleItems.push(element)
-      continue
-    }
-    const slot = slots.byIndex.get(i)
-    const place = typeof element.type === 'string' ? { style: { ...element.props.style, order: i } } : { slotStyle: { order: i } }
-    slotted.push({ slot, element: cloneElement(element, { key: `${item ? 'slot' : 'blank'}-${slot}`, ...place }) })
-  }
+
   if (recycling) {
-    slotted.sort((a, b) => a.slot - b.slot)
-    for (const entry of slotted) visibleItems.push(entry.element)
+    const rows = []
+    for (let row = startRow; row < endRow; row++) {
+      const cells = []
+      for (let col = 0; col < perRow; col++) {
+        const index = row * perRow + col
+        if (index >= catalogSize) break
+        const { item, element } = cellAt(index)
+        cells.push(cloneElement(element, { key: `${item ? 'card' : 'blank'}-${col}` }))
+      }
+      rows.push({ slot: slots.byIndex.get(row), top: layout.offset(row), cells })
+    }
+    rows.sort((a, b) => a.slot - b.slot)
+    return (
+      <div ref={listRef} style={{ height: `${layout.total}px`, position: 'relative' }}>
+        <div ref={windowRef} data-virtual-window style={{ position: 'absolute', inset: 0 }}>
+          {rows.map(({ slot, top, cells }) => (
+            <div key={`row-${slot}`} className={className} style={{ position: 'absolute', top: `${top}px`, left: 0, right: 0 }}>
+              {cells}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
 
   return (

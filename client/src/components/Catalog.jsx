@@ -97,7 +97,7 @@ function queuedTrackIds(queue) {
   return queued.ids
 }
 
-const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null, slotStyle = undefined }) {
+const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null }) {
   const { getWhite, triggerEffect } = useDynamicTheme()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
@@ -146,7 +146,6 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
     <MediaCardAnimation
       index={index}
       shouldAnimate={shouldAnimate}
-      style={slotStyle}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} group/card cursor-pointer ${
         isPlaying ? 'ui-current-outline' : ''
       } ${isQueued && !isPlaying ? 'ring-1 ring-blue-400/40' : ''}`}
@@ -212,8 +211,7 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
 }, (prev, next) => {
   return (
     prev.track.id === next.track.id &&
-    prev.selectedGenre === next.selectedGenre &&
-    prev.slotStyle?.order === next.slotStyle?.order
+    prev.selectedGenre === next.selectedGenre
   )
 })
 
@@ -279,7 +277,7 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
   const { isMobile } = useViewport()
   const [measuredRowHeight, setMeasuredRowHeight] = useState(isMobile ? 308 : 344)
   const measurementRef = useRef(null)
-  const { itemsPerRow, gridClassName } = useMediaGridColumns()
+  const { itemsPerRow, rowClassName } = useMediaGridColumns()
   const gridLayoutRef = useRef({ itemsPerRow, rowHeight: measuredRowHeight, anchorIndex: null, anchorUntil: 0 })
 
   useLayoutEffect(() => {
@@ -536,7 +534,8 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
       const card = gridContainer.firstElementChild
       if (!card) return
       const cardHeight = card.getBoundingClientRect().height
-      const actualRowHeight = cardHeight + (parseFloat(getComputedStyle(gridContainer).rowGap) || 0)
+      const gridStyle = getComputedStyle(gridContainer)
+      const actualRowHeight = cardHeight + (parseFloat(gridStyle.rowGap) || 0) + (parseFloat(gridStyle.paddingBottom) || 0)
 
       if (cardHeight > 0 && Math.abs(actualRowHeight - gridLayoutRef.current.rowHeight) > 2) {
         setMeasuredRowHeight(actualRowHeight)
@@ -688,7 +687,7 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
                 onRangeChange={!isSearchMode ? catalogWindow.ensureRange : undefined}
                 getPrefetchId={getTrackArtworkId}
                 scrollContainerRef={scrollContainerRef}
-                className={gridClassName}
+                className={rowClassName}
                 recycle
               />
             </div>
