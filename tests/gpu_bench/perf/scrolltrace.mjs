@@ -2,7 +2,8 @@
 // down and back with a synthetic finger: per thread (page main, compositor, raster workers, GPU process) the busy time
 // per second, and for the page's main thread the self time by kind of work (style, layout, paint, script...), with the
 // layouts and style recalculations that script forced counted apart. PICK=1 traces one tap on a Catalog card instead
-// of a scroll (it changes the owner's song).
+// of a scroll (it changes the owner's song). ART='<json>' / SCENE='<json>' apply cover / scene switches for the run
+// (window.__plairArt.set, window.__plairScene.set), e.g. ART='{"skipDraw":true}' SCENE='{"skip":true}' for the floor.
 import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Catalog'
@@ -26,6 +27,8 @@ const send = (method, params = {}) => new Promise(r => { const i = ++id; pending
 
 const p = await page()
 await openPanel(p, panel)
+if (process.env.ART) await p.evaluate(`window.__plairArt.set(${process.env.ART}), 1`)
+if (process.env.SCENE) await p.evaluate(`window.__plairScene.set(${process.env.SCENE}), 1`)
 await sleep(2000)
 const spot = JSON.parse(await p.evaluate(`JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight * 0.45) })`))
 await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,blink.user_timing,gpu,viz,cc', transferMode: 'ReportEvents' })
@@ -111,6 +114,8 @@ for (const e of forced) {
   forcedBy.set(key, entry)
 }
 for (const [key, entry] of [...forcedBy].sort((a, b) => b[1].ms - a[1].ms).slice(0, 8)) console.log(`   forced ${entry.n}x, ${entry.ms.toFixed(0)} ms by ${key}`)
+if (process.env.ART) await p.evaluate(`window.__plairArt.set({ skipDraw: false, skipCopy: false, lit: true, coarse: null }), 1`)
+if (process.env.SCENE) await p.evaluate(`window.__plairScene.set({ skip: false }), 1`)
 browser.close()
 p.close()
 process.exit(0)
