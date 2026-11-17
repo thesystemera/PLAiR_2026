@@ -16,6 +16,7 @@ old scratchpad or `E:/AI_RADIO/client/dist`; adjust before running.
 - `vizframe.mjs [panel]` - one compositor frame: render passes with their rectangles, and the layers.
 - `cssab.mjs <panel> '<json {label: css rules}>' [rounds] [extra]` - GPU cost of page styling: the frame is loaded so it is GPU-bound, each set of CSS rules is injected in turn and the frame time compared with "as is".
 - `chromewatch.mjs [panel]` - drags the panel's list and prints, per painted frame, the tab bar and player opacity, the panel area's bottom, the list's edge-mask lift and the scene's glass edge (the scroll-away fades checked against each other); screenshots at rest, away and back.
+- `chromeend.mjs [panel]` - scrolls the panel's list to its very end with a real drag, lets the tab bar and player return, and prints the list's distance from its end per painted frame (it must stay at its end above the tab bar).
 - `toggle.mjs [button title] [rounds] [panel]` - opens and closes a player panel (default "Manage devices") and prints frames drawn, average and worst frame and long frames.
 - `touchfps.mjs [panel] [seconds] [x,y]` - frames per second without and with a synthetic finger moving on the screen (Chrome holds page frames to 60 Hz unless the screen is touched).
 - `copycost.mjs [size] [rounds] [targets]` - cost of WebGL-to-2D-canvas copies, the way covers reach the screen (10 small covers: about 0.7 ms a frame).

@@ -124,13 +124,17 @@ function TwoWayDots({ side }) {
 
 function MobileChrome({ as: Component = motion.div, hidden = false, nodeRef, style, children, ...props }) {
   const away = useUISelector(state => state.interfaceState.chromeAway)
+  const [last, setLast] = useState({ hidden, away, transition: PANEL_FADE_TRANSITION })
+  if (last.hidden !== hidden || last.away !== away) {
+    setLast({ hidden, away, transition: last.away !== away ? MOTION.chrome : PANEL_FADE_TRANSITION })
+  }
   const visible = !hidden && !away
   return (
     <Component
       {...props}
       ref={nodeRef}
       animate={{ opacity: visible ? 1 : 0 }}
-      transition={PANEL_FADE_TRANSITION}
+      transition={last.transition}
       style={{ ...style, ...getPanelPointerEvents(visible) }}
     >
       {children}

@@ -22,6 +22,7 @@ export const DURATION = {
   burst: 0.46,
   arrive: 0.5,
   fade: 0.5,
+  chrome: 0.3,
   slow: 0.6,
   theme: 0.7,
   breathe: 2.4,
@@ -75,7 +76,7 @@ export function createFade(value = 0) {
   return { value, from: value, to: value, at: 0 }
 }
 
-export function stepFade(fade, target, now, seconds = DURATION.fade) {
+export function stepFade(fade, target, now, seconds = DURATION.chrome) {
   if (target !== fade.to) {
     fade.from = fade.value
     fade.to = target
@@ -99,6 +100,7 @@ export const MOTION = {
   spring: SPRING.panel,
   toastSpring: SPRING.toast,
   fade: { duration: DURATION.fade, ease: EASE.standard },
+  chrome: { duration: DURATION.chrome, ease: EASE.standard },
   quick: { duration: DURATION.quick },
   quickOpacity: { opacity: { duration: DURATION.quick } },
   quickScale: { scale: { duration: DURATION.quick } },

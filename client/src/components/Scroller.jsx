@@ -1,8 +1,8 @@
-import { useRef, useState, useEffect, useLayoutEffect, forwardRef, useImperativeHandle } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { motion, AnimatePresence, useMotionValue } from 'framer-motion'
 import { useDynamicTheme, PANEL, PANEL_SCROLL } from '../contexts/DynamicThemeContext'
 import { EDGE_FADE_MASK } from '../lib/themeManager'
-import { MOTION } from '../lib/motion'
+import { MOTION, createFade, stepFade } from '../lib/motion'
 import { useUISelector } from '../contexts/UIStateContext'
 import { useViewport } from '../contexts/ViewportContext'
 import { scrollChrome } from '../lib/scrollChrome'
@@ -11,9 +11,10 @@ const { maskFadeTop, maskFadeBottom, maskFadeSide } = PANEL_SCROLL
 
 const SCROLLER_MASK = EDGE_FADE_MASK(maskFadeTop, maskFadeBottom, maskFadeSide)
 
-function scrollerMask(lift, extra) {
+function scrollerMask(lift, hole, holeShown) {
   const edges = lift > 0 ? EDGE_FADE_MASK(maskFadeTop, maskFadeBottom, maskFadeSide, lift) : SCROLLER_MASK
-  return extra ? `${edges}, ${extra}` : edges
+  if (!hole || holeShown <= 0) return edges
+  return `${edges}, radial-gradient(circle at 50% ${hole.y}px, rgba(0, 0, 0, ${(1 - holeShown).toFixed(3)}) ${hole.inner}px, black ${hole.outer}px)`
 }
 
 function scrollerMaskStyle(mask) {
@@ -24,11 +25,18 @@ const SETTLE_MS = 500
 const INPUT_WINDOW_MS = 300
 const TOP_ZONE_PX = 10
 const INDICATOR_HEIGHT = 80
+const END_SLACK_PX = 2
 
-export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, mask = null }, ref) {
+let owner = null
+
+export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, hole = null, holeShown = false }, ref) {
   const scrollRef = useRef(null)
   const frameRef = useRef(null)
-  const extraMaskRef = useRef(mask)
+  const spacerRef = useRef(null)
+  const holeRef = useRef(hole)
+  const maskRef = useRef('')
+  const atEndRef = useRef(false)
+  const [holeFade] = useState(() => createFade(holeShown ? 1 : 0))
 
   useImperativeHandle(ref, () => scrollRef.current, [])
   const [scrollLabel, setScrollLabel] = useState('')
@@ -49,19 +57,45 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
   const { getAccentColor, triggerEffect } = useDynamicTheme()
   const { reportInterfaceState, interfaceRef } = useUISelector(state => ({ reportInterfaceState: state.reportInterfaceState, interfaceRef: state.interfaceRef }))
 
+  const mask = scrollerMask(scrollChrome.lift(), hole, holeFade.value)
+
   useLayoutEffect(() => {
     latestRef.current = { getScrollLabel, onScroll, triggerEffect, isMobile }
-    extraMaskRef.current = mask
+    holeRef.current = hole
+    maskRef.current = mask
   })
 
-  useEffect(() => scrollChrome.follow(() => {
+  const writeMask = useCallback(() => {
     const node = frameRef.current
-    if (!node) return
-    const value = scrollerMask(scrollChrome.lift(), extraMaskRef.current)
-    if (node.style.maskImage === value) return
+    const value = scrollerMask(scrollChrome.lift(), holeRef.current, holeFade.value)
+    if (!node || maskRef.current === value) return
+    maskRef.current = value
     node.style.webkitMaskImage = value
     node.style.maskImage = value
-  }), [])
+  }, [holeFade])
+
+  useEffect(() => scrollChrome.follow(() => {
+    writeMask()
+    const scroller = scrollRef.current
+    const spacer = spacerRef.current
+    if (!scroller || !spacer) return
+    const lift = scrollChrome.lift()
+    const height = lift > 0 ? `${lift}px` : ''
+    if (spacer.style.height === height) return
+    spacer.style.height = height
+    if (scroller === owner && atEndRef.current) scrollChrome.afterWrites(() => { scroller.scrollTop = scroller.scrollHeight })
+  }), [writeMask])
+
+  useEffect(() => {
+    const target = holeShown ? 1 : 0
+    if (holeFade.to === target && holeFade.value === target) return
+    let frame = requestAnimationFrame(function step(now) {
+      const value = stepFade(holeFade, target, now)
+      writeMask()
+      frame = value === target ? null : requestAnimationFrame(step)
+    })
+    return () => { if (frame !== null) cancelAnimationFrame(frame) }
+  }, [holeShown, holeFade, writeMask])
 
   const indicatorY = useMotionValue(0)
 
@@ -76,6 +110,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
     const setActive = (active) => {
       if (gesture.active === active) return
       gesture.active = active
+      if (active) owner = container
       reportInterfaceState({ isScrolling: active, chromeAway: active && latestRef.current.isMobile })
     }
 
@@ -116,12 +151,13 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
         setScrollLabel(prevLabel => prevLabel !== label ? (label || '') : prevLabel)
       }
 
+      atEndRef.current = scrollTop + clientHeight >= scrollHeight - END_SLACK_PX
       const away = scrollTop > TOP_ZONE_PX
-      setShowLabel(away)
       ui.scrollVelocity = away ? velocity : 0
       ui.scrollPosition = scrollTop
 
       const byListener = gesture.active || gesture.touching || gesture.pressed || now - gesture.inputAt < INPUT_WINDOW_MS
+      setShowLabel(away && byListener)
       setActive(byListener && away)
 
       if (gesture.touching || gesture.pressed) clearTimeout(settleTimer)
@@ -188,11 +224,12 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
         ui.scrollVelocity = 0
         setActive(false)
       }
+      if (owner === container) owner = null
     }
   }, [interfaceRef, reportInterfaceState, indicatorY])
 
   return (
-    <div ref={frameRef} className="h-full relative overflow-hidden" style={scrollerMaskStyle(scrollerMask(scrollChrome.lift(), mask))}>
+    <div ref={frameRef} className="h-full relative overflow-hidden" style={scrollerMaskStyle(mask)}>
       <div
         ref={scrollRef}
         className={`h-full overflow-y-auto ${className}`}
@@ -200,6 +237,7 @@ export const Scroller = forwardRef(function Scroller({ children, getScrollLabel 
         data-scroller
       >
         {children}
+        <div ref={spacerRef} aria-hidden="true" />
       </div>
 
       <AnimatePresence>

@@ -358,6 +358,7 @@ function createDefaultState() {
     panelOpacities: [],
     radioButtonPos: null,
     radioButton: { opacity: 0, isHovered: false, isPressed: false },
+    headerReveal: 0,
     chromeReveal: 0,
     chromeLift: 0,
     radioProgress: null,
@@ -1102,7 +1103,7 @@ export class SceneRenderer {
     const logicalWidth = width * referenceDpr
     const logicalHeight = height * referenceDpr
 
-    fgUniforms.u_header_height.value = state.headerHeight / Math.max(height, 1)
+    fgUniforms.u_header_height.value = state.headerHeight * (1 - state.headerReveal) / Math.max(height, 1)
 
     let minX = Infinity
     let minY = Infinity

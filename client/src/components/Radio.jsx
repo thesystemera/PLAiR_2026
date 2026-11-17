@@ -41,7 +41,7 @@ function useRadioAnchor(scrollerRef, anchorRef) {
       if (!scroller || !anchorNode || !button) return
       const scrollerRect = scroller.getBoundingClientRect()
       const anchorRect = anchorNode.getBoundingClientRect()
-      const offset = (anchorRect.top + anchorRect.height / 2) - (scrollerRect.top + scrollerRect.height / 2)
+      const offset = (anchorRect.top + anchorRect.height / 2) - scrollerRect.top
       const size = button.offsetWidth
       const fit = Math.min(anchorRect.width, anchorRect.height) - 16
       const scale = size > 0 ? Math.max(0.5, Math.min(1, fit / size)) : 1
@@ -160,13 +160,12 @@ export function Radio() {
   }, [])
 
   const isPanelActive = !isFullscreenVisuals && (!isMobile || mobilePanel === 2)
-  const showButtonMask = buttonOpacity > 0.5 && !isPhoneLandscape
+  const showButtonHole = buttonOpacity > 0.5 && !isPhoneLandscape
   const besideButton = isPhoneLandscape && !isTextInput
 
   const buttonScale = buttonInteraction?.scale || 1
   const buttonVisualRadius = (buttonSize * buttonScale * anchorScale) / 2
-  const maskInnerRadius = buttonVisualRadius * 0.92
-  const maskOuterRadius = buttonVisualRadius * 1.12
+  const buttonHole = { y: maskOffset, inner: buttonVisualRadius * 0.92, outer: buttonVisualRadius * 1.12 }
 
   return (
     <div className="h-full w-full relative overflow-hidden flex flex-col">
@@ -234,9 +233,8 @@ export function Radio() {
         <Scroller
           ref={conversationScrollRef}
           className="h-full overflow-x-hidden"
-          mask={showButtonMask
-            ? `radial-gradient(circle at 50% calc(50% + ${maskOffset}px), transparent ${maskInnerRadius}px, black ${maskOuterRadius}px)`
-            : null}
+          hole={buttonHole}
+          holeShown={showButtonHole}
           style={{
             scrollbarWidth: 'thin',
             scrollbarColor: buttonOpacity < 1 ? 'rgba(136, 136, 136, 0.5) transparent' : 'transparent transparent',
@@ -292,7 +290,7 @@ export function Radio() {
         >
           <motion.div
             animate={{ opacity: buttonForegroundOpacity }}
-            transition={MOTION.fade}
+            transition={MOTION.chrome}
             style={{
               scale: anchorScale,
               pointerEvents: buttonForegroundOpacity > 0.9 ? 'auto' : 'none'

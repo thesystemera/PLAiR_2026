@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { useUISelector, GLASS_EFFECT_CONFIG } from '../contexts/UIStateContext'
 import { featheredFill } from '../lib/themeManager'
-import { PRESETS } from '../lib/motion'
+import { MOTION, PRESETS } from '../lib/motion'
 
 const CURVED_BACKDROP_RADIUS_PX = 12
 const CURVED_BACKDROP_FEATHER_PX = 8
@@ -148,11 +148,9 @@ export function PanelHeader({ title, children, className = '' }) {
   return (
     <motion.div
       className={`absolute top-0 left-0 right-0 z-10 ${className}`}
-      style={{ height: `${PANEL.headerHeight}px` }}
-      animate={{
-        opacity: isScrolling ? 0.15 : 1
-      }}
-      transition={TRANSITIONS.fade}
+      animate={{ opacity: isScrolling ? 0 : 1 }}
+      transition={MOTION.chrome}
+      style={{ height: `${PANEL.headerHeight}px`, pointerEvents: isScrolling ? 'none' : undefined }}
     >
       <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.panelHeader} />
       <div className="relative z-10 h-full px-4 md:px-6 flex items-center justify-between">

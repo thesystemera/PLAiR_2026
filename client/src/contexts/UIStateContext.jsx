@@ -808,7 +808,7 @@ export function UIStateProvider({ children }) {
     }
 
     const merged = interfaceRef.current
-    if ('chromeAway' in updates) scrollChrome.set(merged.chromeAway)
+    if ('isScrolling' in updates || 'chromeAway' in updates) scrollChrome.set(merged.isScrolling, merged.chromeAway)
     const isHidden = merged.isFullscreenVisuals || merged.isScrolling || uiState.settingsState.radioInput === 'text'
     const isRadioPanel = merged.currentMobilePanel === 2
     setRadioButtonOpacity(isHidden ? 0 : (isRadioPanel ? 1 : UI_FULLSCREEN.radioGlassOpacity))

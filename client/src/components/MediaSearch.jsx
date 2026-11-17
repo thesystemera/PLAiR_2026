@@ -5,7 +5,7 @@ import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import { api } from '../lib/api'
 import { triggerHaptic } from '../lib/haptics'
 import { useUISound } from '../hooks/useUISound'
-import { useDynamicTheme, PANEL, TRANSITIONS, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, PANEL, CatalogIcon, ShoutoutsIcon } from '../contexts/DynamicThemeContext'
 import { InteractiveEngagementButton } from './InteractiveEngagementButton'
 import { useUISelector } from '../contexts/UIStateContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
@@ -165,11 +165,9 @@ export const MediaSearch = memo(function MediaSearch({
   return (
     <motion.div
       className="absolute top-0 left-0 right-0 z-10"
-      style={{ height: `${PANEL.headerHeight}px` }}
-      animate={{
-        opacity: isScrolling ? 0.15 : 1
-      }}
-      transition={TRANSITIONS.fade}
+      animate={{ opacity: isScrolling ? 0 : 1 }}
+      transition={MOTION.chrome}
+      style={{ height: `${PANEL.headerHeight}px`, pointerEvents: isScrolling ? 'none' : undefined }}
     >
       <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.searchBar} />
       <form onSubmit={handleSubmit} className={`relative z-10 h-full flex items-center w-full ${compact ? 'px-3' : 'px-4 md:px-6'}`}>

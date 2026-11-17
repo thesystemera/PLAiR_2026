@@ -1,61 +1,23 @@
-import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Music, List, Clock } from 'lucide-react'
-import { useDynamicTheme, CATALOG_HEADER, TRANSITIONS, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
+import { useDynamicTheme, CATALOG_HEADER, RecentIcon, RemasteredIcon, AlphabeticalIcon, GenreIcon } from '../contexts/DynamicThemeContext'
 import { CurvedBackdrop, GLASS_EFFECT_CONFIG } from './Panel'
 import { Fade, FadeSwap } from './Motion'
-import { PRESETS } from '../lib/motion'
+import { MOTION, PRESETS } from '../lib/motion'
+import { useUISelector } from '../contexts/UIStateContext'
 
 export function CatalogHeader({ stats, sortMode, onSortChange, selectedGenre = null, onBackToGenres = null, contentType = 'catalog' }) {
   const { getGrey400 } = useDynamicTheme()
-  const [visible, setVisible] = useState(true)
-  const scrollTimeoutRef = useRef(null)
-  const overlayRef = useRef(null)
-
-  useEffect(() => {
-    const handleScrollOrTouch = () => {
-      setVisible(false)
-
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current)
-      }
-
-      scrollTimeoutRef.current = setTimeout(() => {
-        setVisible(true)
-      }, 500)
-    }
-
-    const scrollContainer = overlayRef.current?.closest('.overflow-y-auto')
-
-    if (scrollContainer) {
-      scrollContainer.addEventListener('scroll', handleScrollOrTouch, { passive: true })
-      scrollContainer.addEventListener('touchstart', handleScrollOrTouch, { passive: true })
-      scrollContainer.addEventListener('touchmove', handleScrollOrTouch, { passive: true })
-    }
-
-    return () => {
-      if (scrollContainer) {
-        scrollContainer.removeEventListener('scroll', handleScrollOrTouch)
-        scrollContainer.removeEventListener('touchstart', handleScrollOrTouch)
-        scrollContainer.removeEventListener('touchmove', handleScrollOrTouch)
-      }
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current)
-      }
-    }
-  }, [])
+  const isScrolling = useUISelector(state => state.interfaceState.isScrolling)
 
   if (!stats) return null
 
   return (
     <motion.div
-      ref={overlayRef}
       className="sticky top-0 z-40 pointer-events-none"
       initial={{ opacity: 0 }}
-      animate={{
-        opacity: visible ? 1 : 0
-      }}
-      transition={TRANSITIONS.fade}
+      animate={{ opacity: isScrolling ? 0 : 1 }}
+      transition={MOTION.chrome}
     >
       <div className="relative px-3 md:px-4 pt-2 md:pt-3 pb-2 md:pb-3 w-full rounded-2xl overflow-hidden">
         <CurvedBackdrop baseOpacity={GLASS_EFFECT_CONFIG.opacity.catalogHeader} />
