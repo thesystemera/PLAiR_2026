@@ -448,18 +448,20 @@ function QueueComponent({ onSeedRadio, onList }) {
   useEffect(() => {
     const list = listRef.current
     if (!list || typeof ResizeObserver === 'undefined') return
+    let observedRow = null
     const observer = new ResizeObserver(() => {
       setContentHeight(list.offsetHeight)
-      const rows = [...list.querySelectorAll('[data-queue-key]')].filter(row => getComputedStyle(row).position !== 'absolute')
-      if (!rows.length) return
-      const pitch = rows.length > 1
-        ? (rows[rows.length - 1].offsetTop - rows[0].offsetTop) / (rows.length - 1)
-        : rows[0].offsetHeight
+      const row = [...list.querySelectorAll('[data-queue-key]')].find(element => !element.closest('[data-motion-pop-id]'))
+      if (!row) return
+      if (row !== observedRow) {
+        if (observedRow) observer.unobserve(observedRow)
+        observer.observe(row)
+        observedRow = row
+      }
+      const pitch = parseFloat(getComputedStyle(row).height)
       if (pitch > 0) setRowHeight(previous => (Math.abs(previous - pitch) > 0.05 ? pitch : previous))
     })
     observer.observe(list)
-    const rowsWindow = list.querySelector('[data-virtual-window]')
-    if (rowsWindow) observer.observe(rowsWindow)
     return () => observer.disconnect()
   }, [])
 

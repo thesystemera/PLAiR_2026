@@ -687,7 +687,7 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
                 onRangeChange={!isSearchMode ? catalogWindow.ensureRange : undefined}
                 getPrefetchId={getTrackArtworkId}
                 scrollContainerRef={scrollContainerRef}
-                className={rowClassName}
+                itemClassName={rowClassName}
                 recycle
               />
             </div>

@@ -110,8 +110,7 @@ function VirtualScroller({
   scrollContainerRef,
   wrapItems = null,
   itemClassName = undefined,
-  recycle = false,
-  className = ''
+  recycle = false
 }) {
   const measured = typeof itemKey === 'function'
   const listRef = useRef(null)
@@ -407,85 +406,39 @@ function VirtualScroller({
 
   const startRow = Math.min(range.start, totalRows)
   const endRow = Math.min(range.end, totalRows)
-  const startIndex = startRow * perRow
-  const endIndex = Math.min(catalogSize, endRow * perRow)
-
-  const visibleItems = []
-  if (measured) {
-    for (let row = startRow; row < endRow; row++) {
-      const key = rowKeyOf(items, row, perRow, itemKey)
-      const first = row * perRow
-      let cells = null
-      if (perRow === 1) {
-        cells = renderItem(items[first], first)
-      } else {
-        cells = []
-        for (let i = first; i < Math.min(items.length, first + perRow); i++) cells.push(renderItem(items[i], i))
-      }
-      visibleItems.push(
-        <div key={key} data-vs-key={key} className={itemClassName}>
-          {cells}
-        </div>
-      )
-    }
-  }
   const recycling = recycle && !measured
-  const cellAt = (index) => {
-    const item = items[index - windowStart]
-    return { item, element: item ? renderItem(item, index) : renderPlaceholder ? renderPlaceholder(index) : defaultPlaceholder(index, itemHeight) }
-  }
-  if (!measured && !recycling) {
-    for (let i = startIndex; i < endIndex; i++) visibleItems.push(cellAt(i).element)
-  }
   let slots = slotState
   if (recycling && (slots.start !== startRow || slots.end !== endRow)) {
     slots = assignSlots(slots, startRow, endRow)
     setSlotState(slots)
   }
 
-  if (recycling) {
-    const rows = []
-    for (let row = startRow; row < endRow; row++) {
-      const cells = []
-      for (let col = 0; col < perRow; col++) {
-        const index = row * perRow + col
-        if (index >= catalogSize) break
-        const { item, element } = cellAt(index)
-        cells.push(cloneElement(element, { key: `${item ? 'card' : 'blank'}-${col}` }))
-      }
-      rows.push({ slot: slots.byIndex.get(row), top: layout.offset(row), cells })
+  const rows = []
+  for (let row = startRow; row < endRow; row++) {
+    const first = row * perRow
+    const cells = []
+    for (let index = first; index < Math.min(catalogSize, first + perRow); index++) {
+      const item = measured ? items[index] : items[index - windowStart]
+      const element = measured || item ? renderItem(item, index) : renderPlaceholder ? renderPlaceholder(index) : defaultPlaceholder(index, itemHeight)
+      cells.push(recycling ? cloneElement(element, { key: `${item ? 'card' : 'blank'}-${index - first}` }) : element)
     }
-    rows.sort((a, b) => a.slot - b.slot)
-    return (
-      <div ref={listRef} style={{ height: `${layout.total}px`, position: 'relative' }}>
-        <div ref={windowRef} data-virtual-window style={{ position: 'absolute', inset: 0 }}>
-          {rows.map(({ slot, top, cells }) => (
-            <div key={`row-${slot}`} className={className} style={{ position: 'absolute', top: `${top}px`, left: 0, right: 0 }}>
-              {cells}
-            </div>
-          ))}
-        </div>
-      </div>
-    )
+    const slot = recycling ? slots.byIndex.get(row) : row
+    const key = measured
+      ? rowKeyOf(items, row, perRow, itemKey)
+      : recycling ? `row-${slot}` : perRow === 1 ? cells[0]?.key ?? `row-${row}` : `${perRow}:${cells[0]?.key ?? row}`
+    rows.push({ slot, key, top: layout.offset(row), cells: perRow === 1 ? cells[0] : cells })
   }
+  if (recycling) rows.sort((a, b) => a.slot - b.slot)
+  const rowElements = rows.map(({ key, top, cells }) => (
+    <div key={key} data-vs-key={measured ? key : undefined} className={itemClassName} style={{ position: 'absolute', top: `${top}px`, left: 0, right: 0 }}>
+      {cells}
+    </div>
+  ))
 
   return (
-    <div ref={listRef} style={{ height: `${layout.total}px`, position: 'relative' }}>
-      <div
-        ref={windowRef}
-        data-virtual-window
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          transform: `translateY(${layout.offset(startRow)}px)`,
-          willChange: 'transform'
-        }}
-      >
-        <div className={className}>
-          {wrapItems ? wrapItems(visibleItems) : visibleItems}
-        </div>
+    <div ref={listRef} style={{ height: `${layout.total}px`, position: 'relative', overflowAnchor: 'none' }}>
+      <div ref={windowRef} data-virtual-window style={{ position: 'absolute', inset: 0 }}>
+        {wrapItems ? wrapItems(rowElements) : rowElements}
       </div>
     </div>
   )
@@ -501,7 +454,6 @@ export const MemoizedVirtualScroller = memo(VirtualScroller, (prevProps, nextPro
     prevProps.itemKey === nextProps.itemKey &&
     prevProps.estimatedItemHeight === nextProps.estimatedItemHeight &&
     prevProps.stickToEnd === nextProps.stickToEnd &&
-    prevProps.className === nextProps.className &&
     prevProps.itemClassName === nextProps.itemClassName &&
     prevProps.renderItem === nextProps.renderItem &&
     prevProps.renderPlaceholder === nextProps.renderPlaceholder &&
