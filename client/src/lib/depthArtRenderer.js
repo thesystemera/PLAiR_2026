@@ -20,7 +20,6 @@ const AHEAD_FRAMES = 10
 const AHEAD_MIN_VIEWPORTS = 0.5
 const AHEAD_MAX_VIEWPORTS = 2
 const AHEAD_DRAWS_PER_FRAME = 4
-const FLING_HALF_REDRAW_PX_PER_S = 1200
 const ATLAS_STEP_PX = 64
 const ATLAS_MIN_WIDTH = 1024
 const ATLAS_SPARE_RATIO = 1.5
@@ -110,9 +109,6 @@ class DepthArtRenderer {
     this.scrollViews = new WeakMap()
     this.scrolledTargets = new Set()
     this.scrollSpeed = 0
-    this.nextParity = 0
-    this.flingPhase = 0
-    this.lastDrawAt = 0
     this.aheadMargin = 0
     this.aheadPending = false
     this.viewsVersion = 0
@@ -149,7 +145,7 @@ class DepthArtRenderer {
     const view = {
       host, canvas, ctx: null, packUrl, intensity, onDrawn, onFailed, failed: false,
       clips: clippingAncestors(host.parentElement), scroller: scrollTilt ? host.closest('[data-scroller]') : null, visible: false, dirty: true, entry: null, last: null, drawn: false,
-      shiftX: 0, shiftY: 0, styleVisible: true, parity: this.nextParity++ & 1,
+      shiftX: 0, shiftY: 0, styleVisible: true,
     }
     this.views.add(view)
     this.viewsVersion++
@@ -477,10 +473,6 @@ class DepthArtRenderer {
       this.lastLayoutAt = timestamp
     }
     this.applyScrolls()
-    const sinceDraw = this.lastDrawAt ? timestamp - this.lastDrawAt : 0
-    this.lastDrawAt = timestamp
-    const fling = sinceDraw > 0 && this.scrollSpeed * 1000 / sinceDraw > FLING_HALF_REDRAW_PX_PER_S
-    if (fling) this.flingPhase ^= 1
     this.aheadMargin = clamp(this.scrollSpeed * AHEAD_FRAMES, viewport.height * AHEAD_MIN_VIEWPORTS, viewport.height * AHEAD_MAX_VIEWPORTS)
     const clipRects = new Map()
     const dpr = Math.min(window.devicePixelRatio || 1, this.settings.dpr)
@@ -562,7 +554,6 @@ class DepthArtRenderer {
       const tiltStill = last && last.entry === entry && last.width === width && last.height === height &&
         Math.abs(last.px - px) < epsilon && Math.abs(last.py - py) < epsilon
       if (!this.bench.forceFull && tiltStill && last.light === probe.key && last.left === rect.left && last.top === rect.top) continue
-      if (fling && sized && view.parity !== this.flingPhase && last && last.entry === entry && last.width === width && last.height === height) continue
       const cache = view.cache
       const cached = !this.bench.forceFull && !coarse && probe.active && cache?.ready && cache.art === entry && cache.width === width && cache.height === height &&
         Math.abs(cache.px - px) < epsilon && Math.abs(cache.py - py) < epsilon
