@@ -198,6 +198,7 @@ export const STAGES = {
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
   ...lightCountStages(),
+  ...coarseSplitStages(),
 }
 
 function lightCountStages() {
@@ -306,4 +307,20 @@ export async function applyStage(p, stage) {
 export async function removeShaderEdits(p) {
   await applyStage(p, {})
   await p.evaluate(`(() => { window.__plairArt.set({ coarse: null }); const proto = WebGL2RenderingContext.prototype; if (proto.__originalShaderSource) proto.shaderSource = proto.__originalShaderSource; if (proto.__originals) { Object.assign(proto, proto.__originals); delete proto.__originals } window.__derive = null; return 1 })()`)
+}
+
+function coarseSplitStages() {
+  const noMarch = ['return parallax(uv, u_disp, hitUV, hitDepth, fillColor, fillMix);', 'hitUV = uv; hitDepth = 0.0; fillColor = vec4(0.0); fillMix = 0.0; return COLOR_AT(uv);']
+  const noFill = ['SHADE float dispGate = u_disp_gate;', 'SHADE float dispGate = 0.0;']
+  const composeOneRead = ['vec2 hitUV = uv + texture(u_coarse_hit, at).xy;', 'o_color = texture(u_color, uv); return; vec2 hitUV = uv + texture(u_coarse_hit, at).xy;']
+  const coarse = { coarse: true }
+  return {
+    'C as is': { art: coarse },
+    'C no march': { art: coarse, edits: [noMarch] },
+    'C no fill': { art: coarse, edits: [noFill] },
+    'C lights off': { art: coarse, light: { off: true } },
+    'C bare': { art: coarse, edits: [noMarch], light: { off: true } },
+    'C bare 1 read': { art: coarse, edits: [noMarch, composeOneRead], light: { off: true } },
+    'flat covers': { art: { lit: false } },
+  }
 }
