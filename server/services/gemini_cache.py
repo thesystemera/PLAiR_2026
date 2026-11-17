@@ -8,7 +8,7 @@ from typing import Dict, Optional, Tuple
 from google.genai import types
 
 from config.settings import settings
-from services import log_service
+from services import log_service, usage_tracking
 from services.task_utils import spawn
 
 
@@ -41,7 +41,8 @@ class SystemCacheManager:
             name = self._fresh(key, client)
             if name is not None or key in self._memo and self._memo[key][1] > time.monotonic():
                 return name
-            return await self._create(client, key, label, model, system_instruction, tools)
+            with usage_tracking.station_work():
+                return await self._create(client, key, label, model, system_instruction, tools)
 
     def _fresh(self, key: str, client) -> Optional[str]:
         name, expires = self._memo.get(key, (None, 0.0))
@@ -50,7 +51,8 @@ class SystemCacheManager:
             return None
         if remaining < settings.GEMINI_CACHE_TTL_S / 2:
             self._memo[key] = (name, time.monotonic() + settings.GEMINI_CACHE_TTL_S * 0.9)
-            spawn(self._renew(client, name), name=f"gemini_cache_renew:{key}")
+            with usage_tracking.station_work():
+                spawn(self._renew(client, name), name=f"gemini_cache_renew:{key}")
         return name
 
     async def _renew(self, client, name: str) -> None:

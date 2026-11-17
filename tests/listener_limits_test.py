@@ -125,9 +125,13 @@ def counting():
                 check("asked() keeps the IP", usage_tracking.client_ip() == "1.0.0.1")
                 usage_tracking.record_llm(role="announce", provider="deepseek", model="m", cost_usd=0.001,
                                           feature="welcome")
+                with usage_tracking.station_work():
+                    usage_tracking.record_gpu("tts.chatterbox", 60.0)
+                    usage_tracking.record_llm(role="live", provider="gemini", model="m", cost_usd=0.003,
+                                              feature="SystemCacheManager.get")
         finally:
             usage_tracking.unbind_client(client)
-        check("a welcome the guest caused counts", abs(limits.ledger.spent(subject.key, "day")[0]
+        check("a welcome the guest caused counts; the hosts' voice and the shared prompt cache don't", abs(limits.ledger.spent(subject.key, "day")[0]
                                                       - expected - 0.001) < 1e-9)
     finally:
         usage_tracking.unbind(token)

@@ -89,6 +89,17 @@ def asked():
         unbind_client(token)
 
 
+@contextmanager
+def station_work():
+    """Work a listener's request sets off that is the station's own, never their allowance: the hosts' voice and the
+    shared Gemini prompt cache."""
+    token = _client.set(ClientContext(client_ip(), False))
+    try:
+        yield
+    finally:
+        unbind_client(token)
+
+
 def _is_guest_id(value: str) -> bool:
     from security_middleware import is_valid_guest_id
     return is_valid_guest_id(value)

@@ -349,9 +349,10 @@ class TTSGenerationService:
             pcm.extend(chunk)
 
         if 'started' in job:
-            usage_tracking.record_gpu(feature, time.perf_counter() - job['started'],
-                                      audio_seconds=len(pcm) / 2 / settings.TTS_SAMPLE_RATE, model="chatterbox-turbo",
-                                      error=bool(job.get('failed')))
+            with usage_tracking.station_work():
+                usage_tracking.record_gpu(feature, time.perf_counter() - job['started'],
+                                          audio_seconds=len(pcm) / 2 / settings.TTS_SAMPLE_RATE,
+                                          model="chatterbox-turbo", error=bool(job.get('failed')))
         job_id = job.get('id')
         if job_id is not None and job_id in self._aborted_jobs:
             self._aborted_jobs.discard(job_id)

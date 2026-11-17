@@ -4,7 +4,8 @@ Tiers: guest (no account), basic (free account) and premium (users.tier). Each t
 rolling day and per rolling 30 days, and its song credits. The allowance counts only the AI work a listener's own
 actions cause (the request context usage_tracking marks as asked: chatting with the hosts, smart search, dictation,
 posts, uploads, the welcome a new guest triggers), priced as usage_tracking prices it (LLM and paid API calls, plus
-local GPU time at gpu_second_usd), never the station's own talk. Guests also share a daily allowance per IP, because
+local GPU time at gpu_second_usd), never the station's own talk, voice or shared prompt cache
+(usage_tracking.station_work()). Guests also share a daily allowance per IP, because
 guest ids are free to make. Every request and WebSocket message also spends from a request bucket per listener and per
 public IP (media a quarter of a request).
 
