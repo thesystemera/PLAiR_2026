@@ -3,9 +3,12 @@
 // per second, and for the page's main thread the self time by kind of work (style, layout, paint, script...), with the
 // layouts and style recalculations that script forced counted apart. PICK=1 traces one tap on a Catalog card instead
 // of a scroll (it changes the owner's song). ART='<json>' / SCENE='<json>' apply cover / scene switches for the run
-// (window.__plairArt.set, window.__plairScene.set), e.g. ART='{"skipDraw":true}' SCENE='{"skip":true}' for the floor.
+// (window.__plairArt.set, window.__plairScene.set); JS / UNDO run page code before / after; e.g. ART='{"skipDraw":true}' SCENE='{"skip":true}' for the floor.
 // THREADS=CrGpuMain,CompositorGpuThread,... prints those threads' self time by event (TOP=n rows) and the page's and
-// the display's frames per second; CATS adds trace categories (e.g. toplevel,gpu.service).
+// the display's frames per second; CATS adds trace categories (e.g. toplevel,gpu.service). PAINTS=1 sums the page's
+// painted area per second by element (PAINTS=dump also prints a few raw Paint events). INVAL=1 counts paint
+// invalidations by reason and element (adds the invalidationTracking category itself). COUNT='<regex>' counts trace
+// events by name per second (DUMPARGS='<name part>' prints the args of the first two).
 import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Catalog'
@@ -31,9 +34,10 @@ const p = await page()
 await openPanel(p, panel)
 if (process.env.ART) await p.evaluate(`window.__plairArt.set(${process.env.ART}), 1`)
 if (process.env.SCENE) await p.evaluate(`window.__plairScene.set(${process.env.SCENE}), 1`)
+if (process.env.JS) console.log('JS:', await p.evaluate(process.env.JS))
 await sleep(2000)
 const spot = JSON.parse(await p.evaluate(`JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight * 0.45) })`))
-await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,blink.user_timing,gpu,viz,cc' + (process.env.CATS ? ',' + process.env.CATS : ''), transferMode: 'ReportEvents' })
+await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,blink.user_timing,gpu,viz,cc' + (process.env.CATS ? ',' + process.env.CATS : '') + (process.env.INVAL ? ',disabled-by-default-devtools.timeline.invalidationTracking' : ''), transferMode: 'ReportEvents' })
 await sleep(300)
 await p.evaluate(`performance.mark('trace-from'), 1`)
 if (process.env.PICK) {
@@ -117,6 +121,43 @@ if (process.env.THREADS) {
     }
   }
 }
+if (process.env.PAINTS) {
+  const paints = main.filter(e => e.name === 'Paint' && e.args?.data)
+  const area = q => (q && q.length >= 8 ? Math.abs((q[2] - q[0]) * (q[5] - q[1])) : 0)
+  const byNode = new Map()
+  let total = 0
+  for (const e of paints) {
+    const a = area(e.args.data.clip)
+    total += a
+    const key = e.args.data.nodeName || e.args.data.nodeId || e.args.data.layerId || '?'
+    const entry = byNode.get(key) || { area: 0, n: 0, ms: 0, w: 0, h: 0 }
+    entry.area += a; entry.n++; entry.ms += (e.dur || 0) / 1000
+    const q = e.args.data.clip
+    if (q && q.length >= 8) { entry.w = Math.round(Math.abs(q[2] - q[0])); entry.h = Math.round(Math.abs(q[5] - q[1])) }
+    byNode.set(key, entry)
+  }
+  console.log(`paints: ${(paints.length / seconds).toFixed(0)}/s, painted area ${(total / 1e6 / seconds).toFixed(1)} Mpx/s (screen is ${(1080 * 2260 / 1e6).toFixed(1)} Mpx)`)
+  for (const [key, e] of [...byNode].sort((a, b) => b[1].area - a[1].area).slice(0, 8)) console.log(`  ${(e.area / 1e6 / seconds).toFixed(2).padStart(6)} Mpx/s  ${(e.n / seconds).toFixed(0).padStart(4)}/s  ${e.ms.toFixed(0).padStart(4)} ms  last ${e.w}x${e.h}  ${key}`)
+  if (process.env.PAINTS === 'dump') console.log(JSON.stringify(paints.slice(0, 3).map(e => e.args.data)))
+}
+if (process.env.INVAL) {
+  const inval = events.filter(e => e.name === 'PaintInvalidationTracking' && e.ts >= from.ts && e.ts <= to.ts && e.args?.data)
+  const byKey = new Map()
+  for (const e of inval) {
+    const d = e.args.data
+    const key = `${d.reason || '?'} | ${(d.nodeName || '').slice(0, 80)}`
+    byKey.set(key, (byKey.get(key) || 0) + 1)
+  }
+  console.log(`paint invalidations: ${(inval.length / seconds).toFixed(0)}/s; invalidation event names in the trace: ${[...new Set(events.filter(e => /nvalidat|Raster|Tile/.test(e.name)).map(e => e.name))].slice(0, 30).join(', ')}`)
+  for (const [key, n] of [...byKey].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.TOP || 15))) console.log(`${(n / seconds).toFixed(0).padStart(6)}/s  ${key}`)
+}
+if (process.env.COUNT) {
+  const re = new RegExp(process.env.COUNT)
+  const counts = new Map()
+  for (const e of events) if (re.test(e.name) && e.ts >= from.ts && e.ts <= to.ts) counts.set(e.name, (counts.get(e.name) || 0) + 1)
+  for (const [name, n] of [...counts].sort((a, b) => b[1] - a[1])) console.log(`${(n / seconds).toFixed(1).padStart(8)}/s  ${name.slice(0, 120)}`)
+  if (process.env.DUMPARGS) for (const e of events.filter(e => e.name.includes(process.env.DUMPARGS)).slice(0, 2)) console.log(JSON.stringify(e.args).slice(0, 1500))
+}
 const forced = main.filter(e => (e.name === 'Layout' || e.name === 'UpdateLayoutTree') && (e.args?.beginData?.stackTrace || e.args?.stackTrace))
 const sum = (name, list) => list.filter(e => e.name === name).reduce((a, e) => a + (e.dur || 0), 0) / 1000
 const all = name => main.filter(e => e.name === name)
@@ -132,6 +173,7 @@ for (const e of forced) {
   forcedBy.set(key, entry)
 }
 for (const [key, entry] of [...forcedBy].sort((a, b) => b[1].ms - a[1].ms).slice(0, 8)) console.log(`   forced ${entry.n}x, ${entry.ms.toFixed(0)} ms by ${key}`)
+if (process.env.UNDO) await p.evaluate(process.env.UNDO)
 if (process.env.ART) await p.evaluate(`window.__plairArt.set({ skipDraw: false, skipCopy: false, lit: true, coarse: null }), 1`)
 if (process.env.SCENE) await p.evaluate(`window.__plairScene.set({ skip: false }), 1`)
 browser.close()

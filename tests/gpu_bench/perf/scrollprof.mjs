@@ -4,7 +4,7 @@
 // to their callers and a snippet of the built file (needs client/dist to be the build the phone runs). Then the scripts
 // inside the long frames by what started them, with the time each spent forcing style or layout. TOP=30 sets how
 // many functions are listed. PICK=3 profiles three taps on Catalog cards (1.5 s each) instead of a scroll: it changes
-// the owner's song.
+// the owner's song. ART='<json>' / SCENE='<json>' apply cover / scene switches for the run (put back at the end).
 import { readFileSync, readdirSync } from 'node:fs'
 import { page, sleep, openPanel } from './cdp.mjs'
 
@@ -15,6 +15,8 @@ const rounds = Number(process.argv[5] || 2)
 const DIST = 'E:/AI_RADIO/client/dist/assets/'
 const p = await page()
 await openPanel(p, panel)
+if (process.env.ART) await p.evaluate(`window.__plairArt.set(${process.env.ART}), 1`)
+if (process.env.SCENE) await p.evaluate(`window.__plairScene.set(${process.env.SCENE}), 1`)
 await sleep(2000)
 const spot = JSON.parse(await p.evaluate(`JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight * 0.45) })`))
 await p.send('Profiler.enable')
@@ -111,5 +113,7 @@ for (const s of frames.long) {
 }
 console.log('scripts in the long frames (over 50 ms), per second of scrolling:')
 for (const [key, entry] of [...scripts].sort((a, b) => b[1].ms - a[1].ms).slice(0, 12)) console.log(`${perSecond(entry.ms).padStart(5)} ms/s (${perSecond(entry.forced)} forcing style or layout), ${entry.n}x  ${key}`)
+if (process.env.ART) await p.evaluate(`window.__plairArt.set({ skipDraw: false, skipCopy: false, lit: true, coarse: null }), 1`)
+if (process.env.SCENE) await p.evaluate(`window.__plairScene.set({ skip: false }), 1`)
 p.close()
 process.exit(0)
