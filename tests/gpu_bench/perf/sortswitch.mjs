@@ -22,8 +22,8 @@ const state = () => p.evaluate(`(() => {
   const scroller = [...document.querySelectorAll('[data-scroller]')].find(s => s.innerText.includes('TRACKS') || s.innerText.includes('GENRES'))
   if (!scroller) return 'no catalog list'
   const box = scroller.getBoundingClientRect()
-  const cards = [...scroller.querySelectorAll('[data-depth-art]')].map(art => art.closest('[style*="order"]') || art.parentElement).filter(card => { const r = card.getBoundingClientRect(); return r.bottom > box.top + 120 && r.top < box.bottom })
-  const titled = cards.filter(card => /\\S/.test(card.innerText.replace(/\\d+:\\d+/g, ''))).length
+  const cards = [...scroller.querySelectorAll('[class*="group/card"]')].filter(card => { const r = card.getBoundingClientRect(); return r.bottom > box.top + 120 && r.top < box.bottom })
+  const titled = cards.filter(card => card.querySelector('h3')?.textContent.trim()).length
   return JSON.stringify({ top: Math.round(scroller.scrollTop), height: scroller.scrollHeight, cardsOnScreen: cards.length, withTitle: titled, firstText: scroller.innerText.slice(0, 50).split('\\n').join(' | ') })
 })()`)
 const tap = title => p.evaluate(`(() => { const b = document.querySelector('button[title="${title}"]'); if (!b) return 'no button'; b.click(); return 'tapped' })()`)
