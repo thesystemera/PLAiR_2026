@@ -157,6 +157,43 @@ export function MediaSessionBridge() {
   return null
 }
 
+export function ScreenAwakeBridge() {
+  const keepAwake = useUISelector(state => state.interfaceState.isFullscreenVisuals)
+
+  useEffect(() => {
+    if (!keepAwake || !navigator.wakeLock) return undefined
+    let lock = null
+    let pending = false
+    let stopped = false
+
+    const acquire = async () => {
+      if (stopped || pending || document.visibilityState !== 'visible') return
+      if (lock && !lock.released) return
+      pending = true
+      try {
+        const next = await navigator.wakeLock.request('screen')
+        if (stopped) next.release().catch(() => {})
+        else lock = next
+      } catch (error) {
+        logger.debug('[ScreenAwake] wake lock refused:', error?.name || error)
+      } finally {
+        pending = false
+      }
+    }
+
+    acquire()
+    document.addEventListener('visibilitychange', acquire)
+    return () => {
+      stopped = true
+      document.removeEventListener('visibilitychange', acquire)
+      lock?.release().catch(() => {})
+      lock = null
+    }
+  }, [keepAwake])
+
+  return null
+}
+
 export function OfflineNotice() {
   const { offline, noNetwork, showNotice, hideNotice } = useUISelector(state => ({
     offline: !!state.audioState.offlineMode,

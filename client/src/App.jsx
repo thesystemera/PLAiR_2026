@@ -46,7 +46,7 @@ import {DJActivityBridge} from './components/DJActivity'
 import {AudioUnlockPrompt} from './components/AudioUnlockPrompt'
 import {FPSCounter} from './components/FPSCounter'
 import {KeyboardControls} from './components/KeyboardControls'
-import {ConnectionNotice, DeviceLinkBridge, LimitNotice, MediaSessionBridge, OfflineNotice, SettingsSyncBridge, ShareVideoNotice, TrackDataLoader, UploadNotice} from './components/AppBridges'
+import {ConnectionNotice, DeviceLinkBridge, LimitNotice, MediaSessionBridge, OfflineNotice, ScreenAwakeBridge, SettingsSyncBridge, ShareVideoNotice, TrackDataLoader, UploadNotice} from './components/AppBridges'
 import {DepthArtBridge, ProfileArt} from './components/DepthArt'
 import {noteLayoutMotion} from './lib/lightProbe'
 import {finalPanelWidths, panelRevealEnabled, watchPanelSlide} from './lib/panelReveal'
@@ -743,6 +743,7 @@ function App() {
         <DJVoiceEngine />
         <TrackDataLoader />
         <MediaSessionBridge />
+        <ScreenAwakeBridge />
         <ConnectionNotice />
         <OfflineNotice />
         <UploadNotice />

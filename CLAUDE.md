@@ -650,7 +650,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 #### client/src/components
 
 - `client/src/components/AccountSettings.jsx` - User panel account section: passkeys, optional password, device-link code approval, sign out, delete account.
-- `client/src/components/AppBridges.jsx` - Render-nothing bridges: track data loading, media session, offline/connection/upload/share-video notices, the limit notice (request refusals and the AI allowance running low or used up), device link, settings sync.
+- `client/src/components/AppBridges.jsx` - Render-nothing bridges: track data loading, media session, a screen wake lock while fullscreen visuals are on (like a video player), offline/connection/upload/share-video notices, the limit notice (request refusals and the AI allowance running low or used up), device link, settings sync.
 - `client/src/components/AppErrorBoundary.jsx` - Root error boundary that reports render crashes and shows a "Reload PLAiR" screen.
 - `client/src/components/AudioReactiveCanvas.jsx` - Page side of the background scene: starts the scene worker (or the main-thread fallback), posts a state snapshot every frame, sends artwork, lyric words and video frames, relays the light probe, beat, glow and frame stats.
 - `client/src/components/AudioUnlockPrompt.jsx` - "Tap to start audio" prompt shown when the browser blocks playback until a tap.
