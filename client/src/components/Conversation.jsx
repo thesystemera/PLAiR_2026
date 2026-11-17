@@ -862,11 +862,10 @@ export function Conversation({ isOpen, messageFilter = 'all', onFilterCounts, sh
         clearTimeout(scrollTimeoutRef.current)
       }
 
-      const behavior = prevConversationLengthRef.current === 0 ? 'auto' : 'smooth'
       scrollTimeoutRef.current = setTimeout(() => {
         requestAnimationFrame(() => {
           if (chatEndRef.current) {
-            chatEndRef.current.scrollIntoView({ behavior, block: 'nearest' })
+            chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
           }
         })
       }, 100)
