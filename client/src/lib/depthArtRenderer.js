@@ -794,7 +794,7 @@ class DepthArtRenderer {
           this.drawDelays.push(view.drawnAfterMs)
           if (this.drawDelays.length > 200) this.drawDelays.shift()
         }
-        view.onDrawn?.()
+        view.onDrawn?.(view.shown)
       }
     }
     if (this.skipCopy) gl.flush()

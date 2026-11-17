@@ -244,6 +244,7 @@ textarea,
 
   .ui-arrive[data-arrived="false"] {
     opacity: 0;
+    transition: none;
   }
 
   .ui-placeholder {

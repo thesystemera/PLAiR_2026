@@ -389,6 +389,42 @@ list instead of unmounting and mounting cards (the mount is the floor; an update
 still while the list moves fast (16 -> 25 fps, a change of look); a shorter colour fade (up to 140 ms a pick, a
 change of look).
 
+## 3k. Card reuse in the virtual list, and covers that are there when they scroll in (17 Nov)
+
+Built after 3j, at the owner's request ("any and all optimisations for the virtual scroller"; "I'd scroll and
+scroll back and all of it was gone"). What it is: CLAUDE.md section 14 (`recycle`, and the arrival rule).
+
+- **Card reuse, phone, builds in turn** (`catalogpick.mjs SCROLL=1800`, `scrolltrace.mjs`, `scrollab.mjs`):
+  layouts in a five-second scroll 128 -> 65 (250 -> 167 ms), elements restyled 4,087 -> 2,338, the page's main
+  thread 663 -> 607 ms/s, React's tasks inside the long frames 128 -> 28 ms/s. Frame rate: 13.7 and 14.8 with
+  reuse against 16.0 and 15.8 without (inside the noise, and not a gain); with covers not redrawn and the scene
+  off, 23.6 and 24.0 against 25.6 and 22.4. So mounting cards was not the floor that 3j took it for.
+- **What is left with reuse and the graphics frozen** (`scrolltrace.mjs`): the page 718 ms/s (script 193,
+  waiting on the GPU process 78, layerize 77, style 55, paint 37, layout 33, prepaint 33), Chrome's compositor
+  thread 471, its GPU main thread 536, the compositor's GPU thread 492, viz 276. The scroll is bound by the
+  compositor and GPU side: 20-35 cover canvases, each its own layer, plus the raster of the cards.
+- **Texture uploads** (timed inside the app on the phone): colour 0.5 ms, maps 1.2-1.3 ms (uploaded as RGB from
+  an RGBA bitmap, which Chrome repacks on the CPU), about 1.9 ms a cover, 56 covers in the test scroll. A CPU
+  profile reports 92 ms/s for the same calls: the profiler inflates native calls, time them directly.
+- **Getting it to reuse at all** took three tries, worth knowing: keys by `index % pool` never reuse (the node
+  that held the slot has gone by the time the index wraps); slots handed over in the same render do, but only
+  if a row leaves and a row arrives in the same step (the old window grew at the bottom and shrank at the top
+  at different scroll positions, so every row was 2 mounts and 2 unmounts: 48 cards built in a 3,600 px scroll
+  down and back, 10 with a fixed row count); and the children must keep their DOM order (CSS `order`), or
+  React re-inserts every card when one moves to the front.
+- **Covers on screen while scrolling** (`coverwatch.mjs`). Phone, build before the change: on the way down 22%
+  not shown and 30% still fading in; on the way back 9% and 40%. Desktop: 17-44% still fading in before, 0%
+  after, on both legs, two rounds each. The phone was unplugged before the changed build could be measured:
+  **still to run there**, together with the frame rate (reuse is one prop on the Catalog's scroller).
+- **Checked on desktop**: after scrolling, flinging and reversing three times, and after every sort mode, each
+  card's canvas matched its own song's pack (flat covers, 12x12 comparison, the title on screen as the truth:
+  the fibers behind DOM nodes can be the stale alternate and gave false alarms), no console errors.
+
+Open, in order of likely worth: the renderer keeps 8 idle cover textures (`MAX_IDLE_TEXTURES`), so scrolling
+back more than about four rows re-uploads covers (the 9% not shown); a larger number costs GPU memory, about
+2.4 MB per 512 pack, and wants a phone check. The maps could be uploaded as RGBA (no repack, 0.7 ms a cover).
+The real limit is one compositor layer per cover.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

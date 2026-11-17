@@ -3,11 +3,22 @@ import { useEffect, useState } from 'react'
 const MISSING_RETRY_MS = 10 * 60 * 1000
 const missingSince = new Map()
 
+const lookup = (cache, id, enabled) => ({ cache, id, enabled, url: enabled && id ? cache.peekMemory(id) : null, missing: false })
+
 export function useDepthMap(cache, id, enabled = true) {
-  const [state, setState] = useState(() => ({ url: enabled && id ? cache.peekMemory(id) : null, missing: false }))
+  const [state, setState] = useState(() => lookup(cache, id, enabled))
+  let current = state
+  if (state.cache !== cache || state.id !== id || state.enabled !== enabled) {
+    current = lookup(cache, id, enabled)
+    setState(current)
+  }
 
   useEffect(() => {
-    const setUrl = (url, missing = false) => setState(prev => (prev.url === url && prev.missing === missing ? prev : { url, missing }))
+    const setUrl = (url, missing = false) => setState(prev => (
+      prev.cache !== cache || prev.id !== id || prev.enabled !== enabled || (prev.url === url && prev.missing === missing)
+        ? prev
+        : { ...prev, url, missing }
+    ))
     if (!enabled || !id) {
       queueMicrotask(() => setUrl(null))
       return
@@ -51,5 +62,5 @@ export function useDepthMap(cache, id, enabled = true) {
     }
   }, [cache, id, enabled])
 
-  return state
+  return current
 }

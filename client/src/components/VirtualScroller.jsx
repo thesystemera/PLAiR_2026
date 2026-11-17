@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
+import { cloneElement, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { flushSync } from 'react-dom'
 import { prefetchCovers } from '../lib/artworkPrefetcher'
 import { depthArtRenderer } from '../lib/depthArtRenderer'
@@ -18,10 +18,25 @@ const PREFETCH_IDLE_BEHIND_ITEMS = 16
 const INITIAL_ROWS = 8
 const MEASURE_EPSILON_PX = 0.5
 const END_SLACK_PX = 4
+const NO_SLOTS = { start: 0, end: 0, byIndex: new Map(), next: 0 }
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const pinToEnd = (element) => { element.scrollTop = element.scrollHeight }
 const shiftScroll = (element, delta) => { element.scrollTop += delta }
+
+function assignSlots(previous, start, end) {
+  const byIndex = new Map()
+  const free = []
+  for (const [index, slot] of previous.byIndex) {
+    if (index >= start && index < end) byIndex.set(index, slot)
+    else free.push(slot)
+  }
+  let next = previous.next
+  for (let index = start; index < end; index++) {
+    if (!byIndex.has(index)) byIndex.set(index, free.length ? free.pop() : next++)
+  }
+  return { start, end, byIndex, next }
+}
 
 function fixedLayout(rows, rowHeight) {
   return {
@@ -95,6 +110,7 @@ function VirtualScroller({
   scrollContainerRef,
   wrapItems = null,
   itemClassName = undefined,
+  recycle = false,
   className = ''
 }) {
   const measured = typeof itemKey === 'function'
@@ -109,6 +125,7 @@ function VirtualScroller({
   const rafRef = useRef(0)
   const settleTimerRef = useRef(null)
   const [heights, setHeights] = useState(() => new Map())
+  const [slotState, setSlotState] = useState(NO_SLOTS)
   const heightsRef = useRef(heights)
   const atEndRef = useRef(false)
   const observedRef = useRef(null)
@@ -229,7 +246,7 @@ function VirtualScroller({
 
     const relativeTop = scrollTop - motion.listTop
     const firstRow = current.rowAt(relativeTop)
-    const lastRow = clamp(current.rowAt(relativeTop + viewHeight) + 1, 0, rows)
+    const lastRow = clamp(latest.recycle ? firstRow + Math.ceil(viewHeight / current.rowHeight) + 1 : current.rowAt(relativeTop + viewHeight) + 1, 0, rows)
     if (fromResize && firstRow >= rangeRef.current.start && lastRow <= rangeRef.current.end) return
     const speed = Math.abs(motion.velocity)
     const idle = speed < IDLE_SPEED
@@ -259,14 +276,14 @@ function VirtualScroller({
     if (!previous || previous.items !== items || previous.windowStart !== windowStart) {
       itemsVersionRef.current++
     }
-    latestRef.current = { items, windowStart, layout, perRow, onRangeChange, getPrefetchId }
+    latestRef.current = { items, windowStart, layout, perRow, onRangeChange, getPrefetchId, recycle: recycle && !measured }
     if (!previous || previous.layout.rowHeight !== layout.rowHeight || previous.perRow !== perRow) {
       measure()
     }
     const container = scrollContainerRef?.current
     if (measured && stickToEnd && container && atEndRef.current) pinToEnd(container)
     compute(!motionRef.current.scrolling)
-  }, [items, windowStart, layout, perRow, onRangeChange, getPrefetchId, measure, compute, measured, stickToEnd, scrollContainerRef])
+  }, [items, windowStart, layout, perRow, onRangeChange, getPrefetchId, measure, compute, measured, stickToEnd, scrollContainerRef, recycle])
 
   useEffect(() => {
     if (!measured || typeof ResizeObserver === 'undefined') return
@@ -412,15 +429,27 @@ function VirtualScroller({
       )
     }
   }
+  const recycling = recycle && !measured
+  let slots = slotState
+  if (recycling && (slots.start !== startIndex || slots.end !== endIndex)) {
+    slots = assignSlots(slots, startIndex, endIndex)
+    setSlotState(slots)
+  }
+  const slotted = []
   for (let i = startIndex; i < endIndex && !measured; i++) {
     const item = items[i - windowStart]
-    if (item) {
-      visibleItems.push(renderItem(item, i))
-    } else if (renderPlaceholder) {
-      visibleItems.push(renderPlaceholder(i))
-    } else {
-      visibleItems.push(defaultPlaceholder(i, itemHeight))
+    const element = item ? renderItem(item, i) : renderPlaceholder ? renderPlaceholder(i) : defaultPlaceholder(i, itemHeight)
+    if (!recycling) {
+      visibleItems.push(element)
+      continue
     }
+    const slot = slots.byIndex.get(i)
+    const place = typeof element.type === 'string' ? { style: { ...element.props.style, order: i } } : { slotStyle: { order: i } }
+    slotted.push({ slot, element: cloneElement(element, { key: `${item ? 'slot' : 'blank'}-${slot}`, ...place }) })
+  }
+  if (recycling) {
+    slotted.sort((a, b) => a.slot - b.slot)
+    for (const entry of slotted) visibleItems.push(entry.element)
   }
 
   return (
@@ -461,6 +490,7 @@ export const MemoizedVirtualScroller = memo(VirtualScroller, (prevProps, nextPro
     prevProps.renderPlaceholder === nextProps.renderPlaceholder &&
     prevProps.onRangeChange === nextProps.onRangeChange &&
     prevProps.getPrefetchId === nextProps.getPrefetchId &&
-    prevProps.wrapItems === nextProps.wrapItems
+    prevProps.wrapItems === nextProps.wrapItems &&
+    prevProps.recycle === nextProps.recycle
   )
 })

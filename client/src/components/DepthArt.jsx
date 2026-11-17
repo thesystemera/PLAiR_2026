@@ -80,8 +80,8 @@ const DepthArt = memo(function DepthArt({
       packUrl: key,
       intensity,
       scrollTilt,
-      onDrawn: () => {
-        if (coveredRef.current) setDrawnHiddenFor(identityRef.current)
+      onDrawn: (onScreen) => {
+        if (coveredRef.current || onScreen === false) setDrawnHiddenFor(identityRef.current)
         setDrawnFor(identityRef.current)
         callbacksRef.current.onLoad?.({ currentTarget: canvasRef.current, target: canvasRef.current })
       },

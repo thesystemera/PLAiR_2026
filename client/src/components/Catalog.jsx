@@ -97,7 +97,7 @@ function queuedTrackIds(queue) {
   return queued.ids
 }
 
-const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null }) {
+const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index, shouldAnimate, selectedGenre = null, slotStyle = undefined }) {
   const { getWhite, triggerEffect } = useDynamicTheme()
   const params = track.generation_params || {}
   const trackInfo = track.track_info || {}
@@ -146,6 +146,7 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
     <MediaCardAnimation
       index={index}
       shouldAnimate={shouldAnimate}
+      style={slotStyle}
       className={`bg-dark-card rounded-lg p-2 md:p-4 hover:bg-dark-hover active:bg-dark-card ${CARD_TRANSITION} group/card cursor-pointer ${
         isPlaying ? 'ui-current-outline' : ''
       } ${isQueued && !isPlaying ? 'ring-1 ring-blue-400/40' : ''}`}
@@ -160,7 +161,7 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
           alt={params.title || 'Track artwork'}
           onLoad={onArtLoad}
         />
-        <MediaPlayingOverlay active={isPlaying} />
+        <MediaPlayingOverlay key={track.id} active={isPlaying} />
 
         <div className="absolute left-2 z-20 top-2">
           <MediaActions type="track" itemId={track.id} compact />
@@ -185,6 +186,7 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
         <MediaCardDurationBar duration={trackInfo.duration || 0} />
 
         <MediaStatusSlot
+          key={track.id}
           className="absolute bottom-2 right-2 z-30"
           status={isPlaying ? 'playing' : isLoading ? 'loading' : isQueued ? 'queued' : null}
         />
@@ -210,7 +212,8 @@ const TrackCard = memo(function TrackCard({ track, onPlayNow, onPickSeed, index,
 }, (prev, next) => {
   return (
     prev.track.id === next.track.id &&
-    prev.selectedGenre === next.selectedGenre
+    prev.selectedGenre === next.selectedGenre &&
+    prev.slotStyle?.order === next.slotStyle?.order
   )
 })
 
@@ -690,6 +693,7 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
                 getPrefetchId={getTrackArtworkId}
                 scrollContainerRef={scrollContainerRef}
                 className={gridClassName}
+                recycle
               />
             </div>
           )}

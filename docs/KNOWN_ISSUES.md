@@ -32,6 +32,10 @@ anything else is carried over as written.
   1.5 s; the builds before and after the 17 Nov UI commits measure the same. What it is made of, what was tried
   and reverted, and the three larger options (recycle the virtual list's rows, hold covers still during a fast
   scroll, a shorter colour fade): `docs/NEXT_SESSION_PERFORMANCE.md` section 3j. Owner to choose.
+  **17 Nov, later:** the Catalog reuses its cards (`recycle`) and covers drawn off screen are there when they
+  scroll in; reuse halves the layout work but does not raise the frame rate on the phone, where the compositor
+  and GPU process are the limit (section 3k). **Still to measure on the phone** (it was unplugged):
+  `perf/coverwatch.mjs` on the build before and after, and the scroll frame rate once more.
 
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
