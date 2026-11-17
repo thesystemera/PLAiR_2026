@@ -474,6 +474,32 @@ rate also slows the covers; a budget in time would not, but uploads load the GPU
 one, so it needs measuring). The maps could be uploaded as RGBA (no repack, 0.7 ms a cover). The real limit on
 the frame rate is one compositor layer per cover.
 
+## 3l. What the screen shows in a fling, and what cover lighting costs (17 Nov, evening)
+
+- **The fling is smooth on screen; it is the page that is slow.** Trace of a Catalog fling on the phone (viz
+  and cc events over 6.9 s, pauses between the gestures included): the display compositor drew and swapped
+  86 frames a second, while the page's own frames (`requestAnimationFrame`, `BeginMainFrame`) ran at 15 a
+  second. **Every "fps" for a scroll in sections 3j and 3k, and in the notes before them, is the page's frame
+  rate, not the screen's.** The list glides at the compositor's rate; what updates 15 times a second is what
+  the page draws: each cover's tilt and lighting (the tilt follows the cover's place in the viewport,
+  `scrollTiltFor`, so every visible cover is re-marched as it moves) and the rows that arrive. Count
+  `Display::DrawAndSwap` in a trace to know what the owner sees; count rAF to know how often covers update.
+- **Why 15.** With lit covers the page waits on the GPU: about 8 covers a frame at about 2.5 ms each, on the
+  same GPU that composites 86 frames a second. Flat covers: 25 page frames a second, and then the page's own
+  work per frame (about 40 ms) is the limit. So in a fling the cover pass decides how often covers update.
+- **Cover pass by stage, Now Playing, full resolution** (`stages.mjs`, 2 rounds, same song inside a round):
+  as is 11.3-11.7 ms; lights off 7.3-7.8 (lighting 3.7-4.3); one light of four 8.3-8.4 (about 1 ms a light);
+  no edge fill 8.8. Per-pixel pieces of the light sum taken out one at a time save 0.4-0.7 each (the half
+  vector, the falloff, both); the normalisation alone nothing. Light vectors as per-cover values varying
+  linearly across the cover: no saving (11.8). Per-cover values, the same for the whole cover and different per
+  light: 9.1 and 10.2 (-1.3 to -2.5). The same with one constant for all four lights 8.1-8.6, which only shows
+  the compiler folding four lights into one. So the cost is per light and per pixel, and rewriting the maths
+  does not move it (also 3g). What would: fewer lights (about 1 ms each, a change of look) or one direction
+  per cover per light (-1.3 to -2.5 ms, no gradient of light across a cover).
+- **Wrong lead, for the record:** the edge fill "costing every pixel like an unused path" was already tested
+  on 14 Nov (3g: 21.8% of a big cover's pixels take it, it is honest work). I told the owner it had never been
+  tried; it had.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:

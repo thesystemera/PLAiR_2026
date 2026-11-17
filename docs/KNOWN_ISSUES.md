@@ -58,12 +58,11 @@ anything else is carried over as written.
   (the median pixel 28 degrees, half the pixels over 30, a fifth over 58), so whole areas brighten and darken
   with the light. A re-bake with flatter ramps and less emboss is a CPU job over 2,265 covers and their packs.
   (2) The frame rate: lit covers are redrawn every frame of a scroll because the scroll tilts them (16 against
-  25 fps on the phone, lit against flat). The owner will not give up the tilt in a fling: the look stays, the
-  cost has to come out of the shader. Lead, not yet measured: the cover program carries the march, the trail
-  test (4 reads) and the fill (8 reads) in one fragment shader, and on the Adreno read paths that rarely run
-  still cost every pixel (what the background looks taught on 16 Nov, never applied to the covers). Time the
-  cover pass on the phone with the fill path edited out; if it is much cheaper, move the fill out of the main
-  program with the same pixels.
+  25 on the phone, lit against flat: those are the page's frames, the screen itself shows 86 a second in a
+  fling). The owner will not give up the tilt in a fling. Timed on the phone the same evening
+  (`docs/NEXT_SESSION_PERFORMANCE.md` section 3l): lighting is 3.7-4.3 ms of the 11.5 ms cover pass, about
+  1 ms a light, and no rewrite of the same maths makes it cheaper. Cheaper lighting means fewer lights or one
+  light direction per cover instead of per pixel: both change the picture a little, so they are the owner's.
 
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
