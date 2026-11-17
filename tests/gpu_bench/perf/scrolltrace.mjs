@@ -4,6 +4,8 @@
 // layouts and style recalculations that script forced counted apart. PICK=1 traces one tap on a Catalog card instead
 // of a scroll (it changes the owner's song). ART='<json>' / SCENE='<json>' apply cover / scene switches for the run
 // (window.__plairArt.set, window.__plairScene.set), e.g. ART='{"skipDraw":true}' SCENE='{"skip":true}' for the floor.
+// THREADS=CrGpuMain,CompositorGpuThread,... prints those threads' self time by event (TOP=n rows) and the page's and
+// the display's frames per second; CATS adds trace categories (e.g. toplevel,gpu.service).
 import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Catalog'
@@ -31,7 +33,7 @@ if (process.env.ART) await p.evaluate(`window.__plairArt.set(${process.env.ART})
 if (process.env.SCENE) await p.evaluate(`window.__plairScene.set(${process.env.SCENE}), 1`)
 await sleep(2000)
 const spot = JSON.parse(await p.evaluate(`JSON.stringify({ x: Math.round(innerWidth / 2), y: Math.round(innerHeight * 0.45) })`))
-await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,blink.user_timing,gpu,viz,cc', transferMode: 'ReportEvents' })
+await send('Tracing.start', { categories: 'devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,blink.user_timing,gpu,viz,cc' + (process.env.CATS ? ',' + process.env.CATS : ''), transferMode: 'ReportEvents' })
 await sleep(300)
 await p.evaluate(`performance.mark('trace-from'), 1`)
 if (process.env.PICK) {
@@ -99,6 +101,22 @@ const main = byThread.get(mainKey) || []
 const { self } = selfTimes(main)
 console.log('the page\'s main thread, self time by kind of work:')
 for (const [name, us] of [...self].sort((a, b) => b[1] - a[1]).slice(0, 16)) console.log(`${(us / 1000 / seconds).toFixed(0).padStart(5)} ms/s  ${name}`)
+if (process.env.THREADS) {
+  const count = name => events.filter(e => e.name === name && e.ts >= from.ts && e.ts <= to.ts).length / seconds
+  console.log(`frames per second: page BeginMainFrame ${count('ProxyMain::BeginMainFrame').toFixed(1)}, display swaps ${count('Display::DrawAndSwap').toFixed(1)}`)
+  const wanted = process.env.THREADS.split(',')
+  for (const [key, list] of byThread) {
+    const name = threadNames.get(key) || key
+    if (!wanted.some(w => name.startsWith(w))) continue
+    const { self, busy } = selfTimes(list)
+    const counts = new Map()
+    for (const e of list) counts.set(e.name, (counts.get(e.name) || 0) + 1)
+    console.log(`${name} (${(busy / 1000 / seconds).toFixed(0)} ms/s busy), self time by event:`)
+    for (const [event, us] of [...self].sort((a, b) => b[1] - a[1]).slice(0, Number(process.env.TOP || 12))) {
+      console.log(`${(us / 1000 / seconds).toFixed(1).padStart(7)} ms/s  ${(counts.get(event) / seconds).toFixed(0).padStart(5)}/s  ${event}`)
+    }
+  }
+}
 const forced = main.filter(e => (e.name === 'Layout' || e.name === 'UpdateLayoutTree') && (e.args?.beginData?.stackTrace || e.args?.stackTrace))
 const sum = (name, list) => list.filter(e => e.name === name).reduce((a, e) => a + (e.dur || 0), 0) / 1000
 const all = name => main.filter(e => e.name === name)
