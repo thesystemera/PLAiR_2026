@@ -1,4 +1,4 @@
-import { COARSE_UNITS, POM, bindDepthBound, createCoarseTargets, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteCoarseTargets, deleteParallaxCache, parallaxSteps, setLightRect, setLightUniforms, viewport } from './depthArtShader'
+import { COARSE_UNITS, POM, bindDepthBound, createCoarseTargets, createDepthArtPrograms, createDepthBound, createParallaxCache, deleteCoarseTargets, deleteParallaxCache, parallaxSteps, setFillTaps, setLightRect, setLightUniforms, setParallaxUniforms, uvScale, viewport } from './depthArtShader'
 import { noteLightConsumer, readLightProbe } from './lightProbe'
 import { isSceneRenderingPaused } from './renderPause'
 import { logger } from './logger'
@@ -295,10 +295,10 @@ class DepthArtRenderer {
 
   setupContext(gl) {
     const programs = createDepthArtPrograms(gl, { packedNormals: true, ...this.shaderOptions })
-    for (const entry of [programs.full, programs.cache, programs.coarse?.pass, programs.coarse?.compose]) {
+    for (const entry of [programs.full, programs.cache, programs.coarse?.pass]) {
       if (!entry) continue
       gl.useProgram(entry.program)
-      gl.uniform1f(entry.uniforms.zoom, 1)
+      setFillTaps(gl, entry.uniforms)
     }
     this.gl = gl
     this.programs = programs
@@ -680,9 +680,7 @@ class DepthArtRenderer {
         gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         gl.activeTexture(gl.TEXTURE2)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
-        gl.uniform2f(pass.uniforms.gyro, item.px, item.py)
-        gl.uniform1f(pass.uniforms.intensity, item.view.intensity)
-        gl.uniform1f(pass.uniforms.steps, item.steps)
+        setParallaxUniforms(gl, pass.uniforms, item.px, item.py, item.view.intensity, item.steps)
         bindDepthBound(gl, this.programs, pass.uniforms, item.entry.bound)
         if (lit) setLightRect(gl, pass.uniforms, item.rect)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
@@ -699,7 +697,7 @@ class DepthArtRenderer {
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
         gl.uniform4f(compose.uniforms.coarse_rect, ...item.coarseRect)
-        gl.uniform1f(compose.uniforms.intensity, item.view.intensity)
+        gl.uniform1f(compose.uniforms.uv_scale, uvScale(item.view.intensity))
         gl.drawArrays(gl.TRIANGLES, 0, 6)
       }
     }
@@ -727,9 +725,7 @@ class DepthArtRenderer {
         gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
         gl.activeTexture(gl.TEXTURE1)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
-        gl.uniform2f(cache.uniforms.gyro, item.px, item.py)
-        gl.uniform1f(cache.uniforms.intensity, view.intensity)
-        gl.uniform1f(cache.uniforms.steps, item.steps)
+        setParallaxUniforms(gl, cache.uniforms, item.px, item.py, view.intensity, item.steps)
         bindDepthBound(gl, this.programs, cache.uniforms, item.entry.bound)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
         Object.assign(view.cache, { art: item.entry, px: item.px, py: item.py, ready: true })
@@ -751,9 +747,7 @@ class DepthArtRenderer {
         gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
         gl.activeTexture(gl.TEXTURE2)
         gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
-        gl.uniform2f(full.uniforms.gyro, item.px, item.py)
-        gl.uniform1f(full.uniforms.intensity, item.view.intensity)
-        gl.uniform1f(full.uniforms.steps, item.steps)
+        setParallaxUniforms(gl, full.uniforms, item.px, item.py, item.view.intensity, item.steps)
         bindDepthBound(gl, this.programs, full.uniforms, item.entry.bound)
         if (lit) setLightRect(gl, full.uniforms, item.rect)
         for (let extra = 0; extra <= this.bench.extraFull; extra++) gl.drawArrays(gl.TRIANGLES, 0, 6)

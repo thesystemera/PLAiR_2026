@@ -125,24 +125,29 @@ const FLAT_FRAGMENT = `
   }
 `
 
+const FILL_TAPS = 4
+
 const PARALLAX_UNIFORMS = `
   uniform sampler2D u_color;
   uniform sampler2D u_depth;
-  uniform vec2 u_gyro;
-  uniform float u_intensity;
-  uniform float u_zoom;
+  uniform vec2 u_disp;
+  uniform vec2 u_half_disp;
+  uniform float u_disp_gate;
+  uniform vec2 u_disp_dir;
+  uniform float u_spread;
+  uniform float u_uv_scale;
   uniform float u_steps;
+  uniform float u_layer_step;
+  uniform int u_fill_taps;
 `
 
 const LIGHT_UNIFORMS = `
   uniform sampler2D u_normal;
-  uniform vec4 u_lights[${MAX_LIGHTS}];
-  uniform vec3 u_light_colors[${MAX_LIGHTS}];
+  uniform vec3 u_light_pos[${MAX_LIGHTS}];
+  uniform vec3 u_light_amp[${MAX_LIGHTS}];
   uniform vec4 u_rect;
-  uniform float u_aspect;
   uniform float u_light;
-  uniform float u_kick;
-  uniform float u_pulse;
+  uniform float u_energy;
 `
 
 const MARCH_BOUND = `
@@ -155,8 +160,8 @@ const MARCH_BOUND = `
   float marchBound(vec2 uv, vec2 displacement) {
     if (u_bound_levels <= 0.0) return 2.0;
     vec2 size = u_depth_size;
-    vec2 a = clamp(uv - 0.5 * displacement, 0.0, 1.0) * size - 0.5;
-    vec2 b = clamp(uv + 0.5 * displacement, 0.0, 1.0) * size - 0.5;
+    vec2 a = clamp(uv - u_half_disp, 0.0, 1.0) * size - 0.5;
+    vec2 b = clamp(uv + u_half_disp, 0.0, 1.0) * size - 0.5;
     vec2 lo = clamp(floor(min(a, b)), vec2(0.0), size - 1.0);
     vec2 hi = clamp(floor(max(a, b)) + 1.0, vec2(0.0), size - 1.0);
     float span = max(hi.x - lo.x, hi.y - lo.y);
@@ -197,6 +202,11 @@ const SHADE_PRECISION = `
 const SAMPLES = `
   #define DEPTH_AT(uv) texture2D(u_depth, uv).g
   #define COLOR_AT(uv) texture2D(u_color, uv)
+  #if __VERSION__ >= 300
+  #define FILL_TAP_COUNT u_fill_taps
+  #else
+  #define FILL_TAP_COUNT ${FILL_TAPS}
+  #endif
 `
 
 const PARALLAX = `
@@ -205,13 +215,12 @@ const PARALLAX = `
   ${SAMPLES}
 
   vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV, out float hitDepth, out vec4 fillColor, out float fillMix) {
-    float dispLen = length(displacement);
     hitDepth = 0.0;
     fillColor = vec4(0.0);
     fillMix = 0.0;
 
     const int LINEAR_STEPS = ${POM.LINEAR_STEPS};
-    float layerStep = 1.0 / u_steps;
+    float layerStep = u_layer_step;
 
     float testDepth = 1.0;
     float prevTestDepth = 1.0;
@@ -269,7 +278,7 @@ const PARALLAX = `
     hitUV = testUV;
     SHADE vec4 pomColor = COLOR_AT(clamp(testUV, 0.001, 0.999));
 
-    SHADE float dispGate = smoothstep(${G(POM.DISP_GATE_MIN)}, ${G(POM.DISP_GATE_MAX)}, dispLen);
+    SHADE float dispGate = u_disp_gate;
     if (dispGate <= 0.0) return pomColor;
 
     SHADE float baseDepth = DEPTH_AT(clamp(uv, 0.0, 1.0));
@@ -287,44 +296,29 @@ const PARALLAX = `
     SHADE float trailMask = edgeness * foregroundness * dispGate;
     if (trailMask <= 0.0) return pomColor;
 
-    vec2 dispDir = dispLen > 0.001 ? displacement / dispLen : vec2(1.0, 0.0);
+    vec2 dispDir = u_disp_dir;
     vec2 perpDir = vec2(-dispDir.y, dispDir.x);
-    float spread = max(dispLen * ${G(POM.FILL_SPREAD_MULT)}, ${G(POM.FILL_SPREAD_MIN)});
+    float spread = u_spread;
 
-    vec2 s1 = uv + perpDir * spread;
-    vec2 s2 = uv - perpDir * spread;
-    vec2 s3 = uv - dispDir * spread;
-    vec2 s4 = uv - dispDir * spread * 2.0;
+    SHADE vec4 fillSum = vec4(0.0);
+    SHADE float weightSum = 0.0;
+    for (int k = 0; k < FILL_TAP_COUNT; k++) {
+      vec2 s = k < 2 ? uv + perpDir * (k == 0 ? spread : -spread) : uv - dispDir * (spread * float(k - 1));
+      SHADE float fd = DEPTH_AT(clamp(s, 0.0, 1.0));
+      SHADE float w = max(0.01, pow(1.0 - fd, ${G(POM.FILL_DEPTH_POWER)}));
+      fillSum += COLOR_AT(clamp(s - (fd - 0.5) * displacement, 0.001, 0.999)) * w;
+      weightSum += w;
+    }
 
-    SHADE float fd1 = DEPTH_AT(clamp(s1, 0.0, 1.0));
-    SHADE float fd2 = DEPTH_AT(clamp(s2, 0.0, 1.0));
-    SHADE float fd3 = DEPTH_AT(clamp(s3, 0.0, 1.0));
-    SHADE float fd4 = DEPTH_AT(clamp(s4, 0.0, 1.0));
-
-    SHADE float w1 = max(0.01, pow(1.0 - fd1, ${G(POM.FILL_DEPTH_POWER)}));
-    SHADE float w2 = max(0.01, pow(1.0 - fd2, ${G(POM.FILL_DEPTH_POWER)}));
-    SHADE float w3 = max(0.01, pow(1.0 - fd3, ${G(POM.FILL_DEPTH_POWER)}));
-    SHADE float w4 = max(0.01, pow(1.0 - fd4, ${G(POM.FILL_DEPTH_POWER)}));
-
-    SHADE vec4 fc1 = COLOR_AT(clamp(s1 - (fd1 - 0.5) * displacement, 0.001, 0.999)) * w1;
-    SHADE vec4 fc2 = COLOR_AT(clamp(s2 - (fd2 - 0.5) * displacement, 0.001, 0.999)) * w2;
-    SHADE vec4 fc3 = COLOR_AT(clamp(s3 - (fd3 - 0.5) * displacement, 0.001, 0.999)) * w3;
-    SHADE vec4 fc4 = COLOR_AT(clamp(s4 - (fd4 - 0.5) * displacement, 0.001, 0.999)) * w4;
-
-    fillColor = (fc1 + fc2 + fc3 + fc4) / (w1 + w2 + w3 + w4);
+    fillColor = fillSum / weightSum;
     fillMix = trailMask * ${G(POM.FILL_STRENGTH)};
     return pomColor;
   }
 
 
   vec4 parallaxAt(vec2 texCoord, out vec2 hitUV, out float hitDepth, out vec4 fillColor, out float fillMix) {
-    vec2 displacement = u_gyro * u_intensity;
-
-    float autoZoom = 1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)};
-    float finalZoom = u_zoom * autoZoom;
-    vec2 uv = (texCoord - 0.5) / finalZoom + 0.5;
-
-    return parallax(uv, displacement, hitUV, hitDepth, fillColor, fillMix);
+    vec2 uv = (texCoord - 0.5) * u_uv_scale + 0.5;
+    return parallax(uv, u_disp, hitUV, hitDepth, fillColor, fillMix);
   }
 
   vec4 parallaxColorAt(vec2 texCoord, out vec2 hitUV) {
@@ -378,19 +372,18 @@ const SKYLIGHT = `
     SHADE vec3 glint = vec3(0.0);
     SHADE vec3 rim = vec3(0.0);
     for (int i = 0; i < ${MAX_LIGHTS}; i++) {
-      SHADE vec4 source = u_lights[i];
-      if (source.w <= 0.001) continue;
-      SHADE vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
+      if (u_light_pos[i].z <= 0.001) continue;
+      SHADE vec2 toLight = u_light_pos[i].xy - screenUV;
       SHADE float dist2 = dot(toLight, toLight);
       SHADE vec3 L = vec3(toLight, ${G(LIGHT.HEIGHT)}) * inversesqrt(dist2 + ${G(LIGHT.HEIGHT * LIGHT.HEIGHT)});
-      SHADE vec3 light = u_light_colors[i] * (source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist2 * ${G(LIGHT.FALLOFF)}));
+      SHADE vec3 light = u_light_amp[i] / (1.0 + dist2 * ${G(LIGHT.FALLOFF)});
       relief += light * (dot(n, L) - L.z);
       SHADE vec3 H = vec3(L.xy, L.z + 1.0) * inversesqrt(2.0 + 2.0 * L.z);
       glint += light * max(shine(max(dot(n, H), 0.0)) - shine(H.z), 0.0);
       rim += light * max(dot(facing, L.xy), 0.0);
     }
 
-    SHADE float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
+    SHADE float energy = u_energy;
     SHADE float edge = smoothstep(${G(LIGHT.RIM_SOFT)}, ${G(LIGHT.RIM_HARD)}, slopeLen);
     reliefTerm = relief * ${G(LIGHT.RELIEF)} * energy;
     extraTerm = (glint * ${G(LIGHT.SPECULAR)} + rim * edge * ${G(LIGHT.RIM)}) * energy;
@@ -465,8 +458,7 @@ const COARSE_FRAGMENT = `#version 300 es
     SHADE vec3 reliefTerm = vec3(0.0);
     SHADE vec3 extraTerm = vec3(0.0);
     if (u_light > 0.0) lightTermsAt(hitUV, v_texCoord, reliefTerm, extraTerm);
-    float zoom = u_zoom * (1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)});
-    vec2 uv = (v_texCoord - 0.5) / zoom + 0.5;
+    vec2 uv = (v_texCoord - 0.5) * u_uv_scale + 0.5;
     o_hit = vec4(hitUV - uv, 0.0, 1.0);
     o_relief = vec4(reliefTerm, fillMix);
     o_extra = vec4(extraTerm, 1.0);
@@ -483,8 +475,7 @@ const COMPOSE_FRAGMENT = `#version 300 es
   uniform sampler2D u_coarse_fill;
   uniform vec4 u_coarse_rect;
   uniform vec2 u_coarse_size;
-  uniform float u_intensity;
-  uniform float u_zoom;
+  uniform float u_uv_scale;
   in vec2 v_texCoord;
   out vec4 o_color;
   ${SHADE_PRECISION}
@@ -495,7 +486,7 @@ const COMPOSE_FRAGMENT = `#version 300 es
     vec2 origin = u_coarse_rect.xy;
     vec2 pos = vec2(v_texCoord.x, 1.0 - v_texCoord.y) * cells - 0.5;
     vec2 at = clamp(origin + pos + 0.5, origin + 0.5, origin + cells - 0.5) / u_coarse_size;
-    vec2 uv = (v_texCoord - 0.5) / (u_zoom * (1.0 + abs(u_intensity) * ${G(POM.ZOOM_FACTOR)})) + 0.5;
+    vec2 uv = (v_texCoord - 0.5) * u_uv_scale + 0.5;
     vec2 hitUV = uv + texture(u_coarse_hit, at).xy;
     vec4 relief = texture(u_coarse_relief, at);
     vec4 extra = texture(u_coarse_extra, at);
@@ -593,9 +584,10 @@ const QUAD_TEX_COORDS = new Float32Array([
   0, 0,  1, 1,  1, 0
 ])
 
-const PARALLAX_UNIFORM_NAMES = ['u_color', 'u_depth', 'u_gyro', 'u_intensity', 'u_zoom', 'u_steps']
+const PARALLAX_UNIFORM_NAMES = ['u_color', 'u_depth', 'u_disp', 'u_half_disp', 'u_disp_gate', 'u_disp_dir', 'u_spread', 'u_uv_scale', 'u_steps', 'u_layer_step', 'u_fill_taps']
 const BOUND_UNIFORM_NAMES = ['u_depth_bound', 'u_bound_levels', 'u_depth_size', 'u_bound_size']
-const LIGHT_UNIFORM_NAMES = ['u_normal', 'u_lights', 'u_light_colors', 'u_rect', 'u_aspect', 'u_light', 'u_kick', 'u_pulse']
+const LIGHT_UNIFORM_NAMES = ['u_normal', 'u_light_pos', 'u_light_amp', 'u_rect', 'u_light', 'u_energy']
+const ARRAY_UNIFORMS = new Set(['u_light_pos', 'u_light_amp'])
 
 const MIN_LINEAR_STEPS = 6
 
@@ -629,7 +621,7 @@ function linkProgram(gl, vertexSource, fragmentSource, uniformNames, samplers) {
 
   const uniforms = {}
   for (const name of uniformNames) {
-    uniforms[name.slice(2)] = gl.getUniformLocation(program, name === 'u_lights' || name === 'u_light_colors' ? `${name}[0]` : name)
+    uniforms[name.slice(2)] = gl.getUniformLocation(program, ARRAY_UNIFORMS.has(name) ? `${name}[0]` : name)
   }
   for (const [name, unit] of Object.entries(samplers)) gl.uniform1i(uniforms[name], unit)
   return { program, uniforms }
@@ -688,7 +680,7 @@ function createCoarsePrograms(gl, defines, fullUniforms, fullSamplers) {
   try {
     const pass = linkProgram(gl, VERTEX_300, withDefines(COARSE_FRAGMENT, defines), [...fullUniforms, ...BOUND_UNIFORM_NAMES], { ...fullSamplers, depth_bound: BOUND_UNIT })
     const compose = linkProgram(gl, VERTEX_300, withDefines(COMPOSE_FRAGMENT, defines.filter(name => name !== 'PACKED_NORMALS')),
-      ['u_color', 'u_coarse_hit', 'u_coarse_relief', 'u_coarse_extra', 'u_coarse_fill', 'u_coarse_rect', 'u_coarse_size', 'u_intensity', 'u_zoom'],
+      ['u_color', 'u_coarse_hit', 'u_coarse_relief', 'u_coarse_extra', 'u_coarse_fill', 'u_coarse_rect', 'u_coarse_size', 'u_uv_scale'],
       { color: 0, coarse_hit: COARSE_UNITS.hit, coarse_relief: COARSE_UNITS.relief, coarse_extra: COARSE_UNITS.extra, coarse_fill: COARSE_UNITS.fill })
     return { pass, compose }
   } catch (error) {
@@ -859,18 +851,56 @@ if (typeof window !== 'undefined') {
   window.visualViewport?.addEventListener('resize', measureViewport, { passive: true })
 }
 
+export function uvScale(intensity) {
+  return 1 / (1 + Math.abs(intensity) * POM.ZOOM_FACTOR)
+}
+
+export function setFillTaps(gl, uniforms) {
+  if (uniforms.fill_taps) gl.uniform1i(uniforms.fill_taps, FILL_TAPS)
+}
+
+export function setParallaxUniforms(gl, uniforms, px, py, intensity, steps) {
+  const dx = px * intensity
+  const dy = py * intensity
+  const length = Math.hypot(dx, dy)
+  const gate = clamp01((length - POM.DISP_GATE_MIN) / (POM.DISP_GATE_MAX - POM.DISP_GATE_MIN))
+  gl.uniform2f(uniforms.disp, dx, dy)
+  gl.uniform2f(uniforms.half_disp, 0.5 * dx, 0.5 * dy)
+  gl.uniform1f(uniforms.disp_gate, gate * gate * (3 - 2 * gate))
+  if (length > 0.001) gl.uniform2f(uniforms.disp_dir, dx / length, dy / length)
+  else gl.uniform2f(uniforms.disp_dir, 1, 0)
+  gl.uniform1f(uniforms.spread, Math.max(length * POM.FILL_SPREAD_MULT, POM.FILL_SPREAD_MIN))
+  gl.uniform1f(uniforms.uv_scale, uvScale(intensity))
+  gl.uniform1f(uniforms.steps, steps)
+  gl.uniform1f(uniforms.layer_step, 1 / steps)
+}
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value))
+}
+
+const lightPositions = new Float32Array(MAX_LIGHTS * 3)
+const lightAmplitudes = new Float32Array(MAX_LIGHTS * 3)
+
 export function setLightUniforms(gl, uniforms, probe, hasNormals) {
   const on = probe.active && hasNormals
   gl.uniform1f(uniforms.light, on ? probe.level : 0)
   if (!on) return false
-  gl.uniform4fv(uniforms.lights, probe.lights)
-  gl.uniform3fv(uniforms.light_colors, probe.lightColors)
-  gl.uniform1f(uniforms.aspect, viewport.width / viewport.height)
-  gl.uniform1f(uniforms.kick, probe.kick)
-  gl.uniform1f(uniforms.pulse, probe.pulse)
+  const aspect = viewport.width / viewport.height
+  for (let i = 0; i < MAX_LIGHTS; i++) {
+    const strength = probe.lights[i * 4 + 3]
+    lightPositions[i * 3] = probe.lights[i * 4] * aspect
+    lightPositions[i * 3 + 1] = probe.lights[i * 4 + 1]
+    lightPositions[i * 3 + 2] = strength
+    for (let c = 0; c < 3; c++) lightAmplitudes[i * 3 + c] = probe.lightColors[i * 3 + c] * strength * LIGHT.STRENGTH
+  }
+  gl.uniform3fv(uniforms.light_pos, lightPositions)
+  gl.uniform3fv(uniforms.light_amp, lightAmplitudes)
+  gl.uniform1f(uniforms.energy, probe.level * (1 + probe.pulse * LIGHT.PULSE + probe.kick * LIGHT.KICK))
   return true
 }
 
 export function setLightRect(gl, uniforms, rect) {
-  gl.uniform4f(uniforms.rect, rect.left / viewport.width, rect.top / viewport.height, rect.width / viewport.width, rect.height / viewport.height)
+  const height = viewport.height
+  gl.uniform4f(uniforms.rect, rect.left / height, rect.top / height, rect.width / height, rect.height / height)
 }

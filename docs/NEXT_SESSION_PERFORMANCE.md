@@ -500,6 +500,40 @@ the frame rate is one compositor layer per cover.
   on 14 Nov (3g: 21.8% of a big cover's pixels take it, it is honest work). I told the owner it had never been
   tried; it had.
 
+## 3m. Cover pass: the fill loop and per-cover values (17 Nov, late)
+
+Measured on the phone (thermal status 0, `stages.mjs`, 3 rounds in turn, ms per pass for everything on screen).
+
+- **The phone was drawing coarse covers.** Keep It Smooth starts at step 1 ("coarse covers") on every touch device
+  with nothing stored (`heuristicStep` in `QualityContext.jsx`); `__plairQuality()` on the owner's phone said
+  `levers: ["coarse covers"]`. Scripts that leave `coarse` at `null` measure coarse covers. Not changed (owner's call).
+- **Catalog fling, page updates a second** (`scrollab.mjs`, 3 rounds): coarse (as the phone was) 17.4, full
+  resolution 13.3, full without the scroller's edge-fade mask 16.2, flat covers 21.2. Flat covers are the ceiling
+  for anything done to the cover pass; 30 a second needs work outside it.
+- **Catalog tiles (446 px from 512 packs), cover pass 18.7 ms:** lighting 4.7, edge fill 4.6, march + depth bound
+  8.8, rest about 1. Only 0-3.4% of tile pixels take the fill path (`trailshare.mjs`), yet the fill code cost
+  about 4 ms: `fill never` (code present, never runs) 18.6 against `taps only` (gate kept, fill code removed)
+  14.5. The gate is 0.8, the four taps nothing. It is the unrolled fill holding all eight reads at once.
+- **Shipped, both checked pixel by pixel with `identity.mjs` (tilt and lights frozen, against the shader before):**
+  - The fill's four samples run in a loop bounded by a uniform (`u_fill_taps`, 4): the compiler can't unroll it.
+    Tiles 18.7 -> 16.1, Now Playing 11.2 -> 10.0. Bit-identical. A constant-bound loop changes nothing (it is
+    unrolled back). Uniform-bound light and march loops on top of it: no further gain.
+  - Values that are the same for the whole cover are computed per draw in JS (`setParallaxUniforms`,
+    `setLightUniforms`): displacement and half of it, gate, direction, spread, the zoom scale, 1/steps, energy,
+    light colour x intensity x strength, light positions and the cover's rectangle in viewport-height units.
+    With the fill loop: tiles 18.2 -> 14.9 (-18%), Now Playing 9.7 -> 8.0 (-17%). Max 1 level on a tile, 4 on a
+    handful of Now Playing pixels (none off by more than 2): rounding.
+- **Fling page rate with both** (`flingstages.mjs`, the new shader applied live through the rig, 5 rounds): as is
+  18.0 (17.2-23.0), new 18.9 (18.5-19.3). The cover pass is a sixth cheaper, the fling rate barely moves: the
+  limit is outside the covers (see the flat ceiling above).
+- Rig: `edits.mjs` stages can carry `derive`, page code that turns the uniforms the renderer set into new
+  per-cover uniforms before each draw (cover uniforms the edited shader no longer reads get stand-in locations so
+  their values are still seen); `derivecheck.mjs` prints them. Check a derive stage with `identity.mjs` before
+  timing it: a broken one draws less and reads fast (the first try read 8 ms a pass on a wrong, flat picture).
+  `shadercompile.mjs` compiles the working copy's cover programs on the phone's GPU in a throwaway context.
+- Catalog bug seen on the way: scrolled to 15,887 px the list showed skeleton cards for minutes; the page of tracks
+  for that spot had not been requested since 38 minutes earlier (`useVirtualWindow`). Not investigated.
+
 ## 4. Next steps, in order
 
 1. ~~Fix the context loss~~ (done, section 1). ~~Draw Now Playing straight into its own canvas~~ (dropped:
