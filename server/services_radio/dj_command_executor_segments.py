@@ -10,7 +10,7 @@ from services_radio.dj_prompt_helper_service import UnavailableSegment
 from services_radio.dj_content_bank import content_bank
 from services_radio.tts_stream_planner import spoken_text
 from database.models import User
-from services import log_service
+from services import listener_limits, log_service, usage_tracking
 
 NEWS_CATEGORIES = ["world", "nation", "business", "technology", "entertainment", "sports", "science", "health"]
 INTERPRETATION_GATE_TIMEOUT_S = 90.0
@@ -87,7 +87,12 @@ class ExecutorSegments:
     async def welcome_new_listener(self, session_id):
         asked_at = time.time()
         talk_clock.segment_depth.set("brief")
-        script = await self.dj_prompt_service.gpt_onboarding({'user_id': None, 'session_id': session_id})
+        allowance = await listener_limits.allowance_for_session(session_id, None)
+        if allowance is not None and allowance.out:
+            log_service.announcer(f"{log_service.who(session_id)}: no welcome, this guest's AI allowance is used up")
+            return
+        with usage_tracking.asked():
+            script = await self.dj_prompt_service.gpt_onboarding({'user_id': None, 'session_id': session_id})
         if not script:
             return
         if conversation_service.last_turn_at(session_id) >= asked_at:

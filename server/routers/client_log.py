@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from config.settings import settings
-from routers.deps import RateLimit, request_identity
+from routers.deps import get_cached_current_user
+from security_middleware import is_valid_guest_id
 from security_middleware import SENSITIVE_QUERY_PATTERN
 from services import log_service
 
@@ -89,7 +90,7 @@ def _logger() -> logging.Logger:
 
 
 @router.post("/api/client-log")
-async def client_log(request: Request, user=Depends(RateLimit("client_log", user_limit=(60, 3600), guest_limit=(30, 3600)))):
+async def client_log(request: Request, user=Depends(get_cached_current_user)):
     length = request.headers.get("content-length")
     if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail="Log batch too large")
@@ -101,8 +102,8 @@ async def client_log(request: Request, user=Depends(RateLimit("client_log", user
     except Exception:
         raise HTTPException(status_code=422, detail="Invalid log batch")
 
-    identity = request_identity(request, user)
-    who = f"user:{user.id}" if user is not None else ("guest" if identity.startswith("guest") else "anon")
+    guest = request.headers.get("x-guest-id") or ""
+    who = f"user:{user.id}" if user is not None else ("guest" if is_valid_guest_id(guest) else "anon")
     base = {
         "ts": int(time.time() * 1000),
         "who": who,

@@ -3,9 +3,9 @@ from services.device_settings_service import device_kinds, valid_kind
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services import auth_service, log_service
+from services import auth_service, listener_limits, log_service
 from services.rate_limit_service import rate_limit_service
-from security_middleware import is_valid_guest_id
+from security_middleware import is_valid_guest_id, resolve_client_ip
 from database import get_db, User
 from config import settings
 
@@ -107,29 +107,8 @@ def _peer_ip(request: Request) -> Optional[str]:
 
 
 def real_client_ip(request: Request) -> Optional[str]:
-    peer = _peer_ip(request)
-    if peer not in settings.TRUSTED_PROXY_IPS:
-        return peer
-    real_ip = (request.headers.get("x-real-ip") or "").strip()
-    if real_ip:
-        return real_ip
-    forwarded = request.headers.get("x-forwarded-for") or ""
-    if forwarded:
-        return forwarded.split(",")[-1].strip() or None
-    return None
-
-
-def client_ip(request: Request) -> str:
-    return real_client_ip(request) or _peer_ip(request) or "unknown"
-
-
-def request_identity(request: Request, user: Optional[User]) -> str:
-    if user is not None:
-        return f"user:{int(user.id)}"  # type: ignore
-    guest = request.headers.get("x-guest-id") or request.query_params.get("guest_id")
-    if guest and is_valid_guest_id(guest):
-        return f"guest:{guest}"
-    return f"ip:{client_ip(request)}"
+    return resolve_client_ip(_peer_ip(request), request.headers.get("x-real-ip") or "",
+                             request.headers.get("x-forwarded-for") or "")
 
 
 def enforce_rate_limit(bucket: str, key: str, default: Optional[tuple] = None) -> None:
@@ -147,33 +126,23 @@ def enforce_rate_limit(bucket: str, key: str, default: Optional[tuple] = None) -
         )
 
 
-class RateLimit:
-    def __init__(self, name: str, user_limit: Optional[tuple] = None, guest_limit: Optional[tuple] = None):
-        self.name = name
-        self.user_limit = user_limit
-        self.guest_limit = guest_limit
+class AIAllowance:
+    """The listener's AI allowance (listener_limits) for a route that starts AI work. With refuse, a listener who has
+    used it up gets a polite 429 the app shows as a notice; without, the route decides (smart search falls back to
+    the plain search)."""
 
-    async def __call__(
-            self,
-            request: Request,
-            user: Optional[User] = Depends(get_current_user)
-    ) -> Optional[User]:
-        self.charge(request, user)
-        return user
+    def __init__(self, refuse: bool = True):
+        self.refuse = refuse
 
-    def charge(self, request: Request, user: Optional[User]) -> None:
-        identity = request_identity(request, user)
-        if user is not None:
-            enforce_rate_limit(f"{self.name}_user", identity, self.user_limit)
-            return
-
-        enforce_rate_limit(f"{self.name}_guest", identity, self.guest_limit)
-        ip = real_client_ip(request)
-        if ip and not identity.startswith("ip:"):
-            enforce_rate_limit(f"{self.name}_guest_ip", ip)
-
-
-AI_SEARCH = RateLimit("search_ai")
+    async def __call__(self, request: Request,
+                       user: Optional[User] = Depends(get_cached_current_user)) -> listener_limits.Allowance:
+        guest = request.headers.get("x-guest-id") or request.query_params.get("guest_id")
+        allowance = await listener_limits.allowance_for(user, guest if guest and is_valid_guest_id(guest) else None,
+                                                        real_client_ip(request))
+        if self.refuse and allowance.out:
+            raise HTTPException(status_code=429, detail=listener_limits.notice_text(allowance),
+                                headers={"Retry-After": str(allowance.resets_in_s), "X-Limit": "ai_allowance"})
+        return allowance
 
 
 def enforce_auth_rate_limit(request: Request, username: str) -> None:

@@ -191,6 +191,24 @@ export function OfflineNotice() {
   return null
 }
 
+const LIMIT_NOTICES = {
+  requests: { tone: 'warning' },
+  low: { tone: 'info', sticky: true },
+  out: { tone: 'warning', sticky: true },
+}
+
+export function LimitNotice() {
+  const showNotice = useUISelector(state => state.showNotice)
+  const show = useCallback((data) => {
+    const look = LIMIT_NOTICES[data?.state]
+    if (look && typeof data.message === 'string') showNotice({ key: 'limits', text: data.message, ...look })
+  }, [showNotice])
+
+  useEffect(() => api.onLimit(show), [show])
+  useWebSocketSubscribe('allowance', show)
+  return null
+}
+
 export function ConnectionNotice() {
   const connected = usePlaybackConnected()
   const { success, errorToast } = useUISelector(state => ({

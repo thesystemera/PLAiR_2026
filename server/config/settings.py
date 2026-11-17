@@ -236,25 +236,11 @@ class Settings:
     )
 
     RATE_LIMITS: dict = {
-        "dj_talk_guest": (int(os.getenv("RATE_LIMIT_DJ_TALK_GUEST_PER_HOUR", "20")), 3600),
-        "dj_talk_user": (int(os.getenv("RATE_LIMIT_DJ_TALK_USER_PER_HOUR", "120")), 3600),
-        "dj_talk_guest_ip": (int(os.getenv("RATE_LIMIT_DJ_TALK_GUEST_IP_PER_HOUR", "60")), 3600),
-        "transcribe_guest": (int(os.getenv("RATE_LIMIT_TRANSCRIBE_GUEST_PER_HOUR", "20")), 3600),
-        "transcribe_user": (int(os.getenv("RATE_LIMIT_TRANSCRIBE_USER_PER_HOUR", "120")), 3600),
-        "transcribe_guest_ip": (int(os.getenv("RATE_LIMIT_TRANSCRIBE_GUEST_IP_PER_HOUR", "60")), 3600),
         "auth_ip": (int(os.getenv("RATE_LIMIT_AUTH_IP_PER_MINUTE", "10")), 60),
         "auth_username": (int(os.getenv("RATE_LIMIT_AUTH_USERNAME_PER_MINUTE", "10")), 60),
-        "search_guest": (int(os.getenv("RATE_LIMIT_SEARCH_GUEST_PER_MINUTE", "30")), 60),
-        "search_user": (int(os.getenv("RATE_LIMIT_SEARCH_USER_PER_MINUTE", "60")), 60),
-        "search_ai_user": (int(os.getenv("RATE_LIMIT_SEARCH_AI_USER_PER_HOUR", "60")), 3600),
-        "search_ai_guest": (int(os.getenv("RATE_LIMIT_SEARCH_AI_GUEST_PER_HOUR", "60")), 3600),
-        "search_ai_guest_ip": (int(os.getenv("RATE_LIMIT_SEARCH_AI_GUEST_IP_PER_HOUR", "180")), 3600),
-        "ai_upload_user": (int(os.getenv("RATE_LIMIT_AI_UPLOAD_USER_PER_HOUR", "30")), 3600),
-        "shoutout_play_guest": (int(os.getenv("RATE_LIMIT_SHOUTOUT_PLAY_GUEST_PER_MINUTE", "30")), 60),
-        "shoutout_play_user": (int(os.getenv("RATE_LIMIT_SHOUTOUT_PLAY_USER_PER_MINUTE", "120")), 60),
-        "shoutout_play_guest_ip": (int(os.getenv("RATE_LIMIT_SHOUTOUT_PLAY_GUEST_IP_PER_MINUTE", "120")), 60),
-        "usage_stats": (int(os.getenv("RATE_LIMIT_USAGE_STATS_PER_MINUTE", "30")), 60),
     }
+    LISTENER_LIMITS_PATH: Path = Path(os.getenv("LISTENER_LIMITS_PATH", str(BASE_DIR / "data" / "listener_limits.json")))
+    AI_ALLOWANCE_PATH: Path = Path(os.getenv("AI_ALLOWANCE_PATH", str(BASE_DIR / "data" / "ai_allowance.json")))
     SHOUTOUT_PLAY_DEDUPE_HOURS: float = float(os.getenv("SHOUTOUT_PLAY_DEDUPE_HOURS", "6"))
 
     MAX_PROFILE_PICTURE_BYTES: int = 10 * 1024 * 1024
@@ -771,9 +757,6 @@ class Settings:
     STRIPE_APP_TAG: str = "plair"
     STRIPE_PRICE_LABEL: str = os.getenv("STRIPE_PRICE_LABEL", "US$4.99/mo")
     STRIPE_WEBHOOK_TOLERANCE_S: int = 300
-    PREMIUM_MONTHLY_GENERATIONS: int = int(os.getenv("PREMIUM_MONTHLY_GENERATIONS", "50"))
-    FREE_GENERATION_LIMIT: int = int(os.getenv("FREE_GENERATION_LIMIT", "5"))
-    FREE_GENERATION_PERIOD: str = os.getenv("FREE_GENERATION_PERIOD", "month").strip().lower()
     GENERATION_USAGE_PATH: Path = Path(os.getenv("GENERATION_USAGE_PATH", str(BASE_DIR / "data" / "generation_usage.json")))
 
     YOUTUBE_CLIENT_ID: str = os.getenv("YOUTUBE_CLIENT_ID", "")

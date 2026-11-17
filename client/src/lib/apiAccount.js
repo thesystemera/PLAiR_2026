@@ -275,4 +275,12 @@ export const accountMethods = {
   async getMyUsage(period = 'month') {
     return this._getUsage('getMyUsage', '/usage/me', { period })
   },
+
+  async getListenerLimits() {
+    return this._getUsage('getListenerLimits', '/admin/limits')
+  },
+
+  async saveListenerLimits(limits) {
+    return this._jsonRequest('/admin/limits', 'PUT', limits, 'Could not save the limits')
+  },
 }

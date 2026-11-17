@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, RefreshCw, ArrowUpDown } from 'lucide-react'
-import { Modal, ModalSection, ModalCard, ModalErrorState } from './Modal'
+import { Modal, ModalButton, ModalSection, ModalCard, ModalErrorState } from './Modal'
 import { Expandable, Fade, FadeSwap } from '../Motion'
 import { PRESETS } from '../../lib/motion'
 import { api } from '../../lib/api'
@@ -286,6 +286,146 @@ function AdminView({ summary, users, period }) {
   )
 }
 
+const TIER_FIELDS = [
+  { key: 'ai_usd_per_day', label: 'AI $ / day', step: 0.01 },
+  { key: 'ai_usd_per_month', label: 'AI $ / month', step: 0.05 },
+  { key: 'songs', label: 'Song credits', step: 1 },
+]
+const SHARED_FIELDS = [
+  { path: ['guest_ai_usd_per_ip_per_day'], label: 'Guests on one IP, AI $ / day', step: 0.05 },
+  { path: ['warn_at'], label: 'Warn when this share is used', step: 0.05 },
+  { path: ['gpu_second_usd'], label: 'One GPU second counts as $', step: 0.0001 },
+  { path: ['requests', 'per_second'], label: 'Requests a second, per listener', step: 1 },
+  { path: ['requests', 'burst'], label: 'Burst, per listener', step: 5 },
+  { path: ['requests', 'ip_per_second'], label: 'Requests a second, per IP', step: 1 },
+  { path: ['requests', 'ip_burst'], label: 'Burst, per IP', step: 10 },
+  { path: ['requests', 'media_cost'], label: 'A cover or stream counts as', step: 0.05 },
+]
+const INPUT_CLASS = 'w-full min-w-0 bg-white/5 border border-gray-700/50 rounded px-2 py-1 text-xs text-white tabular-nums focus:outline-none focus:border-violet-500/60'
+
+const readPath = (value, path) => path.reduce((node, key) => node?.[key], value)
+
+function writePath(value, path, next) {
+  const copy = structuredClone(value)
+  const parent = path.slice(0, -1).reduce((node, key) => node[key], copy)
+  parent[path[path.length - 1]] = next
+  return copy
+}
+
+function NumberField({ label, value, step, onChange }) {
+  return (
+    <input type="number" min="0" step={step} value={value} aria-label={label}
+      onChange={e => onChange(e.target.value)} className={INPUT_CLASS} />
+  )
+}
+
+function LimitsSection() {
+  const [view, setView] = useState(null)
+  const [draft, setDraft] = useState(null)
+  const [note, setNote] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getListenerLimits()
+      .then(data => { if (!cancelled) { setView(data); setDraft(data.limits) } })
+      .catch(err => { if (!cancelled) setNote({ tone: 'error', text: `Couldn't load the limits (${err.message}).` }) })
+    return () => { cancelled = true }
+  }, [])
+
+  const save = useCallback(async () => {
+    setSaving(true)
+    try {
+      const data = await api.saveListenerLimits(draft)
+      setView(data)
+      setDraft(data.limits)
+      setNote({ tone: 'success', text: 'Saved. The new limits apply straight away.' })
+    } catch (err) {
+      setNote({ tone: 'error', text: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }, [draft])
+
+  const edit = useCallback((path, value) => {
+    setDraft(current => writePath(current, path, value))
+    setNote(null)
+  }, [])
+
+  if (!draft) {
+    return note ? <ModalSection title="Listener limits"><InlineNote tone={note.tone}>{note.text}</InlineNote></ModalSection> : null
+  }
+
+  const chat = view.chat_cost_usd
+  const premium = draft.tiers.premium
+  const worst = Number(premium.songs) * view.song_cost_usd + Number(premium.ai_usd_per_month)
+  const net = view.premium_price_usd - view.premium_fee_usd
+  const changed = JSON.stringify(draft) !== JSON.stringify(view.limits)
+
+  return (
+    <ModalSection title="Listener limits">
+      <ModalCard className="space-y-3 text-xs">
+        <p className="text-gray-400">
+          What each kind of listener gets. AI money counts only what their own actions cause (chatting with the hosts,
+          smart search, dictation, posts, uploads), never the station&apos;s own talk.
+          {chat ? ` One chat with the hosts costs about ${formatUsd(chat)}.` : ''}
+        </p>
+        <div className="grid grid-cols-[minmax(0,1.2fr)_repeat(3,minmax(0,1fr))] gap-2 items-center">
+          <span className="text-gray-500">Tier</span>
+          {TIER_FIELDS.map(field => <span key={field.key} className="text-gray-500">{field.label}</span>)}
+          {view.tiers.map(tier => (
+            <TierRow key={tier} tier={tier} row={draft.tiers[tier]} chat={chat} onEdit={edit} />
+          ))}
+        </div>
+        <div className="text-[11px] text-gray-500">
+          Worst case for one Premium listener: {formatUsd(Number(premium.songs) * view.song_cost_usd)} in songs
+          + {formatUsd(Number(premium.ai_usd_per_month))} AI = {formatUsd(worst)} a month, against {formatUsd(net)} after
+          Stripe, plus the station&apos;s own talk while they listen.
+        </div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          {SHARED_FIELDS.map(field => (
+            <label key={field.path.join('.')} className="flex flex-col gap-1 text-gray-400">
+              {field.label}
+              <NumberField label={field.label} value={readPath(draft, field.path)} step={field.step}
+                onChange={value => edit(field.path, value)} />
+            </label>
+          ))}
+        </div>
+        {note && <InlineNote tone={note.tone}>{note.text}</InlineNote>}
+        <div className="flex justify-end gap-2">
+          <ModalButton variant="secondary" onClick={() => { setDraft(view.defaults); setNote(null) }}>Use defaults</ModalButton>
+          <ModalButton onClick={save} disabled={!changed || saving}>{saving ? 'Saving...' : 'Save limits'}</ModalButton>
+        </div>
+      </ModalCard>
+    </ModalSection>
+  )
+}
+
+function TierRow({ tier, row, chat, onEdit }) {
+  const perDay = Number(row.ai_usd_per_day)
+  return (
+    <>
+      <div className="flex flex-col">
+        <span className="text-gray-200">{row.label}</span>
+        {chat ? <span className="text-[11px] text-gray-500">about {Math.floor(perDay / chat)} chats a day</span> : null}
+      </div>
+      {TIER_FIELDS.map(field => (
+        <div key={field.key} className="flex gap-1">
+          <NumberField label={`${row.label} ${field.label}`} value={row[field.key]} step={field.step}
+            onChange={value => onEdit(['tiers', tier, field.key], value)} />
+          {field.key === 'songs' && (
+            <select value={row.songs_period} aria-label={`${row.label} song credit period`}
+              onChange={e => onEdit(['tiers', tier, 'songs_period'], e.target.value)} className={INPUT_CLASS}>
+              <option value="month">a month</option>
+              <option value="day">a day</option>
+            </select>
+          )}
+        </div>
+      ))}
+    </>
+  )
+}
+
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-3">
@@ -372,6 +512,7 @@ export function UsageStatsModal({ isOpen, onClose, isAdmin }) {
       {data && isAdmin && data.summary && data.users && (
         <>
           <AdminView summary={data.summary} users={data.users} period={period} />
+          <LimitsSection />
           {data.own && (
             <ModalSection title="Your own usage" className="mt-6">
               <ModalCard className="flex justify-between text-xs">

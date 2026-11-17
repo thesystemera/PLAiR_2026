@@ -8,7 +8,7 @@ from services import log_service
 from services_radio.conversation_service import conversation_service
 from config import settings
 from service_registry import services
-from routers.deps import get_session_info, RateLimit, read_upload_limited
+from routers.deps import get_session_info, AIAllowance, read_upload_limited
 from routers.schemas import DJTalkRequest
 
 router = APIRouter()
@@ -17,7 +17,7 @@ router = APIRouter()
 async def transcribe_audio(
         audio: UploadFile = File(...),
         session: dict = Depends(get_session_info),
-        _rate_limit=Depends(RateLimit("transcribe"))
+        _allowance=Depends(AIAllowance())
 ):
     if not audio:
         raise HTTPException(status_code=400, detail="No audio file provided")
@@ -51,8 +51,7 @@ async def transcribe_audio(
 @router.post("/api/dj/talk")
 async def dj_talk(
         request: DJTalkRequest,
-        session: dict = Depends(get_session_info),
-        _rate_limit=Depends(RateLimit("dj_talk"))
+        session: dict = Depends(get_session_info)
 ):
     if not services.tts_queue_manager:
         raise HTTPException(status_code=503, detail="DJ service unavailable")

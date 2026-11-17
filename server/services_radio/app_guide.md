@@ -116,7 +116,7 @@ The player along the bottom has previous (restart once a song is three seconds i
 
 ## Making an account
 Asks: how do I sign up, should I make an account, why sign in, create an account, register, what do I get with an account, is it free, do I need an email
-An account is free and makes the station yours: likes, super likes and bans that shape what plays, your favorites and Smart Discovery stations, posting shoutouts, replies and reviews, your station and settings on all your devices with the music following you between them, liked songs downloaded for offline, uploading your own music, making songs, and the best audio quality. It takes a few seconds and needs no email and no password: in the Account panel (the Account tab on a phone) tap "Create account", pick a username and tap "Create with passkey"; Windows Hello, Face ID or a fingerprint signs you in. A password is optional.
+An account is free and makes the station yours: likes, super likes and bans that shape what plays, your favorites and Smart Discovery stations, posting shoutouts, replies and reviews, your station and settings on all your devices with the music following you between them, liked songs downloaded for offline, uploading your own music, making songs, more AI time each day (chatting with the hosts, smart search), and the best audio quality. It takes a few seconds and needs no email and no password: in the Account panel (the Account tab on a phone) tap "Create account", pick a username and tap "Create with passkey"; Windows Hello, Face ID or a fingerprint signs you in. A password is optional.
 
 ## Signing in on another device
 Asks: how do I log in on my computer, sign in on another phone, I can't log in, log in, scan code, QR code
@@ -126,6 +126,10 @@ In the Account panel tap "Login" and then "Sign in with passkey" (Windows Hello,
 Asks: how do I log out, delete my account, delete my data, change my username, profile picture, clear the conversation, privacy
 In the Account panel tap your picture to add a photo and the pencil to change your username. "Account & Privacy" adds passkeys, sets an optional password, clears your conversation with the hosts, resets the profile the hosts keep of your taste, and "Delete account and all data" removes everything for good, ending any subscription. "Logout" is at the bottom.
 
+## AI time and limits
+Asks: why did the hosts stop chatting, is there a limit, how much can I talk to you, chat limit, used up, when does it reset, too many requests, why can't I search
+Chatting with the hosts, the smart search (pressing Enter or searching by voice), voice dictation, posting and uploads use AI, so every listener has an allowance of AI time a day and a month. The app and the hosts mention it when you're close and say when it tops up; it tops up by itself over the following day. The music, the station's own talk and plain search as you type never stop. A free account gives more AI time than listening as a guest, and Premium more again. If the app says "that's a lot at once", wait a few seconds and try again.
+
 ## Premium
 Asks: what's premium, how much does it cost, is it free, subscription, upgrade, pay
-PLAiR is free to listen to, talk to and sign up for. Premium is a monthly subscription that gives you many more credits for making songs and supports the station; "Upgrade to Premium" in the Account panel shows the price, and "Manage subscription" changes or cancels it.
+PLAiR is free to listen to, talk to and sign up for. Premium is a monthly subscription that gives you many more credits for making songs, more AI time each day and month, and supports the station; "Upgrade to Premium" in the Account panel shows the price, and "Manage subscription" changes or cancels it.

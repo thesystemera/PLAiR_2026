@@ -16,7 +16,7 @@ from services.task_utils import spawn
 from database import User
 from config import settings
 from service_registry import services
-from routers.deps import get_session_info, get_current_user, RateLimit, read_upload_limited
+from routers.deps import get_session_info, get_current_user, AIAllowance, read_upload_limited
 
 router = APIRouter()
 UPLOAD_JOBS: dict = {}
@@ -51,7 +51,7 @@ async def upload_user_music(
         upload_id: Optional[str] = Form(None, max_length=64),
         current_user: User = Depends(get_current_user),
         session: dict = Depends(get_session_info),
-        _rate_limit=Depends(RateLimit("ai_upload"))
+        _allowance=Depends(AIAllowance())
 ):
 
     if not current_user:
@@ -438,7 +438,7 @@ async def delete_track_artwork(
 async def generate_track_artwork(
         track_id: str,
         current_user: User = Depends(get_current_user),
-        _rate_limit=Depends(RateLimit("ai_upload"))
+        _allowance=Depends(AIAllowance())
 ):
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")

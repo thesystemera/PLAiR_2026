@@ -26,10 +26,6 @@ class RateLimitService(SingletonService):
 
     async def initialize(self):
         self._load_usage()
-        log_service.system(
-            f"RateLimitService initialized (premium {settings.PREMIUM_MONTHLY_GENERATIONS}/month, "
-            f"free {settings.FREE_GENERATION_LIMIT}/{settings.FREE_GENERATION_PERIOD})"
-        )
 
     def _get_user_key(self, user_id: Optional[int], session_id: str) -> str:
         return f"user_{user_id}" if user_id else f"session_{session_id}"
@@ -91,11 +87,10 @@ class RateLimitService(SingletonService):
             for k, _ in oldest[:len(self._buckets) - MAX_TRACKED_BUCKETS]:
                 del self._buckets[k]
 
-    def _limit_for(self, user) -> Tuple[int, str]:
-        if self._get_user_tier(user) == "premium":
-            return settings.PREMIUM_MONTHLY_GENERATIONS, "month"
-        period = settings.FREE_GENERATION_PERIOD if settings.FREE_GENERATION_PERIOD in ("day", "month") else "day"
-        return settings.FREE_GENERATION_LIMIT, period
+    @staticmethod
+    def _limit_for(user) -> Tuple[int, str]:
+        from services import listener_limits
+        return listener_limits.song_quota(user)
 
     def _load_usage(self):
         if self._usage_loaded:

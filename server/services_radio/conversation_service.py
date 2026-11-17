@@ -15,7 +15,7 @@ from services import log_service
 from services_radio.tts_stream_planner import spoken_text
 from services_radio import talk_clock
 from services_radio.filler_scripts import IMPULSE, conversation_context, plain_talk
-from services import usage_tracking
+from services import listener_limits, usage_tracking
 from services.task_utils import spawn
 from config.settings import settings
 
@@ -668,6 +668,15 @@ class ConversationService:
 
             if self.dj_prompt_service is None:
                 raise RuntimeError("dj_prompt_service not initialized")
+
+            allowance = await listener_limits.allowance_for_session(session_id, user_id)
+            if allowance is not None and allowance.out:
+                line = listener_limits.host_line(allowance)
+                log_service.listener(f"{log_service.who(session_id)}: AI allowance used up "
+                                     f"({allowance.tier}, {allowance.window}), the hosts say so instead of a turn")
+                await self._speak_dj_text(line, user_id, session_id, is_guest)
+                await self._publish_turn(transcription, line, [], user_id, session_id, is_guest)
+                return
 
             await self._process_tool_turn(transcription, user_id, session_id, is_guest, session_dict, origin)
 

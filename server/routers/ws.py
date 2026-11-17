@@ -7,12 +7,12 @@ from typing import Dict, Optional
 
 from services import log_service
 from services import auth_service
-from security_middleware import is_valid_guest_id
+from security_middleware import client_ip_from_scope, is_valid_guest_id
 from database import AsyncSessionLocal
 from services.device_settings_service import device_kinds, guest_settings
 from service_registry import services
 from services.task_utils import spawn
-from services import usage_tracking
+from services import listener_limits, usage_tracking
 from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver
 from config.settings import settings
@@ -288,6 +288,8 @@ async def websocket_endpoint(
 
     session_callback = None
     inflight_commands = set()
+    limit_identity = usage_tracking.subject_for_session(session_id, session_user_id).key
+    limit_ip = client_ip_from_scope(websocket.scope)
 
     try:
         await websocket.send_json({"type": "session_info", "data": {
@@ -344,6 +346,8 @@ async def websocket_endpoint(
 
         while True:
             raw_data = await websocket.receive_text()
+            if listener_limits.allow_request(limit_identity, limit_ip, 1.0):
+                continue
 
             services.websocket_service.update_activity(session_id, session_device_id)  # type: ignore
 

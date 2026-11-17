@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from typing import Optional
 from urllib.parse import parse_qs
 
 from starlette.middleware.gzip import GZipMiddleware
@@ -12,6 +13,23 @@ MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 
 def is_valid_guest_id(guest_id: str) -> bool:
     return bool(GUEST_ID_PATTERN.match(guest_id))
+
+
+def resolve_client_ip(peer: Optional[str], real_ip: str, forwarded_for: str) -> Optional[str]:
+    from config import settings
+    if peer not in settings.TRUSTED_PROXY_IPS:
+        return peer
+    if real_ip.strip():
+        return real_ip.strip()
+    return forwarded_for.split(",")[-1].strip() or None
+
+
+def client_ip_from_scope(scope) -> Optional[str]:
+    headers = {name: value.decode("latin-1") for name, value in scope.get("headers", [])
+               if name in (b"x-real-ip", b"x-forwarded-for")}
+    client = scope.get("client")
+    return resolve_client_ip(client[0] if client else None, headers.get(b"x-real-ip", ""),
+                             headers.get(b"x-forwarded-for", ""))
 
 
 SENSITIVE_QUERY_PATTERN = re.compile(r"((?:token|access_token|apikey|api_key|key)=)[^&\s\"']+", re.IGNORECASE)

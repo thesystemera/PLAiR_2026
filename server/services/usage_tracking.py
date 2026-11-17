@@ -50,8 +50,43 @@ class UsageSubject:
 
 UNATTRIBUTED = UsageSubject(KIND_SYSTEM, None, "unattributed")
 
+@dataclass(frozen=True)
+class ClientContext:
+    ip: Optional[str]
+    asked: bool
+
+
 _subject: ContextVar[Optional[UsageSubject]] = ContextVar("usage_subject", default=None)
 _feature: ContextVar[Optional[str]] = ContextVar("usage_feature", default=None)
+_client: ContextVar[Optional[ClientContext]] = ContextVar("usage_client", default=None)
+spend_hook: Optional[Callable[[UsageSubject, Optional[str], float, float], None]] = None
+
+
+def bind_client(ip: Optional[str], asked: bool):
+    return _client.set(ClientContext(ip, asked))
+
+
+def unbind_client(token) -> None:
+    try:
+        _client.reset(token)
+    except (ValueError, RuntimeError):
+        pass
+
+
+def client_ip() -> Optional[str]:
+    client = _client.get()
+    return client.ip if client else None
+
+
+@contextmanager
+def asked():
+    """Count the AI work inside toward the listener's allowance (listener_limits): an HTTP request already is; a
+    WebSocket or background path wraps what the listener's own action caused, such as a new guest's welcome."""
+    token = _client.set(ClientContext(client_ip(), True))
+    try:
+        yield
+    finally:
+        unbind_client(token)
 
 
 def _is_guest_id(value: str) -> bool:
@@ -424,9 +459,12 @@ observed_suno_credits: deque[float] = deque(maxlen=50)
 
 
 def _emit(category: str, feature: str, subject: Optional[UsageSubject] = None, **fields) -> None:
+    subject = subject or current_subject()
+    client = _client.get()
+    if client is not None and client.asked and spend_hook is not None and category != CATEGORY_SUNO:
+        spend_hook(subject, client.ip, float(fields.get("cost_usd") or 0.0), float(fields.get("gpu_seconds") or 0.0))
     if not settings.USAGE_TRACKING_ENABLED:
         return
-    subject = subject or current_subject()
     recorder.add(UsageEventData(
         created_at=datetime.now(timezone.utc),
         subject_key=subject.key,

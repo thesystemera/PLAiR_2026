@@ -7,7 +7,7 @@ if platform.system() == "Windows":
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from security_middleware import RequestGuardMiddleware, MediaAwareGZipMiddleware, install_log_redaction
-from usage_middleware import UsageAttributionMiddleware
+from listener_middleware import ListenerMiddleware
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -33,6 +33,7 @@ from services.suno_enriched_metadata_service import EnrichedMetadataService
 from services.whisper_dual_service import whisper_dual_service
 from services.user_data_cache_service import user_data_cache
 from services.rate_limit_service import rate_limit_service
+from services import listener_limits
 from services.analytics_service import analytics_service
 from services.youtube_clip_service import get_youtube_clip_service
 
@@ -138,7 +139,7 @@ async def lifespan(_app: FastAPI):
     log_service.success("✓ OpenGraph service initialized")
 
     await rate_limit_service.initialize()
-    log_service.success("✓ Rate limiting initialized")
+    await listener_limits.start()
 
     services.transcoding_service = transcoding_service = AudioTranscodingService()
     await transcoding_service.initialize()
@@ -658,6 +659,7 @@ async def lifespan(_app: FastAPI):
     await close_http_client()
     close_all_pools()
 
+    await listener_limits.stop()
     await usage_tracking.stop()
 
     await engine.dispose()
@@ -683,7 +685,7 @@ app.add_middleware(
 )
 
 app.add_middleware(MediaAwareGZipMiddleware, minimum_size=1000, compresslevel=6)
-app.add_middleware(UsageAttributionMiddleware)
+app.add_middleware(ListenerMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 
 app.include_router(stripe_router, prefix="/api/stripe", tags=["stripe"])

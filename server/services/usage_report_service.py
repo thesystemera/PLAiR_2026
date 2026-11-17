@@ -185,6 +185,22 @@ async def _daily_costs(conn, start_day: date, end_day: date, subject_key: Option
     return {row[0]: float(row[1] or 0.0) + electricity_usd(float(row[2] or 0.0)) for row in rows}
 
 
+CHAT_TURN_FEATURE = "ContextRouterService.determine_route"
+CHAT_FEATURES = (CHAT_TURN_FEATURE, "DJPromptService.gpt_dj_interactive_tools")
+
+
+async def chat_cost(conn, days: int = 30) -> Optional[float]:
+    """What one chat with the hosts costs on average: the Producer (once per turn) and the DJ's rounds."""
+    daily = AIUsageDaily.__table__
+    since = utc_now().date() - timedelta(days=days)
+    rows = (await conn.execute(
+        select(daily.c.feature, func.sum(daily.c.cost_usd), func.sum(daily.c.calls))
+        .where(and_(daily.c.day >= since, daily.c.feature.in_(CHAT_FEATURES))).group_by(daily.c.feature)
+    )).all()
+    turns = sum(int(row[2] or 0) for row in rows if row[0] == CHAT_TURN_FEATURE)
+    return round(sum(float(row[1] or 0.0) for row in rows) / turns, 5) if turns else None
+
+
 async def subscription_counts(conn) -> dict[str, int]:
     users = User.__table__
     active = (await conn.execute(

@@ -57,6 +57,18 @@ async def get_listener_guest(user: Optional[User] = None, **_) -> str:
 
 
 @node_registry.register(
+    "listener_allowance",
+    "When the listener has used most of their AI time with the hosts: how much, when it tops up, how to mention it",
+    cost="free",
+    visible=False
+)
+async def get_listener_allowance(user: Optional[User] = None, session_id: Optional[str] = None, **_) -> str:
+    from services import listener_limits
+    allowance = await listener_limits.allowance_for_session(session_id or "", int(user.id) if user else None)
+    return listener_limits.host_note(allowance) if allowance is not None else ""
+
+
+@node_registry.register(
     "user_local_time",
     "Current time in user's timezone (HH:MM AM/PM)",
     cost="low"

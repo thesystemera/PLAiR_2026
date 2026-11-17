@@ -16,6 +16,7 @@ class API {
     this.token = null
     this.authRejectedListeners = new Set()
     this.connectivityListeners = new Set()
+    this.limitListeners = new Set()
     this.syncingOfflineWrites = null
     this.lastServerBytesAt = 0
   }
@@ -31,6 +32,22 @@ class API {
         listener(event)
       } catch (err) {
         logger.error('[API] Connectivity listener failed:', err)
+      }
+    })
+  }
+
+  onLimit(listener) {
+    this.limitListeners.add(listener)
+    return () => this.limitListeners.delete(listener)
+  }
+
+  _noteRefusal(kind, message) {
+    if (kind !== 'requests') return
+    this.limitListeners.forEach(listener => {
+      try {
+        listener({ state: 'requests', message })
+      } catch (err) {
+        logger.error('[API] Limit listener failed:', err)
       }
     })
   }
@@ -136,6 +153,11 @@ class API {
     }
     if (res.status === 502 || res.status === 503 || res.status === 504) {
       this.reportServerTrouble(`http_${res.status}`)
+    }
+    if (res.status === 429) {
+      res.clone().json()
+        .then(data => this._noteRefusal(res.headers.get('X-Limit'), data?.detail))
+        .catch(() => {})
     }
     if (res.status === 401) {
       const auth = options.headers?.Authorization
@@ -282,6 +304,7 @@ class API {
           data = {}
         }
         if (status === 502 || status === 503 || status === 504) this.reportServerTrouble(`http_${status}`)
+        if (status === 429) this._noteRefusal(xhr.getResponseHeader('X-Limit'), data.detail)
         if (status === 401 && headers.Authorization === `Bearer ${this.token}` && this.token) {
           this._notifyAuthRejected(this.token, url)
         }

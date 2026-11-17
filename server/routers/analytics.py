@@ -7,7 +7,7 @@ from typing import Literal, Optional
 from services.analytics_service import analytics_service
 from database import User
 from service_registry import services
-from routers.deps import RateLimit, get_session_info
+from routers.deps import get_current_user, get_session_info
 from security_middleware import is_valid_guest_id
 from services.rate_limit_service import rate_limit_service
 from config import settings
@@ -80,7 +80,7 @@ class ShoutoutPlayRequest(BaseModel):
 @router.post("/api/analytics/shoutout/play")
 async def log_shoutout_play(
         request: ShoutoutPlayRequest,
-        current_user: Optional[User] = Depends(RateLimit("shoutout_play")),
+        current_user: Optional[User] = Depends(get_current_user),
         session_info: dict = Depends(get_session_info)
 ):
     session_id = session_info["session_id"]

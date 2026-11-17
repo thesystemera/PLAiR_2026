@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from services import log_service
 from services.api_utils import without_lyrics
 from database import User
 from service_registry import services
-from routers.deps import get_session_info, get_current_user, RateLimit, AI_SEARCH
+from routers.deps import get_session_info, get_current_user, AIAllowance
+from services.listener_limits import Allowance
 from routers.schemas import SearchRequest
 
 router = APIRouter()
@@ -12,16 +13,13 @@ router = APIRouter()
 @router.post("/api/search/semantic")
 async def semantic_search(
         request: SearchRequest,
-        http_request: Request,
         current_user: User = Depends(get_current_user),
         session: dict = Depends(get_session_info),
-        _rate_limit=Depends(RateLimit("search"))
+        allowance: Allowance = Depends(AIAllowance(refuse=False))
 ):
     session_id = session["session_id"]
     user_id = int(current_user.id) if current_user else None  # type: ignore
-    use_ai_analysis = bool(request.use_ai_analysis)
-    if use_ai_analysis:
-        AI_SEARCH.charge(http_request, current_user)
+    use_ai_analysis = bool(request.use_ai_analysis) and not allowance.out
 
     from services.listener_filters import excluded_ids
     banned_ids = await excluded_ids(user_id, session_id)
