@@ -241,7 +241,7 @@ function VirtualScroller({
     }
     motion.top = scrollTop
     motion.time = now
-    atEndRef.current = scrollTop + viewHeight >= container.scrollHeight - END_SLACK_PX
+    atEndRef.current = scrollTop + viewHeight >= motion.listTop + current.total - END_SLACK_PX
 
     const relativeTop = scrollTop - motion.listTop
     const firstRow = current.rowAt(relativeTop)
@@ -275,7 +275,7 @@ function VirtualScroller({
     if (!previous || previous.items !== items || previous.windowStart !== windowStart) {
       itemsVersionRef.current++
     }
-    latestRef.current = { items, windowStart, layout, perRow, onRangeChange, getPrefetchId, recycle: recycle && !measured }
+    latestRef.current = { items, windowStart, layout, perRow, onRangeChange, getPrefetchId, recycle: recycle && !measured, stickToEnd: measured && stickToEnd }
     if (!previous || previous.layout.rowHeight !== layout.rowHeight || previous.perRow !== perRow) {
       measure()
     }
@@ -379,7 +379,9 @@ function VirtualScroller({
     }
 
     const resizeObserver = new ResizeObserver(() => {
+      const wasAtEnd = atEndRef.current
       measure()
+      if (wasAtEnd && latestRef.current?.stickToEnd) pinToEnd(container)
       compute(!motion.scrolling, false, true)
     })
     resizeObserver.observe(container)
