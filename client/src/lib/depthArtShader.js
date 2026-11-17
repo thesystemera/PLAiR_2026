@@ -382,13 +382,12 @@ const SKYLIGHT = `
       if (source.w <= 0.001) continue;
       SHADE vec2 toLight = (source.xy - screenUV) * vec2(u_aspect, 1.0);
       SHADE float dist2 = dot(toLight, toLight);
-      SHADE vec2 dir = dist2 > 1e-8 ? toLight * inversesqrt(dist2) : vec2(0.0);
       SHADE vec3 L = vec3(toLight, ${G(LIGHT.HEIGHT)}) * inversesqrt(dist2 + ${G(LIGHT.HEIGHT * LIGHT.HEIGHT)});
       SHADE vec3 light = u_light_colors[i] * (source.w * ${G(LIGHT.STRENGTH)} / (1.0 + dist2 * ${G(LIGHT.FALLOFF)}));
       relief += light * (dot(n, L) - L.z);
       SHADE vec3 H = vec3(L.xy, L.z + 1.0) * inversesqrt(2.0 + 2.0 * L.z);
       glint += light * max(shine(max(dot(n, H), 0.0)) - shine(H.z), 0.0);
-      rim += light * max(dot(facing, dir), 0.0);
+      rim += light * max(dot(facing, L.xy), 0.0);
     }
 
     SHADE float energy = u_light * (1.0 + u_pulse * ${G(LIGHT.PULSE)} + u_kick * ${G(LIGHT.KICK)});
