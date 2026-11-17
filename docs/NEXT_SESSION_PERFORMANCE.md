@@ -456,6 +456,13 @@ scroll back and all of it was gone"). What it is: CLAUDE.md section 14 (`recycle
   5.7 GB and had 1.8 GB available. Shipped as a budget in bytes, `IDLE_TEXTURE_BYTES` 64 MB (about 27 covers at
   512, 12 at 768), most recently left the screen first, and at most 8 idle covers that are still loading (so a
   fling does not upload covers nobody will see). `__plairArt.set({ idleMB })` changes it live.
+- **The fade stays (owner, the same evening).** The "fully there" numbers above were taken with covers drawn
+  off screen appearing at once (3ee5d0a). The owner saw that live and rejected it ("you killed the fade effect,
+  it looks yuck"): covers fading in while the list scrolls is the look, and what bothered him on the way back
+  was blank cards (the cache), not fades. That rule is removed: every cover fades in from the moment it is
+  drawn. So judge the way back by "cover not shown" (blank), not by "fully there". He also asked why a fast
+  scroll showed nothing, then the placeholder, then the cover: the placeholder faded in after a 90 ms delay
+  over 500 ms. It is now there from the card's first frame.
 - **Not changed: the first way down** (27-44% there in every build). Those covers have never been loaded:
   fetch, decode in the worker, upload (2 a frame at about 17 frames a second), draw.
 - **Swapping builds on the live site**: emptying `client/dist` from a script was refused by the safety check

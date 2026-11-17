@@ -32,10 +32,10 @@ anything else is carried over as written.
   1.5 s; the builds before and after the 17 Nov UI commits measure the same. What it is made of, what was tried
   and reverted, and the three larger options (recycle the virtual list's rows, hold covers still during a fast
   scroll, a shorter colour fade): `docs/NEXT_SESSION_PERFORMANCE.md` section 3j. Owner to choose.
-  **17 Nov, later:** the Catalog reuses its cards (`recycle`) and covers drawn off screen are there when they
-  scroll in; covers that left the screen stay on the GPU up to 64 MB (it was 8 covers). Measured on the phone:
-  scrolling back after a long scroll 69-100% of the covers are there (17-22% before), on the short test 100%
-  (47-69% before). The frame rate did not move (17.7 fps with reuse, 18.7 without): the compositor and GPU
+  **17 Nov, later:** the Catalog reuses its cards (`recycle`) and covers that left the screen stay on the GPU
+  up to 64 MB (it was 8 covers), so scrolling back no longer shows blank cards (about a fifth were blank or
+  missing on the phone before). The placeholder is there from a card's first frame and every cover fades in
+  over it (covers drawn off screen appearing at once was tried and rejected by the owner the same evening). The frame rate did not move (17.7 fps with reuse, 18.7 without): the compositor and GPU
   process are the limit (section 3k). Reuse broke the list for about an hour on 17 Nov (the Catalog measured
   its row height by DOM order); fixed, and `perf/coverwatch.mjs` now reports cards that are not there.
   **Open:** the first scroll through covers never loaded (a third there) and the frame rate itself.

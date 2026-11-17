@@ -80,8 +80,8 @@ const DepthArt = memo(function DepthArt({
       packUrl: key,
       intensity,
       scrollTilt,
-      onDrawn: (onScreen) => {
-        if (coveredRef.current || onScreen === false) setDrawnHiddenFor(identityRef.current)
+      onDrawn: () => {
+        if (coveredRef.current) setDrawnHiddenFor(identityRef.current)
         setDrawnFor(identityRef.current)
         callbacksRef.current.onLoad?.({ currentTarget: canvasRef.current, target: canvasRef.current })
       },
@@ -141,7 +141,7 @@ function usePackSize(intensity) {
 
 const TrackPlaceholder = memo(function TrackPlaceholder({ trackId }) {
   return (
-    <div className={`ui-placeholder absolute inset-0 flex items-center justify-center bg-gradient-to-br ${getFallbackGradientClass(trackId)}`} style={PLACEHOLDER}>
+    <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br ${getFallbackGradientClass(trackId)}`} style={PLACEHOLDER}>
       <Music className="text-white opacity-80" style={PLACEHOLDER_NOTE} strokeWidth={1.5} aria-hidden="true" />
     </div>
   )

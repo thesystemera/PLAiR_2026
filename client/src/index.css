@@ -115,7 +115,6 @@ textarea,
   --dur-enter: 260ms;
   --dur-art: 280ms;
   --dur-arrive: 500ms;
-  --arrive-delay: 90ms;
   --dur-pop: 340ms;
   --dur-theme: 700ms;
   --dur-breathe: 2400ms;
@@ -245,15 +244,6 @@ textarea,
   .ui-arrive[data-arrived="false"] {
     opacity: 0;
     transition: none;
-  }
-
-  .ui-placeholder {
-    animation: ui-arrive-in var(--dur-arrive) var(--ease-standard) var(--arrive-delay) backwards;
-  }
-
-  [data-arrive="arrived"] .ui-placeholder,
-  [data-arrive="instant"] .ui-placeholder {
-    animation-play-state: paused;
   }
 
   [data-arrive="instant"] .ui-arrive {
@@ -530,12 +520,6 @@ textarea,
   }
 }
 
-@keyframes ui-arrive-in {
-  from {
-    opacity: 0;
-  }
-}
-
 @keyframes ui-task-spin {
   from {
     rotate: -90deg;
@@ -579,8 +563,7 @@ textarea,
   .ui-badge-in,
   .ui-eq,
   .ui-eq > span,
-  .ui-breathe,
-  .ui-placeholder {
+  .ui-breathe {
     animation: none !important;
   }
 
