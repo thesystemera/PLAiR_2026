@@ -8,7 +8,9 @@
 // the display's frames per second; CATS adds trace categories (e.g. toplevel,gpu.service). PAINTS=1 sums the page's
 // painted area per second by element (PAINTS=dump also prints a few raw Paint events). INVAL=1 counts paint
 // invalidations by reason and element (adds the invalidationTracking category itself). COUNT='<regex>' counts trace
-// events by name per second (DUMPARGS='<name part>' prints the args of the first two).
+// events by name per second (DUMPARGS='<name part>' prints the args of the first two). LONGTASKS=<ms> lists the
+// page's longest tasks over that length with what they spent their time on. WAITS=1 lists where the main thread
+// waited on the GPU process (CommandBufferProxyImpl::WaitForToken over 5 ms) by the events around each wait.
 import { page, sleep, openPanel } from './cdp.mjs'
 
 const panel = process.argv[2] || 'Catalog'
@@ -157,6 +159,31 @@ if (process.env.COUNT) {
   for (const e of events) if (re.test(e.name) && e.ts >= from.ts && e.ts <= to.ts) counts.set(e.name, (counts.get(e.name) || 0) + 1)
   for (const [name, n] of [...counts].sort((a, b) => b[1] - a[1])) console.log(`${(n / seconds).toFixed(1).padStart(8)}/s  ${name.slice(0, 120)}`)
   if (process.env.DUMPARGS) for (const e of events.filter(e => e.name.includes(process.env.DUMPARGS)).slice(0, 2)) console.log(JSON.stringify(e.args).slice(0, 1500))
+}
+if (process.env.LONGTASKS) {
+  const tops = main.filter(e => (e.name === 'ThreadControllerImpl::RunTask' || e.name === 'RunTask') && (e.dur || 0) > Number(process.env.LONGTASKS) * 1000)
+  const seen = new Set()
+  for (const task of tops.sort((a, b) => b.dur - a.dur).slice(0, 8)) {
+    if ([...seen].some(s => task.ts >= s.ts && task.ts < s.ts + s.dur)) continue
+    seen.add(task)
+    const inside = main.filter(e => e !== task && e.ts >= task.ts && e.ts + (e.dur || 0) <= task.ts + task.dur)
+    const { self } = selfTimes(inside)
+    const parts = [...self].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([name, us]) => `${name} ${(us / 1000).toFixed(0)}`).join(', ')
+    const fn = inside.filter(e => e.name === 'FunctionCall').map(e => e.args?.data?.functionName || '?').slice(0, 3).join('/')
+    console.log(`long task ${(task.dur / 1000).toFixed(0)} ms at +${((task.ts - from.ts) / 1e6).toFixed(2)} s: ${parts}${fn ? ' | js ' + fn : ''}`)
+  }
+}
+if (process.env.WAITS) {
+  const waits = main.filter(e => e.name === 'CommandBufferProxyImpl::WaitForToken' && (e.dur || 0) > 5000)
+  const byChain = new Map()
+  for (const w of waits) {
+    const parents = main.filter(e => e !== w && e.ts <= w.ts && e.ts + (e.dur || 0) >= w.ts + w.dur).sort((a, b) => a.ts - b.ts || b.dur - a.dur)
+    const chain = parents.slice(-5).map(e => e.name === 'FunctionCall' ? `fn:${e.args?.data?.functionName || '?'}@${e.args?.data?.columnNumber || ''}` : e.name).join(' > ')
+    const entry = byChain.get(chain) || { n: 0, ms: 0 }
+    entry.n++; entry.ms += w.dur / 1000
+    byChain.set(chain, entry)
+  }
+  for (const [chain, e] of [...byChain].sort((a, b) => b[1].ms - a[1].ms).slice(0, 8)) console.log(`waits ${e.n}x ${e.ms.toFixed(0)} ms inside: ${chain}`)
 }
 const forced = main.filter(e => (e.name === 'Layout' || e.name === 'UpdateLayoutTree') && (e.args?.beginData?.stackTrace || e.args?.stackTrace))
 const sum = (name, list) => list.filter(e => e.name === name).reduce((a, e) => a + (e.dur || 0), 0) / 1000

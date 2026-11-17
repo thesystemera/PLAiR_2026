@@ -324,5 +324,7 @@ function coarseSplitStages() {
     'C bare': { art: coarse, edits: [noMarch], light: { off: true } },
     'C bare 1 read': { art: coarse, edits: [noMarch, composeOneRead], light: { off: true } },
     'flat covers': { art: { lit: false } },
+    'C -extra read': { art: coarse, edits: [['vec4 extra = texture(u_coarse_extra, at);', 'vec4 extra = vec4(relief.rgb * 0.25, 1.0);']] },
+    'C -extra -relief reads': { art: coarse, edits: [['vec4 relief = texture(u_coarse_relief, at);', 'vec4 relief = vec4(texture(u_coarse_hit, at).xyx * 4.0, 0.0);'], ['vec4 extra = texture(u_coarse_extra, at);', 'vec4 extra = vec4(relief.rgb * 0.25, 1.0);']] },
   }
 }
