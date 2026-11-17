@@ -126,7 +126,7 @@ function VirtualScroller({
   const [heights, setHeights] = useState(() => new Map())
   const [slotState, setSlotState] = useState(NO_SLOTS)
   const heightsRef = useRef(heights)
-  const atEndRef = useRef(false)
+  const atEndRef = useRef(stickToEnd)
   const observedRef = useRef(null)
 
   const perRow = Math.max(1, itemsPerRow)
