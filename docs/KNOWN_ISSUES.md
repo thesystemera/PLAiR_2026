@@ -40,6 +40,24 @@ anything else is carried over as written.
   its row height by DOM order); fixed, and `perf/coverwatch.mjs` now reports cards that are not there.
   **Open:** the first scroll through covers never loaded (a third there) and the frame rate itself.
 
+- **Cover lighting read as too strong and the normals as wrong (owner, 17 Nov).** Checked on 40 covers: the
+  normals are the right way round (normal x and y run against the depth rising, correlation -0.31 and -0.29;
+  the light positions, the cover's place on screen and the normal's y are all measured downward, so nearer
+  things bulge toward the viewer and are lit on the side facing the light). What made it look wrong was the
+  level. The light probe finds up to four lights and each could reach an intensity of 2.5, so one bright area
+  of the background counted as four lights (the phone reported 2.03, 1.71, 1.73 and 1.99 in one corner). With
+  those, relief changed a cover's brightness by 73% for the top tenth of its pixels and 187% for the top 1%,
+  all the time, and by 187% and 478% on a kick: clipped to white and black. Now the lights share one total
+  (`MAX_TOTAL_INTENSITY` 2.5 in `lightProbe.js`) and the kick flash is half (`LIGHT.KICK` 0.6 in
+  `depthArtShader.js`): 25% and 63% steady, 48% and 122% on a kick. `LIGHT.STRENGTH` (0.6) is the one knob for
+  all of it. **Open, owner to choose:** (1) the baked normals. They are made mostly from the picture's own
+  edges (the deepMirror emboss), and gentle depth ramps such as floors, walls and table tops come out tilted
+  (the median pixel 28 degrees, half the pixels over 30, a fifth over 58), so whole areas brighten and darken
+  with the light. A re-bake with flatter ramps and less emboss is a CPU job over 2,265 covers and their packs.
+  (2) The frame rate: lit covers are redrawn every frame of a scroll because the scroll tilts them (16 against
+  25 fps on the phone, lit against flat); holding the tilt during a fast scroll would leave only the relight
+  pass (`docs/NEXT_SESSION_PERFORMANCE.md` section 3j).
+
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
   background scene's own share was about 85 ms and is now about 5 ms in the rush (CLAUDE.md section 11, "What the

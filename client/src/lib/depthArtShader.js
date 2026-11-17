@@ -30,7 +30,7 @@ import { logger } from './logger'
 //   Foreground edges soft? → Raise FG_DEPTH_SOFT/HARD (less aggressive detection)
 //   Fill looks wrong?      → Increase FILL_SPREAD_MULT, increase FILL_DEPTH_POWER
 //   Effect too subtle?     → Raise intensity prop in NowPlaying.jsx (currently 0.05)
-//   Lighting too strong?   → Lower LIGHT.RELIEF / LIGHT.RIM
+//   Lighting too strong?   → Lower LIGHT.STRENGTH (all of it) or LIGHT.KICK (the flash on kicks)
 // ═══════════════════════════════════════════════════════════════════════════════
 export const POM = {
 
@@ -88,7 +88,7 @@ const LIGHT = {
 
   // --- Music ---
   PULSE:            0.35,   // Extra light at the top of the beat's breathing.
-  KICK:             1.2,    // Extra rim + relief on a kick flash.
+  KICK:             0.6,    // Extra rim + relief on a kick flash.
 }
 
 const G = v => String(v).includes('.') ? String(v) : String(v) + '.0'

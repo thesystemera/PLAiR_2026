@@ -8,6 +8,7 @@ const KICK_DECAY_SECONDS = 0.18
 const MIN_LIGHT_SPACING = 0.22
 const CONTRAST_FLOOR = 0.03
 const MAX_INTENSITY = 2.5
+const MAX_TOTAL_INTENSITY = 2.5
 const CONSUMER_TIMEOUT_MS = 250
 const STALE_PROBE_MS = 1000
 const MOTION_QUIET_MS = 800
@@ -129,6 +130,12 @@ function findLightSources() {
     light.g = grid[cell * 3 + 1] / peak
     light.b = grid[cell * 3 + 2] / peak
     light.intensity = Math.min(MAX_INTENSITY, contrast)
+  }
+  let total = 0
+  for (let k = 0; k < count; k++) total += found[k].intensity
+  if (total > MAX_TOTAL_INTENSITY) {
+    const share = MAX_TOTAL_INTENSITY / total
+    for (let k = 0; k < count; k++) found[k].intensity *= share
   }
   return count
 }
