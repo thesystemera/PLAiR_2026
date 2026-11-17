@@ -422,8 +422,10 @@ export const TRANSITIONS = {
   colorShift: { duration: DURATION.theme * 1000 }
 }
 
-export const EDGE_FADE_MASK = (fadeTop, fadeBottom, fadeSide) =>
-  `linear-gradient(0deg, transparent, black ${fadeBottom}, black calc(100% - ${fadeTop}), transparent), linear-gradient(90deg, transparent, black ${fadeSide}, black calc(100% - ${fadeSide}), transparent)`
+export const EDGE_FADE_MASK = (fadeTop, fadeBottom, fadeSide, bottomInset = 0) =>
+  `${bottomInset > 0
+    ? `linear-gradient(0deg, transparent ${bottomInset}px, black calc(${bottomInset}px + ${fadeBottom}), black calc(100% - ${fadeTop}), transparent)`
+    : `linear-gradient(0deg, transparent, black ${fadeBottom}, black calc(100% - ${fadeTop}), transparent)`}, linear-gradient(90deg, transparent, black ${fadeSide}, black calc(100% - ${fadeSide}), transparent)`
 
 export const VERTICAL_EDGE_FADE_FILL = (color, fade) =>
   `linear-gradient(to bottom, transparent 0%, ${color} ${fade}, ${color} calc(100% - ${fade}), transparent 100%)`

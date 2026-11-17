@@ -69,6 +69,23 @@ function cubicBezier(x1, y1, x2, y2) {
 
 export const trackFadeEase = cubicBezier(...EASE.emphasized)
 
+const standardEase = cubicBezier(0.42, 0, 0.58, 1)
+
+export function createFade(value = 0) {
+  return { value, from: value, to: value, at: 0 }
+}
+
+export function stepFade(fade, target, now, seconds = DURATION.fade) {
+  if (target !== fade.to) {
+    fade.from = fade.value
+    fade.to = target
+    fade.at = now
+  }
+  const t = (now - fade.at) / (seconds * 1000)
+  fade.value = t >= 1 ? fade.to : fade.from + (fade.to - fade.from) * standardEase(t)
+  return fade.value
+}
+
 const STAGGER = {
   step: 0.035,
   max: 0.3,

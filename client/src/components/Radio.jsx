@@ -20,11 +20,12 @@ import { registerKeyboardRecordingCallback } from './KeyboardControls'
 import { PanelHeader, TextRadioIcon, PANEL_CONFIG, PANEL_IDS } from './Panel'
 import { Scroller } from './Scroller'
 import { FadeSwap } from './Motion'
-import { PRESETS } from '../lib/motion'
+import { MOTION, PRESETS } from '../lib/motion'
 import { useDynamicTheme } from '../contexts/DynamicThemeContext'
 import { PANEL } from '../lib/themeManager'
 import { insetBottom, insetBottomAboveTabs } from '../lib/playerInset'
-import { usePlayerInset } from '../hooks/usePlayerInset'
+import { usePlayerInset, useScrollChrome } from '../hooks/usePlayerInset'
+import { liftWithPanel } from '../lib/scrollChrome'
 
 const RADIO_SIDE_WIDTH = 'min(18rem, 40vw)'
 
@@ -100,6 +101,7 @@ export function Radio() {
     anchorInset(node)
   }, [anchorInset])
   const { offset: maskOffset, scale: anchorScale, size: buttonSize } = useRadioAnchor(scrollerRef, anchorRef)
+  const composerLift = useScrollChrome(liftWithPanel)
 
   const { toastError, toastInfo } = useUISelector(state => ({ toastError: state.toastError, toastInfo: state.toastInfo }))
   const errorToast = toastError
@@ -262,13 +264,15 @@ export function Radio() {
         </Scroller>
       </div>
 
-      <AnimatePresence initial={false}>
-        {isTextInput && (
-          <motion.div key="composer" className="w-full max-w-3xl mx-auto" {...PRESETS.fade}>
-            <DJTextComposer onSend={sendTextToDJ} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div ref={composerLift}>
+        <AnimatePresence initial={false}>
+          {isTextInput && (
+            <motion.div key="composer" className="w-full max-w-3xl mx-auto" {...PRESETS.fade}>
+              <DJTextComposer onSend={sendTextToDJ} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {createPortal(
         <div
@@ -286,11 +290,11 @@ export function Radio() {
             zIndex: 50
           }}
         >
-          <div
-            className="transition-opacity duration-fade"
+          <motion.div
+            animate={{ opacity: buttonForegroundOpacity }}
+            transition={MOTION.fade}
             style={{
-              opacity: buttonForegroundOpacity,
-              transform: anchorScale < 1 ? `scale(${anchorScale})` : undefined,
+              scale: anchorScale,
               pointerEvents: buttonForegroundOpacity > 0.9 ? 'auto' : 'none'
             }}
           >
@@ -303,7 +307,7 @@ export function Radio() {
               uiSound={uiSound}
               onRecordingComplete={sendToDJ}
             />
-          </div>
+          </motion.div>
         </div>,
         document.body
       )}

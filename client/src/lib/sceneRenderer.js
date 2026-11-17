@@ -41,7 +41,7 @@ import { lowerBound, numericAscending } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
 import { decodePack } from './packImage'
-import { DURATION, trackFadeEase } from './motion'
+import { DURATION, createFade, stepFade, trackFadeEase } from './motion'
 
 const GLOW_FALLOFF_SCALE = Math.sqrt(6 / Math.LN2)
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
@@ -79,6 +79,8 @@ const OPAQUE_PANEL_OPACITY = 0.9995
 const PANEL_FEATHER = 0.01
 const MIN_PANEL_SIZE = 0.01
 const MIN_PANEL_OPACITY = 0.01
+const PLAYER_PANEL = 5
+const MOBILE_PANELS = 2
 const MAX_PANELS = 7
 const MAX_SPLIT_RECTS = MAX_PANELS * 2
 const SPLIT_GRID = 128
@@ -356,6 +358,8 @@ function createDefaultState() {
     panelOpacities: [],
     radioButtonPos: null,
     radioButton: { opacity: 0, isHovered: false, isPressed: false },
+    chromeReveal: 0,
+    chromeLift: 0,
     radioProgress: null,
     speakerColor: null,
     voiceTarget: 0,
@@ -427,6 +431,7 @@ export class SceneRenderer {
     this.crossfadeColor = new Vector3()
     this.smoothProgress = 0
     this.panelOpacitiesLerp = [0, 0, 0, 0, 0, 0, 0]
+    this.radioFade = createFade(0)
     this.panelRegionVecs = Array.from({ length: 7 }, () => new Vector4())
     this.probeAt = 0
     this.probeParams = {}
@@ -1111,6 +1116,9 @@ export class SceneRenderer {
     const packedOpacities = fgUniforms.u_panel_opacities.value
     const packedIds = fgUniforms.u_panel_ids.value
     const opacityStep = perFrame(0.3)
+    const fadeNow = performance.now()
+    const chrome = 1 - state.chromeReveal
+    const liftFloor = state.chromeLift / Math.max(height, 1)
     let packedCount = 0
 
     for (let i = 0; i < panelCount; i++) {
@@ -1118,8 +1126,14 @@ export class SceneRenderer {
       const current = this.panelRegionVecs[i]
       const targetOpacity = opacities[i] || 0.0
       current.set(region.x, region.y, region.z, region.w)
+      if (i === MOBILE_PANELS && liftFloor > 0 && current.y - current.w * 0.5 < liftFloor) {
+        const top = current.y + current.w * 0.5
+        current.y = (top + liftFloor) * 0.5
+        current.w = Math.max(0, top - liftFloor)
+      }
       this.panelOpacitiesLerp[i] += (targetOpacity - this.panelOpacitiesLerp[i]) * opacityStep
-      if (current.z > 0.01 && this.panelOpacitiesLerp[i] > 0.01) {
+      const shown = i === PLAYER_PANEL ? this.panelOpacitiesLerp[i] * chrome : this.panelOpacitiesLerp[i]
+      if (current.z > 0.01 && shown > 0.01) {
         hasVisiblePanels = true
         const halfWidth = current.z * 0.5
         const halfHeight = current.w * 0.5
@@ -1128,9 +1142,9 @@ export class SceneRenderer {
         maxX = Math.max(maxX, current.x + halfWidth)
         maxY = Math.max(maxY, current.y + halfHeight)
       }
-      if (current.z >= 0.01 && this.panelOpacitiesLerp[i] >= 0.01) {
+      if (current.z >= 0.01 && shown >= 0.01) {
         packedRegions[packedCount].copy(current)
-        packedOpacities[packedCount] = this.panelOpacitiesLerp[i]
+        packedOpacities[packedCount] = shown
         packedIds[packedCount] = i
         packedCount++
       }
@@ -1157,7 +1171,7 @@ export class SceneRenderer {
     }
 
     const radioButton = state.radioButton
-    fgUniforms.u_radio_button_state.value += (radioButton.opacity - fgUniforms.u_radio_button_state.value) * perFrame(0.15)
+    fgUniforms.u_radio_button_state.value = stepFade(this.radioFade, radioButton.opacity, fadeNow)
     if (fgUniforms.u_radio_button_state.value > 0.01) hasVisiblePanels = true
     const buttonStep = perFrame(0.25)
     fgUniforms.u_radio_button_hover.value += ((radioButton.isHovered ? 1.0 : 0.0) - fgUniforms.u_radio_button_hover.value) * buttonStep

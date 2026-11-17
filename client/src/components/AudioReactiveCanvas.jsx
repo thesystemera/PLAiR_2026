@@ -19,6 +19,7 @@ import {drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle} from '
 import {loadLyricFonts} from '../lib/lyricFonts'
 import {usePlaybackActions} from '../contexts/PlaybackContext'
 import {shareVideoRendering} from '../lib/shareVideoJob'
+import {scrollChrome} from '../lib/scrollChrome'
 
 const VOICE_GAIN = 2.2
 const VOICE_STEADY = 0.4
@@ -472,6 +473,8 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
           panelOpacities: state.panelOpacitiesRef?.current || [],
           radioButtonPos: state.radioButtonPosRef?.current || null,
           radioButton: { opacity: radioButton?.opacity || 0, isHovered: !!radioButton?.isHovered, isPressed: !!radioButton?.isPressed },
+          chromeReveal: scrollChrome.reveal(),
+          chromeLift: scrollChrome.sceneLift(),
           radioProgress: progress ? { stateInt: progress.stateInt || 0, currentVisualColor: pickColor(progress.currentVisualColor), onAirColor: pickColor(progress.onAirColor) } : null,
           speakerColor: pickColor(state.speakerColorRef?.current),
           voiceTarget: latest.reduceMotion ? VOICE_STEADY : averageLevel(state.djFftDataRef?.current),

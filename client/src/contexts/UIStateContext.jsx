@@ -45,7 +45,7 @@
  * - publishAuthState() - Authentication state
  * - publishRadioState() - Radio/seed mode state
  * - publishContentUpdate() - Content update counters (triggers data refresh)
- * - reportInterfaceState() - Interface state (fullscreen, scrolling, mobile visibility)
+ * - reportInterfaceState() - Interface state (fullscreen, scrolling, mobile chrome away while scrolling)
  * - showNotice() / hideNotice() - The one notice channel (toasts are passing notices)
  *
  * SUBSCRIBERS (How to read state):
@@ -73,6 +73,7 @@ import { api } from '../lib/api'
 import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 import { shareVideoJob } from '../lib/shareVideoJob'
 import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
+import { scrollChrome } from '../lib/scrollChrome'
 
 const INITIAL_SETTINGS = loadLocalSettings()
 
@@ -776,6 +777,7 @@ export function UIStateProvider({ children }) {
 
   const [interfaceState, setInterfaceState] = useState({
     isScrolling: false,
+    chromeAway: false,
     scrollVelocity: 0,
     scrollPosition: 0,
     isFullscreenVisuals: false,
@@ -787,6 +789,7 @@ export function UIStateProvider({ children }) {
 
   const interfaceRef = useRef({
     isScrolling: false,
+    chromeAway: false,
     scrollVelocity: 0,
     scrollPosition: 0,
     isFullscreenVisuals: false,
@@ -805,6 +808,7 @@ export function UIStateProvider({ children }) {
     }
 
     const merged = interfaceRef.current
+    if ('chromeAway' in updates) scrollChrome.set(merged.chromeAway)
     const isHidden = merged.isFullscreenVisuals || merged.isScrolling || uiState.settingsState.radioInput === 'text'
     const isRadioPanel = merged.currentMobilePanel === 2
     setRadioButtonOpacity(isHidden ? 0 : (isRadioPanel ? 1 : UI_FULLSCREEN.radioGlassOpacity))

@@ -1,8 +1,9 @@
 import { useCallback, useLayoutEffect, useRef } from 'react'
 import { playerInset } from '../lib/playerInset'
+import { scrollChrome } from '../lib/scrollChrome'
 
-export function usePlayerInset(apply) {
-  const stateRef = useRef({ node: null, stop: null, apply })
+function useFollower(apply, sources) {
+  const stateRef = useRef({ node: null, stops: [], apply })
 
   useLayoutEffect(() => {
     const state = stateRef.current
@@ -12,8 +13,19 @@ export function usePlayerInset(apply) {
 
   return useCallback((node) => {
     const state = stateRef.current
-    state.stop?.()
+    for (const stop of state.stops) stop()
     state.node = node
-    state.stop = node ? playerInset.follow(px => state.apply(node, px)) : null
-  }, [])
+    state.stops = node ? sources.map(source => source.follow(() => state.apply(node, playerInset.height()))) : []
+  }, [sources])
+}
+
+const PLAYER = [playerInset]
+const PLAYER_AND_CHROME = [playerInset, scrollChrome]
+
+export function usePlayerInset(apply) {
+  return useFollower(apply, PLAYER)
+}
+
+export function useScrollChrome(apply) {
+  return useFollower(apply, PLAYER_AND_CHROME)
 }

@@ -2,8 +2,9 @@ import {lazy, startTransition, Suspense, useCallback, useEffect, useMemo, useRef
 import {AnimatePresence, motion} from 'framer-motion'
 import {api} from './lib/api'
 import {MODAL_OPEN_PAUSE_MS, pauseSceneRendering} from './lib/renderPause'
-import {insetBottom, insetPaddingBottom} from './lib/playerInset'
-import {usePlayerInset} from './hooks/usePlayerInset'
+import {insetPaddingBottom} from './lib/playerInset'
+import {panelsInset, railPlace, tabBarPlace} from './lib/scrollChrome'
+import {usePlayerInset, useScrollChrome} from './hooks/usePlayerInset'
 import {logger} from './lib/logger'
 import {safeStorage} from './lib/safeStorage'
 import {offlineBackend} from './lib/offlineAPI'
@@ -121,6 +122,22 @@ function TwoWayDots({ side }) {
   )
 }
 
+function MobileChrome({ as: Component = motion.div, hidden = false, nodeRef, style, children, ...props }) {
+  const away = useUISelector(state => state.interfaceState.chromeAway)
+  const visible = !hidden && !away
+  return (
+    <Component
+      {...props}
+      ref={nodeRef}
+      animate={{ opacity: visible ? 1 : 0 }}
+      transition={PANEL_FADE_TRANSITION}
+      style={{ ...style, ...getPanelPointerEvents(visible) }}
+    >
+      {children}
+    </Component>
+  )
+}
+
 function LazyMount({ when, children }) {
   const [hasMounted, setHasMounted] = useState(when)
   if (when && !hasMounted) setHasMounted(true)
@@ -191,7 +208,7 @@ function App() {
   const [panelFits, setPanelFits] = useState(null)
   const panelRowRef = useRef(null)
   const panelRowInset = usePlayerInset(insetPaddingBottom)
-  const mobilePanelsInset = usePlayerInset(insetBottom)
+  const mobilePanelsInset = useScrollChrome(panelsInset)
   const attachPanelRow = useCallback((node) => {
     panelRowRef.current = node
     panelRowInset(node)
@@ -345,6 +362,7 @@ function App() {
 
   const { isMobile, isPhoneLandscape, isCompatible } = useViewport()
   const navIconClass = isPhoneLandscape ? 'w-5 h-5 mb-0.5' : 'w-6 h-6 mb-1'
+  const navPlace = useScrollChrome(isPhoneLandscape ? railPlace : tabBarPlace)
   const userProfilePicture = useProfilePicture(user?.id, !!user?.profile_picture)
 
   const showCompatibilityWarning = !isCompatible && !compatibilityWarningDismissed
@@ -862,7 +880,9 @@ function App() {
                 </motion.div>
               </div>
 
-              <nav
+              <MobileChrome
+                as={motion.nav}
+                nodeRef={navPlace}
                 data-mobile-nav
                 aria-label="Panels"
                 className={isPhoneLandscape ? MOBILE_RAIL_CLASS : MOBILE_NAV_CLASS}
@@ -949,25 +969,21 @@ function App() {
                     </button>
                   )
                 })}
-              </nav>
+              </MobileChrome>
             </motion.div>
           )}
         </AnimatePresence>
 
-        <motion.div
+        <MobileChrome
           data-shader-panel="player"
-          animate={{
-            opacity: (isFullscreenVisuals && !showUIControls) ? 0 : 1
-          }}
-          transition={PANEL_FADE_TRANSITION}
+          hidden={isFullscreenVisuals && !showUIControls}
           className="relative z-20"
-          style={getPanelPointerEvents(!(isFullscreenVisuals && !showUIControls))}
         >
           <Player
             onSeek={handleSeek}
             onArtworkClick={handleToggleFullscreenVisuals}
           />
-        </motion.div>
+        </MobileChrome>
 
         <AnimatePresence>
           {showLogin && (
