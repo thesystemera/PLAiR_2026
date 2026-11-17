@@ -318,6 +318,8 @@ function coarseSplitStages() {
     'C as is': { art: coarse },
     'C no march': { art: coarse, edits: [noMarch] },
     'C no fill': { art: coarse, edits: [noFill] },
+    'C no fill loop': { art: coarse, edits: [['if (trailMask <= 0.0) return pomColor;', 'return pomColor;']] },
+    'C no edge test': { art: coarse, edits: [['if (foregroundness <= 0.0) return pomColor;', 'return pomColor;']] },
     'C lights off': { art: coarse, light: { off: true } },
     'C bare': { art: coarse, edits: [noMarch], light: { off: true } },
     'C bare 1 read': { art: coarse, edits: [noMarch, composeOneRead], light: { off: true } },

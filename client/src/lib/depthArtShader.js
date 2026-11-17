@@ -209,10 +209,32 @@ const SAMPLES = `
   #endif
 `
 
+const EDGE_FILL = `
+  SHADE vec4 edgeFill(vec2 uv, vec2 displacement) {
+    vec2 dispDir = u_disp_dir;
+    vec2 perpDir = vec2(-dispDir.y, dispDir.x);
+    float spread = u_spread;
+
+    SHADE vec4 fillSum = vec4(0.0);
+    SHADE float weightSum = 0.0;
+    for (int k = 0; k < FILL_TAP_COUNT; k++) {
+      vec2 s = k < 2 ? uv + perpDir * (k == 0 ? spread : -spread) : uv - dispDir * (spread * float(k - 1));
+      SHADE float fd = DEPTH_AT(clamp(s, 0.0, 1.0));
+      SHADE float w = max(0.01, pow(1.0 - fd, ${G(POM.FILL_DEPTH_POWER)}));
+      fillSum += COLOR_AT(clamp(s - (fd - 0.5) * displacement, 0.001, 0.999)) * w;
+      weightSum += w;
+    }
+    return fillSum / weightSum;
+  }
+`
+
 const PARALLAX = `
   ${SHADE_PRECISION}
   ${MARCH_BOUND}
   ${SAMPLES}
+#ifndef DEFERRED_FILL
+  ${EDGE_FILL}
+#endif
 
   vec4 parallax(vec2 uv, vec2 displacement, out vec2 hitUV, out float hitDepth, out vec4 fillColor, out float fillMix) {
     hitDepth = 0.0;
@@ -296,22 +318,10 @@ const PARALLAX = `
     SHADE float trailMask = edgeness * foregroundness * dispGate;
     if (trailMask <= 0.0) return pomColor;
 
-    vec2 dispDir = u_disp_dir;
-    vec2 perpDir = vec2(-dispDir.y, dispDir.x);
-    float spread = u_spread;
-
-    SHADE vec4 fillSum = vec4(0.0);
-    SHADE float weightSum = 0.0;
-    for (int k = 0; k < FILL_TAP_COUNT; k++) {
-      vec2 s = k < 2 ? uv + perpDir * (k == 0 ? spread : -spread) : uv - dispDir * (spread * float(k - 1));
-      SHADE float fd = DEPTH_AT(clamp(s, 0.0, 1.0));
-      SHADE float w = max(0.01, pow(1.0 - fd, ${G(POM.FILL_DEPTH_POWER)}));
-      fillSum += COLOR_AT(clamp(s - (fd - 0.5) * displacement, 0.001, 0.999)) * w;
-      weightSum += w;
-    }
-
-    fillColor = fillSum / weightSum;
     fillMix = trailMask * ${G(POM.FILL_STRENGTH)};
+#ifndef DEFERRED_FILL
+    fillColor = edgeFill(uv, displacement);
+#endif
     return pomColor;
   }
 
@@ -440,13 +450,13 @@ const COARSE_FRAGMENT = `#version 300 es
   precision highp float;
   #define texture2D texture
   #define MARCH_BOUND
+  #define DEFERRED_FILL
   ${PARALLAX_UNIFORMS}
   ${LIGHT_UNIFORMS}
   in vec2 v_texCoord;
   layout(location = 0) out vec4 o_hit;
   layout(location = 1) out vec4 o_relief;
   layout(location = 2) out vec4 o_extra;
-  layout(location = 3) out vec4 o_fill;
   ${PARALLAX}
   ${SKYLIGHT}
   void main() {
@@ -462,7 +472,27 @@ const COARSE_FRAGMENT = `#version 300 es
     o_hit = vec4(hitUV - uv, 0.0, 1.0);
     o_relief = vec4(reliefTerm, fillMix);
     o_extra = vec4(extraTerm, 1.0);
-    o_fill = fillColor;
+  }
+`
+
+const FILL_FRAGMENT = `#version 300 es
+  precision highp float;
+  #define texture2D texture
+  ${PARALLAX_UNIFORMS}
+  uniform highp sampler2D u_coarse_relief;
+  in vec2 v_texCoord;
+  out vec4 o_fill;
+  ${SHADE_PRECISION}
+  ${SAMPLES}
+  ${EDGE_FILL}
+
+  void main() {
+    if (texelFetch(u_coarse_relief, ivec2(gl_FragCoord.xy), 0).a <= 0.0) {
+      o_fill = vec4(0.0);
+      return;
+    }
+    vec2 uv = (v_texCoord - 0.5) * u_uv_scale + 0.5;
+    o_fill = edgeFill(uv, u_disp);
   }
 `
 
@@ -679,10 +709,11 @@ export const COARSE_UNITS = { hit: 4, relief: 5, extra: 6, fill: 7 }
 function createCoarsePrograms(gl, defines, fullUniforms, fullSamplers) {
   try {
     const pass = linkProgram(gl, VERTEX_300, withDefines(COARSE_FRAGMENT, defines), [...fullUniforms, ...BOUND_UNIFORM_NAMES], { ...fullSamplers, depth_bound: BOUND_UNIT })
+    const fill = linkProgram(gl, VERTEX_300, withDefines(FILL_FRAGMENT, defines), [...PARALLAX_UNIFORM_NAMES, 'u_coarse_relief'], { color: 0, depth: 1, coarse_relief: COARSE_UNITS.relief })
     const compose = linkProgram(gl, VERTEX_300, withDefines(COMPOSE_FRAGMENT, defines.filter(name => name !== 'PACKED_NORMALS')),
       ['u_color', 'u_coarse_hit', 'u_coarse_relief', 'u_coarse_extra', 'u_coarse_fill', 'u_coarse_rect', 'u_coarse_size', 'u_uv_scale'],
       { color: 0, coarse_hit: COARSE_UNITS.hit, coarse_relief: COARSE_UNITS.relief, coarse_extra: COARSE_UNITS.extra, coarse_fill: COARSE_UNITS.fill })
-    return { pass, compose }
+    return { pass, fill, compose }
   } catch (error) {
     logger.warn('[DepthArt] Coarse parallax unavailable:', error)
     return null
@@ -706,13 +737,18 @@ export function createCoarseTargets(gl, width, height) {
     gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null)
     return texture
   })
+  const passTextures = textures.slice(0, 3)
   const framebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-  textures.forEach((texture, index) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, texture, 0))
-  gl.drawBuffers(textures.map((_, index) => gl.COLOR_ATTACHMENT0 + index))
-  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+  passTextures.forEach((texture, index) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, texture, 0))
+  gl.drawBuffers(passTextures.map((_, index) => gl.COLOR_ATTACHMENT0 + index))
+  let complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+  const fillFramebuffer = gl.createFramebuffer()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fillFramebuffer)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[3], 0)
+  complete = complete && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-  const targets = { width, height, framebuffer, hit: textures[0], relief: textures[1], extra: textures[2], fill: textures[3] }
+  const targets = { width, height, framebuffer, fillFramebuffer, hit: textures[0], relief: textures[1], extra: textures[2], fill: textures[3] }
   if (complete) return targets
   deleteCoarseTargets(gl, targets)
   return null
@@ -721,6 +757,7 @@ export function createCoarseTargets(gl, width, height) {
 export function deleteCoarseTargets(gl, targets) {
   if (!targets || gl.isContextLost()) return
   gl.deleteFramebuffer(targets.framebuffer)
+  gl.deleteFramebuffer(targets.fillFramebuffer)
   for (const texture of [targets.hit, targets.relief, targets.extra, targets.fill]) gl.deleteTexture(texture)
 }
 

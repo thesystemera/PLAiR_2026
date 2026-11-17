@@ -295,7 +295,7 @@ class DepthArtRenderer {
 
   setupContext(gl) {
     const programs = createDepthArtPrograms(gl, { packedNormals: true, ...this.shaderOptions })
-    for (const entry of [programs.full, programs.cache, programs.coarse?.pass]) {
+    for (const entry of [programs.full, programs.cache, programs.coarse?.pass, programs.coarse?.fill]) {
       if (!entry) continue
       gl.useProgram(entry.program)
       setFillTaps(gl, entry.uniforms)
@@ -646,7 +646,7 @@ class DepthArtRenderer {
   drawCoarse(items, width, height, probe) {
     const gl = this.gl
     const canvas = this.canvas
-    const { pass, compose } = this.programs.coarse
+    const { pass, fill, compose } = this.programs.coarse
     const needWidth = Math.ceil(width / 2)
     const needHeight = Math.ceil(height / 2)
     let targets = this.coarseTargets
@@ -683,6 +683,19 @@ class DepthArtRenderer {
         setParallaxUniforms(gl, pass.uniforms, item.px, item.py, item.view.intensity, item.steps)
         bindDepthBound(gl, this.programs, pass.uniforms, item.entry.bound)
         if (lit) setLightRect(gl, pass.uniforms, item.rect)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targets.fillFramebuffer)
+      gl.useProgram(fill.program)
+      gl.activeTexture(gl.TEXTURE0 + COARSE_UNITS.relief)
+      gl.bindTexture(gl.TEXTURE_2D, targets.relief)
+      for (const item of items) {
+        gl.viewport(...item.coarseRect)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.color)
+        gl.activeTexture(gl.TEXTURE1)
+        gl.bindTexture(gl.TEXTURE_2D, item.entry.map)
+        setParallaxUniforms(gl, fill.uniforms, item.px, item.py, item.view.intensity, item.steps)
         gl.drawArrays(gl.TRIANGLES, 0, 6)
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null)
