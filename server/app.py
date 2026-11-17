@@ -34,6 +34,7 @@ from services.whisper_dual_service import whisper_dual_service
 from services.user_data_cache_service import user_data_cache
 from services.rate_limit_service import rate_limit_service
 from services import listener_limits
+from services.server_load import monitor as server_load_monitor
 from services.analytics_service import analytics_service
 from services.youtube_clip_service import get_youtube_clip_service
 
@@ -578,6 +579,7 @@ async def lifespan(_app: FastAPI):
     request_task_handle = asyncio.create_task(background_tasks_service.listener_request_maintainer())
     await websocket_service.start_background_tasks()
     log_service.success("✓ Background tasks started (weather, TTS vector DB, catalog indexes, user content indexes, video clips, websocket cleanup)")
+    server_load_monitor.start(models_global.device, models_global.gpu_lease_holder, websocket_service.broadcast_to_all_users)
 
     services.announcer_service = announcer_service = AnnouncerService(
         playback_service=playback_service,
@@ -649,6 +651,7 @@ async def lifespan(_app: FastAPI):
     await analytics_service.stop_background_tasks()
     log_service.system("Analytics service stopped")
 
+    server_load_monitor.stop()
     await websocket_service.stop_background_tasks()
     await websocket_service.close_all_connections()
 

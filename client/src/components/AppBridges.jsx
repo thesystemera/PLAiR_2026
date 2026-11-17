@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CloudOff } from 'lucide-react'
+import { CloudOff, Gauge } from 'lucide-react'
 import { api } from '../lib/api'
 import { cacheManager } from '../lib/cacheManager'
 import { logger } from '../lib/logger'
@@ -243,6 +243,44 @@ export function LimitNotice() {
 
   useEffect(() => api.onLimit(show), [show])
   useWebSocketSubscribe('allowance', show)
+  return null
+}
+
+const SERVER_LOAD_KEY = 'server_load'
+
+export function ServerLoadNotice() {
+  const { shown, muted, offline, showNotice, hideNotice } = useUISelector(state => ({
+    shown: state.notices.some(notice => notice.key === SERVER_LOAD_KEY),
+    muted: !!state.settingsState.ttsMuted,
+    offline: !!state.audioState.offlineMode,
+    showNotice: state.showNotice,
+    hideNotice: state.hideNotice,
+  }))
+  const [load, setLoad] = useState(null)
+  const shownSinceRef = useRef(null)
+  const dismissedSinceRef = useRef(null)
+  useWebSocketSubscribe('server_load', setLoad)
+
+  const busySince = load?.state === 'busy' ? load.since : null
+  const message = load?.message
+
+  useEffect(() => {
+    if (!shown && shownSinceRef.current && shownSinceRef.current === busySince) {
+      dismissedSinceRef.current = busySince
+      shownSinceRef.current = null
+    }
+  }, [shown, busySince])
+
+  useEffect(() => {
+    if (!busySince || !message || muted || offline || dismissedSinceRef.current === busySince) {
+      shownSinceRef.current = null
+      hideNotice(SERVER_LOAD_KEY)
+      return
+    }
+    shownSinceRef.current = busySince
+    showNotice({ key: SERVER_LOAD_KEY, tone: 'info', icon: Gauge, priority: 2, sticky: true, text: message })
+  }, [busySince, message, muted, offline, showNotice, hideNotice])
+
   return null
 }
 

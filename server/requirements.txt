@@ -19,6 +19,7 @@ requests==2.32.5
 urllib3==2.8.0
 async-lru==2.0.5
 psutil==7.1.2
+nvidia-ml-py==13.580.82
 pytz==2025.2
 PyYAML==6.0.3
 

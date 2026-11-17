@@ -547,6 +547,13 @@ class Settings:
     LYRIC_PREFER_VOCAL_STEM: bool = os.getenv("LYRIC_PREFER_VOCAL_STEM", "true").lower() == "true"
 
     CATALOG_WATCH_INTERVAL_S: float = float(os.getenv("CATALOG_WATCH_INTERVAL_S", "60"))
+
+    SERVER_LOAD_MONITOR: bool = os.getenv("SERVER_LOAD_MONITOR", "true").lower() == "true"
+    SERVER_LOAD_SAMPLE_S: float = float(os.getenv("SERVER_LOAD_SAMPLE_S", "2"))
+    SERVER_LOAD_BUSY_UTIL: float = float(os.getenv("SERVER_LOAD_BUSY_UTIL", "40"))
+    SERVER_LOAD_BUSY_AFTER_S: float = float(os.getenv("SERVER_LOAD_BUSY_AFTER_S", "30"))
+    SERVER_LOAD_CLEAR_UTIL: float = float(os.getenv("SERVER_LOAD_CLEAR_UTIL", "15"))
+    SERVER_LOAD_CLEAR_AFTER_S: float = float(os.getenv("SERVER_LOAD_CLEAR_AFTER_S", "120"))
     ASSET_DOCTOR_ENABLED: bool = os.getenv("ASSET_DOCTOR_ENABLED", "true").lower() == "true"
     ASSET_DOCTOR_REPAIR_ENABLED: bool = os.getenv("ASSET_DOCTOR_REPAIR_ENABLED", "true").lower() == "true"
     ASSET_DOCTOR_STARTUP_DELAY_S: float = float(os.getenv("ASSET_DOCTOR_STARTUP_DELAY_S", "120"))

@@ -13,6 +13,7 @@ from services.device_settings_service import device_kinds, guest_settings
 from service_registry import services
 from services.task_utils import spawn
 from services import listener_limits, usage_tracking
+from services.server_load import monitor as server_load_monitor
 from services_radio.dj_content_bank import content_bank
 from services_radio import listener_location as location_resolver
 from config.settings import settings
@@ -297,6 +298,7 @@ async def websocket_endpoint(
             "user_id": session_user_id,
             "token_rejected": token_rejected,
         }})
+        await websocket.send_json({"type": "server_load", "data": server_load_monitor.public()})
 
         has_existing_playback = bool(
             services.playback_service.has_session(session_id)  # type: ignore
