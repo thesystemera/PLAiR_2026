@@ -4,6 +4,8 @@ import { STAGES, installShaderEdits, applyStage, removeShaderEdits } from './edi
 const names = (process.argv[2] || Object.keys(STAGES).join(',')).split(',')
 const rounds = Number(process.argv[3] || 2)
 const extra = Number(process.argv[4] || 6)
+const low = Number(process.env.LOW || 0)
+const skipScene = process.env.SKIP_SCENE === '1'
 
 const p = await page()
 await installShaderEdits(p)
@@ -13,6 +15,7 @@ const measure = (ms) => Promise.race([measureOnce(ms), sleep(ms + 8000).then(() 
 await openPanel(p, process.env.PANEL || 'Playing')
 await p.send('DeviceOrientation.setDeviceOrientationOverride', { alpha: 0, beta: 8, gamma: 6 })
 await p.evaluate('window.__plairLight.debug({ level: 0.6, kick: 0, pulse: 0 }), window.__plairArt.set({ tilt: { x: 0.6, y: 0.4 } }), 1')
+if (skipScene) await p.evaluate('window.__plairScene.set({ skip: true }), 1')
 await sleep(1500)
 
 const results = Object.fromEntries(names.map(n => [n, []]))
@@ -20,9 +23,9 @@ try {
   for (let r = 0; r < rounds; r++) {
     for (const name of names) {
       const stage = STAGES[name]
-      const hits = await applyStage(p, stage)
+      const hits = await applyStage(p, stage).catch(async () => { await sleep(1500); return applyStage(p, stage) })
       const times = []
-      for (const n of [0, extra]) {
+      for (const n of [low, low + extra]) {
         await p.evaluate(`window.__plairArt.set({ bench: { forceFull: true, extraFull: ${n}, extraCopy: 0 } }), 1`)
         await sleep(400)
         let last = await measure(700)
@@ -36,11 +39,12 @@ try {
       const perPass = (times[1] - times[0]) / extra
       const song = await p.evaluate(`navigator.mediaSession.metadata?.title || ''`)
       results[name].push(perPass)
-      console.log(`round ${r + 1} ${name.padEnd(16)} frame ${times[0]} ms, +${extra} passes ${times[1]} ms -> ${perPass.toFixed(2)} ms/pass (programs edited: ${hits}) [${song}]`)
+      console.log(`round ${r + 1} ${name.padEnd(16)} frame +${low} ${times[0]} ms, +${low + extra} passes ${times[1]} ms -> ${perPass.toFixed(2)} ms/pass (programs edited: ${hits}) [${song}]`)
     }
   }
 } finally {
   await p.send('DeviceOrientation.clearDeviceOrientationOverride')
+  if (skipScene) await p.evaluate('window.__plairScene.set({ skip: false }), 1')
   await removeShaderEdits(p)
   await p.evaluate(`(() => { window.__plairArt.set({ bench: { forceFull: false, extraFull: 0, extraCopy: 0 }, tilt: null }); window.__plairLight.debug({ off: false, level: null, kick: null, pulse: null }); return 1 })()`)
 }

@@ -197,6 +197,26 @@ export const STAGES = {
   'coarse': { art: { coarse: true } },
   'steps x0.5': { art: { stepScale: 0.5 } },
   'steps x0.33': { art: { stepScale: 0.33 } },
+  ...lightCountStages(),
+}
+
+function lightCountStages() {
+  const fixed = count => `(u) => ({
+    u_light_pos: ['3fv', new Float32Array([0.1, 0.2, 1, 0.4, 0.3, 1, 0.15, 0.7, 1, 0.4, 0.85, 1])],
+    u_light_amp: ['3fv', new Float32Array([0.5, 0.45, 0.4, 0.4, 0.5, 0.45, 0.45, 0.4, 0.5, 0.4, 0.4, 0.4])],
+    u_lcount: ['1i', ${count}],
+  })`
+  const bound = [
+    ['uniform float u_light;', 'uniform float u_light; uniform int u_lcount;'],
+    ['for (int i = 0; i < 4; i++) {', ES3_ONLY('for (int i = 0; i < u_lcount; i++) {', 'for (int i = 0; i < 4; i++) {')],
+  ]
+  const stages = {}
+  for (const [suffix, art] of [['', {}], [' coarse', { coarse: true }]]) {
+    stages['L4 const' + suffix] = { derive: fixed(4), art }
+    for (const n of [4, 2, 1]) stages[`L${n} ubound${suffix}`] = { edits: bound, derive: fixed(n), art }
+    stages['L off' + suffix] = { light: { off: true }, art }
+  }
+  return stages
 }
 
 export async function installShaderEdits(p) {
