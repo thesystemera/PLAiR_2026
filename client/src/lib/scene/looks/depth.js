@@ -3,6 +3,7 @@ import { pickWeighted } from '../random'
 import { APERTURE, FOCUS_RANGE, analysisPixels, depthBands, depthGrid } from '../focus'
 import { gradeMatrix } from '../grade'
 import { FAR_LEVEL } from '../softPyramid'
+import { FOOTAGE_SIGNATURE } from '../glsl/footage'
 
 const DEG = Math.PI / 180
 const MOTIONS = [['orbit', 2], ['dolly', 2], ['track', 2], ['crane', 1], ['breathe', 2]]
@@ -45,28 +46,16 @@ export function readDepth(map, makeCanvas) {
   return { canvas, bands: depthBands(small.data), grid: depthGrid(small.data, small.width, small.height) }
 }
 
-export default {
-  id: 'depth',
-  framing: false,
-  needsDepth: true,
-  vertex: {
-    head: `
-  uniform vec4 u_layers[3];
-  uniform vec2 u_layer_shadow;
-  varying vec4 vNearMid;
-  varying vec4 vFarShadow;
+const COVER_FAR = `        vec2 farUv = vFarShadow.xy;
+        float hole = smoothstep(u_layer_bands.y - soft, u_layer_bands.y + soft, layerDepth(farUv, lod));
+        vec3 far = hole < 0.998 ? layerColor(farUv, 0, lod) : vec3(0.0);
+        if (hole > 0.002) far = mix(far, fillColor(farUv), hole);
+`
 
-  vec2 layerAt(vec2 local, vec4 layer, mat2 rotationMatrix, vec2 shift) {
-    vec2 framed = (getCoverUV(local, u_canvas_resolution, u_tex_resolution) - 0.5) / (u_frame_scale * layer.z) + u_frame_offset + layer.xy;
-    return rotationMatrix * (framed - shift) / u_scale + 0.5;
-  }
-`,
-    main: `    vec2 shift = u_parallax / u_canvas_resolution + glitchOffset;
-    vNearMid = vec4(layerAt(uv, u_layers[2], rotationMatrix, shift), layerAt(uv, u_layers[1], rotationMatrix, shift));
-    vFarShadow = vec4(layerAt(uv, u_layers[0], rotationMatrix, shift), layerAt(uv - u_layer_shadow, u_layers[2], rotationMatrix, shift));
-`,
-  },
-  glsl: `
+const FOOTAGE_FAR = `        vec3 far = footageTreat(footageRead(u_clip0, framedClipUv(clipShape(vUv), u_canvas_resolution, u_layers[0].xy, u_layers[0].z, u_clip_res[0], u_ft_shape.z, 0.0)), u_grade, vUv).rgb;
+`
+
+const depthGlsl = footage => `
   uniform vec4 u_layers[3];
   uniform vec4 u_layer_grade[3];
   uniform mat3 u_layer_tone[3];
@@ -108,17 +97,36 @@ export default {
       vec3 behind = vec3(0.0);
       if (midAlpha > 0.002) behind = layerColor(midUv, 1, lod) * midAlpha;
       if (midAlpha < 0.998) {
-        vec2 farUv = vFarShadow.xy;
-        float hole = smoothstep(u_layer_bands.y - soft, u_layer_bands.y + soft, layerDepth(farUv, lod));
-        vec3 far = hole < 0.998 ? layerColor(farUv, 0, lod) : vec3(0.0);
-        if (hole > 0.002) far = mix(far, fillColor(farUv), hole);
-        behind += far * (1.0 - midAlpha);
+${footage ? FOOTAGE_FAR : COVER_FAR}        behind += far * (1.0 - midAlpha);
       }
       color += behind * (1.0 - shadow) * (1.0 - nearAlpha);
     }
     return vec4(color, 1.0);
   }
+`
+
+const depth = {
+  id: 'depth',
+  framing: false,
+  needsDepth: true,
+  vertex: {
+    head: `
+  uniform vec4 u_layers[3];
+  uniform vec2 u_layer_shadow;
+  varying vec4 vNearMid;
+  varying vec4 vFarShadow;
+
+  vec2 layerAt(vec2 local, vec4 layer, mat2 rotationMatrix, vec2 shift) {
+    vec2 framed = (getCoverUV(local, u_canvas_resolution, u_tex_resolution) - 0.5) / (u_frame_scale * layer.z) + u_frame_offset + layer.xy;
+    return rotationMatrix * (framed - shift) / u_scale + 0.5;
+  }
 `,
+    main: `    vec2 shift = u_parallax / u_canvas_resolution + glitchOffset;
+    vNearMid = vec4(layerAt(uv, u_layers[2], rotationMatrix, shift), layerAt(uv, u_layers[1], rotationMatrix, shift));
+    vFarShadow = vec4(layerAt(uv, u_layers[0], rotationMatrix, shift), layerAt(uv - u_layer_shadow, u_layers[2], rotationMatrix, shift));
+`,
+  },
+  glsl: depthGlsl(false),
   uniforms: () => ({
     u_layers: { value: [new Vector4(0, 0, 1, 0), new Vector4(0, 0, 1, 0), new Vector4(0, 0, 1, 0)] },
     u_layer_grade: { value: [new Vector4(1, 0, 1, 1), new Vector4(1, 0, 1, 1), new Vector4(1, 0, 1, 1)] },
@@ -184,4 +192,15 @@ export default {
     const reach = SHADOW_REACH * (1 + sep)
     u.u_layer_shadow.value.set(reach / ctx.aspect, -reach)
   },
+}
+
+export default depth
+
+export const depthFootage = {
+  ...depth,
+  id: 'depthFootage',
+  framing: true,
+  footage: true,
+  glsl: depthGlsl(true),
+  signature: [...depth.signature, ...FOOTAGE_SIGNATURE],
 }

@@ -1,7 +1,8 @@
 import { BACKGROUND_VERTEX, FRAMING, IMAGE_BODY, backgroundVertex, finishImage } from './scene/glsl/background'
+import { FOOTAGE_BODY, FOOTAGE_FRAMING } from './scene/glsl/footage'
 import { GLASS_BODY } from './scene/glsl/glass'
 import { AMBIENT_GLOW } from './scene/glsl/glow'
-import { LOOKS } from './scene/looks'
+import { lookById } from './scene/looks'
 
 const RADIO_BUTTON_DEFINE = '#define GLASS_RADIO_BUTTON\n'
 
@@ -39,18 +40,25 @@ const GLASS_MAIN = `
   }
 `
 
-export function lookShaders(id) {
-  const look = LOOKS[id]
-  const body = IMAGE_BODY + (look.framing ? FRAMING : '') + look.glsl
-  const tiled = look.tiled
-    ? {
-      tileVertex: backgroundVertex(look.tiled.vertexHead, look.tiled.vertexMain),
-      tilePicture: IMAGE_BODY + look.tiled.picture + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,
-      tileBorder: IMAGE_BODY + look.tiled.border + BACKGROUND_FUNCTION + AMBIENT_GLOW + look.tiled.borderMain,
-    }
-    : null
+function tileShaders(tiled) {
+  const shaders = {
+    tileVertex: backgroundVertex(tiled.vertexHead, tiled.vertexMain),
+    tilePicture: IMAGE_BODY + tiled.picture + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,
+    tileBorder: IMAGE_BODY + tiled.border + BACKGROUND_FUNCTION + AMBIENT_GLOW + tiled.borderMain,
+  }
+  if (!tiled.clip) return shaders
   return {
-    ...tiled,
+    ...shaders,
+    tileClipVertex: backgroundVertex(tiled.clipVertexHead, tiled.clipVertexMain),
+    tileClip: IMAGE_BODY + FOOTAGE_BODY + tiled.clip + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,
+  }
+}
+
+export function lookShaders(id) {
+  const look = lookById(id)
+  const body = IMAGE_BODY + (look.framing ? FRAMING : '') + (look.footage ? FOOTAGE_FRAMING + FOOTAGE_BODY : '') + look.glsl
+  return {
+    ...(look.tiled ? tileShaders(look.tiled) : null),
     vertex: look.vertex ? backgroundVertex(look.vertex.head, look.vertex.main) : BACKGROUND_VERTEX,
     background: body + finishImage('void main()', 'gl_FragColor = finalColor;'),
     backdrop: body + BACKGROUND_FUNCTION + AMBIENT_GLOW + BACKDROP_MAIN,

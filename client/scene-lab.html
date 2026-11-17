@@ -14,10 +14,12 @@
 <canvas id="scene"></canvas>
 <script type="module">
 // Dev page (Vite dev server only, never built): the background scene for one song, stepped by hand.
-// ?track=ID&w=412&h=915&dpr=1. window.lab: at(seconds), sheet(times), plan(), force(look), timing(n), identity()
+// ?track=ID&w=412&h=915&dpr=1. window.lab: at(seconds), sheet(times), plan(), force(look), timing(n), identity(),
+// footage(list) (video clips on: the API's, or a given [{ url, duration, keyword }]; false = off), footageShots(), forceFootage(look, prefer)
 import { Mesh, PlaneGeometry, Scene, ShaderMaterial, WebGLRenderTarget } from 'three'
 import { SceneRenderer } from '/src/lib/sceneRenderer.js'
-import { LOOKS } from '/src/lib/scene/looks/index.js'
+import { FOOTAGE_IDS, LOOKS } from '/src/lib/scene/looks/index.js'
+import { planFootage } from '/src/lib/scene/footage.js'
 import { planShots } from '/src/lib/scene/director.js'
 import { seededRandom } from '/src/lib/scene/random.js'
 import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from '/src/lib/lyricStyle.js'
@@ -63,6 +65,8 @@ const styled = lyricTiming ? prepareLyricStyle(lyricTiming) : null
 const fontsReady = styled ? await loadLyricFonts(styled.uses, styled.text) : false
 const aspect = width / height
 const lyricCanvas = document.createElement('canvas')
+let clipVideos = null
+let clipMeta = null
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const until = async (test, ms = 20000) => {
   const end = performance.now() + ms
@@ -106,6 +110,18 @@ async function at(seconds, capture) {
     scene.handle({ type: 'state', state: { isPlaying: true, progressMs: (seconds - (frames - 1 - i) / 60) * 1000, durationMs: features.duration * 1000 } })
     scene.frame(1 / 60)
   }
+  if (clipVideos && scene.footage.slots.length) {
+    await Promise.all(scene.footage.slots.map((index, k) => {
+      const video = clipVideos[index]
+      return new Promise(resolve => {
+        video.addEventListener('seeked', resolve, { once: true })
+        video.currentTime = scene.footage.times[k]
+      })
+    }))
+    for (const index of scene.footage.slots) scene.clips.textures[index].needsUpdate = true
+    scene.handle({ type: 'state', state: { isPlaying: true, progressMs: seconds * 1000 + 1, durationMs: features.duration * 1000 } })
+    scene.frame(1 / 60)
+  }
   scene.bench.force = false
   capture?.(canvas)
   const shot = scene.plan?.shots?.[scene.directorCursor.shot]
@@ -113,7 +129,8 @@ async function at(seconds, capture) {
 }
 
 function describe(shot) {
-  return `${shot.role}${shot.drop ? '!' : ''} ${Math.round((shot.density ?? 0) * 100)}% ${shot.camera} ${shot.patch.primary}${shot.hook >= 0 ? ` hook${shot.hook}` : ''} ${lookDetail(shot)}`
+  const fmv = shot.footage ? ` FMV ${shot.footage.mode}/${shot.footage.treat.card}/${shot.footage.speed} ${shot.footage.clips.join('+')}` : ''
+  return `${shot.role}${shot.drop ? '!' : ''} ${Math.round((shot.density ?? 0) * 100)}% ${shot.camera} ${shot.patch.primary}${shot.hook >= 0 ? ` hook${shot.hook}` : ''} ${lookDetail(shot)}${fmv}`
 }
 
 function lookDetail(shot) {
@@ -159,11 +176,55 @@ async function still(seconds, look, seed = 7, level = 'high') {
 
 function force(look, level = 'high', seed = 7, prefer = {}) {
   const base = planShots(features, { sections, lines })
-  scene.plan = look
+  const forced = look
     ? { ...base, shots: base.shots.map(s => ({ ...s, look, level, variant: LOOKS[look].variant(seededRandom(seed), level, prefer) })) }
     : base
+  scene.plan = clipMeta ? planFootage(forced, clipMeta) : forced
   scene.directorCursor = { shot: 0, beat: 0 }
   return scene.plan.shots[0].variant
+}
+
+async function footage(list = null) {
+  if (list === false) {
+    clipVideos = null
+    clipMeta = null
+    scene.handle({ type: 'clips', clips: [] })
+    return { clips: 0 }
+  }
+  const data = list ? { clips: list } : await fetch(`/api/video-clips/${id}`).then(r => r.json())
+  clipVideos = await Promise.all((data.clips || []).map(clip => new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    video.muted = true
+    video.crossOrigin = 'anonymous'
+    video.preload = 'auto'
+    video.onloadeddata = () => resolve(video)
+    video.onerror = () => reject(new Error(`clip did not load: ${clip.url}`))
+    video.src = clip.url
+  })))
+  clipMeta = (data.clips || []).map(clip => ({ duration: clip.duration || 30 }))
+  scene.handle({ type: 'clips', clips: clipMeta })
+  clipVideos.forEach((video, index) => {
+    scene.handle({ type: 'clipFrame', index, video })
+    scene.clips.textures[index].needsUpdate = true
+  })
+  await until(() => FOOTAGE_IDS.every(look => scene.lookReady[look]) && scene.plan)
+  force(null)
+  return { clips: clipVideos.length, keywords: (data.clips || []).map(clip => clip.keyword), sizes: clipVideos.map(v => `${v.videoWidth}x${v.videoHeight}`) }
+}
+
+function footageShots() {
+  return scene.plan.shots.map((s, i) => ({ i, t: +(s.start + Math.min(2, (s.end - s.start) * 0.6)).toFixed(2), start: +s.start.toFixed(2), end: +s.end.toFixed(2), look: s.look, what: describe(s) }))
+    .filter(row => scene.plan.shots[row.i].footage)
+}
+
+function forceFootage(look, prefer = {}, seed = 7) {
+  force(look, 'high', seed, prefer)
+  let last = null
+  scene.plan = { ...scene.plan, shots: scene.plan.shots.map(s => {
+    if (s.footage) last = s.footage
+    return s.footage || !last ? s : { ...s, footage: last }
+  }) }
+  return scene.plan.shots.filter(s => s.footage).length
 }
 
 function plan() {
@@ -189,15 +250,18 @@ function structure() {
   }
 }
 
-async function timing(n = 40) {
+async function timing(n = 40, withFootage = false) {
   const gl = scene.gl
   const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2')
   if (!ext) return 'no timer queries'
   const result = {}
-  for (const look of Object.keys(LOOKS)) {
-    force(look)
+  const runs = Object.keys(LOOKS).flatMap(look => (withFootage ? [[look, false], [look, true]] : [[look, false]]))
+  for (const [look, footaged] of runs) {
+    if (footaged) forceFootage(look)
+    else force(look)
     await at(60)
-    const runs = []
+    const label = footaged ? `${scene.look} (${look} + footage)` : look
+    const samples = []
     for (let r = 0; r < 5; r++) {
       const query = gl.createQuery()
       gl.beginQuery(ext.TIME_ELAPSED_EXT, query)
@@ -205,11 +269,11 @@ async function timing(n = 40) {
       gl.endQuery(ext.TIME_ELAPSED_EXT)
       gl.flush()
       await until(() => gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE))
-      runs.push(gl.getQueryParameter(query, gl.QUERY_RESULT) / n / 1e6)
+      samples.push(gl.getQueryParameter(query, gl.QUERY_RESULT) / n / 1e6)
       gl.deleteQuery(query)
     }
-    runs.sort((a, b) => a - b)
-    result[look] = +runs[2].toFixed(3)
+    samples.sort((a, b) => a - b)
+    result[label] = +samples[2].toFixed(3)
   }
   force(null)
   return result
@@ -294,7 +358,13 @@ async function video(seconds, times, width = 360, height = 640) {
   const { renderVideo } = await import('/src/lib/offlineVideoRenderer.js')
   const sampleRate = 48000
   const pcm = { left: new Float32Array(sampleRate * seconds), right: new Float32Array(sampleRate * seconds), sampleRate }
-  const { buffer, stats } = await renderVideo({ artworkBlob: blob, pcm, audioFeatures: features, lyricTimestamps: lyricTiming, durationMs: seconds * 1000, width, height, fps: 30 })
+  const requestClipFrame = (index, time) => new Promise(resolve => {
+    const clip = clipVideos[index]
+    clip.addEventListener('seeked', () => resolve(new VideoFrame(clip)), { once: true })
+    clip.currentTime = time
+  })
+  const clipDurations = clipVideos ? clipVideos.map(clip => clip.duration) : []
+  const { buffer, stats } = await renderVideo({ artworkBlob: blob, pcm, audioFeatures: features, lyricTimestamps: lyricTiming, durationMs: seconds * 1000, width, height, fps: 30, clipDurations, requestClipFrame })
   const element = document.createElement('video')
   element.muted = true
   element.src = URL.createObjectURL(new Blob([buffer], { type: 'video/mp4' }))
@@ -469,7 +539,7 @@ async function tilesCheck(seconds, prefer = {}, seed = 7) {
   return { layout, draws: scene.backdropMesh.geometry.groups.length, vertices: scene.backdropMesh.geometry.drawRange.count, max, over2, pixels: tiled.length / 4 }
 }
 
-window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, tilesCheck, ready: true }
+window.lab = { scene, features, sections, at, sheet, still, video, plan, structure, trace, force, timing, identity, blurCheck, tilesCheck, footage, footageShots, forceFootage, ready: true }
 info.textContent = `${id}: ${features.duration?.toFixed(0)} s, ${features.beats?.length} beats, ${features.sections?.length} sections, lyric style ${styled ? 'yes' : 'no'}, depth bands ${JSON.stringify(scene.bands)}`
 </script>
 </body>

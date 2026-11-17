@@ -30,6 +30,9 @@ const RENDERING_TEXT_WIDTH = 0.84
 const LYRIC_PROBE_DIVISOR = 16
 const LYRIC_LEAD_MS = 16
 const NO_PARALLAX = Object.freeze({ parallaxX: 0, parallaxY: 0 })
+const CLIP_RATE_MIN = 0.0625
+const CLIP_RATE_MAX = 16
+const DEFAULT_CLIP_SECONDS = 30
 
 function averageLevel(data) {
   if (!data || !data.length) return 0
@@ -79,21 +82,75 @@ function drawRenderingVideo(ctx, percent, width, height) {
   ctx.fillText(`${percent}%`, width / 2, height / 2 + RENDERING_PERCENT_SIZE * unit * 0.55)
 }
 
-function syncVideoClipPlayback(clipState) {
-  const count = clipState.videos.length
-  if (count === 0) return
-  const nextIndex = (clipState.currentIndex + 1) % count
-  clipState.videos.forEach((video, index) => {
-    if (!clipState.resting && (index === clipState.currentIndex || index === nextIndex)) {
-      if (!video.getAttribute('src')) {
-        video.src = video.dataset.clipUrl
-        video.load()
-      }
+function createClipState() {
+  return { videos: new Map(), callbacks: new Map(), sources: [], playing: new Set(), rates: new Map(), resting: false, hidden: false, frameTransfer: false }
+}
+
+function syncClipPlayback(clips) {
+  for (const [index, video] of clips.videos) {
+    const run = !clips.resting && !clips.hidden && clips.playing.has(index) && (clips.rates.get(index) ?? 1) > 0 && video.getAttribute('src')
+    if (run) {
       if (video.paused) video.play().catch(() => {})
     } else if (!video.paused) {
       video.pause()
     }
-  })
+  }
+}
+
+function clipVideo(clips, index, send) {
+  const existing = clips.videos.get(index)
+  if (existing) return existing
+  const video = document.createElement('video')
+  video.crossOrigin = 'anonymous'
+  video.muted = true
+  video.loop = true
+  video.playsInline = true
+  video.preload = 'auto'
+  clips.videos.set(index, video)
+  if (!clips.frameTransfer) {
+    send({ type: 'clipFrame', index, video })
+    return video
+  }
+  if (!video.requestVideoFrameCallback) return video
+  const push = () => {
+    if (clips.videos.get(index) !== video) return
+    if (clips.playing.has(index) && video.readyState >= 2) {
+      try {
+        const frame = new VideoFrame(video)
+        send({ type: 'clipFrame', index, frame }, [frame])
+      } catch (error) {
+        logger.debug('[AudioReactiveCanvas] Video frame skipped', error?.message)
+      }
+    }
+    clips.callbacks.set(index, video.requestVideoFrameCallback(push))
+  }
+  clips.callbacks.set(index, video.requestVideoFrameCallback(push))
+  return video
+}
+
+function cueClip(clips, index, at, send) {
+  const source = clips.sources[index]
+  if (!source) return
+  const video = clipVideo(clips, index, send)
+  if (!video.getAttribute('src')) {
+    video.src = source.url
+    video.load()
+  }
+  if (!Number.isFinite(at)) return
+  if (video.readyState >= 1) video.currentTime = at
+  else video.addEventListener('loadedmetadata', () => { video.currentTime = at }, { once: true })
+}
+
+function releaseClips(clips) {
+  for (const [index, video] of clips.videos) {
+    const callback = clips.callbacks.get(index)
+    if (callback) video.cancelVideoFrameCallback(callback)
+    releaseVideo(video)
+  }
+  clips.videos = new Map()
+  clips.callbacks = new Map()
+  clips.playing = new Set()
+  clips.rates = new Map()
 }
 
 const AudioReactiveScene = memo(function AudioReactiveScene({
@@ -140,7 +197,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const channelRef = useRef(null)
   const latestRef = useRef(null)
   const glowRef = useRef(new Float32Array(11))
-  const clipsRef = useRef({ videos: [], currentIndex: 0, resting: false })
+  const [clips] = useState(createClipState)
   const lyricRef = useRef({ canvas: null, words: null, styled: null, key: null })
   const aspectRef = useRef(LYRIC_WIDTH / LYRIC_HEIGHT)
   const evalsRef = useRef(new Map())
@@ -168,15 +225,23 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       case 'ready': splashReady('scene'); break
       case 'renderer': latest.reportRenderer(message.name); break
       case 'context': latest.onContextLostChange(message.lost); break
-      case 'clipIndex': {
-        const clips = clipsRef.current
-        clips.currentIndex = message.index
-        syncVideoClipPlayback(clips)
+      case 'footage': {
+        const before = clips.playing
+        clips.playing = new Set(message.play.map(clip => clip.index))
+        const keep = new Set([...clips.playing, ...message.next.map(clip => clip.index)])
+        for (const { index, at } of message.play) cueClip(clips, index, before.has(index) ? null : at, send)
+        for (const { index, at } of message.next) if (!before.has(index) && !clips.playing.has(index)) cueClip(clips, index, at, send)
+        for (const [index, video] of clips.videos) if (!keep.has(index) && video.getAttribute('src')) releaseVideo(video)
+        syncClipPlayback(clips)
         break
       }
-      case 'clipRate': {
-        const video = clipsRef.current.videos[clipsRef.current.currentIndex]
-        if (video && video.readyState >= 2) video.playbackRate = message.rate
+      case 'clipRates': {
+        for (const [index, rate] of message.rates) {
+          clips.rates.set(index, rate)
+          const video = clips.videos.get(index)
+          if (video && rate > 0) video.playbackRate = Math.min(CLIP_RATE_MAX, Math.max(CLIP_RATE_MIN, rate))
+        }
+        syncClipPlayback(clips)
         break
       }
       case 'warn': logger.warn(`[AudioReactiveCanvas] ${message.message}`); break
@@ -188,7 +253,7 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
       }
       default: break
     }
-  }, [])
+  }, [send, clips])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -256,7 +321,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
 
   useEffect(() => {
     send({ type: 'visible', visible: !!ui.isScreenVisible })
-  }, [send, ui.isScreenVisible])
+    clips.hidden = !ui.isScreenVisible
+    syncClipPlayback(clips)
+  }, [send, clips, ui.isScreenVisible])
 
   useEffect(() => {
     const features = ui.audioFeatures || null
@@ -305,10 +372,9 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   const videoPercent = visualsResting ? ui.videoPercent : 0
   const isPlaying = ui.isPlaying && !visualsResting
   useEffect(() => {
-    const clips = clipsRef.current
     clips.resting = visualsResting
-    syncVideoClipPlayback(clips)
-  }, [visualsResting])
+    syncClipPlayback(clips)
+  }, [clips, visualsResting])
 
   useEffect(() => {
     if (!ui.isScreenVisible) return undefined
@@ -368,49 +434,12 @@ const AudioReactiveScene = memo(function AudioReactiveScene({
   }, [send, isPlaying, visualsResting, videoPercent, ui.isScreenVisible, ui.lyricTimestamps])
 
   useEffect(() => {
-    const clips = clipsRef.current
-    clips.videos.forEach(releaseVideo)
-    clips.videos = []
-    clips.currentIndex = 0
-    const sources = videoClips || []
-    send({ type: 'clips', count: sources.length })
-    if (sources.length === 0) return undefined
-    const frameTransfer = channelRef.current?.thread === 'worker' && typeof VideoFrame !== 'undefined'
-    const callbacks = []
-    sources.forEach((clip, index) => {
-      const video = document.createElement('video')
-      video.crossOrigin = 'anonymous'
-      video.muted = true
-      video.loop = true
-      video.playsInline = true
-      video.preload = 'auto'
-      video.dataset.clipUrl = clip.url
-      clips.videos.push(video)
-      if (!frameTransfer || !video.requestVideoFrameCallback) {
-        if (!frameTransfer) send({ type: 'clipFrame', index, video })
-        return
-      }
-      const pushFrame = () => {
-        if (!clips.videos.includes(video)) return
-        if (index === clips.currentIndex && video.readyState >= 2) {
-          try {
-            const frame = new VideoFrame(video)
-            send({ type: 'clipFrame', index, frame }, [frame])
-          } catch (error) {
-            logger.debug('[AudioReactiveCanvas] Video frame skipped', error?.message)
-          }
-        }
-        callbacks[index] = video.requestVideoFrameCallback(pushFrame)
-      }
-      callbacks[index] = video.requestVideoFrameCallback(pushFrame)
-    })
-    syncVideoClipPlayback(clips)
-    return () => {
-      clips.videos.forEach((video, index) => { if (callbacks[index]) video.cancelVideoFrameCallback(callbacks[index]) })
-      clips.videos.forEach(releaseVideo)
-      clips.videos = []
-    }
-  }, [send, videoClips])
+    releaseClips(clips)
+    clips.sources = videoClips || []
+    clips.frameTransfer = channelRef.current?.thread === 'worker' && typeof VideoFrame !== 'undefined'
+    send({ type: 'clips', clips: clips.sources.map(clip => ({ duration: clip.duration || DEFAULT_CLIP_SECONDS })) })
+    return () => releaseClips(clips)
+  }, [send, clips, videoClips])
 
   useEffect(() => {
     let frame = null

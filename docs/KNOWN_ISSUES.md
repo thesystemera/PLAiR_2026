@@ -243,6 +243,22 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 ## 6. Medium jobs
 
+- **Video clips (FMV) in the director, after step 1 (17 Nov).** Step 1 is in (CLAUDE.md section 11, "Video clips
+  are footage the director edits with"). Found on the way, not done:
+  - **Few songs have clips.** 522 of 2,265 catalog songs have no `video_search_terms` (mostly the Oct-Nov 2025
+    batch; `server/utils/backfill_video_search_terms.py` fills them with DeepSeek). Of the 1,743 that have terms,
+    1,122 have no clip yet: the prefetch loop adds about 15-40 clips a day (1,813 cached), about one per half-hour
+    run against a budget of 12. Likely cause, not confirmed: recently failed searches count against the budget
+    and every run starts again at the top of the catalog. Also 822 files (827 MB) in `data/youtube_clips` are in
+    no index entry: never served, never evicted.
+  - **Guests get no clips:** `/api/video-clips` answers only a signed-in account whose saved setting has video clips on.
+  - **Sources:** title cards, burned-in subtitles and copyright text, letterbox bars, near-black clips; 480p is soft
+    full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), a short
+    keyframe gap (the share video seeks each clip per frame: 0.34x real time on the P6000 for 70 s with today's
+    ~250-frame keyframe gap), clips matched to lyric lines by meaning (mpnet, in the prefetch loop).
+  - **Not measured on the phone:** footage looks, two to four videos decoding at once, mipmaps made per video frame.
+    On the P6000 the footage looks cost the same as the plain looks (under 1 ms a frame at 1081x2402).
+
 - **Capacity for a few hundred listeners (audit 10 Nov).** Measured on a private boot (:8011, all outbound calls
   and TTS blocked) with up to 1,000 simulated guests that stream, preload, fetch covers and change songs about
   every 60 s (~4x a normal listener). Harness and raw numbers: `E:\scratch\plair\loadtest` (`loadgen.py`,

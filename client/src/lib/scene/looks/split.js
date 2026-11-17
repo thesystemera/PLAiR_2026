@@ -4,6 +4,7 @@ import { focusTarget } from '../focus'
 import { gradeMatrix } from '../grade'
 import { lowerBound } from '../../sceneEffects'
 import { FRAMING_FUNCTIONS } from '../glsl/background'
+import { CLIP_UNIFORMS, FOOTAGE_FRAMING, FOOTAGE_SIGNATURE } from '../glsl/footage'
 
 const TILES = 8
 const DEG = Math.PI / 180
@@ -28,6 +29,7 @@ const CURTAIN_OPENINGS = [0.34, 0.6, 0.18, 0.76, 0.46]
 const MOSAIC_STAGGER_BEATS = 0.5
 const MOSAIC_FLIP = 0.3
 const MOSAIC_BACK = 0.22
+const FOOTAGE_BACK_LEVEL = 0.9
 const INK = { share: 0.65, light: 0.7, chroma: 0.6 }
 const MAX_CUTS = 4 * TILES + 2
 const MAX_CELLS = (MAX_CUTS - 1) * (MAX_CUTS - 1)
@@ -339,10 +341,17 @@ function tileQuads(uniforms, positions, uvs, ranges) {
   return vertex
 }
 
-export default {
-  id: 'split',
-  framing: true,
-  glsl: `
+const COVER_COLOR = `    vec4 color = chromaticImage(depthView(uv, vec2(0.0)), u_tile_grade[tile]);
+`
+
+const FOOTAGE_COLOR = `    vec2 viewed = depthView(uv, vec2(0.0));
+    float source = u_tile_src[tile];
+    vec4 color;
+    if (source > -0.5) color = footageTreat(clipRead(source, framedClipUv(base, whole ? u_canvas_resolution : u_canvas_resolution * size, crop.xy, crop.z, u_clip_res[int(source + 0.5)], 0.0, 0.0)), u_tile_grade[tile], vUv);
+    else color = chromaticImage(viewed, u_tile_grade[tile]);
+`
+
+const splitGlsl = footage => `
   uniform vec4 u_tile_rect[${TILES}];
   uniform vec4 u_tile_crop[${TILES + 1}];
   uniform mat3 u_tile_grade[${TILES + 1}];
@@ -351,7 +360,8 @@ export default {
   uniform vec3 u_tile_ink[${TILES + 1}];
   uniform vec4 u_split_frame;
   uniform int u_tile_count;
-
+${footage ? `  uniform float u_tile_src[${TILES + 1}];
+` : ''}
   vec4 lookImage() {
     int tile = ${TILES};
     for (int i = 0; i < u_tile_count; i++) {
@@ -373,8 +383,7 @@ export default {
     vec2 base = whole ? vUv : local;
     if (mod(crop.w, 2.0) > 0.5) base.x = whole ? frame.x + frame.z - base.x : 1.0 - base.x;
     vec2 uv = framedUv(base, whole ? u_canvas_resolution : u_canvas_resolution * size, crop.xy, crop.z);
-    vec4 color = chromaticImage(depthView(uv, vec2(0.0)), u_tile_grade[tile]);
-    color.rgb *= u_tile_level[tile];
+${footage ? FOOTAGE_COLOR : COVER_COLOR}    color.rgb *= u_tile_level[tile];
     float border = u_split_frame.y;
     if (border > 0.0) {
       float pixel = 1.0 / u_canvas_resolution.y;
@@ -382,23 +391,24 @@ export default {
     }
     return color;
   }
-`,
-  tiled: {
-    groups: TILE_GROUPS,
-    vertices: 2 * MAX_CELLS * 6,
-    vertexHead: `
+`
+
+const TILED = {
+  groups: TILE_GROUPS,
+  vertices: 2 * MAX_CELLS * 6,
+  vertexHead: `
   uniform vec2 u_fx_rot;
   uniform vec4 u_tile_frame;
   uniform vec4 u_tile_cropping;
   varying vec2 vTileUv;
 ${FRAMING_FUNCTIONS}`,
-    vertexMain: `    vec2 tileSize = u_tile_frame.zw - u_tile_frame.xy;
+  vertexMain: `    vec2 tileSize = u_tile_frame.zw - u_tile_frame.xy;
     bool tileWhole = u_tile_cropping.w > 1.5;
     vec2 tileBase = tileWhole ? uv : (uv - u_tile_frame.xy) / tileSize;
     if (mod(u_tile_cropping.w, 2.0) > 0.5) tileBase.x = tileWhole ? u_tile_frame.x + u_tile_frame.z - tileBase.x : 1.0 - tileBase.x;
     vTileUv = framedUv(tileBase, tileWhole ? u_canvas_resolution : u_canvas_resolution * tileSize, u_tile_cropping.xy, u_tile_cropping.z);
 `,
-    picture: `
+  picture: `
   uniform mat3 u_tile_tone;
   uniform vec2 u_tile_light;
   uniform vec3 u_tile_lettering;
@@ -412,7 +422,7 @@ ${FRAMING_FUNCTIONS}`,
     return color;
   }
 `,
-    border: `
+  border: `
   uniform vec4 u_tile_frame;
   uniform vec4 u_split_frame;
   uniform vec3 u_tile_lettering;
@@ -422,7 +432,7 @@ ${FRAMING_FUNCTIONS}`,
     return vec4(vec3(u_split_frame.z), 1.0);
   }
 `,
-    borderMain: `
+  borderMain: `
   void main() {
     vec4 background = clamp(computeBackground(), 0.0, 1.0);
     vec2 inside = min(vUv - u_tile_frame.xy, u_tile_frame.zw - vUv) * vec2(u_canvas_resolution.x / u_canvas_resolution.y, 1.0);
@@ -431,25 +441,75 @@ ${FRAMING_FUNCTIONS}`,
     gl_FragColor = vec4(applyAmbientGlow(background.rgb, vUv, 0.0), cover);
   }
 `,
-    isBorder: group => group > TILES,
-    uniformsFor(uniforms, group) {
-      const tile = group > TILES ? group - TILES - 1 : group
-      const frame = { value: tile < TILES ? uniforms.u_tile_rect.value[tile] : WHOLE_SCREEN }
-      const lettering = { value: uniforms.u_tile_ink.value[tile] }
-      if (group > TILES) return { u_tile_frame: frame, u_tile_lettering: lettering }
-      return {
-        u_tile_frame: frame,
-        u_tile_lettering: lettering,
-        u_tile_cropping: { value: uniforms.u_tile_crop.value[tile] },
-        u_tile_tone: { value: uniforms.u_tile_grade.value[tile] },
-        u_tile_light: { value: new Vector2(1, 0.5) },
-      }
-    },
-    layout(uniforms, materials, positions, uvs, ranges) {
-      for (let tile = 0; tile <= TILES; tile++) materials[tile].uniforms.u_tile_light.value.set(uniforms.u_tile_level.value[tile], uniforms.u_tile_focus.value[tile])
-      return tileQuads(uniforms, positions, uvs, ranges)
-    },
+  isBorder: group => group > TILES,
+  uniformsFor(uniforms, group) {
+    const tile = group > TILES ? group - TILES - 1 : group
+    const frame = { value: tile < TILES ? uniforms.u_tile_rect.value[tile] : WHOLE_SCREEN }
+    const lettering = { value: uniforms.u_tile_ink.value[tile] }
+    if (group > TILES) return { u_tile_frame: frame, u_tile_lettering: lettering }
+    return {
+      u_tile_frame: frame,
+      u_tile_lettering: lettering,
+      u_tile_cropping: { value: uniforms.u_tile_crop.value[tile] },
+      u_tile_tone: { value: uniforms.u_tile_grade.value[tile] },
+      u_tile_light: { value: new Vector2(1, 0.5) },
+    }
   },
+  layout(uniforms, materials, positions, uvs, ranges) {
+    for (let tile = 0; tile <= TILES; tile++) materials[tile].uniforms.u_tile_light.value.set(uniforms.u_tile_level.value[tile], uniforms.u_tile_focus.value[tile])
+    return tileQuads(uniforms, positions, uvs, ranges)
+  },
+}
+
+const FOOTAGE_TILED = {
+  ...TILED,
+  extra: TILES + 1,
+  clipVertexHead: `${TILED.vertexHead}
+  uniform vec2 u_tile_clip_res;
+  varying vec2 vTileClipUv;
+${FOOTAGE_FRAMING}`,
+  clipVertexMain: `${TILED.vertexMain}    vTileClipUv = framedClipUv(tileBase, tileWhole ? u_canvas_resolution : u_canvas_resolution * tileSize, u_tile_cropping.xy, u_tile_cropping.z, u_tile_clip_res, 0.0, 0.0);
+`,
+  clip: `
+  uniform mat3 u_tile_tone;
+  uniform vec2 u_tile_light;
+  uniform vec3 u_tile_lettering;
+  uniform sampler2D u_tile_clip;
+  varying vec2 vTileClipUv;
+
+  vec4 lookImage() {
+    lyricInk = u_tile_lettering;
+    vec4 color = footageTreat(footageRead(u_tile_clip, vTileClipUv), u_tile_tone, vUv);
+    color.rgb *= u_tile_light.x;
+    return color;
+  }
+`,
+  uniformsFor(uniforms, index) {
+    if (index < TILE_GROUPS) return TILED.uniformsFor(uniforms, index)
+    return { ...TILED.uniformsFor(uniforms, index - TILE_GROUPS), u_tile_clip: { value: null }, u_tile_clip_res: { value: new Vector2(16, 9) } }
+  },
+  materialIndex(uniforms, group) {
+    return group <= TILES && uniforms.u_tile_src.value[group] > -0.5 ? TILE_GROUPS + group : group
+  },
+  layout(uniforms, materials, positions, uvs, ranges) {
+    for (let tile = 0; tile <= TILES; tile++) {
+      const source = uniforms.u_tile_src.value[tile]
+      const material = materials[source > -0.5 ? TILE_GROUPS + tile : tile]
+      material.uniforms.u_tile_light.value.set(uniforms.u_tile_level.value[tile], uniforms.u_tile_focus.value[tile])
+      if (source < -0.5) continue
+      const slot = Math.round(source)
+      material.uniforms.u_tile_clip.value = uniforms[CLIP_UNIFORMS[slot]].value
+      material.uniforms.u_tile_clip_res.value.copy(uniforms.u_clip_res.value[slot])
+    }
+    return tileQuads(uniforms, positions, uvs, ranges)
+  },
+}
+
+const split = {
+  id: 'split',
+  framing: true,
+  glsl: splitGlsl(false),
+  tiled: TILED,
   uniforms: () => ({
     u_tile_rect: { value: Array.from({ length: TILES }, () => new Vector4(0, 0, 0, 0)) },
     u_tile_crop: { value: Array.from({ length: TILES + 1 }, () => new Vector4(0, 0, 1, 0)) },
@@ -460,6 +520,7 @@ ${FRAMING_FUNCTIONS}`,
     u_tile_ink: { value: Array.from({ length: TILES + 1 }, () => new Vector3(1, 1, 1)) },
     u_split_frame: { value: new Vector4(0, 0, 0, 0) },
     u_tile_count: { value: 0 },
+    u_tile_src: { value: new Array(TILES + 1).fill(-1) },
   }),
   signature: ['u_tile_rect', 'u_tile_crop', 'u_tile_hue', 'u_tile_level', 'u_tile_focus', 'u_tile_ink', 'u_split_frame', 'u_tile_count'],
 
@@ -512,8 +573,11 @@ ${FRAMING_FUNCTIONS}`,
     const brightness = u.u_brightness.value
     const contrast = u.u_contrast.value
     const saturation = u.u_saturation.value
+    const footage = ctx.footage ? shot.footage : null
+    const panels = footage?.panels
     u.u_tile_grade.value[TILES].copy(u.u_grade.value)
-    u.u_tile_level.value[TILES] = v.back
+    u.u_tile_level.value[TILES] = panels && footage.back >= 0 ? FOOTAGE_BACK_LEVEL : v.back
+    if (panels) u.u_tile_src.value[TILES] = footage.back
     u.u_tile_focus.value[TILES] = u.u_focal_depth.value
     const since = Math.max(0, ctx.t - shot.start)
     const lit = (shot.vocal && ctx.words?.length ? ctx.wordsSince : ctx.beatsSince) % Math.max(1, count)
@@ -524,6 +588,7 @@ ${FRAMING_FUNCTIONS}`,
       const x = c.flags & WHOLE ? c.x : Math.max(-limit, Math.min(limit, c.x + c.dx * since))
       const y = c.flags & WHOLE ? c.y : Math.max(-limit, Math.min(limit, c.y + c.dy * since))
       const flags = c.flags ?? (v.mirror && i % 2 === 1 ? MIRROR : 0)
+      if (panels) u.u_tile_src.value[i] = i < count ? panels[(c.hue ?? i) % panels.length] : -1
       u.u_tile_crop.value[i].set(x, y, zoom, flags)
       const turn = v.hues[(c.hue ?? i) % v.hues.length]
       const angle = ctx.hue + turn * DEG
@@ -535,4 +600,15 @@ ${FRAMING_FUNCTIONS}`,
       u.u_tile_focus.value[i] = ctx.grid ? focusTarget(ctx.grid, ctx.frame, ctx.flipY, x, y, zoom) : 0.5
     }
   },
+}
+
+export default split
+
+export const splitFootage = {
+  ...split,
+  id: 'splitFootage',
+  footage: true,
+  glsl: splitGlsl(true),
+  tiled: FOOTAGE_TILED,
+  signature: [...split.signature, 'u_tile_src', ...FOOTAGE_SIGNATURE],
 }

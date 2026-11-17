@@ -30,12 +30,13 @@ import {
   WebGLRenderTarget,
 } from 'three'
 import { backgroundVertexShader, backgroundFragmentShader, sceneFragmentShader, sceneGlassFragmentShader, sceneGlassButtonFragmentShader, backdropFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, createLookContext, directLook, lookSignature, lookUniforms, setLookUniforms } from './scene/looks'
+import { FOOTAGE_IDS, LOOK_IDS, createLookContext, directLook, lookById, lookSignature, lookUniforms, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { applyFocus, createFocus } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
 import { setGrade } from './scene/grade'
 import { createSoftener } from './scene/softPyramid'
+import { MAX_SLOTS, createFootageState, planFootage, setFootageUniforms, stepFootage } from './scene/footage'
 import { lowerBound, numericAscending } from './sceneEffects'
 import { artworkPixels, sampleBackgroundProbe } from './backgroundProbe'
 import { addFrameWork, createGpuTimer, takeFrameWork, watchFrameStats } from './frameStats'
@@ -84,11 +85,12 @@ const SPLIT_GRID = 128
 const RADIO_BUTTON_REACH = 1.25
 const RADIO_BUTTON_MIN_STATE = 0.005
 const RADIO_BUTTON_MIN_RADIUS = 0.001
+const CLIP_RATE_STEP = 0.08
 export const LYRIC_WIDTH = 1024
 export const LYRIC_HEIGHT = 512
 
 const BG_SIGNATURE_UNIFORMS = [
-  'u_has_depth_map', 'u_focal_depth', 'u_focal_range', 'u_video_clip_blend', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
+  'u_has_depth_map', 'u_focal_depth', 'u_focal_range', 'u_transition', 'u_tex_resolution', 'u_glitch', 'u_scale',
   'u_frame_offset', 'u_frame_scale', 'u_rotation', 'u_orbit', 'u_brightness', 'u_contrast', 'u_saturation',
   'u_hue', 'u_max_blur', 'u_chromatic', 'u_flicker', 'u_canvas_resolution', 'u_text_empty',
 ]
@@ -204,9 +206,10 @@ async function loadArtworkTextures(blob) {
   texture.wrapT = MirroredRepeatWrapping
   texture.generateMipmaps = true
   texture.needsUpdate = true
-  if (!analysis) {
+  const palette = analysis?.palette || null
+  if (!analysis?.bands) {
     map?.close()
-    return { texture, depth: null }
+    return { texture, depth: null, palette }
   }
   const depthCanvas = makeCanvas(map.width, map.height)
   depthCanvas.getContext('2d', { willReadFrequently: true }).drawImage(map, 0, 0)
@@ -216,7 +219,7 @@ async function loadArtworkTextures(blob) {
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
   depthTexture.needsUpdate = true
-  return { texture, depth: { texture: depthTexture, ...analysis } }
+  return { texture, depth: { texture: depthTexture, ...analysis }, palette }
 }
 
 function addRect(out, n, x0, y0, x1, y1) {
@@ -434,10 +437,13 @@ export class SceneRenderer {
     this.layers = { A: this.transparentPixel, B: this.transparentPixel }
     this.layerDepth = { A: null, B: null }
     this.layerSoft = { A: null, B: null }
+    this.layerPalette = { A: null, B: null }
+    this.palette = null
     this.bands = null
     this.depthGrid = null
     this.focus = createFocus()
     this.plan = null
+    this.basePlan = null
     this.planTimer = null
     this.directorCursor = createDirectorCursor()
     this.lookContext = createLookContext(this.focus.frame, true)
@@ -446,7 +452,11 @@ export class SceneRenderer {
     this.artworkUrl = null
     this.artworkTokens = { A: 0, B: 0 }
     this.pendingSwap = null
-    this.clips = { textures: [], currentIndex: 0, blend: 0, count: 0, rate: 0 }
+    this.clips = { meta: [], textures: [] }
+    this.footage = createFootageState()
+    this.footageBuilt = false
+    this.slotTextures = new Array(MAX_SLOTS).fill(null)
+    this.sentRates = new Float32Array(MAX_SLOTS).fill(-1)
 
     this.captureScene = new Scene()
     this.captureCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1)
@@ -469,8 +479,6 @@ export class SceneRenderer {
         u_orbit: { value: new Vector3(0, 0, 0) },
         u_text_texture: { value: this.transparentPixel },
         u_text_empty: { value: 0.0 },
-        u_video_clip: { value: this.transparentPixel },
-        u_video_clip_blend: { value: 0.0 },
         u_transition: { value: 1.0 },
         u_tex_resolution: { value: new Vector2(1, 1) },
         u_canvas_resolution: { value: new Vector2(1, 1) },
@@ -568,29 +576,11 @@ export class SceneRenderer {
     })
     this.lookMaterials = { cover: { capture: this.bgMaterial, full: this.fgMaterial, backdrop: this.backdropMaterial } }
     this.lookTiles = {}
-    for (const id of LOOK_IDS) {
-      if (id === 'cover') continue
-      const shaders = lookShaders(id)
-      this.lookMaterials[id] = {
-        capture: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, uniforms: this.bgMaterial.uniforms }),
-        full: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.scene, uniforms: this.fgMaterial.uniforms }),
-        backdrop: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.backdrop, uniforms: this.backdropMaterial.uniforms }),
-      }
-      const tiled = LOOKS[id].tiled
-      if (!tiled) continue
-      const materials = Array.from({ length: tiled.groups }, (_, group) => new ShaderMaterial({
-        vertexShader: tiled.isBorder(group) ? shaders.vertex : shaders.tileVertex,
-        fragmentShader: tiled.isBorder(group) ? shaders.tileBorder : shaders.tilePicture,
-        uniforms: { ...this.backdropMaterial.uniforms, ...tiled.uniformsFor(this.bgMaterial.uniforms, group) },
-        transparent: tiled.isBorder(group),
-      }))
-      const geometry = new BufferGeometry()
-      geometry.setAttribute('position', new BufferAttribute(new Float32Array(tiled.vertices * 3), 3).setUsage(DynamicDrawUsage))
-      geometry.setAttribute('uv', new BufferAttribute(new Float32Array(tiled.vertices * 2), 2).setUsage(DynamicDrawUsage))
-      this.lookTiles[id] = { materials, geometry, ranges: new Int32Array(tiled.groups * 2), groups: materials.map((_, materialIndex) => ({ start: 0, count: 0, materialIndex })) }
-    }
-    this.lookSignatures = Object.fromEntries(LOOK_IDS.map(id => [id, id === 'cover' ? [] : lookSignature(id)]))
-    this.lookIndex = Object.fromEntries(LOOK_IDS.map((id, i) => [id, i]))
+    for (const id of LOOK_IDS) if (id !== 'cover') this.buildLook(id)
+    const allLooks = [...LOOK_IDS, ...FOOTAGE_IDS]
+    this.lookSignatures = Object.fromEntries(allLooks.map(id => [id, id === 'cover' ? [] : lookSignature(id)]))
+    this.lookIndex = Object.fromEntries(allLooks.map((id, i) => [id, i]))
+    this.footageLooks = new Set(FOOTAGE_IDS)
     this.lookReady = { cover: true }
     this.look = 'cover'
     this.glassGeometry = new BufferGeometry()
@@ -635,7 +625,7 @@ export class SceneRenderer {
       this.renderer.compileAsync(this.mainScene, this.mainCamera),
     ]).then(() => {
       this.programsReady = true
-      return this.compileLooks()
+      return this.compileLooks(LOOK_IDS).then(() => this.compileLooks(FOOTAGE_IDS))
     })
 
     let rendererName = ''
@@ -648,12 +638,39 @@ export class SceneRenderer {
     this.emit({ type: 'renderer', name: rendererName })
   }
 
-  async compileLooks() {
-    for (const id of LOOK_IDS) {
-      if (this.lookReady[id] || this.disposed) continue
+  buildLook(id) {
+    const shaders = lookShaders(id)
+    this.lookMaterials[id] = {
+      capture: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, uniforms: this.bgMaterial.uniforms }),
+      full: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.scene, uniforms: this.fgMaterial.uniforms }),
+      backdrop: new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.backdrop, uniforms: this.backdropMaterial.uniforms }),
+    }
+    const tiled = lookById(id).tiled
+    if (!tiled) return
+    const materials = Array.from({ length: tiled.groups + (tiled.extra || 0) }, (_, index) => {
+      const clip = index >= tiled.groups
+      const border = !clip && tiled.isBorder(index)
+      return new ShaderMaterial({
+        vertexShader: clip ? shaders.tileClipVertex : border ? shaders.vertex : shaders.tileVertex,
+        fragmentShader: clip ? shaders.tileClip : border ? shaders.tileBorder : shaders.tilePicture,
+        uniforms: { ...this.backdropMaterial.uniforms, ...tiled.uniformsFor(this.bgMaterial.uniforms, index) },
+        transparent: border,
+      })
+    })
+    const geometry = new BufferGeometry()
+    geometry.setAttribute('position', new BufferAttribute(new Float32Array(tiled.vertices * 3), 3).setUsage(DynamicDrawUsage))
+    geometry.setAttribute('uv', new BufferAttribute(new Float32Array(tiled.vertices * 2), 2).setUsage(DynamicDrawUsage))
+    const groups = Array.from({ length: tiled.groups }, (_, materialIndex) => ({ start: 0, count: 0, materialIndex }))
+    this.lookTiles[id] = { materials, geometry, ranges: new Int32Array(tiled.groups * 2), groups }
+  }
+
+  async compileLooks(ids) {
+    for (const id of ids) {
+      if (this.lookReady[id] || this.disposed || !this.lookMaterials[id]) continue
       const scene = new Scene()
       const tiles = this.lookTiles[id]
-      const programs = tiles ? [tiles.materials[0], tiles.materials[tiles.materials.length - 1]] : []
+      const tiled = lookById(id).tiled
+      const programs = tiles ? [tiles.materials[0], tiles.materials[tiled.groups - 1], ...(tiled.extra ? [tiles.materials[tiled.groups]] : [])] : []
       for (const material of [...Object.values(this.lookMaterials[id]), ...programs]) {
         const mesh = new Mesh(this.geometry, material)
         mesh.frustumCulled = false
@@ -662,6 +679,13 @@ export class SceneRenderer {
       await this.renderer.compileAsync(scene, this.captureCamera)
       this.lookReady[id] = true
     }
+  }
+
+  enableFootage() {
+    if (this.footageBuilt || this.disposed) return
+    this.footageBuilt = true
+    for (const id of FOOTAGE_IDS) this.buildLook(id)
+    if (this.programsReady) this.compileLooks(FOOTAGE_IDS)
   }
 
   setLook(id) {
@@ -683,7 +707,8 @@ export class SceneRenderer {
     }
     const { geometry, materials, ranges, groups } = tiles
     const { position, uv } = geometry.attributes
-    const vertices = LOOKS[this.look].tiled.layout(this.bgMaterial.uniforms, materials, position.array, uv.array, ranges)
+    const tiled = lookById(this.look).tiled
+    const vertices = tiled.layout(this.bgMaterial.uniforms, materials, position.array, uv.array, ranges)
     for (const attribute of [position, uv]) {
       attribute.clearUpdateRanges()
       attribute.addUpdateRange(0, vertices * attribute.itemSize)
@@ -694,11 +719,27 @@ export class SceneRenderer {
       if (!ranges[group * 2 + 1]) continue
       groups[group].start = ranges[group * 2]
       groups[group].count = ranges[group * 2 + 1]
+      groups[group].materialIndex = tiled.materialIndex ? tiled.materialIndex(this.bgMaterial.uniforms, group) : group
       geometry.groups.push(groups[group])
     }
     geometry.setDrawRange(0, vertices)
     mesh.geometry = geometry
     mesh.material = materials
+  }
+
+  showable(look) {
+    return !!this.lookReady[look] && !(lookById(look).needsDepth && (!this.bands || this.transitionProgress < 1))
+  }
+
+  footageTextures(footage) {
+    const slots = this.slotTextures
+    for (let k = 0; k < MAX_SLOTS; k++) {
+      const clip = footage.clips[k]
+      const texture = clip === undefined ? null : this.clips.textures[clip]
+      if (clip !== undefined && !(texture?.version > 0)) return null
+      slots[k] = texture || null
+    }
+    return slots
   }
 
   direct(at, reduceMotion, width, height, parallaxX, parallaxY) {
@@ -707,10 +748,13 @@ export class SceneRenderer {
       this.setLook('cover')
       return
     }
+    const shot = at.shot
     const bgUniforms = this.bgMaterial.uniforms
     const ctx = this.lookContext
-    let look = at.shot.look
-    if (!this.lookReady[look] || (LOOKS[look].needsDepth && (!this.bands || this.transitionProgress < 1))) look = 'cover'
+    const textures = shot.footage && this.showable(shot.footage.look) ? this.footageTextures(shot.footage) : null
+    let look = textures ? shot.footage.look : shot.look
+    if (!this.showable(look)) look = 'cover'
+    ctx.footage = !!textures
     if (look !== 'cover') {
       directLook(ctx, plan, at, this.effects, this.interpolatedProgress / 1000)
       ctx.aspect = width / Math.max(height, 1)
@@ -720,9 +764,31 @@ export class SceneRenderer {
       ctx.grid = bgUniforms.u_has_depth_map.value > 0.5 ? this.depthGrid : null
       ctx.tilt.x = -parallaxX / Math.max(width, 1)
       ctx.tilt.y = -parallaxY / Math.max(height, 1)
-      setLookUniforms(bgUniforms, at.shot, ctx)
+      setLookUniforms(bgUniforms, shot, ctx, look)
+      if (textures) setFootageUniforms(bgUniforms, shot, ctx, textures, this.palette)
     }
     this.setLook(look)
+  }
+
+  stepClips(plan, at, t, delta, playing) {
+    const state = stepFootage(this.footage, plan, at, t, delta, this.effects, this.clips.meta, playing)
+    const sent = this.sentRates
+    if (state.changed) {
+      this.emit({
+        type: 'footage',
+        play: state.slots.map((index, k) => ({ index, at: state.times[k] })),
+        next: state.next.map((index, k) => ({ index, at: state.nextAt[k] })),
+      })
+      sent.fill(-1)
+    }
+    let changed = false
+    for (let k = 0; k < state.slots.length; k++) {
+      const rate = state.rates[k]
+      if (Math.abs(rate - sent[k]) > CLIP_RATE_STEP || (rate === 0) !== (sent[k] === 0)) changed = true
+    }
+    if (!changed) return
+    sent.set(state.rates)
+    this.emit({ type: 'clipRates', rates: state.slots.map((index, k) => [index, state.rates[k]]) })
   }
 
   handle(message) {
@@ -732,7 +798,7 @@ export class SceneRenderer {
       case 'features': this.setFeatures(message.features, message.sections, message.lines); break
       case 'artwork': this.setArtwork(message.key, message.blob); break
       case 'lyric': this.setLyric(message); break
-      case 'clips': this.setClipCount(message.count); break
+      case 'clips': this.setClips(message.clips); break
       case 'clipFrame': this.setClipFrame(message); break
       case 'click': this.click = { intensity: message.intensity, at: Date.now() - message.age, active: true }; break
       case 'visible': this.setVisible(message.visible); break
@@ -771,15 +837,22 @@ export class SceneRenderer {
     this.audioFeatures = features || null
     this.lightCurve = buildLightCurve(features)
     this.plan = null
+    this.basePlan = null
     this.directorCursor = createDirectorCursor()
     this.effects.lastBeat = -1
     this.effects.lastShot = -1
     if (!features) return
     this.planTimer = setTimeout(() => {
       if (this.disposed) return
-      this.plan = planShots(features, { sections, lines })
-      this.directorCursor = createDirectorCursor()
+      this.basePlan = planShots(features, { sections, lines })
+      this.updateFootagePlan()
     }, PLAN_DELAY_MS)
+  }
+
+  updateFootagePlan() {
+    this.plan = this.clips.meta.length ? planFootage(this.basePlan, this.clips.meta) : this.basePlan
+    this.directorCursor = createDirectorCursor()
+    this.footage = createFootageState()
   }
 
   setArtwork(url, blob) {
@@ -787,7 +860,7 @@ export class SceneRenderer {
     const layer = this.frontLayer === 'A' ? 'B' : 'A'
     const token = ++this.artworkTokens[layer]
     this.artworkUrl = url
-    loadArtworkTextures(blob).then(({ texture, depth }) => {
+    loadArtworkTextures(blob).then(({ texture, depth, palette }) => {
       if (this.disposed || this.artworkTokens[layer] !== token) {
         texture.dispose()
         depth?.texture.dispose()
@@ -799,6 +872,7 @@ export class SceneRenderer {
       this.layerSoft[layer] = this.softener.soften(texture, this.layerSoft[layer])
       this.layerDepth[layer]?.texture.dispose()
       this.layerDepth[layer] = depth
+      this.layerPalette[layer] = palette
       this.pendingSwap = { layer, frames: ARTWORK_SWAP_FRAMES }
     }).catch(error => {
       if (this.artworkTokens[layer] === token) this.emit({ type: 'warn', message: `Failed to load artwork texture: ${error?.message || error}` })
@@ -824,6 +898,7 @@ export class SceneRenderer {
     this.bands = depth ? depth.bands : null
     this.depthGrid = depth ? depth.grid : null
     this.effects.interest = depth ? depth.interest : null
+    this.palette = this.layerPalette[this.frontLayer]
     this.focus.primed = false
   }
 
@@ -845,23 +920,37 @@ export class SceneRenderer {
     this.textTexture.needsUpdate = true
   }
 
-  setClipCount(count) {
-    for (const texture of this.clips.textures) texture.dispose()
-    this.clips = { textures: [], currentIndex: 0, blend: 0, count, rate: 0, sources: [] }
+  setClips(clips) {
+    for (const texture of this.clips.textures) {
+      if (!texture) continue
+      texture.image?.close?.()
+      texture.dispose()
+    }
+    this.clips = { meta: clips || [], textures: [] }
+    this.slotTextures.fill(null)
+    if (this.clips.meta.length) this.enableFootage()
+    if (this.basePlan) this.updateFootagePlan()
+    else this.footage = createFootageState()
   }
 
   setClipFrame({ index, frame, video }) {
-    const clips = this.clips
-    let texture = clips.textures[index]
+    const textures = this.clips.textures
+    let texture = textures[index]
     if (!texture) {
       texture = video ? new VideoTexture(video) : new VideoFrameTexture()
-      texture.minFilter = LinearFilter
+      texture.generateMipmaps = true
+      texture.minFilter = LinearMipmapLinearFilter
       texture.magFilter = LinearFilter
       texture.wrapS = MirroredRepeatWrapping
       texture.wrapT = MirroredRepeatWrapping
-      clips.textures[index] = texture
+      textures[index] = texture
     }
-    if (frame) texture.setFrame(frame)
+    if (!frame) return
+    const previous = texture.image
+    texture.userData.width = frame.displayWidth
+    texture.userData.height = frame.displayHeight
+    texture.setFrame(frame)
+    if (previous !== frame) previous?.close?.()
   }
 
   runEval({ id, code }) {
@@ -908,9 +997,9 @@ export class SceneRenderer {
     this.backdropMaterial.dispose()
     this.glassInteriorMaterial.dispose()
     this.glassButtonMaterial.dispose()
-    for (const id of LOOK_IDS) {
+    for (const [id, materials] of Object.entries(this.lookMaterials)) {
       if (id === 'cover') continue
-      for (const material of Object.values(this.lookMaterials[id])) material.dispose()
+      for (const material of Object.values(materials)) material.dispose()
     }
     for (const tiles of Object.values(this.lookTiles)) {
       tiles.geometry.dispose()
@@ -991,10 +1080,6 @@ export class SceneRenderer {
     const playhead = this.interpolatedProgress / 1000
     const at = plan ? directorAt(plan, playhead, this.directorCursor) : null
     const beat = stepFx(effects, plan, at, playhead, delta, isPlaying)
-    if (beat.cut && this.clips.count > 0) {
-      this.clips.currentIndex = (this.clips.currentIndex + 1) % this.clips.count
-      this.emit({ type: 'clipIndex', index: this.clips.currentIndex })
-    }
     const kickOut = reduceMotion || this.lightLevel < LIGHT_KICK_FLOOR ? 0 : beat.kick
     const pulseOut = reduceMotion ? 0 : effects.beatPulse
 
@@ -1195,24 +1280,8 @@ export class SceneRenderer {
     bgUniforms.u_flicker.value = effects.flicker
     this.direct(at, reduceMotion, logicalWidth, logicalHeight, reduceMotion ? 0 : pX, reduceMotion ? 0 : pY)
 
-    const clips = this.clips
-    if (clips.count > 0 && visualQuality === 'high') {
-      const currentEnergy = effects.currentEnergy || 0
-      const targetBlend = isPlaying ? 0.15 + (currentEnergy * 0.55) : 0
-      clips.blend += (targetBlend - clips.blend) * perFrame(targetBlend > clips.blend ? 0.15 : 0.08)
-      const rate = 0.6 + (currentEnergy * 1.2)
-      if (Math.abs(rate - clips.rate) > 0.01) {
-        clips.rate = rate
-        this.emit({ type: 'clipRate', rate })
-      }
-      const texture = clips.textures[clips.currentIndex]
-      if (texture) {
-        bgUniforms.u_video_clip.value = texture
-        bgUniforms.u_video_clip_blend.value = clips.blend
-      }
-    } else {
-      bgUniforms.u_video_clip_blend.value = 0
-    }
+    if (this.clips.meta.length) this.stepClips(plan, at, playhead, delta, isPlaying && !reduceMotion)
+    const footageActive = isPlaying && this.footageLooks.has(this.look)
 
     const rtHeight = this.captureResolution
     const rtWidth = Math.floor(rtHeight * (w / h))
@@ -1263,9 +1332,8 @@ export class SceneRenderer {
 
     const textures = signature.textures
     const textVersion = textTexture ? textTexture.version : -1
-    const videoActive = bgUniforms.u_video_clip_blend.value > 0.01
     const wantsRender = signature.force ||
-      videoActive ||
+      footageActive ||
       hasVisiblePanels !== signature.fgVisible ||
       textures[0] !== bgUniforms.u_texture.value ||
       textures[1] !== bgUniforms.u_texture_prev.value ||
@@ -1275,7 +1343,7 @@ export class SceneRenderer {
       sigLength !== signature.length ||
       signatureChanged(signature.current, signature.previous, sigLength)
 
-    const captureDirty = signature.force || signature.captureStale || videoActive ||
+    const captureDirty = signature.force || signature.captureStale || footageActive ||
       textures[0] !== bgUniforms.u_texture.value ||
       textures[1] !== bgUniforms.u_texture_prev.value ||
       textures[2] !== bgUniforms.u_text_texture.value ||
@@ -1310,7 +1378,7 @@ export class SceneRenderer {
       p.hue = u.u_hue.value
       p.flicker = u.u_flicker.value
       p.text = u.u_text_empty.value < 0.5 ? this.textProbe : null
-      p.split = this.look === 'split' ? u : null
+      p.split = this.look === 'split' || this.look === 'splitFootage' ? u : null
       probe = sampleBackgroundProbe(p).slice()
     }
 

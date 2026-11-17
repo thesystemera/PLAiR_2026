@@ -154,7 +154,7 @@ function phraseCuts(song, phrase, role, minGap, fill, lineStarts) {
   return kept
 }
 
-function createDeck(cards, rand) {
+export function createDeck(cards, rand) {
   let pile = []
   let last = null
   return fit => {
@@ -306,7 +306,7 @@ export function planShots(features, { sections, lines, still = false } = {}) {
   if (!shots.length) return STILL
   shots[0].start = 0
   for (let i = 0; i < shots.length - 1; i++) shots[i].end = shots[i + 1].start
-  const plan = { shots, beats, song, coverage }
+  const plan = { shots, beats, song, coverage, seed: songSeed(features, beats) }
   plan.norm = measureSpread(plan, directorAt, createDirectorCursor)
   return plan
 }

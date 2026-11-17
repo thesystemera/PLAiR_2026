@@ -1,3 +1,5 @@
+import { coverPalette } from './palette'
+
 const GRID = 64
 const AIM_RADIUS = 0.12
 const AIM_PERCENTILE = 0.8
@@ -218,13 +220,14 @@ function colourDistinctness(colour) {
 }
 
 export function coverAnalysis(color, map, makeCanvas) {
-  if (!map) return null
+  const small = analysisPixels(color, makeCanvas)
+  const palette = coverPalette(small.data)
+  if (!map) return { palette }
   const depth = analysisPixels(map, makeCanvas)
   const bands = depthBands(depth.data)
-  if (!bands) return null
+  if (!bands) return { palette }
   const grid = depthGrid(depth.data, depth.width, depth.height)
-  const small = analysisPixels(color, makeCanvas)
-  return { bands, grid, interest: interestPoints(grid, detailGrid(small.data, small.width, small.height), true) }
+  return { palette, bands, grid, interest: interestPoints(grid, detailGrid(small.data, small.width, small.height), true) }
 }
 
 export function interestPoints(depth, cover, flipY, count = 5) {

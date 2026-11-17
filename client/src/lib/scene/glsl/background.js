@@ -58,8 +58,6 @@ export const IMAGE_BODY = `
   uniform vec3 u_orbit;
   uniform sampler2D u_text_texture;
   uniform float u_text_empty;
-  uniform sampler2D u_video_clip;
-  uniform float u_video_clip_blend;
   uniform float u_transition;
   uniform vec2 u_canvas_resolution;
   uniform vec2 u_glitch;
@@ -153,13 +151,7 @@ export const IMAGE_BODY = `
   vec4 coverImage() {
     focalDepth = u_focal_depth;
     vec2 uv = depthView(vFxUv, vLocal);
-    vec4 finalColor = chromaticImage(uv, u_grade);
-
-    if (u_video_clip_blend > 0.01) {
-      vec4 clipColor = texture2D(u_video_clip, uv);
-      finalColor = mix(finalColor, clipColor, u_video_clip_blend);
-    }
-    return finalColor;
+    return chromaticImage(uv, u_grade);
   }
 
 `

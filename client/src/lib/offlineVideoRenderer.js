@@ -20,12 +20,14 @@ import {
 } from 'three'
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
-import { LOOKS, LOOK_IDS, createLookContext, directLook, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
+import { FOOTAGE_IDS, LOOK_IDS, createLookContext, directLook, lookById, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
 import { analysisPixels, applyFocus, createFocus, detailGrid, interestPoints } from './scene/focus'
 import { createFx, setCamera, stepFx } from './scene/beatFx'
 import { setGrade } from './scene/grade'
 import { createSoftener } from './scene/softPyramid'
+import { MAX_SLOTS, createFootageState, planFootage, setFootageUniforms, stepFootage } from './scene/footage'
+import { coverPalette } from './scene/palette'
 import {
   processLyricTimestamps,
   getLyricAt,
@@ -43,6 +45,7 @@ const AUDIO_QUEUE_CHUNKS = 4
 const AUDIO_CHUNK_SECONDS = 1
 const PROGRESS_INTERVAL_MS = 250
 const ENCODER_WAIT_LIMIT_MS = 50
+const CLIP_FRAME_S = 1 / 30
 
 function encoderDequeued(encoder) {
   return new Promise(resolve => {
@@ -138,7 +141,6 @@ export async function renderVideo({
     videoEncoder: null,
     audioEncoder: null,
     clipTextures: [],
-    clipFrame: null,
     readback: null,
   }
   const spent = { effects: 0, clips: 0, lyrics: 0, draw: 0, encode: 0 }
@@ -180,7 +182,7 @@ export async function renderVideo({
   resources.lyricTexture = lyricTexture
 
   onStatus?.('Loading artwork...')
-  const { texture: artworkTexture, depth } = await loadTextures(artworkBlob)
+  const { texture: artworkTexture, depth, palette } = await loadTextures(artworkBlob)
   resources.artworkTexture = artworkTexture
   resources.depthTexture = depth?.texture || null
   const softener = createSoftener(renderer)
@@ -208,8 +210,6 @@ export async function renderVideo({
       u_depth_map: { value: depth?.texture || transparentPixel },
       u_orbit: { value: new Vector3(0, 0, 0) },
       u_text_texture: { value: lyricTexture },
-      u_video_clip: { value: transparentPixel },
-      u_video_clip_blend: { value: 0.0 },
       u_transition: { value: 1.0 },
       u_tex_resolution: { value: new Vector2(texWidth, texHeight) },
       u_canvas_resolution: { value: new Vector2(width, height) },
@@ -247,13 +247,15 @@ export async function renderVideo({
   scene.add(mesh)
   resources.material = material
   const materials = { cover: material }
-  for (const id of LOOK_IDS) {
+  const clips = clipDurations.map(duration => ({ duration }))
+  for (const id of clips.length ? [...LOOK_IDS, ...FOOTAGE_IDS] : LOOK_IDS) {
     if (id === 'cover') continue
     const shaders = lookShaders(id)
     materials[id] = new ShaderMaterial({ vertexShader: shaders.vertex, fragmentShader: shaders.background, side: DoubleSide, uniforms: material.uniforms })
     resources.lookMaterials.push(materials[id])
   }
-  const plan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections, lines: lyricTimestamps?.lyrics })
+  const basePlan = bench.flatShader ? null : planShots(audioFeatures, { sections: lyricTimestamps?.timed_sections, lines: lyricTimestamps?.lyrics })
+  const plan = clips.length ? planFootage(basePlan, clips) : basePlan
   const directorCursor = createDirectorCursor()
   const focus = createFocus()
   const lookContext = Object.assign(createLookContext(focus.frame, false), { aspect: width / height, bands: depth?.bands || null, grid: depth?.grid || null })
@@ -328,19 +330,18 @@ export async function renderVideo({
   const effects = createFx()
   effects.interest = depth?.interest || null
 
-  for (let index = 0; index < clipDurations.length; index++) {
+  for (let index = 0; index < clips.length; index++) {
     const clipTexture = new VideoFrameTexture()
-    clipTexture.minFilter = LinearFilter
+    clipTexture.generateMipmaps = true
+    clipTexture.minFilter = LinearMipmapLinearFilter
     clipTexture.magFilter = LinearFilter
     clipTexture.flipY = false
     clipTexture.wrapS = MirroredRepeatWrapping
     clipTexture.wrapT = MirroredRepeatWrapping
     resources.clipTextures.push(clipTexture)
   }
-
-  let currentClipIndex = 0
-  let videoClipBlend = 0
-  const clipVirtualTime = new Array(clipDurations.length).fill(0)
+  const footage = createFootageState()
+  const slotTextures = new Array(MAX_SLOTS).fill(null)
 
   const lyricData = processLyricTimestamps(lyricTimestamps)
   let lyricIndex = 0
@@ -378,9 +379,7 @@ export async function renderVideo({
     const currentTime = timeMs / 1000
 
     const at = plan ? directorAt(plan, currentTime, directorCursor) : null
-    const beat = stepFx(effects, plan, at, currentTime, delta, true)
-    if (beat.cut && resources.clipTextures.length > 0) currentClipIndex = (currentClipIndex + 1) % resources.clipTextures.length
-    const rawEnergy = effects.currentEnergy
+    stepFx(effects, plan, at, currentTime, delta, true)
     effects.blur *= Math.exp(-delta * 6)
     const effectsDone = performance.now()
 
@@ -396,38 +395,26 @@ export async function renderVideo({
     applyFocus(material.uniforms, focus, depth?.grid || null, false, delta, effects, true)
 
     let look = 'cover'
+    let textures = null
     if (at) {
-      look = LOOKS[at.shot.look].needsDepth && !lookContext.bands ? 'cover' : at.shot.look
+      const shot = at.shot
+      if (clips.length) {
+        stepFootage(footage, plan, at, currentTime, delta, effects, clips, true)
+        if (shot.footage) textures = await footageFrames(shot.footage, footage, resources.clipTextures, slotTextures, requestClipFrame)
+      }
+      const showable = id => !(lookById(id).needsDepth && !lookContext.bands)
+      look = textures && showable(shot.footage.look) ? shot.footage.look : shot.look
+      if (!showable(look)) look = 'cover'
+      lookContext.footage = !!textures && look === shot.footage.look
       if (look !== 'cover') {
         directLook(lookContext, plan, at, effects, currentTime)
         lookContext.hue = material.uniforms.u_hue.value
         lookContext.rotation = material.uniforms.u_rotation.value
-        setLookUniforms(material.uniforms, at.shot, lookContext)
+        setLookUniforms(material.uniforms, shot, lookContext, look)
+        if (lookContext.footage) setFootageUniforms(material.uniforms, shot, lookContext, textures, palette)
       }
     }
     mesh.material = materials[look]
-
-    if (resources.clipTextures.length > 0) {
-      const targetBlend = 0.15 + (rawEnergy * 0.55)
-      const blendSpeed = targetBlend > videoClipBlend ? 0.15 : 0.08
-      videoClipBlend += (targetBlend - videoClipBlend) * blendSpeed
-
-      const playbackRate = 0.6 + (rawEnergy * 1.2)
-      clipVirtualTime[currentClipIndex] += delta * playbackRate
-
-      const clipDuration = clipDurations[currentClipIndex]
-      if (clipDuration) {
-        const clipFrame = await requestClipFrame(currentClipIndex, clipVirtualTime[currentClipIndex] % clipDuration)
-        if (clipFrame) {
-          resources.clipFrame?.close()
-          resources.clipFrame = clipFrame
-          resources.clipTextures[currentClipIndex].setFrame(clipFrame)
-        }
-      }
-
-      material.uniforms.u_video_clip.value = resources.clipTextures[currentClipIndex]
-      material.uniforms.u_video_clip_blend.value = resources.clipFrame ? videoClipBlend : 0
-    }
     const clipsDone = performance.now()
 
     const lyricFrame = lyricsStyled ? lyricFrameAt(styledLyrics, timeMs / 1000) : null
@@ -558,12 +545,37 @@ export async function renderVideo({
     } catch { /* ignore */ }
 
     for (const tex of resources.clipTextures) {
-      try { tex.dispose() } catch { /* ignore */ }
+      try {
+        tex.image?.close?.()
+        tex.dispose()
+      } catch { /* ignore */ }
     }
-    try {
-      resources.clipFrame?.close()
-    } catch { /* ignore */ }
   }
+}
+
+async function footageFrames(shotFootage, state, clipTextures, slots, requestClipFrame) {
+  for (let k = 0; k < MAX_SLOTS; k++) {
+    const clip = shotFootage.clips[k]
+    if (clip === undefined) {
+      slots[k] = null
+      continue
+    }
+    const texture = clipTextures[clip]
+    const time = state.times[k]
+    const fresh = Math.abs(time - (texture.userData.time ?? -1)) < CLIP_FRAME_S
+    const frame = fresh ? null : await requestClipFrame(clip, time)
+    if (frame) {
+      texture.userData.time = time
+      const previous = texture.image
+      texture.userData.width = frame.displayWidth
+      texture.userData.height = frame.displayHeight
+      texture.setFrame(frame)
+      if (previous !== frame) previous?.close?.()
+    }
+    if (!(texture.version > 0)) return null
+    slots[k] = texture
+  }
+  return slots
 }
 
 async function loadTextures(packBlob) {
@@ -573,14 +585,15 @@ async function loadTextures(packBlob) {
   texture.flipY = false
   texture.wrapS = MirroredRepeatWrapping
   texture.wrapT = MirroredRepeatWrapping
+  const small = analysisPixels(color, (w, h) => new OffscreenCanvas(w, h))
+  const palette = coverPalette(small.data)
   const depth = map ? readDepth(map, (w, h) => new OffscreenCanvas(w, h)) : null
-  if (!depth?.bands) return { texture, depth: null }
+  if (!depth?.bands) return { texture, depth: null, palette }
   const depthTexture = new CanvasTexture(depth.canvas)
   depthTexture.flipY = false
   depthTexture.wrapS = MirroredRepeatWrapping
   depthTexture.wrapT = MirroredRepeatWrapping
   depthTexture.minFilter = LinearMipmapLinearFilter
-  const small = analysisPixels(color, (w, h) => new OffscreenCanvas(w, h))
   const detail = detailGrid(small.data, small.width, small.height)
-  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, false) } }
+  return { texture, depth: { texture: depthTexture, bands: depth.bands, grid: depth.grid, interest: interestPoints(depth.grid, detail, false) }, palette }
 }
