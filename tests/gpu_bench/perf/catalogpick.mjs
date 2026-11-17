@@ -6,10 +6,10 @@
 // prints the frame rate, the worst frame and the frames over 25 ms while it moves. VARIANTS='{"label": "css"}' runs
 // a series per set of injected CSS rules (or {css, art, scene}: cover and scene switches as in scrollab.mjs), in turn,
 // ROUNDS times (default 2). It changes the owner's song on every
-// pick.
+// pick. `catalogpick.mjs 0 0` with SCROLL set only scrolls.
 import { page, sleep, openPanel } from './cdp.mjs'
 
-const picks = Number(process.argv[2] || 8)
+const picks = Number(process.argv[2] ?? 8)
 const warm = Number(process.argv[3] || 1)
 const WINDOW_MS = 1500
 const p = await page()

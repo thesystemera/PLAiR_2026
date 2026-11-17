@@ -533,17 +533,13 @@ function CatalogComponent({ onPlayNow, onPickSeed }) {
       const gridContainer = measurementRef.current?.querySelector('.grid')
       if (!gridContainer) return
 
-      const firstCard = gridContainer.children[0]
-      const thirdCard = gridContainer.children[gridLayoutRef.current.itemsPerRow]
+      const card = gridContainer.firstElementChild
+      if (!card) return
+      const cardHeight = card.getBoundingClientRect().height
+      const actualRowHeight = cardHeight + (parseFloat(getComputedStyle(gridContainer).rowGap) || 0)
 
-      if (firstCard && thirdCard) {
-        const firstRect = firstCard.getBoundingClientRect()
-        const thirdRect = thirdCard.getBoundingClientRect()
-        const actualRowHeight = thirdRect.top - firstRect.top
-
-        if (actualRowHeight > 0 && Math.abs(actualRowHeight - gridLayoutRef.current.rowHeight) > 2) {
-          setMeasuredRowHeight(actualRowHeight)
-        }
+      if (cardHeight > 0 && Math.abs(actualRowHeight - gridLayoutRef.current.rowHeight) > 2) {
+        setMeasuredRowHeight(actualRowHeight)
       }
     })
 

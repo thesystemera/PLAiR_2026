@@ -33,9 +33,12 @@ anything else is carried over as written.
   and reverted, and the three larger options (recycle the virtual list's rows, hold covers still during a fast
   scroll, a shorter colour fade): `docs/NEXT_SESSION_PERFORMANCE.md` section 3j. Owner to choose.
   **17 Nov, later:** the Catalog reuses its cards (`recycle`) and covers drawn off screen are there when they
-  scroll in; reuse halves the layout work but does not raise the frame rate on the phone, where the compositor
-  and GPU process are the limit (section 3k). **Still to measure on the phone** (it was unplugged):
-  `perf/coverwatch.mjs` on the build before and after, and the scroll frame rate once more.
+  scroll in; covers that left the screen stay on the GPU up to 64 MB (it was 8 covers). Measured on the phone:
+  scrolling back after a long scroll 69-100% of the covers are there (17-22% before), on the short test 100%
+  (47-69% before). The frame rate did not move (17.7 fps with reuse, 18.7 without): the compositor and GPU
+  process are the limit (section 3k). Reuse broke the list for about an hour on 17 Nov (the Catalog measured
+  its row height by DOM order); fixed, and `perf/coverwatch.mjs` now reports cards that are not there.
+  **Open:** the first scroll through covers never loaded (a third there) and the frame rate itself.
 
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The

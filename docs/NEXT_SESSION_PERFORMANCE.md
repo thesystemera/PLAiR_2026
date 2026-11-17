@@ -414,16 +414,58 @@ scroll back and all of it was gone"). What it is: CLAUDE.md section 14 (`recycle
   React re-inserts every card when one moves to the front.
 - **Covers on screen while scrolling** (`coverwatch.mjs`). Phone, build before the change: on the way down 22%
   not shown and 30% still fading in; on the way back 9% and 40%. Desktop: 17-44% still fading in before, 0%
-  after, on both legs, two rounds each. The phone was unplugged before the changed build could be measured:
-  **still to run there**, together with the frame rate (reuse is one prop on the Catalog's scroller).
+  after, on both legs, two rounds each. The phone numbers for the changed build are in "Back on the phone"
+  below; the reuse numbers in the first bullet were taken before the row-height bug was found and are replaced
+  there too.
 - **Checked on desktop**: after scrolling, flinging and reversing three times, and after every sort mode, each
   card's canvas matched its own song's pack (flat covers, 12x12 comparison, the title on screen as the truth:
   the fibers behind DOM nodes can be the stale alternate and gave false alarms), no console errors.
 
-Open, in order of likely worth: the renderer keeps 8 idle cover textures (`MAX_IDLE_TEXTURES`), so scrolling
-back more than about four rows re-uploads covers (the 9% not shown); a larger number costs GPU memory, about
-2.4 MB per 512 pack, and wants a phone check. The maps could be uploaded as RGBA (no repack, 0.7 ms a cover).
-The real limit is one compositor layer per cover.
+### Back on the phone (17 Nov, later)
+
+- **Reuse had broken the list, live for about an hour.** The Catalog measured its row height as the distance
+  from the grid's first child to the child `itemsPerRow` places after it. With reuse the DOM order is slot
+  order, so after a scroll those two were three rows apart: row height 656 instead of 219, the list three times
+  too tall, and after down, back, down no card on screen until the list was scrolled back to the top. Found
+  because `coverwatch.mjs` counted 2.5-4 covers a frame on screen where the old build had 6; it now reports
+  "no card there". Fix: the row height is a card's height plus the grid's row gap (no DOM order). Rule in
+  CLAUDE.md section 14. The desktop check above missed it because the measure only runs when the first child
+  is resized or a page of tracks arrives, and the slots happened to be in order then.
+- **Reuse, measured again with the list working** (builds in turn, `catalogpick.mjs 0 0` with `SCROLL=1800`,
+  `scrolltrace.mjs`): frame rate over eight legs each 17.7 with reuse, 18.7 without (15.4-23.9 and 13.9-23.7:
+  no difference). The page's main thread 549-609 ms/s with reuse, 563-629 without. Layouts 116 -> 61
+  (233 -> 140 ms) and elements restyled 2,736 -> 1,956 with reuse, so the saving in layout is real and is spent
+  elsewhere. GPU main thread 607-643 ms/s either way.
+- **Covers that are there** (`coverwatch.mjs 6000 2500`, a seven-screen scroll at fling speed straight after a
+  reload, then twice more; share of the covers on screen that are fully there, builds in turn):
+
+  | build | first way down | first way back | again, down | again, back |
+  |---|---|---|---|---|
+  | before 3ee5d0a | 27-28% | 17-22% | 14-19% | 19-21% |
+  | fix and cache budget, reuse off | 38-43% | 26-59% | 59-89% | 83-96% |
+  | fix and cache budget, reuse on (shipped) | 33-44% | 69-100% | 75-94% | 87-98% |
+
+  On the short test (1,800 px, three rounds after a warm-up) the build before had 47-69% there on both legs,
+  the shipped one 100%. Reuse was taken out when the frame rate showed nothing and put back when the first way
+  back measured 69-100% (four runs) against 26-59% (three runs). Why reuse helps there is not pinned down: a
+  reused card keeps its sized canvas, a new card is mounted and its canvas resized (3 a frame) before the
+  renderer can draw it ahead.
+- **The cover cache** (one build, the limit switched live, same scroll): 8 idle covers (as it was) 41-49% there
+  on the way back, 19-21% not shown, 30-38% fading in; 32 covers 97-100% there; 64 covers 98%. The GPU
+  process's GL memory (`dumpsys meminfo`) 119-133 MB with 8, 180 MB with 24 idle covers held; the phone has
+  5.7 GB and had 1.8 GB available. Shipped as a budget in bytes, `IDLE_TEXTURE_BYTES` 64 MB (about 27 covers at
+  512, 12 at 768), most recently left the screen first, and at most 8 idle covers that are still loading (so a
+  fling does not upload covers nobody will see). `__plairArt.set({ idleMB })` changes it live.
+- **Not changed: the first way down** (27-44% there in every build). Those covers have never been loaded:
+  fetch, decode in the worker, upload (2 a frame at about 17 frames a second), draw.
+- **Swapping builds on the live site**: emptying `client/dist` from a script was refused by the safety check
+  (rightly: a relative glob). Copy the other build over it instead (stale hashed files are harmless, the
+  manifest and `index.html` are replaced) and finish with `npm run build`.
+
+Open, in order of likely worth: the first way down (uploads per frame are counted per frame, so a slow frame
+rate also slows the covers; a budget in time would not, but uploads load the GPU process, which is the busy
+one, so it needs measuring). The maps could be uploaded as RGBA (no repack, 0.7 ms a cover). The real limit on
+the frame rate is one compositor layer per cover.
 
 ## 4. Next steps, in order
 

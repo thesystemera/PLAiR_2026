@@ -9,7 +9,8 @@ import { decodePack } from './packImage'
 const INTENSITY = 0.1
 const SCROLL_TILT = 1.3
 const MAX_PARALLAX = 1.6
-const MAX_IDLE_TEXTURES = 8
+const IDLE_TEXTURE_BYTES = 64 * 1024 * 1024
+const MAX_IDLE_LOADING = 8
 const UPLOADS_PER_FRAME = 2
 const REDRAW_SHIFT_PX = 0.5
 const LAYOUT_REFRESH_MS = 250
@@ -58,6 +59,12 @@ function clippingAncestors(element) {
   return clips
 }
 
+function textureBytes(entry) {
+  if (!entry.sizes) return 0
+  const [colorWidth, colorHeight, mapWidth, mapHeight] = entry.sizes
+  return colorWidth * colorHeight * 4 + mapWidth * mapHeight * (4 + 4 / 3)
+}
+
 function overlaps(a, left, top, right, bottom) {
   return a.right > left && a.left < right && a.bottom > top && a.top < bottom
 }
@@ -66,7 +73,7 @@ class DepthArtRenderer {
   constructor() {
     this.views = new Set()
     this.textures = new Map()
-    this.maxIdle = MAX_IDLE_TEXTURES
+    this.idleBytes = IDLE_TEXTURE_BYTES
     this.redrawShiftPx = REDRAW_SHIFT_PX
     this.skipCopy = false
     this.forceSplit = false
@@ -159,7 +166,10 @@ class DepthArtRenderer {
   detach(view) {
     if (!this.views.delete(view)) return
     this.viewsVersion++
-    if (view.entry) view.entry.refs--
+    if (view.entry) {
+      view.entry.refs--
+      view.entry.usedAt = performance.now()
+    }
     view.entry = null
     this.dropCache(view)
     this.evictIdle()
@@ -346,11 +356,20 @@ class DepthArtRenderer {
   }
 
   evictIdle() {
-    let idle = 0
-    for (const entry of this.textures.values()) if (entry.refs <= 0 && !entry.warm) idle++
-    if (idle <= this.maxIdle) return
-    const byAge = [...this.textures.values()].filter(entry => entry.refs <= 0 && !entry.warm).sort((a, b) => a.usedAt - b.usedAt)
-    for (const entry of byAge.slice(0, idle - this.maxIdle)) this.release(entry)
+    const idle = []
+    for (const entry of this.textures.values()) if (entry.refs <= 0 && !entry.warm) idle.push(entry)
+    if (!idle.length) return
+    idle.sort((a, b) => b.usedAt - a.usedAt)
+    let bytes = 0
+    let loading = 0
+    for (const entry of idle) {
+      if (entry.state === 'ready') {
+        bytes += textureBytes(entry)
+        if (bytes > this.idleBytes) this.release(entry)
+      } else if (++loading > MAX_IDLE_LOADING) {
+        this.release(entry)
+      }
+    }
   }
 
   release(entry) {
@@ -817,16 +836,16 @@ if (typeof window !== 'undefined') {
     stats: () => {
       const r = depthArtRenderer
       const mb = bytes => +(bytes / 1048576).toFixed(1)
-      let active = 0, idle = 0, warm = 0, textureBytes = 0, cacheBytes = 0, caches = 0
+      let active = 0, idle = 0, warm = 0, totalBytes = 0, idleBytes = 0, cacheBytes = 0, caches = 0
       const textureSizes = {}
       for (const entry of r.textures.values()) {
         if (entry.refs > 0) active++
         else if (entry.warm) warm++
         else idle++
         if (!entry.sizes) continue
-        const [cw, ch, mw, mh] = entry.sizes
-        textureBytes += cw * ch * 4 + mw * mh * (4 + 4 / 3)
-        textureSizes[cw] = (textureSizes[cw] || 0) + 1
+        totalBytes += textureBytes(entry)
+        if (entry.refs <= 0 && !entry.warm) idleBytes += textureBytes(entry)
+        textureSizes[entry.sizes[0]] = (textureSizes[entry.sizes[0]] || 0) + 1
       }
       const viewSizes = {}
       for (const view of r.views) {
@@ -838,7 +857,7 @@ if (typeof window !== 'undefined') {
         viewSizes[key] = (viewSizes[key] || 0) + 1
       }
       return {
-        views: r.views.size, active, idle, warm, textureMB: mb(textureBytes), textureSizes, caches, cacheMB: mb(cacheBytes),
+        views: r.views.size, active, idle, warm, textureMB: mb(totalBytes), idleMB: mb(idleBytes), textureSizes, caches, cacheMB: mb(cacheBytes),
         atlas: r.canvas ? `${r.canvas.width}x${r.canvas.height}` : null, viewSizes,
       }
     },
@@ -868,7 +887,7 @@ if (typeof window !== 'undefined') {
       }
       return out
     },
-    set: ({ maxIdle, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt, coarse } = {}) => {
+    set: ({ idleMB, lit, redrawShiftPx, skipCopy, skipDraw, forceSplit, stepScale, bench, shader, stepPx, tilt, coarse } = {}) => {
       if (coarse !== undefined) depthArtRenderer.coarseOverride = coarse === null ? null : !!coarse
       if (tilt !== undefined) depthArtRenderer.tiltOverride = tilt && { parallaxX: tilt.x, parallaxY: tilt.y }
       if (stepPx !== undefined) depthArtRenderer.configure({ stepPx })
@@ -882,7 +901,7 @@ if (typeof window !== 'undefined') {
       if (stepScale !== undefined) depthArtRenderer.stepScale = stepScale
       if (skipCopy !== undefined) depthArtRenderer.skipCopy = skipCopy
       if (skipDraw !== undefined) depthArtRenderer.skipDraw = skipDraw
-      if (maxIdle !== undefined) depthArtRenderer.maxIdle = maxIdle
+      if (idleMB !== undefined) depthArtRenderer.idleBytes = idleMB === null ? IDLE_TEXTURE_BYTES : idleMB * 1024 * 1024
       if (redrawShiftPx !== undefined) depthArtRenderer.redrawShiftPx = redrawShiftPx
       if (lit !== undefined) depthArtRenderer.configure({ lit })
       depthArtRenderer.evictIdle()
