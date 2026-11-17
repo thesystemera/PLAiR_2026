@@ -50,13 +50,20 @@ anything else is carried over as written.
   all the time, and by 187% and 478% on a kick: clipped to white and black. Now the lights share one total
   (`MAX_TOTAL_INTENSITY` 2.5 in `lightProbe.js`) and the kick flash is half (`LIGHT.KICK` 0.6 in
   `depthArtShader.js`): 25% and 63% steady, 48% and 122% on a kick. `LIGHT.STRENGTH` (0.6) is the one knob for
-  all of it. **Open, owner to choose:** (1) the baked normals. They are made mostly from the picture's own
+  all of it. The owner then saw the light as cone shaped: the rim term used the unit direction to each light,
+  so a light sitting over a cover split every broad slope into lit and unlit sectors with their apex at the
+  light. It now uses the horizontal part of the 3D light vector, which fades to nothing under the light.
+  **Open, owner to choose:** (1) the baked normals. They are made mostly from the picture's own
   edges (the deepMirror emboss), and gentle depth ramps such as floors, walls and table tops come out tilted
   (the median pixel 28 degrees, half the pixels over 30, a fifth over 58), so whole areas brighten and darken
   with the light. A re-bake with flatter ramps and less emboss is a CPU job over 2,265 covers and their packs.
   (2) The frame rate: lit covers are redrawn every frame of a scroll because the scroll tilts them (16 against
-  25 fps on the phone, lit against flat); holding the tilt during a fast scroll would leave only the relight
-  pass (`docs/NEXT_SESSION_PERFORMANCE.md` section 3j).
+  25 fps on the phone, lit against flat). The owner will not give up the tilt in a fling: the look stays, the
+  cost has to come out of the shader. Lead, not yet measured: the cover program carries the march, the trail
+  test (4 reads) and the fill (8 reads) in one fragment shader, and on the Adreno read paths that rarely run
+  still cost every pixel (what the background looks taught on 16 Nov, never applied to the covers). Time the
+  cover pass on the phone with the fill path edited out; if it is much cheaper, move the fill out of the main
+  program with the same pixels.
 
 - **Next track drops frames for about a second (owner, 17 Nov; measured on the phone, front screen on, two
   skips).** About 570-770 ms of frame time lost in the 1.2 s after pressing Next, worst frame 150-190 ms. The
