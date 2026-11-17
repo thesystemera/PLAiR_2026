@@ -18,7 +18,7 @@ const SCROLLER_MASK_STYLE = scrollerMaskStyle(SCROLLER_MASK)
 export const Scroller = forwardRef(function Scroller({ children, getScrollLabel = null, onScroll = null, className = '', style = {}, mask = null }, ref) {
   const scrollRef = useRef(null)
 
-  useImperativeHandle(ref, () => scrollRef.current)
+  useImperativeHandle(ref, () => scrollRef.current, [])
   const [scrollLabel, setScrollLabel] = useState('')
   const [showLabel, setShowLabel] = useState(false)
   const hideTimeoutRef = useRef(null)
