@@ -670,6 +670,7 @@ class DepthArtRenderer {
     }
     for (let extra = 0; extra <= this.bench.extraFull; extra++) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer)
+      gl.invalidateFramebuffer(gl.FRAMEBUFFER, targets.passAttachments)
       gl.useProgram(pass.program)
       const lit = setLightUniforms(gl, pass.uniforms, probe, true)
       for (const item of items) {
@@ -686,6 +687,7 @@ class DepthArtRenderer {
         gl.drawArrays(gl.TRIANGLES, 0, 6)
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, targets.fillFramebuffer)
+      gl.invalidateFramebuffer(gl.FRAMEBUFFER, targets.fillAttachments)
       gl.useProgram(fill.program)
       gl.activeTexture(gl.TEXTURE0 + COARSE_UNITS.relief)
       gl.bindTexture(gl.TEXTURE_2D, targets.relief)

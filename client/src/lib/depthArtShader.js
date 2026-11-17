@@ -740,15 +740,16 @@ export function createCoarseTargets(gl, width, height) {
   const passTextures = textures.slice(0, 3)
   const framebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
-  passTextures.forEach((texture, index) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, texture, 0))
-  gl.drawBuffers(passTextures.map((_, index) => gl.COLOR_ATTACHMENT0 + index))
+  const passAttachments = passTextures.map((_, index) => gl.COLOR_ATTACHMENT0 + index)
+  passTextures.forEach((texture, index) => gl.framebufferTexture2D(gl.FRAMEBUFFER, passAttachments[index], gl.TEXTURE_2D, texture, 0))
+  gl.drawBuffers(passAttachments)
   let complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
   const fillFramebuffer = gl.createFramebuffer()
   gl.bindFramebuffer(gl.FRAMEBUFFER, fillFramebuffer)
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textures[3], 0)
   complete = complete && gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
   gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-  const targets = { width, height, framebuffer, fillFramebuffer, hit: textures[0], relief: textures[1], extra: textures[2], fill: textures[3] }
+  const targets = { width, height, framebuffer, fillFramebuffer, passAttachments, fillAttachments: [gl.COLOR_ATTACHMENT0], hit: textures[0], relief: textures[1], extra: textures[2], fill: textures[3] }
   if (complete) return targets
   deleteCoarseTargets(gl, targets)
   return null
