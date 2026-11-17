@@ -5,7 +5,7 @@ import json
 import re
 import time
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,7 @@ from services_radio.conversation_service import post_activity
 from database import get_db, User
 from config import settings
 from service_registry import services
-from routers.deps import get_current_user, RateLimit, enforce_rate_limit
+from routers.deps import get_current_user, RateLimit, AI_SEARCH
 from security_middleware import is_valid_guest_id
 from services_radio import listener_location as location_resolver
 from services_radio.community_judge import judge, post_context
@@ -97,6 +97,7 @@ async def get_shoutout(
 @router.post("/api/user_content/shoutouts/search")
 async def search_shoutouts(
         request: ShoutoutSearchRequest,
+        http_request: Request,
         current_user: Optional[User] = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
         _rate_limit=Depends(RateLimit("search")),
@@ -104,10 +105,9 @@ async def search_shoutouts(
 ):
     assert services.user_content_vector_search_service is not None
     assert services.user_content_service is not None
-    user_id = int(current_user.id) if current_user else "guest"  # type: ignore
-    use_ai_analysis = bool(request.use_ai_analysis) and current_user is not None
+    use_ai_analysis = bool(request.use_ai_analysis)
     if use_ai_analysis:
-        enforce_rate_limit("search_ai_user", f"user:{user_id}")
+        AI_SEARCH.charge(http_request, current_user)
 
 
     try:

@@ -158,17 +158,22 @@ class RateLimit:
             request: Request,
             user: Optional[User] = Depends(get_current_user)
     ) -> Optional[User]:
+        self.charge(request, user)
+        return user
+
+    def charge(self, request: Request, user: Optional[User]) -> None:
         identity = request_identity(request, user)
         if user is not None:
             enforce_rate_limit(f"{self.name}_user", identity, self.user_limit)
-            return user
+            return
 
         enforce_rate_limit(f"{self.name}_guest", identity, self.guest_limit)
-        ip_bucket = f"{self.name}_guest_ip"
         ip = real_client_ip(request)
         if ip and not identity.startswith("ip:"):
-            enforce_rate_limit(ip_bucket, ip)
-        return None
+            enforce_rate_limit(f"{self.name}_guest_ip", ip)
+
+
+AI_SEARCH = RateLimit("search_ai")
 
 
 def enforce_auth_rate_limit(request: Request, username: str) -> None:

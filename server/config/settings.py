@@ -247,6 +247,8 @@ class Settings:
         "search_guest": (int(os.getenv("RATE_LIMIT_SEARCH_GUEST_PER_MINUTE", "30")), 60),
         "search_user": (int(os.getenv("RATE_LIMIT_SEARCH_USER_PER_MINUTE", "60")), 60),
         "search_ai_user": (int(os.getenv("RATE_LIMIT_SEARCH_AI_USER_PER_HOUR", "60")), 3600),
+        "search_ai_guest": (int(os.getenv("RATE_LIMIT_SEARCH_AI_GUEST_PER_HOUR", "60")), 3600),
+        "search_ai_guest_ip": (int(os.getenv("RATE_LIMIT_SEARCH_AI_GUEST_IP_PER_HOUR", "180")), 3600),
         "ai_upload_user": (int(os.getenv("RATE_LIMIT_AI_UPLOAD_USER_PER_HOUR", "30")), 3600),
         "shoutout_play_guest": (int(os.getenv("RATE_LIMIT_SHOUTOUT_PLAY_GUEST_PER_MINUTE", "30")), 60),
         "shoutout_play_user": (int(os.getenv("RATE_LIMIT_SHOUTOUT_PLAY_USER_PER_MINUTE", "120")), 60),
