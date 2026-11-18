@@ -255,7 +255,11 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     are rescored in idle time (CLAUDE.md section 11). The gate is a little strict: CGI cityscapes read as games and
     some street footage with a timecode fails. New prompt for the search terms; the catalog's terms are only
     rewritten when `utils/backfill_video_search_terms.py --rewrite --apply` runs (151 DeepSeek calls).
-    yt-dlp is 2026.08.19 (403 Forbidden from googlevideo on about 1% of downloads; an update usually fixes it).
+    403 Forbidden from googlevideo (19 Nov, yt-dlp 2026.10.26): YouTube's video servers refuse about 1 request
+    in 10 when ffmpeg opens the link (11% of production downloads, 4 of 64 and 1 of 32 in tests), for format 18
+    and video-only formats alike, over IPv6 from the TV client (no PO token needed there); the same video works
+    at once with a fresh link. The downloader retries once and counts it in the hourly line. If the rate rises,
+    look at a PO token provider for yt-dlp.
   - **Guests get no clips:** `/api/video-clips` answers only a signed-in account whose saved setting has video clips on.
   - **Sources:** title cards, burned-in subtitles and copyright text, letterbox bars, near-black clips; 480p is soft
     full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), clips matched

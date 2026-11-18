@@ -202,6 +202,7 @@ class YouTubeClipService:
         self.downloaded_since_report = 0
         self.rescored_kept = 0
         self.rescored_removed = 0
+        self.refused_once = 0
         self.last_report = time.time()
 
     async def prepare(self):
@@ -523,10 +524,11 @@ class YouTubeClipService:
         if changed and time.time() - self.last_report >= REPORT_EVERY_S:
             log_service.success(
                 f"✓ Video clips: +{self.downloaded_since_report} downloaded, {self.rescored_kept} checked and kept, "
-                f"{self.rescored_removed} removed for their look ({len(self.index['clips'])} in the library, "
+                f"{self.rescored_removed} removed for their look, {self.refused_once} refused once by YouTube and "
+                f"tried again ({len(self.index['clips'])} in the library, "
                 f"{self.cache_bytes / 1024 ** 3:.1f} GB; {len(self.priority) + len(self.fill_queue)} search terms waiting)"
             )
-            self.downloaded_since_report = self.rescored_kept = self.rescored_removed = 0
+            self.downloaded_since_report = self.rescored_kept = self.rescored_removed = self.refused_once = 0
             self.last_report = time.time()
 
     async def _evict_least_used(self):
@@ -606,6 +608,10 @@ class YouTubeClipService:
             ]
 
             returncode, _, stderr = await self._run(dl_cmd, DOWNLOAD_TIMEOUT_S)
+            if returncode != 0 and b"403 Forbidden" in stderr:
+                self.refused_once += 1
+                self._remove_temps(video_id)
+                returncode, _, stderr = await self._run(dl_cmd, DOWNLOAD_TIMEOUT_S)
 
             if returncode != 0:
                 log_service.throttled("youtube_download_failed",
