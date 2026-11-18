@@ -358,16 +358,11 @@ async function video(seconds, times, width = 360, height = 640) {
   const { renderVideo } = await import('/src/lib/offlineVideoRenderer.js')
   const sampleRate = 48000
   const pcm = { left: new Float32Array(sampleRate * seconds), right: new Float32Array(sampleRate * seconds), sampleRate }
-  const requestClipFrame = (index, time) => new Promise(resolve => {
-    const clip = clipVideos[index]
-    clip.addEventListener('seeked', () => resolve(new VideoFrame(clip)), { once: true })
-    clip.currentTime = time
-  })
-  const clipDurations = clipVideos ? clipVideos.map(clip => clip.duration) : []
-  const { buffer, stats } = await renderVideo({ artworkBlob: blob, pcm, audioFeatures: features, lyricTimestamps: lyricTiming, durationMs: seconds * 1000, width, height, fps: 30, clipDurations, requestClipFrame })
+  const clipUrls = clipVideos ? clipVideos.map(clip => new URL(clip.src, location.href).href) : []
+  const { blob: file, stats } = await renderVideo({ artworkBlob: blob, pcm, audioFeatures: features, lyricTimestamps: lyricTiming, durationMs: seconds * 1000, width, height, fps: 30, codec: 'avc1.4d001f', videoBitrate: 5_000_000, audioBitrate: 256_000, clipUrls })
   const element = document.createElement('video')
   element.muted = true
-  element.src = URL.createObjectURL(new Blob([buffer], { type: 'video/mp4' }))
+  element.src = URL.createObjectURL(file)
   await new Promise((resolve, reject) => { element.onloadeddata = resolve; element.onerror = () => reject(new Error('video did not decode')) })
   const columns = Math.min(times.length, 6)
   const out = document.createElement('canvas')
@@ -386,7 +381,7 @@ async function video(seconds, times, width = 360, height = 640) {
     ctx.drawImage(element, x, y + 18, width / 2, height / 2)
     ctx.fillText(`${times[i]}s`, x + 4, y + 13)
   }
-  return { image: out.toDataURL('image/png'), stats, megabytes: +(buffer.byteLength / 1e6).toFixed(2) }
+  return { image: out.toDataURL('image/png'), stats, megabytes: +(file.size / 1e6).toFixed(2) }
 }
 
 async function trace(fps = 30) {

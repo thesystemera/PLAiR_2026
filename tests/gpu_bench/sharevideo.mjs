@@ -1,6 +1,8 @@
 // node sharevideo.mjs <url> [close|cancel|stay]  — render a share video for the song on air in headless Chrome on the
 // P6000 (LUID=high,low from list_gpus.py) and report how long it took. `close` shuts the Share window while it renders
 // and waits for the "Video ready" notice; `cancel` cancels after 3 s; `stay` (default) keeps the window open.
+// SHARE='{"seconds":20,"quality":"1080p60","orientation":"landscape","clipUrls":[...]}' sets the bench switches
+// (window.__plairShare.set; nothing is uploaded while they are set) and the finished MP4 is saved to SCRATCH.
 import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -68,10 +70,11 @@ try {
   await until(`(() => { const b = document.querySelector('button[title="Share track"]'); return !!b && !b.disabled })()`, 40, 'a song on air')
   await sleep(1500)
   await evaluate(`document.querySelector('button[title="Share track"]').click()`)
-  await until(`[...document.querySelectorAll('button')].some(b => b.textContent.trim().startsWith('Generate Video'))`, 10, 'the Share window')
+  await until(`[...document.querySelectorAll('button')].some(b => b.textContent.trim().startsWith('Generate video'))`, 10, 'the Share window')
   await sleep(600)
+  if (process.env.SHARE) await evaluate(`window.__plairShare.set(${process.env.SHARE}), 1`)
   const started = Date.now()
-  await clickText('Generate Video')
+  await clickText('Generate video')
   console.log('render started')
 
   const ready = `!!document.querySelector('video[src^="blob:"]')`
@@ -82,7 +85,7 @@ try {
     await sleep(3000)
     await shot('rendering')
     console.log('cancel clicked:', await clickText('Cancel'))
-    await until(`[...document.querySelectorAll('button')].some(b => b.textContent.trim().startsWith('Generate Video'))`, 10, 'the idle Share window after cancel')
+    await until(`[...document.querySelectorAll('button')].some(b => b.textContent.trim().startsWith('Generate video'))`, 10, 'the idle Share window after cancel')
     console.log('cancelled; Share window is back to idle')
   } else {
     if (mode === 'close') {
@@ -115,6 +118,19 @@ try {
     }
     const info = await evaluate(`(async () => { const v = document.querySelector('video[src^="blob:"]'); if (v.readyState < 1) await new Promise(r => v.addEventListener('loadedmetadata', r, { once: true })); const size = (document.body.innerText.match(/MP4 ready - ([\\d.]+) MB/) || [])[1]; return JSON.stringify({ duration: v.duration, width: v.videoWidth, height: v.videoHeight, sizeMB: size }) })()`)
     console.log('video:', info)
+    console.log('stats:', JSON.stringify(await evaluate('JSON.stringify(Object.assign({}, window.__plairShare.last(), { sample: undefined }))')))
+    if (process.env.SHARE) {
+      const size = await evaluate('window.__plairShare.file()?.size || 0')
+      const parts = []
+      for (let at = 0; at < size; at += 4 << 20) {
+        const piece = await evaluate(`window.__plairShare.file().slice(${at}, ${at + (4 << 20)}).arrayBuffer().then(b => { let s = ''; const u = new Uint8Array(b); for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s) })`)
+        parts.push(Buffer.from(piece, 'base64'))
+      }
+      writeFileSync(join(SCRATCH, 'share.mp4'), Buffer.concat(parts))
+      console.log('saved', size, 'bytes to', join(SCRATCH, 'share.mp4'))
+      const sample = await evaluate(`(() => { const u = window.__plairShare.last()?.sample; if (!u) return ''; let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s) })()`)
+      if (sample) writeFileSync(join(SCRATCH, 'sample.rgba'), Buffer.from(sample, 'base64'))
+    }
   }
 } catch (error) {
   failed = error

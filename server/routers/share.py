@@ -54,6 +54,8 @@ async def upload_share_video(
         track_id: str = Form(..., max_length=128),
         title: Optional[str] = Form(None, max_length=300),
         artist: Optional[str] = Form(None, max_length=300),
+        width: Optional[int] = Form(None, ge=16, le=4096),
+        height: Optional[int] = Form(None, ge=16, le=4096),
         current_user: User = Depends(get_current_user)
 ):
     if not current_user:
@@ -100,7 +102,9 @@ async def upload_share_video(
             "artist": artist or "Unknown Artist",
             "user_id": int(current_user.id),  # type: ignore
             "created_at": int(time.time()),
-            "size": size
+            "size": size,
+            "width": width,
+            "height": height
         }
         async with aiofiles.open(metadata_path, "w", encoding="utf-8") as meta_file:
             await meta_file.write(json.dumps(metadata, indent=2))
@@ -165,6 +169,11 @@ async def get_shared_video_page(share_id: str):
     escaped_artist = esc(artist)
     image_meta = f'\n  <meta property="og:image" content="{artwork_url}">' if artwork_url else ""
     poster_attr = f' poster="{artwork_url}"' if artwork_url else ""
+    width = metadata.get("width")
+    height = metadata.get("height")
+    has_size = isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0
+    size_meta = f'\n  <meta property="og:video:width" content="{width}">\n  <meta property="og:video:height" content="{height}">' if has_size else ""
+    page_width = "min(960px, 92vw)" if has_size and width > height else "min(420px, 92vw)"
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -177,11 +186,11 @@ async def get_shared_video_page(share_id: str):
   <meta property="og:description" content="Watch {escaped_title} ({escaped_artist}) on PLAiR.">
   <meta property="og:video" content="{mp4_url}">
   <meta property="og:video:secure_url" content="{mp4_url}">
-  <meta property="og:video:type" content="video/mp4">{image_meta}
+  <meta property="og:video:type" content="video/mp4">{size_meta}{image_meta}
   <style>
     body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #05070a; color: white; font-family: system-ui, sans-serif; }}
-    main {{ width: min(420px, 92vw); }}
-    video {{ width: 100%; border-radius: 8px; background: black; }}
+    main {{ width: {page_width}; }}
+    video {{ width: 100%; max-height: 80vh; border-radius: 8px; background: black; }}
     h1 {{ font-size: 20px; margin: 16px 0 4px; }}
     p {{ color: #a7adb8; margin: 0 0 16px; }}
     a {{ color: white; }}

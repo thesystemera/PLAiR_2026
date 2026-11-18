@@ -1,24 +1,43 @@
 import { useState, useCallback, useEffect } from 'react'
 import { Modal, ModalButton, ModalErrorState, ModalProgress, ModalSection } from './Modal'
 import { Fade, FadeSwap } from '../Motion'
+import { OptionCard } from '../PlayerSheet'
 import { PRESETS } from '../../lib/motion'
 import { useUISelector } from '../../contexts/UIStateContext'
+import { useViewport } from '../../contexts/ViewportContext'
 import { useGenerationQueue } from '../../contexts/GenerationQueueContext'
 import { triggerHaptic } from '../../lib/haptics'
 import { logger } from '../../lib/logger'
-import { shareVideoBusy, shareVideoJob } from '../../lib/shareVideoJob'
+import { SHARE_QUALITIES, shareVideoBusy, shareVideoJob, shareVideoSupport } from '../../lib/shareVideoJob'
 import { TrackArt } from '../DepthArt'
 import { InlineNote } from '../Notice'
 import { artistByline, artistCredit, formatTimeLeft } from '../../lib/utils'
-import { Share2, Download, Copy, Check, Video } from 'lucide-react'
+import { Share2, Download, Copy, Check, Video, RectangleVertical, RectangleHorizontal, Sparkles, Film, Zap } from 'lucide-react'
+
+const ORIENTATION_CHOICES = [
+  { id: 'portrait', icon: RectangleVertical, title: 'Portrait', subtitle: '9:16, for phones' },
+  { id: 'landscape', icon: RectangleHorizontal, title: 'Landscape', subtitle: '16:9, widescreen' },
+]
+
+const QUALITY_CHOICES = [
+  { id: '1080p60', icon: Sparkles, title: '1080p · 60 fps', subtitle: 'Sharpest picture, takes longest' },
+  { id: '720p60', icon: Film, title: '720p · 60 fps', subtitle: 'Smooth, smaller file' },
+  { id: '720p30', icon: Zap, title: '720p · 30 fps', subtitle: 'Quickest to make' },
+]
+
+const NOT_ON_DEVICE = "This device can't encode this format"
 
 export function ShareModal({ isOpen, onClose, track }) {
+  const { isPortrait } = useViewport()
   const {
     playingTrack,
     videoClipsEnabled,
+    savedQuality,
+    publishSettings,
     setVideoPreviewPlaying,
     jobTrackId,
     jobTitle,
+    jobOrientation,
     jobStatus,
     jobStage,
     jobProgress,
@@ -33,9 +52,12 @@ export function ShareModal({ isOpen, onClose, track }) {
     toastError: state.toastError,
     playingTrack: state.engineState.currentTrack,
     videoClipsEnabled: state.settingsState.videoClipsEnabled,
+    savedQuality: state.settingsState.shareVideoQuality,
+    publishSettings: state.publishSettings,
     setVideoPreviewPlaying: state.setVideoPreviewPlaying,
     jobTrackId: state.shareVideoState.track?.id,
     jobTitle: state.shareVideoState.title,
+    jobOrientation: state.shareVideoState.orientation,
     jobStatus: state.shareVideoState.status,
     jobStage: state.shareVideoState.stage,
     jobProgress: state.shareVideoState.progress,
@@ -52,6 +74,8 @@ export function ShareModal({ isOpen, onClose, track }) {
   const [shareError, setShareError] = useState(null)
   const [linkCopied, setLinkCopied] = useState(false)
   const [videoLinkCopied, setVideoLinkCopied] = useState(false)
+  const [orientation, setOrientation] = useState(isPortrait ? 'portrait' : 'landscape')
+  const [support, setSupport] = useState(null)
   const [wasOpen, setWasOpen] = useState(isOpen)
   if (wasOpen !== isOpen) {
     setWasOpen(isOpen)
@@ -59,10 +83,23 @@ export function ShareModal({ isOpen, onClose, track }) {
       setShareError(null)
       setLinkCopied(false)
       setVideoLinkCopied(false)
+      setOrientation(isPortrait ? 'portrait' : 'landscape')
     }
   }
 
+  useEffect(() => {
+    if (!isOpen) return
+    let live = true
+    shareVideoSupport().then(result => { if (live) setSupport(result) })
+    return () => { live = false }
+  }, [isOpen])
+
   const includeVideoClips = videoClipsEnabled
+  const canMake = (quality, shape) => !support || support[`${quality}:${shape}`]?.supported
+  const quality = canMake(savedQuality, orientation)
+    ? savedQuality
+    : Object.keys(SHARE_QUALITIES).find(id => canMake(id, orientation)) || savedQuality
+  const noFormat = !!support && !Object.keys(SHARE_QUALITIES).some(id => canMake(id, orientation))
 
   const trackTitle = currentTrack?.generation_params?.title || 'Untitled'
   const trackArtist = artistCredit(currentTrack) || 'Unknown Artist'
@@ -121,8 +158,18 @@ export function ShareModal({ isOpen, onClose, track }) {
     if (!currentTrack) return
     setShareError(null)
     setJobsPanelOpen(true)
-    void shareVideoJob.start(currentTrack, { includeClips: includeVideoClips })
-  }, [currentTrack, includeVideoClips, setJobsPanelOpen])
+    void shareVideoJob.start(currentTrack, { includeClips: includeVideoClips, quality, orientation })
+  }, [currentTrack, includeVideoClips, quality, orientation, setJobsPanelOpen])
+
+  const chooseOrientation = useCallback((shape) => {
+    triggerHaptic('light')
+    setOrientation(shape)
+  }, [])
+
+  const chooseQuality = useCallback((id) => {
+    triggerHaptic('light')
+    publishSettings({ shareVideoQuality: id })
+  }, [publishSettings])
 
   const handleDownload = useCallback(() => {
     if (!videoUrl) return
@@ -248,9 +295,40 @@ export function ShareModal({ isOpen, onClose, track }) {
           <FadeSwap swapKey={isRendering ? 'rendering' : status} mode="wait" preset={PRESETS.stepSwap}>
             {status === 'idle' && (
               <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {ORIENTATION_CHOICES.map(choice => (
+                    <OptionCard
+                      key={choice.id}
+                      icon={choice.icon}
+                      title={choice.title}
+                      subtitle={choice.subtitle}
+                      selected={orientation === choice.id}
+                      onSelect={() => chooseOrientation(choice.id)}
+                    />
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  {QUALITY_CHOICES.map(choice => {
+                    const available = canMake(choice.id, orientation)
+                    return (
+                      <OptionCard
+                        key={choice.id}
+                        icon={choice.icon}
+                        title={choice.title}
+                        subtitle={available ? choice.subtitle : NOT_ON_DEVICE}
+                        selected={quality === choice.id}
+                        disabled={!available}
+                        onSelect={() => chooseQuality(choice.id)}
+                      />
+                    )
+                  })}
+                </div>
+                {noFormat && (
+                  <InlineNote tone="warning">This browser can&apos;t make videos. Share the track link instead.</InlineNote>
+                )}
                 <ModalButton
                   onClick={handleGenerateVideo}
-                  disabled={!currentTrack || otherTrackRendering}
+                  disabled={!currentTrack || otherTrackRendering || noFormat}
                   className="w-full flex items-center justify-center gap-2"
                 >
                   <Video className="w-5 h-5" />
@@ -279,7 +357,7 @@ export function ShareModal({ isOpen, onClose, track }) {
 
             {status === 'complete' && videoUrl && (
               <div className="space-y-3">
-                <div className="relative aspect-[9/16] max-h-64 mx-auto rounded-lg overflow-hidden bg-black">
+                <div className={`relative ${jobOrientation === 'landscape' ? 'aspect-video w-full' : 'aspect-[9/16] max-h-64'} mx-auto rounded-lg overflow-hidden bg-black`}>
                   <video
                     src={videoUrl}
                     controls

@@ -18,7 +18,7 @@ import {
   VideoFrameTexture,
   WebGLRenderer,
 } from 'three'
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer'
+import { Muxer, StreamTarget } from 'mp4-muxer'
 import { backgroundVertexShader, backgroundFragmentShader, lookShaders } from './sceneShaders'
 import { FOOTAGE_IDS, LOOK_IDS, createLookContext, directLook, lookById, lookUniforms, readDepth, setLookUniforms } from './scene/looks'
 import { createDirectorCursor, directorAt, planShots } from './scene/director'
@@ -36,16 +36,18 @@ import {
 import { drawLyricFrame, lyricCanvasSize, lyricFrameAt, prepareLyricStyle } from './lyricStyle'
 import { loadLyricFonts } from './lyricFonts'
 import { NV12_COLOR_SPACE, createFrameReadback, frameReadbackSupported } from './videoFrameReadback'
+import { openClip } from './clipReader'
 
 const VIDEO_QUEUE_FRAMES = 8
-const VIDEO_BITRATE = 1_500_000
-const VIDEO_CODEC = 'avc1.4d001f'
 const KEY_FRAME_SECONDS = 2
 const AUDIO_QUEUE_CHUNKS = 4
 const AUDIO_CHUNK_SECONDS = 1
+const AUDIO_FRAME_SAMPLES = 1024
+const AUDIO_CHUNK_MARGIN = 16
 const PROGRESS_INTERVAL_MS = 250
 const ENCODER_WAIT_LIMIT_MS = 50
 const CLIP_FRAME_S = 1 / 30
+const CLIP_IDLE_SECONDS = 2
 
 function encoderDequeued(encoder) {
   return new Promise(resolve => {
@@ -111,17 +113,62 @@ async function encodeAudio(audioEncoder, pcm, getError) {
   }
 }
 
+async function audioConfigFor(sampleRate, bitrate) {
+  for (const candidate of [bitrate, 192_000, 128_000]) {
+    const config = { codec: 'mp4a.40.2', numberOfChannels: 2, sampleRate, bitrate: candidate }
+    const { supported } = await AudioEncoder.isConfigSupported(config).catch(() => ({ supported: false }))
+    if (supported) return config
+  }
+  return { codec: 'mp4a.40.2', numberOfChannels: 2, sampleRate, bitrate: 128_000 }
+}
+
+async function openClips(urls) {
+  const opened = await Promise.all(urls.map(url => openClip(url).catch(() => null)))
+  return opened.filter(Boolean)
+}
+
+function writePiece(pieces, position, data) {
+  const blob = new Blob([data])
+  const end = position + blob.size
+  const kept = []
+  for (const piece of pieces) {
+    const pieceEnd = piece.position + piece.blob.size
+    if (pieceEnd <= position || piece.position >= end) {
+      kept.push(piece)
+      continue
+    }
+    if (piece.position < position) kept.push({ position: piece.position, blob: piece.blob.slice(0, position - piece.position) })
+    if (pieceEnd > end) kept.push({ position: end, blob: piece.blob.slice(end - piece.position) })
+  }
+  kept.push({ position, blob })
+  kept.sort((a, b) => a.position - b.position)
+  return kept
+}
+
+function fileFromPieces(pieces) {
+  const parts = []
+  let end = 0
+  for (const piece of pieces) {
+    if (piece.position > end) parts.push(new Uint8Array(piece.position - end))
+    parts.push(piece.blob)
+    end = piece.position + piece.blob.size
+  }
+  return new Blob(parts, { type: 'video/mp4' })
+}
+
 export async function renderVideo({
   artworkBlob,
   pcm,
   audioFeatures,
   lyricTimestamps,
-  clipDurations = [],
-  requestClipFrame,
+  clipUrls = [],
   durationMs,
-  width = 720,
-  height = 1280,
-  fps = 30,
+  width,
+  height,
+  fps,
+  codec,
+  videoBitrate,
+  audioBitrate,
   bench = {},
   onProgress,
   onStatus,
@@ -141,6 +188,7 @@ export async function renderVideo({
     videoEncoder: null,
     audioEncoder: null,
     clipTextures: [],
+    clipReaders: [],
     readback: null,
   }
   const spent = { effects: 0, clips: 0, lyrics: 0, draw: 0, encode: 0 }
@@ -247,7 +295,10 @@ export async function renderVideo({
   scene.add(mesh)
   resources.material = material
   const materials = { cover: material }
-  const clips = clipDurations.map(duration => ({ duration }))
+  if (clipUrls.length) onStatus?.('Loading video clips...')
+  const readers = clipUrls.length ? await openClips(clipUrls) : []
+  resources.clipReaders = readers
+  const clips = readers.map(reader => ({ duration: reader.duration }))
   for (const id of clips.length ? [...LOOK_IDS, ...FOOTAGE_IDS] : LOOK_IDS) {
     if (id === 'cover') continue
     const shaders = lookShaders(id)
@@ -263,12 +314,17 @@ export async function renderVideo({
   onStatus?.('Setting up encoder...')
   const totalFrames = Math.ceil((durationMs / 1000) * fps)
 
+  let pieces = []
   const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
+    target: new StreamTarget({
+      onData: (data, position) => { pieces = writePiece(pieces, position, data) },
+      chunked: true,
+    }),
     video: {
       codec: 'avc',
       width,
       height,
+      frameRate: fps,
     },
     audio: {
       codec: 'aac',
@@ -276,7 +332,10 @@ export async function renderVideo({
       sampleRate,
     },
     firstTimestampBehavior: 'offset',
-    fastStart: 'in-memory',
+    fastStart: {
+      expectedVideoChunks: totalFrames,
+      expectedAudioChunks: Math.ceil(pcm.left.length / AUDIO_FRAME_SAMPLES) + AUDIO_CHUNK_MARGIN,
+    },
   })
 
   let videoEncoderError = null
@@ -288,9 +347,11 @@ export async function renderVideo({
   })
   resources.videoEncoder = videoEncoder
 
-  const encoderConfig = { codec: VIDEO_CODEC, width, height, bitrate: VIDEO_BITRATE, framerate: fps, bitrateMode: 'constant', ...bench.encoder }
+  const encoderConfig = { codec, width, height, bitrate: videoBitrate, framerate: fps, bitrateMode: 'constant', ...bench.encoder }
   const constantBitrate = await VideoEncoder.isConfigSupported(encoderConfig).then(result => result.supported, () => false)
   if (!constantBitrate) delete encoderConfig.bitrateMode
+  const supported = constantBitrate || await VideoEncoder.isConfigSupported(encoderConfig).then(result => result.supported, () => false)
+  if (!supported) throw new Error(`This device can't encode ${height > width ? width : height}p video at ${fps} fps`)
   videoEncoder.configure(encoderConfig)
   const keyFrameEvery = bench.keyFrameEvery || Math.round(fps * KEY_FRAME_SECONDS)
   const syncPixel = new Uint8Array(4)
@@ -304,12 +365,8 @@ export async function renderVideo({
   })
   resources.audioEncoder = audioEncoder
 
-  audioEncoder.configure({
-    codec: 'mp4a.40.2',
-    numberOfChannels: 2,
-    sampleRate,
-    bitrate: 128000,
-  })
+  const audioConfig = await audioConfigFor(sampleRate, audioBitrate)
+  audioEncoder.configure(audioConfig)
 
   const audioError = () => (
     audioEncoderError
@@ -400,7 +457,8 @@ export async function renderVideo({
       const shot = at.shot
       if (clips.length) {
         stepFootage(footage, plan, at, currentTime, delta, effects, clips, true)
-        if (shot.footage) textures = await footageFrames(shot.footage, footage, resources.clipTextures, slotTextures, requestClipFrame)
+        if (shot.footage) textures = await footageFrames(shot.footage, footage, resources.clipTextures, slotTextures, readers, frame)
+        releaseIdleClips(readers, frame - fps * CLIP_IDLE_SECONDS)
       }
       const showable = id => !(lookById(id).needsDepth && !lookContext.bands)
       look = textures && showable(shot.footage.look) ? shot.footage.look : shot.look
@@ -484,18 +542,22 @@ export async function renderVideo({
     speed: +(durationMs / 1000 / renderSeconds).toFixed(2),
     msPerFrame: Object.fromEntries(Object.entries(spent).map(([stage, ms]) => [stage, +(ms / totalFrames).toFixed(2)])),
     frames_source: readback ? `readback, ${readback.batch} a read` : 'canvas',
+    format: `${width}x${height} ${fps} fps, ${(encoderConfig.bitrate / 1e6).toFixed(1)} Mbps video, ${audioConfig.bitrate / 1000} kbps audio`,
     constantBitrate,
+    clipsLoaded: readers.length,
+    clipsWanted: clipUrls.length,
     sample,
   }
 
-  if (bench.noEncode) return { buffer: new ArrayBuffer(0), stats }
+  if (bench.noEncode) return { blob: new Blob([]), stats }
 
   onStatus?.('Building MP4 file...')
   muxer.finalize()
+  const blob = fileFromPieces(pieces)
 
   onProgress?.(1)
 
-  return { buffer: muxer.target.buffer, stats }
+  return { blob, stats }
 
   } finally {
     try {
@@ -550,10 +612,20 @@ export async function renderVideo({
         tex.dispose()
       } catch { /* ignore */ }
     }
+
+    for (const reader of resources.clipReaders) {
+      try { reader.close() } catch { /* ignore */ }
+    }
   }
 }
 
-async function footageFrames(shotFootage, state, clipTextures, slots, requestClipFrame) {
+function releaseIdleClips(readers, before) {
+  for (const reader of readers) {
+    if (reader.decoder && reader.usedAt < before) reader.close()
+  }
+}
+
+async function footageFrames(shotFootage, state, clipTextures, slots, readers, index) {
   for (let k = 0; k < MAX_SLOTS; k++) {
     const clip = shotFootage.clips[k]
     if (clip === undefined) {
@@ -562,8 +634,9 @@ async function footageFrames(shotFootage, state, clipTextures, slots, requestCli
     }
     const texture = clipTextures[clip]
     const time = state.times[k]
+    readers[clip].usedAt = index
     const fresh = Math.abs(time - (texture.userData.time ?? -1)) < CLIP_FRAME_S
-    const frame = fresh ? null : await requestClipFrame(clip, time)
+    const frame = fresh ? null : await readers[clip].frameAt(time)
     if (frame) {
       texture.userData.time = time
       const previous = texture.image

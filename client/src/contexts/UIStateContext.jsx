@@ -357,6 +357,7 @@ export function UIStateProvider({ children }) {
     status: 'idle',
     track: null,
     title: '',
+    orientation: 'portrait',
     stage: '',
     progress: 0,
     etaSeconds: null,

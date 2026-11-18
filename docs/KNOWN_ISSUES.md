@@ -254,8 +254,8 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
   - **Guests get no clips:** `/api/video-clips` answers only a signed-in account whose saved setting has video clips on.
   - **Sources:** title cards, burned-in subtitles and copyright text, letterbox bars, near-black clips; 480p is soft
     full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), a short
-    keyframe gap (the share video seeks each clip per frame: 0.34x real time on the P6000 for 70 s with today's
-    ~250-frame keyframe gap), clips matched to lyric lines by meaning (mpnet, in the prefetch loop).
+    keyframe gap (no longer needed by the share video, which decodes the clips itself since 18 Nov; it would still
+    make its jumps cheaper), clips matched to lyric lines by meaning (mpnet, in the prefetch loop).
   - **Not measured on the phone:** footage looks, two to four videos decoding at once, mipmaps made per video frame.
     On the P6000 the footage looks cost the same as the plain looks (under 1 ms a frame at 1081x2402).
 

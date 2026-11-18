@@ -141,8 +141,7 @@ export const musicMethods = {
     return `/api/stream/${trackId}?${params.toString()}`
   },
 
-  getRenderAudioUrl(trackId) {
-    const baseUrl = `/api/stream/${trackId}`
+  renderAudioUrl(trackId) {
     const session = getSessionIds()
     const params = new URLSearchParams({
       guest_id: session.guestId,
@@ -151,7 +150,11 @@ export const musicMethods = {
       t: String(Date.now())
     })
 
-    return `${baseUrl}?${params.toString()}`
+    return `/api/stream/${trackId}?${params.toString()}`
+  },
+
+  fetchRenderAudio(trackId) {
+    return this._fetch(this.renderAudioUrl(trackId), { headers: this.getHeaders(), cache: 'no-store' })
   },
 
   async getAudioFeatures(trackId) {
@@ -243,13 +246,17 @@ export const musicMethods = {
     })
   },
 
-  async uploadShareVideo({ trackId, title, artist, blob }) {
+  async uploadShareVideo({ trackId, title, artist, blob, width, height }) {
     return this._routeRequest('uploadShareVideo', [trackId, title, artist], async () => {
       const formData = new FormData()
       formData.append('file', blob, `${trackId}_plair_share.mp4`)
       formData.append('track_id', trackId)
       formData.append('title', title || '')
       formData.append('artist', artist || '')
+      if (width && height) {
+        formData.append('width', String(width))
+        formData.append('height', String(height))
+      }
 
       const headers = this.getHeaders()
       delete headers['Content-Type']
