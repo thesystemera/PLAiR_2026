@@ -16,6 +16,10 @@ from services import log_service
 MIN_SOURCE_SECONDS = 30
 MAX_SOURCE_SECONDS = 6 * 3600
 FAILED_SEARCH_RETRY_S = 24 * 3600
+SEARCH_TIMEOUT_S = 30
+DOWNLOAD_TIMEOUT_S = 120
+ENCODE_TIMEOUT_S = 60
+STALE_TEMP_S = DOWNLOAD_TIMEOUT_S + ENCODE_TIMEOUT_S + 60
 
 VIDEO_SEARCH_TERMS_PROMPT = """
 **video_search_terms**: 10-15 YouTube search queries for background video art
@@ -106,6 +110,37 @@ class YouTubeClipService:
         normalized = keyword.lower().strip()
         return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
+    async def _run(self, cmd: list[str], timeout: float) -> tuple[int, bytes, bytes]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **self.process_kwargs
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except BaseException:
+            await _kill_tree(proc)
+            raise
+        return proc.returncode, stdout, stderr
+
+    def _remove_temps(self, video_id: str):
+        for path in self.cache_dir.glob(f"temp_{video_id}.*"):
+            _discard(path)
+
+    def _sweep_stale_temps(self):
+        cutoff = time.time() - STALE_TEMP_S
+        for path in self.cache_dir.glob("temp_*"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except OSError:
+                continue
+
+    def _recently_failed(self, cache_key: str) -> bool:
+        failed_at = self.failed_searches.get(cache_key)
+        return failed_at is not None and time.time() - failed_at < FAILED_SEARCH_RETRY_S
+
     def _note_attempt(self, ok: bool):
         if ok:
             self.consecutive_failures = 0
@@ -173,15 +208,9 @@ class YouTubeClipService:
         ]
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **self.process_kwargs
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            returncode, stdout, stderr = await self._run(cmd, SEARCH_TIMEOUT_S)
 
-            if proc.returncode != 0:
+            if returncode != 0:
                 log_service.error(f"[YOUTUBE] Search failed for '{keyword}': {_one_line(stderr)}")
                 return None
 
@@ -231,6 +260,7 @@ class YouTubeClipService:
         temp_path = self.cache_dir / f"temp_{video_id}.mp4"
 
         try:
+            self._remove_temps(video_id)
             dl_cmd = [
                 self.ytdlp_path,
                 *self.runtime_args,
@@ -243,23 +273,16 @@ class YouTubeClipService:
                 "--limit-rate", settings.YOUTUBE_CLIPS_RATE_LIMIT,
             ]
 
-            proc = await asyncio.create_subprocess_exec(
-                *dl_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **self.process_kwargs
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            returncode, _, stderr = await self._run(dl_cmd, DOWNLOAD_TIMEOUT_S)
 
-            if proc.returncode != 0:
+            if returncode != 0:
                 log_service.error(f"[YOUTUBE] Download failed for {video_id}: {_one_line(stderr)}")
                 return None
 
-            possible_temps = list(self.cache_dir.glob(f"temp_{video_id}*"))
-            if not possible_temps:
+            if not temp_path.exists():
                 log_service.error(f"[YOUTUBE] Downloaded file not found for {video_id}")
                 return None
-            actual_temp = possible_temps[0]
+            actual_temp = temp_path
 
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -274,19 +297,11 @@ class YouTubeClipService:
                 str(output_path)
             ]
 
-            proc = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **self.process_kwargs
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            returncode, _, stderr = await self._run(ffmpeg_cmd, ENCODE_TIMEOUT_S)
 
-            if actual_temp.exists():
-                actual_temp.unlink()
-
-            if proc.returncode != 0:
+            if returncode != 0:
                 log_service.error(f"[YOUTUBE] FFmpeg failed for {video_id}: {_one_line(stderr, tail=True)}")
+                _discard(output_path)
                 return None
 
             if output_path.exists():
@@ -298,12 +313,13 @@ class YouTubeClipService:
 
         except asyncio.TimeoutError:
             log_service.error(f"[YOUTUBE] Download timed out for {video_id}")
-            if temp_path.exists():
-                temp_path.unlink()
+            _discard(output_path)
             return None
         except Exception as e:
             log_service.error(f"[YOUTUBE] Download error for {video_id}: {e}")
             return None
+        finally:
+            self._remove_temps(video_id)
 
     async def get_clip_for_keyword(
         self,
@@ -337,8 +353,7 @@ class YouTubeClipService:
                 "duration": clip_duration
             }
 
-        failed_at = self.failed_searches.get(cache_key)
-        if failed_at is not None and time.time() - failed_at < FAILED_SEARCH_RETRY_S:
+        if self._recently_failed(cache_key):
             return None
         if self.backing_off():
             return None
@@ -456,7 +471,7 @@ class YouTubeClipService:
 
         wanted = keywords[:max_clips]
         clips = [clip for clip in (self.cached_clip_for_keyword(keyword) for keyword in wanted) if clip]
-        missing = [keyword for keyword in wanted if not self.cached_clip_for_keyword(keyword)]
+        missing = [keyword for keyword in wanted if self._needs_download(keyword)]
         if missing:
             self.queue_keywords(missing)
         log_service.detail(f"[YOUTUBE] Track {track_id}: {len(clips)}/{max_clips} clips cached, {len(missing)} queued for background download", "external")
@@ -490,12 +505,14 @@ class YouTubeClipService:
 
         duration_seconds = (metadata.get("track_info", {}) or {}).get("duration", 120000) / 1000
         max_clips = max(4, min(15, int(duration_seconds / 15)))
-        return [
-            keyword for keyword in keywords[:max_clips]
-            if not self._cached_entry(f"{self._keyword_hash(keyword)}_{int(clip_duration)}")
-        ]
+        return [keyword for keyword in keywords[:max_clips] if self._needs_download(keyword, clip_duration)]
+
+    def _needs_download(self, keyword: str, clip_duration: float = 30) -> bool:
+        cache_key = f"{self._keyword_hash(keyword)}_{int(clip_duration)}"
+        return not self._cached_entry(cache_key) and not self._recently_failed(cache_key)
 
     async def enforce_cache_limit(self):
+        self._sweep_stale_temps()
         entries = []
         total_bytes = 0
         for cache_key, entry in list(self.index["clips"].items()):
@@ -531,6 +548,27 @@ class YouTubeClipService:
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "cache_dir": str(self.cache_dir)
         }
+
+def _discard(path: Path):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+async def _kill_tree(proc: asyncio.subprocess.Process):
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill", "/F", "/T", "/PID", str(proc.pid),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+        )
+        await killer.wait()
+    else:
+        proc.kill()
+    await proc.wait()
+
 
 def _one_line(stderr: bytes, tail: bool = False, limit: int = 240) -> str:
     text = " ".join(stderr.decode("utf-8", "replace").split())
