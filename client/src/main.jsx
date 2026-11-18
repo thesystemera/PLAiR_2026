@@ -96,31 +96,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </AppErrorBoundary>,
 )
 
-function scheduleIdleWork(callback, delay) {
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(callback, { timeout: 4000 })
-  } else {
-    setTimeout(() => callback(null), delay)
-  }
-}
-
-function warmInterfaceSounds() {
-  const pending = Array.from(document.querySelectorAll('audio[data-deferred-preload]'))
-  const warmNext = (deadline) => {
-    do {
-      const element = pending.shift()
-      if (element && element.paused && element.readyState === 0) {
-        element.preload = 'auto'
-        element.load()
-      }
-    } while (pending.length > 0 && deadline && !deadline.didTimeout && deadline.timeRemaining() > 8)
-    if (pending.length > 0) scheduleIdleWork(warmNext, 50)
-  }
-  scheduleIdleWork(warmNext, 2000)
-}
-
-window.addEventListener('load', warmInterfaceSounds, { once: true })
-
 if ('serviceWorker' in navigator && PRODUCTION_MODE) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')

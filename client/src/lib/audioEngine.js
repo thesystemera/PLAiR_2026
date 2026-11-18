@@ -1,6 +1,7 @@
 import {logger} from './logger'
 import {safeStorage} from './safeStorage'
 import {AudioInteractionManager} from './audioInteractionManager'
+import { UI_SOUNDS } from './uiSounds'
 
 const MASTER_GAIN_HEADROOM = 1.0
 const MUSIC_LIFT_DB = 2
@@ -18,7 +19,7 @@ const STREAM_RETRY_LIMIT = 90
 const STREAM_APPEND_MIN_BYTES = 32 * 1024
 const SELF_PAUSE_WINDOW_MS = 2000
 const CONTEXT_RESUME_WAIT_MS = 300
-const TRACK_CHANGE_SOUND = '/audio/interface/spotify_track_change.mp3'
+const UI_SOUND_PRELOAD_DELAY_MS = 2000
 const PROGRESSIVE_READY_TIMEOUT_MS = 4000
 const PROGRESSIVE_TRACE_EVENTS = ['loadstart', 'loadedmetadata', 'canplay', 'playing', 'waiting', 'stalled', 'suspend', 'error']
 const NETWORK_STATES = ['empty', 'idle', 'loading', 'no source']
@@ -102,8 +103,7 @@ export class AudioEngine {
 
     this.sfxElement = null
     this.sfxSource = null
-    this.scratchBuffer = null
-    this.scratchLoading = null
+    this.uiBuffers = new Map()
 
     this.currentTrackId = null
     this.nextTrackId = null
@@ -481,7 +481,8 @@ export class AudioEngine {
     this.nextSlot = this.slots.B
 
     this.initialized = true
-    this._loadScratch()
+    this.loadUiSound(UI_SOUNDS.trackChange)
+    setTimeout(() => Object.values(UI_SOUNDS).forEach(sound => this.loadUiSound(sound)), UI_SOUND_PRELOAD_DELAY_MS)
   }
 
   _attachBufferMonitors(slot) {
@@ -527,7 +528,7 @@ export class AudioEngine {
     }
   }
 
-  async playSfx(url, onEnded) {
+  async playSfx(url, onEnded, gainDb = 0) {
     await this.ensureContext()
 
     if (!this.sfxElement.paused) {
@@ -535,6 +536,7 @@ export class AudioEngine {
       this.sfxElement.currentTime = 0
     }
 
+    this.sfxElement.volume = Math.min(1, dbToGain(gainDb))
     this.sfxElement.src = url
 
     const endHandler = () => {
@@ -1675,28 +1677,39 @@ export class AudioEngine {
     }
   }
 
-  _loadScratch() {
-    if (this.scratchBuffer || this.scratchLoading || !this.context) return
-    this.scratchLoading = fetch(TRACK_CHANGE_SOUND)
+  loadUiSound({ url }) {
+    if (!this.context || this.uiBuffers.has(url)) return
+    this.uiBuffers.set(url, null)
+    fetch(url)
       .then(response => (response.ok ? response.arrayBuffer() : Promise.reject(new Error(`HTTP ${response.status}`))))
       .then(data => this.context.decodeAudioData(data))
-      .then((buffer) => { this.scratchBuffer = buffer })
+      .then((buffer) => { this.uiBuffers.set(url, buffer) })
       .catch((error) => {
-        this.scratchLoading = null
-        logger.warn('[AudioEngine] Track-change sound not loaded:', error?.message || error)
+        this.uiBuffers.delete(url)
+        logger.warn(`[AudioEngine] UI sound not loaded (${url}):`, error?.message || error)
       })
   }
 
-  playVinylScratch() {
-    if (this.scratchBuffer && this.context?.state === 'running' && this.uiSoundsGain) {
-      const source = this.context.createBufferSource()
-      source.buffer = this.scratchBuffer
-      source.connect(this.uiSoundsGain)
-      source.start()
-      return true
+  playUiSound(sound) {
+    const buffer = sound && this.uiBuffers.get(sound.url)
+    if (!buffer || this.context?.state !== 'running' || !this.uiSoundsGain) {
+      if (sound) this.loadUiSound(sound)
+      return false
     }
-    this._loadScratch()
-    this.playSfx(TRACK_CHANGE_SOUND)
+    const source = this.context.createBufferSource()
+    const gain = this.context.createGain()
+    source.buffer = buffer
+    gain.gain.value = dbToGain(sound.gainDb)
+    source.connect(gain)
+    gain.connect(this.uiSoundsGain)
+    source.onended = () => gain.disconnect()
+    source.start()
+    return true
+  }
+
+  playVinylScratch() {
+    if (this.playUiSound(UI_SOUNDS.trackChange)) return true
+    this.playSfx(UI_SOUNDS.trackChange.url, undefined, UI_SOUNDS.trackChange.gainDb)
     return true
   }
 
