@@ -4,10 +4,9 @@
 (screen recordings, presenters, tutorials, title cards, captions, games, slides): the share of a softmax over the
 two sets of descriptions that goes to the first. Measured on 80 cached clips (18 Nov): under 0.45 almost all bad,
 over 0.8 almost all usable; a clip whose frames average 0.7 with none under 0.4 passed 27 of 80, one of them bad.
-`relevance` is the frame's cosine to the search term. Loaded on first use, released after VISION_IDLE_S unused."""
+`relevance` is the frame's cosine to the search term. Loaded once when the clip library starts and kept on the GPU."""
 import subprocess
 import threading
-import time
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -31,7 +30,6 @@ NOT_FOOTAGE = (
 )
 FRAME_SIZE = 224
 FRAME_EVERY_S = 5
-VISION_IDLE_S = 600
 
 
 def frame_text(text: str) -> str:
@@ -56,7 +54,10 @@ class ClipVision:
         self.model = None
         self.processor = None
         self.anchors = None
-        self.last_used = 0.0
+
+    def load(self):
+        with self.lock:
+            self._ensure()
 
     def _ensure(self):
         if self.model is not None:
@@ -76,20 +77,11 @@ class ClipVision:
             return np.zeros(0), np.zeros(0)
         with self.lock, torch.no_grad():
             self._ensure()
-            self.last_used = time.time()
             pixels = self.processor(images=images, return_tensors="pt").to(device)
             frames = torch.nn.functional.normalize(self.model.get_image_features(**pixels), dim=-1)
             look = (100 * frames @ self.anchors.T).softmax(-1)[:, :len(FOOTAGE)].sum(1)
             relevance = (frames @ self._texts([frame_text(term)]).T).squeeze(-1) if term else torch.zeros_like(look)
             return look.float().cpu().numpy(), relevance.float().cpu().numpy()
-
-    def release_if_idle(self):
-        with self.lock:
-            if self.model is None or time.time() - self.last_used < VISION_IDLE_S:
-                return
-            self.model = self.processor = self.anchors = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
 
 vision = ClipVision()

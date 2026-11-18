@@ -221,6 +221,7 @@ class YouTubeClipService:
                 del clips[file]
         library = ClipLibraryVectorDatabaseService(clips)
         library.load()
+        vision.load()
         self.library = library
         log_service.success(f"✓ Video clip library: {len(clips)} clips, {self.cache_bytes / 1024 ** 3:.1f} GB "
                             f"in {self.cache_dir}")
@@ -518,7 +519,6 @@ class YouTubeClipService:
             await self._evict_least_used()
         if self.index_dirty:
             await self._save_index()
-        await asyncio.to_thread(vision.release_if_idle)
         changed = self.downloaded_since_report or self.rescored_kept or self.rescored_removed
         if changed and time.time() - self.last_report >= REPORT_EVERY_S:
             log_service.success(

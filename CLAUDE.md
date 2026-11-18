@@ -1004,7 +1004,7 @@ Every `.py`, `.jsx` and `.js` source file with one line on what it does, by fold
 - `server/services/auth_service.py` - Password hashing and checks, JWT creation and decoding, user registration and login lookups.
 - `server/services/base_prompt_cache_service.py` - Base for search query-intent caches: LLM works out category weights and filters, reused by SemanticCache.
 - `server/services/base_service.py` - SingletonService base class that gives each service one shared instance; `ensure_initialized()` runs `initialize()` once (the constructor's `_initialized` flag only guards `__init__`).
-- `server/services/clip_vision.py` - CLIP on the station's GPU: how much video frames look like VJ footage, and how close they are to a search term; frames from a clip file. Loaded on first use, released when idle.
+- `server/services/clip_vision.py` - CLIP on the station's GPU: how much video frames look like VJ footage, and how close they are to a search term; frames from a clip file. Loaded when the clip library starts and kept on the GPU (about 0.6 GB).
 - `server/services/catalog_aspects.py` - Builds stations from song aspects: scores every song per aspect (meaning, tags, artist spelling) and blends.
 - `server/services/catalog_credit.py` - Settles an AI track's single artist credit across all artist fields and lists credited artists.
 - `server/services/catalog_database_service.py` - Track catalog: the one way a track enters or changes (`add_finished_track`, `update_track`), what "ready" means (`is_ready`: master, audio features, lyric timing, artwork and the 128k stream all exist), the boot scan (own threads, unchanged rows skipped), flags, hidden tracks, and the watcher for tracks finished or re-rendered in other processes.

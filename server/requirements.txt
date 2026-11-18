@@ -55,5 +55,5 @@ beartype==0.18.5
 ml-collections==1.1.0
 absl-py==2.5.0
 
-yt-dlp==2026.8.19
+yt-dlp==2026.10.26
 yt-dlp-ejs==0.8.0
