@@ -74,15 +74,14 @@ import { MODAL_OPEN_PAUSE_MS, pauseSceneRendering } from '../lib/renderPause'
 import { shareVideoJob } from '../lib/shareVideoJob'
 import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
 import { scrollChrome } from '../lib/scrollChrome'
+import { phoneTilt } from '../lib/phoneTilt'
 
 const INITIAL_SETTINGS = loadLocalSettings()
 
 const NOTICE_DURATION_MS = { success: 2000, info: 2500, warning: 3500, error: 4000, neutral: 2500 }
 const MAX_PASSING_NOTICES = 3
 const HOLD_AVERAGE_MS = 5000
-const FULL_TILT_DEGREES = 20
-const TILT_INPUT_SMOOTHING_MS = 150
-const TILT_OUTPUT_SMOOTHING_MS = 60
+const TILT_HOLD_SAMPLE_MS = 25
 const HALF_DEGREE = Math.PI / 360
 
 function orientationQuaternion(alpha, beta, gamma) {
@@ -110,6 +109,14 @@ function tiltFrom(reference, pose) {
   const sine = Math.hypot(x, y, z)
   const scale = sine > 1e-6 ? (2 * Math.atan2(sine, w) / sine) * (180 / Math.PI) : 360 / Math.PI
   return { x: x * scale, y: y * scale }
+}
+
+function sampleTilt(hold, at) {
+  const tilt = tiltFrom(hold.reference, hold.pose)
+  const turn = (window.screen?.orientation?.angle || 0) * Math.PI / 180
+  const aboutUp = tilt.x * Math.sin(turn) + tilt.y * Math.cos(turn)
+  const aboutRight = tilt.x * Math.cos(turn) - tilt.y * Math.sin(turn)
+  phoneTilt.sample(-aboutUp, -aboutRight, at)
 }
 
 function followPose(reference, pose, amount) {
@@ -286,23 +293,11 @@ export function UIStateProvider({ children }) {
   const shoutoutFftDataRef = useRef(new Array(32).fill(0))
   const speakerColorRef = useRef({ r: 147, g: 51, b: 234 })
 
-  const gyroscopeRef = useRef({
-    parallaxX: 0,
-    parallaxY: 0,
-  })
+  const gyroscopeRef = useRef(phoneTilt)
 
   const mouseRef = useRef({
     parallaxX: 0,
     parallaxY: 0,
-  })
-
-  const physicsState = useRef({
-    x: 0,
-    y: 0,
-    rawTargetX: 0,
-    rawTargetY: 0,
-    smoothTargetX: 0,
-    smoothTargetY: 0
   })
 
   const holdPose = useRef({ reference: null, pose: null })
@@ -425,6 +420,7 @@ export function UIStateProvider({ children }) {
       const hold = holdPose.current
       hold.pose = orientationQuaternion(event.alpha ?? 0, beta, gamma)
       if (!hold.reference) hold.reference = { ...hold.pose }
+      sampleTilt(hold, event.timeStamp || performance.now())
       physicsKickRef.current?.()
     }
 
@@ -485,35 +481,17 @@ export function UIStateProvider({ children }) {
     }
 
     const loop = (timestamp) => {
-      const p = physicsState.current
       const dt = lastFrameAt ? Math.min(100, timestamp - lastFrameAt) : 1000 / 60
       lastFrameAt = timestamp
       const hold = holdPose.current
       if (hold.pose) {
         followPose(hold.reference, hold.pose, 1 - Math.exp(-dt / HOLD_AVERAGE_MS))
-        const tilt = tiltFrom(hold.reference, hold.pose)
-        const turn = (window.screen?.orientation?.angle || 0) * Math.PI / 180
-        const aboutUp = tilt.x * Math.sin(turn) + tilt.y * Math.cos(turn)
-        const aboutRight = tilt.x * Math.cos(turn) - tilt.y * Math.sin(turn)
-        p.rawTargetX = Math.max(-1, Math.min(1, -aboutUp / FULL_TILT_DEGREES))
-        p.rawTargetY = Math.max(-1, Math.min(1, -aboutRight / FULL_TILT_DEGREES))
+        if (timestamp - phoneTilt.lastAt > TILT_HOLD_SAMPLE_MS) sampleTilt(hold, timestamp)
       }
-      const input = 1 - Math.exp(-dt / TILT_INPUT_SMOOTHING_MS)
-      const output = 1 - Math.exp(-dt / TILT_OUTPUT_SMOOTHING_MS)
-
-      p.smoothTargetX += (p.rawTargetX - p.smoothTargetX) * input
-      p.smoothTargetY += (p.rawTargetY - p.smoothTargetY) * input
-      const stepX = (p.smoothTargetX - p.x) * output
-      const stepY = (p.smoothTargetY - p.y) * output
-      p.x += stepX
-      p.y += stepY
-
-      gyroscopeRef.current.parallaxX = p.x
-      gyroscopeRef.current.parallaxY = p.y
 
       window.__rafDebug?.sources && (window.__rafDebug.sources['UIState-physics'] = (window.__rafDebug.sources['UIState-physics'] || 0) + 1)
 
-      const isMoving = Math.abs(stepX) > 0.0005 || Math.abs(stepY) > 0.0005 || Math.abs(p.x) > 0.002 || Math.abs(p.y) > 0.002
+      const isMoving = Math.abs(phoneTilt.parallaxX) > 0.002 || Math.abs(phoneTilt.parallaxY) > 0.002
       const isRecentInput = Date.now() - lastInputTime < IDLE_TIMEOUT
       if (isMoving || isRecentInput) {
         animationFrameId = requestAnimationFrame(loop)

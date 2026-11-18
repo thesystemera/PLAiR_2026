@@ -9,6 +9,7 @@ import { decodePack } from './packImage'
 const INTENSITY = 0.1
 const SCROLL_TILT = 1.3
 const MAX_PARALLAX = 1.6
+const PHONE_TILT_GAIN = MAX_PARALLAX
 const IDLE_TEXTURE_BYTES = 64 * 1024 * 1024
 const MAX_IDLE_LOADING = 8
 const UPLOADS_PER_FRAME = 2
@@ -438,8 +439,8 @@ class DepthArtRenderer {
     const mouse = this.settings.mouseRef?.current || NO_PARALLAX
     const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
     if (!hasGyro) return mouse
-    this.phoneTilt.parallaxX = -gyro.parallaxX
-    this.phoneTilt.parallaxY = -gyro.parallaxY
+    this.phoneTilt.parallaxX = -gyro.parallaxX * PHONE_TILT_GAIN
+    this.phoneTilt.parallaxY = -gyro.parallaxY * PHONE_TILT_GAIN
     return this.phoneTilt
   }
 
