@@ -131,11 +131,11 @@ function clipVideo(clips, index, send) {
 }
 
 function cueClip(clips, index, at, send) {
-  const source = clips.sources[index]
-  if (!source) return
+  const url = cachedClipUrl(clips.sources[index]?.url)
+  if (!url) return
   const video = clipVideo(clips, index, send)
   if (!video.getAttribute('src')) {
-    video.src = cachedClipUrl(source.url)
+    video.src = url
     video.load()
   }
   if (!Number.isFinite(at)) return

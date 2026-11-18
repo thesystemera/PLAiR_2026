@@ -287,6 +287,7 @@ export function UIStateProvider({ children }) {
 
   const videoClipsMapRef = useRef(new Map())
   const pendingVideoClipsRef = useRef(new Set())
+  const clipsReplacedRef = useRef(new Set())
   const clipTrackRef = useRef(null)
   const [videoClipsByTrack, setVideoClipsByTrack] = useState({})
   const loadingVideoClipsRef = useRef(new Set())
@@ -943,7 +944,6 @@ export function UIStateProvider({ children }) {
         }))
         videoClipsMapRef.current.set(trackId, clips)
         setVideoClipsByTrack(prev => ({ ...prev, [trackId]: clips }))
-        warmClips(clips, uiState)
         logger.info(`[UIState] ✅ Loaded ${clips.length} video clips for track ${trackId.slice(0, 8)}`)
       } else {
         videoClipsMapRef.current.set(trackId, EMPTY_CLIPS)
@@ -977,9 +977,19 @@ export function UIStateProvider({ children }) {
     if (settingsState.videoClipsEnabled) {
       const becameCurrent = clipTrackRef.current !== currentTrackId
       clipTrackRef.current = currentTrackId
+      const ids = [currentTrackId, nextTrack?.id].filter(Boolean)
+      const listOf = id => videoClipsMapRef.current.get(id) || EMPTY_CLIPS
       void fetchVideoClips(currentTrackId, { refresh: becameCurrent })
         .then(() => fetchVideoClips(nextTrack?.id))
-        .then(() => pinClips([currentTrackId, nextTrack?.id].map(id => videoClipsMapRef.current.get(id) || EMPTY_CLIPS)))
+        .then(() => {
+          pinClips(ids.map(listOf))
+          return Promise.all(ids.map(id => warmClips(listOf(id), uiState).then(missing => {
+            if (!missing.length || clipsReplacedRef.current.has(id)) return
+            clipsReplacedRef.current.add(id)
+            videoClipsMapRef.current.delete(id)
+            return fetchVideoClips(id)
+          })))
+        })
     }
   }, [currentTrackId, currentTrackHasArtwork, engineQueue, engineIndex, fetchVideoClips, settingsState.videoClipsEnabled])
 

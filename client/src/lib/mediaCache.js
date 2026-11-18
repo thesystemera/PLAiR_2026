@@ -58,7 +58,8 @@ const CACHE_CONFIGS = {
     expiryMs: 30 * 24 * 60 * 60 * 1000,
     metadataKey: 'video-clip-metadata',
     getUrl: (file) => `/api/video-clip-file/${file}`,
-    logPrefix: '[VideoClipCache]'
+    logPrefix: '[VideoClipCache]',
+    rememberMissing: true
   }
 }
 
@@ -119,6 +120,7 @@ class MediaCache {
     this.saveTimer = null
     this.maxMemoryItems = this.config.maxMemoryItems || MAX_MEMORY_ITEMS
     this.reloads = new Set()
+    this.missing = new Set()
 
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', () => this.flushMetadata())
@@ -217,7 +219,7 @@ class MediaCache {
 
   async getMedia(id, { signal } = {}) {
     if (!this.initialized) await this.initialize()
-    if (!id) return null
+    if (!id || this.missing.has(id)) return null
 
     if (this.memoryCache.has(id)) {
       return this.getMemory(id)
@@ -272,8 +274,16 @@ class MediaCache {
       }
       return response
     }
+    if (response.status === 404 && this.config.rememberMissing) {
+      this.missing.add(id)
+      return null
+    }
     logger.warn(`${this.config.logPrefix} ❌ Fetch failed:`, id, response.status)
     return null
+  }
+
+  isMissing(id) {
+    return this.missing.has(id)
   }
 
   async _fetchAndCache(id, signal) {

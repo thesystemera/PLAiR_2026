@@ -608,7 +608,8 @@ class YouTubeClipService:
             returncode, _, stderr = await self._run(dl_cmd, DOWNLOAD_TIMEOUT_S)
 
             if returncode != 0:
-                log_service.error(f"[YOUTUBE] Download failed for {video_id}: {_one_line(stderr)}")
+                log_service.throttled("youtube_download_failed",
+                                      f"[YOUTUBE] Download failed for {video_id}: {_one_line(stderr)}")
                 return None
 
             if not temp_path.exists():
@@ -768,16 +769,11 @@ class YouTubeClipService:
                 response = await fetch("GET", fragment["url"], retries=1, timeout=20)
                 if response.status_code != 200:
                     continue
-                sheet = Image.open(io.BytesIO(response.content)).convert("RGB")
+                end = begin + (fragment.get("duration") or 0)
+                frames += await asyncio.to_thread(_cut_sheet, response.content, begin, end, board["fps"], rows,
+                                                  columns, width, height)
             except Exception:
                 continue
-            end = begin + (fragment.get("duration") or 0)
-            for k in range(rows * columns):
-                at = begin + k / board["fps"]
-                x, y = (k % columns) * width, (k // columns) * height
-                if at >= end or x + width > sheet.width or y + height > sheet.height:
-                    break
-                frames.append((at, sheet.crop((x, y, x + width, y + height))))
         return frames
 
     async def _look(self, path: Path) -> np.ndarray:
@@ -811,6 +807,19 @@ class YouTubeClipService:
             self.library.remove(file)
         self.cache_bytes -= size
         self.index_dirty = True
+
+
+def _cut_sheet(content: bytes, begin: float, end: float, fps: float, rows: int, columns: int, width: int,
+               height: int) -> List[Tuple[float, Image.Image]]:
+    sheet = Image.open(io.BytesIO(content)).convert("RGB")
+    frames = []
+    for k in range(rows * columns):
+        at = begin + k / fps
+        x, y = (k % columns) * width, (k // columns) * height
+        if at >= end or x + width > sheet.width or y + height > sheet.height:
+            break
+        frames.append((at, sheet.crop((x, y, x + width, y + height))))
+    return frames
 
 
 def _passes(look: np.ndarray) -> bool:

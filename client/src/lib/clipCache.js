@@ -6,8 +6,7 @@ const SLOW_CONNECTIONS = new Set(['slow-2g', '2g', '3g'])
 const FAVOURITE_SHARE = 0.4
 const FAVOURITES_DELAY_MS = 60 * 1000
 
-const queue = []
-let draining = false
+let chain = Promise.resolve()
 let pinned = new Set()
 let favouritesStarted = false
 
@@ -19,6 +18,7 @@ function clipFile(url) {
 
 export function cachedClipUrl(url) {
   const file = clipFile(url)
+  if (file && videoClipCache.isMissing(file)) return null
   return (file && videoClipCache.getMemory(file)) || url
 }
 
@@ -31,33 +31,22 @@ function networkAllows(state, background) {
   return !(background && connection?.type === 'cellular')
 }
 
-async function drain(state) {
-  if (draining) return
-  draining = true
-  try {
-    while (queue.length) {
-      const file = queue.shift()
-      if (!networkAllows(state, false)) {
-        queue.length = 0
-        break
-      }
-      await videoClipCache.getMedia(file)
-    }
-  } finally {
-    draining = false
-  }
-}
-
 export function pinClips(lists) {
   pinned = new Set(lists.flat().map(clip => clipFile(clip?.url)).filter(Boolean))
 }
 
 export function warmClips(clips, state) {
-  for (const clip of clips) {
-    const file = clipFile(clip?.url)
-    if (file && !queue.includes(file)) queue.push(file)
-  }
-  void drain(state)
+  const files = clips.map(clip => clipFile(clip?.url)).filter(Boolean)
+  const run = chain.then(async () => {
+    const missing = []
+    for (const file of files) {
+      if (!networkAllows(state, false)) break
+      if (!(await videoClipCache.getMedia(file)) && videoClipCache.isMissing(file)) missing.push(file)
+    }
+    return missing
+  })
+  chain = run.catch(() => [])
+  return run
 }
 
 function shuffled(items) {
