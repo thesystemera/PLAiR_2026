@@ -86,7 +86,7 @@ class DJPromptService(SegmentPrompts, PromptDebug):
         raw_data.update(extra_kwargs)
         raw_data.setdefault('user_input', user_input)
 
-        required_nodes = config['required_nodes'].copy()
+        required_nodes = node_registry.system_first(config['required_nodes'])
         final_nodes = required_nodes.copy()
         dynamic_nodes = []
 

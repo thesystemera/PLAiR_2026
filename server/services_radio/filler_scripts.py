@@ -174,7 +174,8 @@ class FillerScripts:
                 cohost = HOSTS[1 - HOSTS.index(lead)]
                 from services_radio.context_node_registry import node_registry
                 nodes = await node_registry.fetch_nodes(SHOW_STYLE_NODES, dj_service=self.dj_service)
-                show_style = assemble_prompt(nodes, SHOW_STYLE_NODES, untrusted_keys=set(), note=None)
+                show_style = assemble_prompt(nodes, node_registry.system_first(SHOW_STYLE_NODES),
+                                             untrusted_keys=set(), note=None)
                 avoid = [plain_talk(s.script) for s in self._scripts[kind][-AVOID_EXAMPLES:]]
                 if kind == IMPULSE:
                     written = await self.writer.write_impulse_script(show_style, context, lead, cohost, avoid)

@@ -100,6 +100,9 @@ class ContextNodeRegistry:
     def is_system(self, name: str) -> bool:
         return self._roles.get(name) == "system"
 
+    def system_first(self, nodes: List[str]) -> List[str]:
+        return [name for name in nodes if self.is_system(name)] + [name for name in nodes if not self.is_system(name)]
+
     def get_menu_for_ai(self) -> str:
         menu_items = []
         for key in sorted(name for name in self._descriptions if not self.is_system(name)):

@@ -27,29 +27,29 @@ class StoryCards(BaseModel):
     stories: list[StoryCard]
 
 
-SYSTEM = "You are a careful radio news editor and news geographer."
+SYSTEM = (
+    "You are a careful radio news editor and news geographer.\n\n"
+    "Give each story a card:\n"
+    "- tags: 3-6 short lowercase topic tags, specific to general.\n"
+    "- people: the named people, bands, teams, companies and organisations; [] if none.\n"
+    "- place: the most specific real-world place where the story happens, written so a map search finds it, "
+    "from street to country: 'Karangahape Road, Auckland, New Zealand', 'Ponsonby, Auckland, New Zealand', "
+    "'Los Angeles, California, USA', 'Turkey'. The edition only helps disambiguate: an international story is "
+    "placed where it happens. null when the story isn't about a place (markets, technology, celebrity, opinion, "
+    "results with no venue).\n"
+    f"- category: one of {', '.join(CATEGORIES)}.\n"
+    f"- tone: one of {', '.join(TONES)}.\n"
+    "- worth: 1-10, how good it is for a local radio host to bring up: local relevance, human interest, "
+    "something listeners would talk about. Dry process stories and paywall teasers score low.\n"
+    "Use only what the text says. Return one card per story, with its number."
+)
 
 
 def _prompt(stories: list[dict], edition: str) -> str:
     listing = "\n\n".join(
         f"{i}. {story['title']} ({story['source'] or 'unknown outlet'})\n{story['text'] or '(headline only)'}"
         for i, story in enumerate(stories))
-    return (
-        f"News stories (edition: {edition}):\n\n{listing}\n\n"
-        "Give each story a card:\n"
-        "- tags: 3-6 short lowercase topic tags, specific to general.\n"
-        "- people: the named people, bands, teams, companies and organisations; [] if none.\n"
-        "- place: the most specific real-world place where the story happens, written so a map search finds it, "
-        "from street to country: 'Karangahape Road, Auckland, New Zealand', 'Ponsonby, Auckland, New Zealand', "
-        "'Los Angeles, California, USA', 'Turkey'. The edition only helps disambiguate: an international story is "
-        "placed where it happens. null when the story isn't about a place (markets, technology, celebrity, opinion, "
-        "results with no venue).\n"
-        f"- category: one of {', '.join(CATEGORIES)}.\n"
-        f"- tone: one of {', '.join(TONES)}.\n"
-        "- worth: 1-10, how good it is for a local radio host to bring up: local relevance, human interest, "
-        "something listeners would talk about. Dry process stories and paywall teasers score low.\n"
-        "Use only what the text says. Return one card per story, with its number."
-    )
+    return f"News stories (edition: {edition}):\n\n{listing}"
 
 
 def _clean(card: dict) -> dict:

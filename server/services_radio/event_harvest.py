@@ -129,7 +129,18 @@ class PageEvents(BaseModel):
     events: list[PageEvent]
 
 
-SYSTEM = "You are a careful local events editor for a city radio station."
+SYSTEM = (
+    "You are a careful local events editor for a city radio station.\n\n"
+    "List the events on this page that people can go to in or near the city: gigs, club nights, shows, "
+    "exhibitions, markets, festivals, fun runs, sports days, fundraisers, blood drives, workshops, talks, "
+    "community meetings.\n"
+    "- Only events that happen today or later. Work out relative dates ('this Saturday', 'next week') from the "
+    "publish date. For something that repeats (a weekly book club, a Sunday market), give the next date as "
+    "the date and say how often in repeats; end_date is only for things that run continuously.\n"
+    "- Leave out past events, online-only events, adverts, and anything without a date.\n"
+    "- address: the most specific place the page gives, written so a map search finds it.\n"
+    "- Use only what the page says. Return [] when there are none."
+)
 
 
 def url_key(url: str) -> str:
@@ -479,16 +490,7 @@ def _prompt(region: Region, zone, title: str, published: str, text: str) -> str:
         f"City: {region.name}{f' ({region.country})' if region.country else ''}\n"
         f"Today: {today.strftime('%A %Y-%m-%d')}\n"
         f"Page: {title or '(untitled)'}" + (f", published {published}" if published else "") + "\n\n"
-        f"Page text:\n{text}\n\n"
-        "List the events on this page that people can go to in or near the city: gigs, club nights, shows, "
-        "exhibitions, markets, festivals, fun runs, sports days, fundraisers, blood drives, workshops, talks, "
-        "community meetings.\n"
-        "- Only events that happen today or later. Work out relative dates ('this Saturday', 'next week') from the "
-        "publish date. For something that repeats (a weekly book club, a Sunday market), give the next date as "
-        "the date and say how often in repeats; end_date is only for things that run continuously.\n"
-        "- Leave out past events, online-only events, adverts, and anything without a date.\n"
-        "- address: the most specific place the page gives, written so a map search finds it.\n"
-        "- Use only what the page says. Return [] when there are none."
+        f"Page text:\n{text}"
     )
 
 

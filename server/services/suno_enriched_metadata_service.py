@@ -59,6 +59,54 @@ class DerivedTags(BaseModel):
         description="8-12 YouTube search queries for background video art that matches the song's mood, theme, and energy. More terms = more visual variety."
     )
 
+CATALOGER = "You are a music cataloging expert. Extract precise, consistent metadata tags."
+
+ENRICHMENT_RULES = f"""**Task**: Extract structured metadata following these rules:
+
+1. **primary_genre**: Single most accurate genre (e.g., "Synth-Pop", "Hip-Hop", "Jazz")
+
+2. **secondary_genres**: 2-4 additional genre tags for discoverability
+   - Include sub-genres that capture mood/style nuances
+   - Examples: For dark electronic → ["Electronic", "Darkwave", "Electropop"]
+
+3. **inspired_artist**: The one real artist this track is modelled on. Never null.
+   - The Target Artist if given; otherwise the artist named in the Original User Request
+   - Otherwise the artist named or clearly imitated in the style description; names there are sometimes
+     misspelled on purpose (e.g. "Nirvna" for Nirvana): give the real name
+   - Otherwise the closest of your similar_artists
+
+4. **mood_keywords**: 3-6 descriptive mood tags from style/prompt
+   - Pull from actual text: "dark", "energetic", "melancholic", "hypnotic"
+   - Focus on emotional/atmospheric qualities
+
+5. **lyrical_interpretation**: 1-2 sentence thematic summary
+   - Analyze themes, narrative, emotional arc from the creative prompt
+   - Return null if instrumental or no lyrical content described
+
+6. **vocal_style_keywords**: Technical production terms
+   - Extract from prompt: "Vocoder", "Pitch-Shifted", "Layered", "Auto-Tuned"
+   - Look for bracketed technical notes like [Low Pitch Shifted Vocals]
+   - Empty array if instrumental
+
+7. **vocals**: Who sings: instrumental, male, female, duet (male and female voices) or unknown
+   - Instrumental if Instrumental is Yes; the Vocal Gender if it is set
+   - Otherwise from the style description and prompt (e.g. "male and female vocals", "[duet]", "her voice")
+   - unknown when the text doesn't say
+
+8. **similar_artists**: 4-6 artists with similar style/genre
+   - Base on primary/secondary genres and mood
+   - Ensure stylistic consistency with the track
+   - Examples: For "Dark Swedish Synth-Pop" → ["Fever Ray", "Austra", "Ladytron"]
+
+{VIDEO_SEARCH_TERMS_PROMPT}
+
+**Important**:
+- Be concise but accurate
+- Use existing style/prompt text as primary source
+- Don't invent information not supported by the input
+- For minimal metadata, do your best with available information"""
+
+
 class EnrichedMetadataService(SingletonService):
 
     def __init__(self, ai_service=None):
@@ -146,54 +194,7 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
 **Style Description**: {style}
 **Creative Prompt**: {prompt}
 **Instrumental**: {"Yes" if instrumental else "No"}
-**Vocal Gender**: {vocal_gender}
-
----
-
-**Task**: Extract structured metadata following these rules:
-
-1. **primary_genre**: Single most accurate genre (e.g., "Synth-Pop", "Hip-Hop", "Jazz")
-
-2. **secondary_genres**: 2-4 additional genre tags for discoverability
-   - Include sub-genres that capture mood/style nuances
-   - Examples: For dark electronic → ["Electronic", "Darkwave", "Electropop"]
-
-3. **inspired_artist**: The one real artist this track is modelled on. Never null.
-   - The Target Artist if given; otherwise the artist named in the Original User Request
-   - Otherwise the artist named or clearly imitated in the style description; names there are sometimes
-     misspelled on purpose (e.g. "Nirvna" for Nirvana): give the real name
-   - Otherwise the closest of your similar_artists
-
-4. **mood_keywords**: 3-6 descriptive mood tags from style/prompt
-   - Pull from actual text: "dark", "energetic", "melancholic", "hypnotic"
-   - Focus on emotional/atmospheric qualities
-
-5. **lyrical_interpretation**: 1-2 sentence thematic summary
-   - Analyze themes, narrative, emotional arc from the creative prompt
-   - Return null if instrumental or no lyrical content described
-
-6. **vocal_style_keywords**: Technical production terms
-   - Extract from prompt: "Vocoder", "Pitch-Shifted", "Layered", "Auto-Tuned"
-   - Look for bracketed technical notes like [Low Pitch Shifted Vocals]
-   - Empty array if instrumental
-
-7. **vocals**: Who sings: instrumental, male, female, duet (male and female voices) or unknown
-   - Instrumental if Instrumental is Yes; the Vocal Gender if it is set
-   - Otherwise from the style description and prompt (e.g. "male and female vocals", "[duet]", "her voice")
-   - unknown when the text doesn't say
-
-8. **similar_artists**: 4-6 artists with similar style/genre
-   - Base on primary/secondary genres and mood
-   - Ensure stylistic consistency with the track
-   - Examples: For "Dark Swedish Synth-Pop" → ["Fever Ray", "Austra", "Ladytron"]
-
-{VIDEO_SEARCH_TERMS_PROMPT}
-
-**Important**:
-- Be concise but accurate
-- Use existing style/prompt text as primary source
-- Don't invent information not supported by the input
-- For minimal metadata, do your best with available information"""
+**Vocal Gender**: {vocal_gender}"""
 
         return prompt_text
 
@@ -232,7 +233,7 @@ Output: "80s-inspired indie R&B in the style of Blood Orange..."
                 response_schema=DerivedTags,
                 model=settings.GEMINI_METADATA_MODEL,
                 temperature=temperature,
-                system_instruction="You are a music cataloging expert. Extract precise, consistent metadata tags.",
+                system_instruction=f"{CATALOGER}\n\n{ENRICHMENT_RULES}",
                 role=LLM_BACKGROUND
             )
 

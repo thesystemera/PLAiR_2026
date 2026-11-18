@@ -478,6 +478,34 @@ econstruct_*`); the deepPBR sessions were asked what is safe to prune. PLAiR's t
   lossless storage and a bitrate that follows the listener's music quality were proposed.
 - **Other engines if the RTX 6000 frees up:** `docs/TTS_ENGINE_RESEARCH.md` (VoxCPM2, Step-Audio-EditX).
 
+## Done on 19 Nov 2026 (LLM prompt caching)
+
+- Audit of every LLM call for prefix caching (spend since 1 Oct from `ai_usage_daily`: news cards $1.18, event
+  pages $0.89, DJ turn $0.51 at 84% cached, announcer $0.40, Producer $0.28, Suno prompt $0.22, the rest under
+  $0.10 each). Seven prompts put something that changes ahead of fixed text; moved, wording unchanged (CLAUDE.md
+  section 5, "Prompt layout and caching"): segments, announcer, welcome and Radio Mode breaks (the random tag
+  examples sat fourth), the impulse/interlude writer (same), news cards and event pages (rules after the data),
+  track enrichment (track before ~1,500 tokens of rules), lyric styles (the song before the design rules, which
+  matters for the $21 `--missing` backfill). Checked live with 4 DeepSeek calls: cards and tags as before.
+- Expected saving at today's volume: about $0.30 of the $4.30 spent on LLM calls since 1 Oct (7-8%; input is
+  roughly half of each DeepSeek call's cost), plus about $1-1.5 on the lyric-style backfill. Takes effect at the
+  next PLAiR Start.
+- Left as they are, with the reason:
+  - Producer (Gemini, 7.2k-token fixed system prompt, deterministic): layout already right; 17% cached only because
+    calls are minutes to days apart (the route cache answers most). An explicit cache costs storage (Google lists
+    $1.00 per million tokens per hour for 2.5 Flash, not re-checked) and pays only above ~4 calls an hour.
+  - Suno prompt (`generate_music_params`, Gemini 3.5 Flash with a tool, $0.008 a call): the system prompt holds the
+    overused-words list and refused names mid-way, but at ~1 call a day no cache would hit anyway. It also runs on
+    Gemini 3.5 Flash outside the "DeepSeek unless urgent" rule; owner's call.
+  - News headline ranking (`get_top_news`): the fixed part is ~100 tokens and contains the pick count.
+  - Persona, the shoutout/review filter and the editor: the output-format block sits after the data; moving a format
+    instruction ahead of a long input can hurt compliance, and volume is a few calls a week.
+  - Canonical style rewrite and breaths: prompts of ~100-250 tokens; DeepSeek caches in 64-token blocks.
+  - `instruction_announcements` is a `system` node but ends with the window's time constraint; harmless while it is
+    the last fixed node of the announcer, wrong if it ever joins a cached system prompt.
+  - `llm_telemetry` counts creating the DJ's explicit Gemini cache but not its storage (~$0.005 per 30-minute
+    life at 10k tokens); at ~6 DJ calls per cache life it still pays.
+
 ## Done on 11 Nov 2026 (catalog updates)
 
 - The station crawled for minutes after a generation: every catalog update was a full 86 s reload (all 2,048

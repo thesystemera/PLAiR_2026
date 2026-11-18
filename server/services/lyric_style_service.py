@@ -48,9 +48,6 @@ words that stays on screen while it is sung, each word appearing the moment it i
 it. You design the typography: how the words group into cards, how each card breaks into lines, and the font, size
 and treatment of every word, so the type itself shows what the words mean and how they are sung.
 
-SONG
-{song}
-
 FONTS (use only these ids)
 {fonts}
 
@@ -99,6 +96,9 @@ Cards:
  {{"start": 113, "lines": ["hold me", "like you used to"], "layout": "flow", "align": "left", "font": "cormorant",
    "weight": "light", "case": "lower", "size": 3, "italic": true, "tilt": -3,
    "words": {{"hold": {{"size": 5}}, "you": {{"font": "caveat", "size": 4, "italic": false}}}}}}
+
+SONG
+{song}
 
 LYRICS
 Every word carries its number: 12:night is word 12. Numbers start at 0. Each line starts with its time; (1.2s)
