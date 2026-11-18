@@ -1,11 +1,10 @@
-const FULL_TILT_DEGREES = 20
+const DEGREES_PER_UNIT = 20
 const REST_CUTOFF_HZ = 0.7
 const CUTOFF_PER_DEGREE_PER_S = 0.5
 const SPEED_CUTOFF_HZ = 1
 const BLEND_MS = 8
 
 const smoothing = (cutoffHz, seconds) => 1 / (1 + 1 / (2 * Math.PI * cutoffHz * seconds))
-const clampUnit = value => Math.max(-1, Math.min(1, value))
 const frameTime = () => document.timeline?.currentTime ?? performance.now()
 
 let last = null
@@ -47,10 +46,10 @@ export const phoneTilt = {
   },
 
   get parallaxX() {
-    return last ? clampUnit(blended(valueX, fromX, frameTime()) / FULL_TILT_DEGREES) : 0
+    return last ? blended(valueX, fromX, frameTime()) / DEGREES_PER_UNIT : 0
   },
 
   get parallaxY() {
-    return last ? clampUnit(blended(valueY, fromY, frameTime()) / FULL_TILT_DEGREES) : 0
+    return last ? blended(valueY, fromY, frameTime()) / DEGREES_PER_UNIT : 0
   },
 }

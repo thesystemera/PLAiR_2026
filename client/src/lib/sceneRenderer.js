@@ -1266,8 +1266,8 @@ export class SceneRenderer {
     const gyro = state.gyro || NO_PARALLAX
     const mouse = state.mouse || NO_PARALLAX
     const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
-    const pX = hasGyro ? gyro.parallaxX * 40 : mouse.parallaxX * 40
-    const pY = hasGyro ? gyro.parallaxY * 40 : mouse.parallaxY * 40
+    const pX = (hasGyro ? Math.max(-1, Math.min(1, gyro.parallaxX)) : mouse.parallaxX) * 40
+    const pY = (hasGyro ? Math.max(-1, Math.min(1, gyro.parallaxY)) : mouse.parallaxY) * 40
 
     if (this.transitionProgress < 1) this.transitionProgress = Math.min(1, this.transitionProgress + Math.min(delta, ARTWORK_FADE_MAX_STEP_S) / DURATION.theme)
 
