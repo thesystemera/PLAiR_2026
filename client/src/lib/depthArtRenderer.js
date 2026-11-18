@@ -89,6 +89,7 @@ class DepthArtRenderer {
     this.drawDelays = []
     this.uploads = []
     this.settings = { dpr: Infinity, stepPx: 0, reduceMotion: false, lit: true, coarse: false, gyroRef: null, mouseRef: null }
+    this.phoneTilt = { parallaxX: 0, parallaxY: 0 }
     this.canvas = null
     this.gl = null
     this.programs = null
@@ -436,7 +437,10 @@ class DepthArtRenderer {
     const gyro = this.settings.gyroRef?.current || NO_PARALLAX
     const mouse = this.settings.mouseRef?.current || NO_PARALLAX
     const hasGyro = Math.abs(gyro.parallaxX) > 0.001 || Math.abs(gyro.parallaxY) > 0.001
-    return hasGyro ? gyro : mouse
+    if (!hasGyro) return mouse
+    this.phoneTilt.parallaxX = -gyro.parallaxX
+    this.phoneTilt.parallaxY = -gyro.parallaxY
+    return this.phoneTilt
   }
 
   tick(timestamp) {
