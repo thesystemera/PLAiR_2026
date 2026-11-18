@@ -272,14 +272,15 @@ async def get_audio_features(request: Request, track_id: str):
     return await _json_file_response(request, settings.AUDIOFEATURES_DIR / f"{track_id}.json", "Audio features not found")
 
 @router.get("/api/video-clips/{track_id}")
-async def get_video_clips(track_id: str, current_user: Optional[User] = Depends(get_cached_current_user),
+async def get_video_clips(track_id: str, prefetch: bool = False,
+                          current_user: Optional[User] = Depends(get_cached_current_user),
                           x_device_kind: Optional[str] = Header(None)):
     if not SAFE_ID.fullmatch(track_id):
         raise HTTPException(status_code=400, detail="Invalid track id")
     if not current_user or not settings_for(current_user, valid_kind(x_device_kind))["videoClipsEnabled"]:
         return {"clips": [], "keywords": [], "reason": "video_clips_disabled"}
     youtube_service = get_youtube_clip_service()
-    return await youtube_service.get_clips_for_track(track_id)  # type: ignore
+    return await youtube_service.get_clips_for_track(track_id, str(current_user.id), note_use=not prefetch)
 
 @router.get("/api/video-clip-file/{filename}")
 async def get_video_clip_file(filename: str):
@@ -290,7 +291,7 @@ async def get_video_clip_file(filename: str):
     if not clip_path.exists():
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    return FileResponse(clip_path, media_type="video/mp4")
+    return FileResponse(clip_path, media_type="video/mp4", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 @router.get("/api/lyric-timestamps/{track_id}")
 async def get_lyric_timestamps(request: Request, track_id: str):

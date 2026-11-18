@@ -1,6 +1,7 @@
 import { logger } from './logger'
 import { safeStorage } from './safeStorage'
 import { cacheManager } from './cacheManager'
+import { deviceKind } from './session'
 
 export const PACK_SIZES = [256, 512, 768, 1024]
 export const FULL_PACK_SIZE = 1024
@@ -16,6 +17,10 @@ export function artPackUrl(id, size) {
   return `/api/artwork/${id}/pack/${size}?v=${NORMAL_MAP_VERSION}`
 }
 export const NORMAL_MAP_VERSION = 4
+
+function isPhone() {
+  return typeof navigator !== 'undefined' && ['iphone', 'android-phone'].includes(deviceKind())
+}
 
 const CACHE_CONFIGS = {
   profile_picture: {
@@ -45,6 +50,15 @@ const CACHE_CONFIGS = {
     getUrl: (id) => `/api/user/${id}/profile-picture/pack?v=${NORMAL_MAP_VERSION}`,
     logPrefix: '[ProfilePackCache]',
     memoryOnly: true
+  },
+  video_clip: {
+    cacheName: 'video-clip-cache-v1',
+    maxItems: isPhone() ? 90 : 300,
+    maxMemoryItems: 30,
+    expiryMs: 30 * 24 * 60 * 60 * 1000,
+    metadataKey: 'video-clip-metadata',
+    getUrl: (file) => `/api/video-clip-file/${file}`,
+    logPrefix: '[VideoClipCache]'
   }
 }
 
@@ -392,6 +406,7 @@ export function packCache(size) {
   return packCaches.get(size)
 }
 export const profilePackCache = new MediaCache('profile_pack')
+export const videoClipCache = new MediaCache('video_clip')
 
 if (typeof caches !== 'undefined') {
   for (const [cacheName, metadataKey] of RETIRED_CACHES) {

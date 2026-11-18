@@ -245,17 +245,22 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
 
 - **Video clips (FMV) in the director, after step 1 (17 Nov).** Step 1 is in (CLAUDE.md section 11, "Video clips
   are footage the director edits with"). Found on the way, not done:
-  - **Few songs have clips.** 522 of 2,265 catalog songs have no `video_search_terms` (mostly the Oct-Nov 2025
-    batch; `server/utils/backfill_video_search_terms.py` fills them with DeepSeek). Of the 1,743 that have terms,
-    1,122 have no clip yet: the prefetch loop adds about 15-40 clips a day (1,813 cached), about one per half-hour
-    run against a budget of 12. Likely cause, not confirmed: recently failed searches count against the budget
-    and every run starts again at the top of the catalog. Also 822 files (827 MB) in `data/youtube_clips` are in
-    no index entry: never served, never evicted.
+  - **Clip library (18 Nov, done):** songs share clips by meaning, downloads only fill gaps, the library moved to
+    `D:\catalog\video_clips` (CLAUDE.md section 11). Confirmed and fixed on the way: recently failed searches used
+    up each run's budget of 12; a timed-out download was never stopped (orphan yt-dlp/ffmpeg held temp files).
+    Still: 522 of 2,265 catalog songs have no `video_search_terms` (`server/utils/backfill_video_search_terms.py`
+    fills them with DeepSeek); the old folder `E:\AI_RADIO\data\youtube_clips` keeps 822 files (827 MB) that were
+    in no index entry, plus leftover temp files, for the owner to delete.
+  - **Selection (next, owner asked 18 Nov):** of 24 random cached clips about 6 were usable for VJ work: screen
+    recordings of software, tutorials, gameplay, news with captions, presenters, title cards. Causes: search terms
+    shaped like gear and how-to queries, the first search result taken with no judgement, always 10-40 s into the
+    video. Plan: rank results by meaning, a CLIP check of the video's storyboard before downloading (one-time model
+    download, owner to OK), the best 30 s instead of 10 s in, a rewritten search-term prompt, rescoring the cache.
+    Also: yt-dlp is 2026.08.19 (403 Forbidden from googlevideo on about 1% of downloads; an update usually fixes it).
   - **Guests get no clips:** `/api/video-clips` answers only a signed-in account whose saved setting has video clips on.
   - **Sources:** title cards, burned-in subtitles and copyright text, letterbox bars, near-black clips; 480p is soft
-    full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), a short
-    keyframe gap (no longer needed by the share video, which decodes the clips itself since 18 Nov; it would still
-    make its jumps cheaper), clips matched to lyric lines by meaning (mpnet, in the prefetch loop).
+    full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), clips matched
+    to lyric lines by meaning.
   - **Not measured on the phone:** footage looks, two to four videos decoding at once, mipmaps made per video frame.
     On the P6000 the footage looks cost the same as the plain looks (under 1 ms a frame at 1081x2402).
 

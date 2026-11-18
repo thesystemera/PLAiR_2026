@@ -20,6 +20,7 @@ import {loadLyricFonts} from '../lib/lyricFonts'
 import {usePlaybackActions} from '../contexts/PlaybackContext'
 import {shareVideoRendering} from '../lib/shareVideoJob'
 import {scrollChrome} from '../lib/scrollChrome'
+import {cachedClipUrl} from '../lib/clipCache'
 
 const VOICE_GAIN = 2.2
 const VOICE_STEADY = 0.4
@@ -134,7 +135,7 @@ function cueClip(clips, index, at, send) {
   if (!source) return
   const video = clipVideo(clips, index, send)
   if (!video.getAttribute('src')) {
-    video.src = source.url
+    video.src = cachedClipUrl(source.url)
     video.load()
   }
   if (!Number.isFinite(at)) return

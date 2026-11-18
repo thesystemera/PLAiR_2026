@@ -112,10 +112,11 @@ class Settings:
 
 
     # YouTube video clips cache (background video art for tracks)
-    YOUTUBE_CLIPS_DIR: Path = BASE_DIR / "data" / "youtube_clips"
+    YOUTUBE_CLIPS_DIR: Path = Path(os.getenv("YOUTUBE_CLIPS_DIR", str(CATALOG_DIR / "video_clips")))
     NEWS_DEFAULT_COUNTRY: str = os.getenv("NEWS_DEFAULT_COUNTRY", "US")
-    YOUTUBE_CLIPS_MAX_CACHE_GB: float = float(os.getenv("YOUTUBE_CLIPS_MAX_CACHE_GB", "5"))
-    YOUTUBE_CLIPS_PREFETCH_PER_CYCLE: int = int(os.getenv("YOUTUBE_CLIPS_PREFETCH_PER_CYCLE", "12"))
+    YOUTUBE_CLIPS_MAX_CACHE_GB: float = float(os.getenv("YOUTUBE_CLIPS_MAX_CACHE_GB", "100"))
+    YOUTUBE_CLIPS_PER_HOUR: int = int(os.getenv("YOUTUBE_CLIPS_PER_HOUR", "60"))
+    YOUTUBE_CLIPS_MATCH_THRESHOLD: float = float(os.getenv("YOUTUBE_CLIPS_MATCH_THRESHOLD", "0.7"))
     YOUTUBE_CLIPS_RATE_LIMIT: str = os.getenv("YOUTUBE_CLIPS_RATE_LIMIT", "2M")
     YOUTUBE_CLIPS_FAILURES_BEFORE_BACKOFF: int = int(os.getenv("YOUTUBE_CLIPS_FAILURES_BEFORE_BACKOFF", "3"))
     YOUTUBE_CLIPS_BACKOFF_S: int = int(os.getenv("YOUTUBE_CLIPS_BACKOFF_S", "3600"))

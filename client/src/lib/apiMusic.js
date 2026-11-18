@@ -181,9 +181,9 @@ export const musicMethods = {
     })
   },
 
-  async getVideoClips(trackId) {
+  async getVideoClips(trackId, { prefetch = false } = {}) {
     return this._routeRequest('getVideoClips', [trackId], async () => {
-      const res = await this._fetch(`${API_BASE}/video-clips/${trackId}`, {
+      const res = await this._fetch(`${API_BASE}/video-clips/${trackId}${prefetch ? '?prefetch=true' : ''}`, {
         headers: this.getHeaders(),
       })
       if (!res.ok) {

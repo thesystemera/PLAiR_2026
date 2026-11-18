@@ -75,6 +75,7 @@ import { shareVideoJob } from '../lib/shareVideoJob'
 import { loadLocalSettings, notifySettingsChanged, pickValidSettings, saveLocalSettings } from '../lib/settings'
 import { scrollChrome } from '../lib/scrollChrome'
 import { phoneTilt } from '../lib/phoneTilt'
+import { pinClips, warmClips, warmFavouriteClips } from '../lib/clipCache'
 
 const INITIAL_SETTINGS = loadLocalSettings()
 
@@ -285,6 +286,8 @@ export function UIStateProvider({ children }) {
   const [trackDataFor, setTrackDataFor] = useState(null)
 
   const videoClipsMapRef = useRef(new Map())
+  const pendingVideoClipsRef = useRef(new Set())
+  const clipTrackRef = useRef(null)
   const [videoClipsByTrack, setVideoClipsByTrack] = useState({})
   const loadingVideoClipsRef = useRef(new Set())
 
@@ -917,10 +920,9 @@ export function UIStateProvider({ children }) {
     return () => unpins.forEach(unpin => unpin())
   }, [])
 
-  const fetchVideoClips = useCallback(async (trackId) => {
+  const fetchVideoClips = useCallback(async (trackId, { refresh = false } = {}) => {
     if (!trackId) return
-    if (videoClipsMapRef.current.has(trackId)) {
-      logger.info(`[UIState] 🎬 Already have clips for ${trackId.slice(0, 8)}, skipping fetch`)
+    if (videoClipsMapRef.current.has(trackId) && !(refresh && pendingVideoClipsRef.current.has(trackId))) {
       return
     }
     if (loadingVideoClipsRef.current.has(trackId)) {
@@ -932,6 +934,8 @@ export function UIStateProvider({ children }) {
     try {
       const data = await api.getVideoClips(trackId)
       logger.info(`[UIState] 🎬 API data:`, data.reason || `${data.clips?.length || 0} clips`, data.keywords?.slice(0, 2) || 'no keywords')
+      if (data.pending > 0) pendingVideoClipsRef.current.add(trackId)
+      else pendingVideoClipsRef.current.delete(trackId)
       if (data.clips && data.clips.length > 0) {
         const clips = data.clips.map(clip => ({
           ...clip,
@@ -939,6 +943,7 @@ export function UIStateProvider({ children }) {
         }))
         videoClipsMapRef.current.set(trackId, clips)
         setVideoClipsByTrack(prev => ({ ...prev, [trackId]: clips }))
+        warmClips(clips, uiState)
         logger.info(`[UIState] ✅ Loaded ${clips.length} video clips for track ${trackId.slice(0, 8)}`)
       } else {
         videoClipsMapRef.current.set(trackId, EMPTY_CLIPS)
@@ -970,9 +975,17 @@ export function UIStateProvider({ children }) {
     }
 
     if (settingsState.videoClipsEnabled) {
-      fetchVideoClips(currentTrackId)
+      const becameCurrent = clipTrackRef.current !== currentTrackId
+      clipTrackRef.current = currentTrackId
+      void fetchVideoClips(currentTrackId, { refresh: becameCurrent })
+        .then(() => fetchVideoClips(nextTrack?.id))
+        .then(() => pinClips([currentTrackId, nextTrack?.id].map(id => videoClipsMapRef.current.get(id) || EMPTY_CLIPS)))
     }
   }, [currentTrackId, currentTrackHasArtwork, engineQueue, engineIndex, fetchVideoClips, settingsState.videoClipsEnabled])
+
+  useEffect(() => {
+    if (settingsState.videoClipsEnabled && authState.isAuthenticated) warmFavouriteClips(uiState)
+  }, [settingsState.videoClipsEnabled, authState.isAuthenticated])
 
   useEffect(() => {
     logger.info(`[UIState] 🎬 Video clips setting: ${settingsState.videoClipsEnabled ? 'ENABLED' : 'DISABLED'}`)

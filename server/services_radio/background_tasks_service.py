@@ -184,56 +184,13 @@ class BackgroundTasksService:
                 await asyncio.sleep(60)
 
     async def video_clip_pre_downloader(self):
-        await asyncio.sleep(120)
-
-        while True:
-            try:
-                if not self.youtube_clip_service or not self.catalog_service:
-                    await asyncio.sleep(600)
-                    continue
-
-                budget = settings.YOUTUBE_CLIPS_PREFETCH_PER_CYCLE
-                attempts = 0
-                downloaded = 0
-
-                for keyword in self.youtube_clip_service.take_priority_keywords(budget):
-                    attempts += 1
-                    try:
-                        if await self.youtube_clip_service.get_clip_for_keyword(keyword):
-                            downloaded += 1
-                    except Exception as e:
-                        log_service.error(f"[YOUTUBE] Pre-download failed for '{keyword}': {e}")
-                    await asyncio.sleep(2)
-
-                for track in list(self.catalog_service.tracks.values()):
-                    if attempts >= budget:
-                        break
-                    metadata = track if isinstance(track, dict) else {}
-                    for keyword in self.youtube_clip_service.missing_keywords_for_track(metadata):
-                        if attempts >= budget:
-                            break
-                        attempts += 1
-                        try:
-                            if await self.youtube_clip_service.get_clip_for_keyword(keyword):
-                                downloaded += 1
-                        except Exception as e:
-                            log_service.error(f"[YOUTUBE] Pre-download failed for '{keyword}': {e}")
-                        await asyncio.sleep(2)
-
-                if downloaded:
-                    stats = self.youtube_clip_service.get_cache_stats()
-                    log_service.success(
-                        f"✓ Video clip prefetch: +{downloaded} clips "
-                        f"({stats['clip_count']} cached, {stats['total_size_mb']}MB)"
-                    )
-
-                await self.youtube_clip_service.enforce_cache_limit()
-
-                await self.youtube_clip_service.wait_for_work(1800)
-
-            except asyncio.CancelledError:
-                log_service.info("Video Clip Pre-Downloader: Task cancelled")
-                break
-            except Exception as e:
-                log_service.error(f"Video clip pre-downloader error: {e}")
-                await asyncio.sleep(300)
+        if not self.youtube_clip_service or not self.catalog_service:
+            return
+        try:
+            await self.youtube_clip_service.prepare()
+            await asyncio.sleep(120)
+            await self.youtube_clip_service.run_downloads(self.catalog_service)
+        except asyncio.CancelledError:
+            log_service.info("Video Clip Pre-Downloader: Task cancelled")
+        except Exception as e:
+            log_service.error(f"Video clip library failed to start: {e}")
