@@ -251,12 +251,11 @@ Detail for each is in `docs/AUDIT_2026-09-30_DJ_VOICE.md` (sections 2, 3 and 5).
     Still: 522 of 2,265 catalog songs have no `video_search_terms` (`server/utils/backfill_video_search_terms.py`
     fills them with DeepSeek); the old folder `E:\AI_RADIO\data\youtube_clips` keeps 822 files (827 MB) that were
     in no index entry, plus leftover temp files, for the owner to delete.
-  - **Selection (next, owner asked 18 Nov):** of 24 random cached clips about 6 were usable for VJ work: screen
-    recordings of software, tutorials, gameplay, news with captions, presenters, title cards. Causes: search terms
-    shaped like gear and how-to queries, the first search result taken with no judgement, always 10-40 s into the
-    video. Plan: rank results by meaning, a CLIP check of the video's storyboard before downloading (one-time model
-    download, owner to OK), the best 30 s instead of 10 s in, a rewritten search-term prompt, rescoring the cache.
-    Also: yt-dlp is 2026.08.19 (403 Forbidden from googlevideo on about 1% of downloads; an update usually fixes it).
+  - **Selection (19 Nov, done):** CLIP checks storyboards before a download and real frames after it; older clips
+    are rescored in idle time (CLAUDE.md section 11). The gate is a little strict: CGI cityscapes read as games and
+    some street footage with a timecode fails. New prompt for the search terms; the catalog's terms are only
+    rewritten when `utils/backfill_video_search_terms.py --rewrite --apply` runs (151 DeepSeek calls).
+    yt-dlp is 2026.08.19 (403 Forbidden from googlevideo on about 1% of downloads; an update usually fixes it).
   - **Guests get no clips:** `/api/video-clips` answers only a signed-in account whose saved setting has video clips on.
   - **Sources:** title cards, burned-in subtitles and copyright text, letterbox bars, near-black clips; 480p is soft
     full screen on a phone. Planned: 720p, ffmpeg checks at download (black, frozen, letterbox crop), clips matched

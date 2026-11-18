@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -25,12 +26,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiofiles
 import numpy as np
+from PIL import Image
 
 from config.settings import BASE_DIR, settings
 from models_global import run_on_gpu_executor, run_on_rank_executor
 from services import log_service
+from services.clip_vision import clip_frames, vision
+from services.http_client import fetch
 from services.semantic_source import Category, SemanticVectorDatabaseService, field_text
-from services.vector_store import VectorStore, prime_query_vectors
+from services.vector_store import VectorStore, encode, prime_query_vectors
 
 INDEX_VERSION = 2
 LEGACY_DIR = BASE_DIR / "data" / "youtube_clips"
@@ -41,10 +45,16 @@ START_OFFSET_S = 10
 KEY_FRAME_S = 2
 MIN_SOURCE_SECONDS = 30
 MAX_SOURCE_SECONDS = 6 * 3600
-SEARCH_RESULTS = 5
-DOWNLOAD_TRIES = 3
+SEARCH_RESULTS = 10
+INSPECT_VIDEOS = 3
+DOWNLOAD_TRIES = 2
+STORYBOARD_SHEETS = 6
+STORYBOARD_LOOK_MEAN = 0.6
+STORYBOARD_LOOK_MIN = 0.3
+LIVE_STATUSES = ("is_live", "is_upcoming", "post_live")
+INSPECT_TIMEOUT_S = 90
 PICK_DEPTH = 24
-FAILED_SEARCH_RETRY_S = 24 * 3600
+FAILED_SEARCH_RETRY_S = 30 * 24 * 3600
 SEARCH_TIMEOUT_S = 30
 DOWNLOAD_TIMEOUT_S = 120
 ENCODE_TIMEOUT_S = 60
@@ -62,6 +72,11 @@ You are a professional VJ (video jockey) curating visuals for a live music perfo
 Your job is to find footage that ENHANCES the music - not generic backgrounds, but
 visuals that create a cohesive audio-visual experience.
 
+THE PICTURE IS THE POINT: each query must find a video whose picture works on screen for 30 seconds.
+The station checks every clip and throws away screen recordings, tutorials, gear demos, reviews, people
+talking to the camera, interviews, news with captions, slides, video games and title cards, so a query
+that finds those is wasted. Describe what a camera would film.
+
 THINK LIKE A VJ:
 - READ THE LYRICS carefully - extract specific imagery, locations, themes, emotions
 - MATCH THE ENERGY - fast cuts for high-energy, slow/atmospheric for ambient
@@ -70,31 +85,39 @@ THINK LIKE A VJ:
 - CONSIDER THE ERA - 80s synth gets VHS/CRT aesthetics, modern EDM gets clean digital
 
 CONTEXT-AWARE MATCHING:
-- Political/protest lyrics → "protest march documentary", "demonstration crowd footage", "activist rally 4k", "riot footage news", "revolution documentary", "civil rights archive footage"
+- Political/protest lyrics → "protest march crowd footage", "demonstration crowd footage", "activist rally 4k", "riot street archive footage", "civil rights archive footage"
 - Love/romance → "couple silhouette sunset", "intimate moments cinema", "romantic rain scene", "love story cinematography"
 - Isolation/loneliness → "empty city streets night", "lone figure walking", "abandoned places urban exploration", "solitary person window rain"
 - Party/celebration → "crowd dancing festival 4k", "nightclub lights POV", "concert crowd energy", "rave lasers smoke"
-- Nature/peace → "forest morning mist 4k", "ocean waves aerial drone", "mountain timelapse clouds", "nature documentary peaceful"
+- Nature/peace → "forest morning mist 4k", "ocean waves aerial drone", "mountain timelapse clouds", "waterfall slow motion 4k"
 - Aggression/anger → "fire explosion slow motion", "storm lightning 4k", "industrial machinery heavy", "destruction demolition footage"
 - Psychedelic/trippy → "fractal zoom infinite", "kaleidoscope patterns", "liquid light show 60s", "DMT visuals simulation", "mandelbrot zoom"
-- Futuristic/sci-fi → "cyberpunk city rain", "hologram interface", "space nebula 4k", "matrix code rain", "blade runner aesthetic"
+- Futuristic/sci-fi → "cyberpunk city rain", "hologram interface", "space nebula 4k", "matrix code rain", "neon megacity night aerial"
 - Retro/nostalgic → "VHS glitch overlay", "80s TV static", "vintage film grain", "old home movies footage", "CRT monitor aesthetic"
-- Trance/EDM → "VJ loops abstract", "particle system 4k", "geometric patterns morph", "tunnel infinite zoom", "waveform visualizer"
+- Trance/EDM → "VJ loops abstract", "particle system 4k", "geometric patterns morph", "tunnel infinite zoom", "audio reactive visuals"
 
 GENRE-SPECIFIC VJ THINKING:
 - Electronic/Dance: Abstract geometry, particles, tunnels, waveforms, club visuals, laser shows
 - Rock/Metal: Fire, storms, industrial, concert crowds, urban decay, dramatic skies
-- Hip-Hop/Rap: Urban streets, city life, cars, nightlife, documentary style, gritty realism
+- Hip-Hop/Rap: Urban streets, city life, cars, nightlife, handheld street footage, gritty realism
 - Indie/Folk: Nature, vintage film, intimate moments, road trips, golden hour, 16mm aesthetic
 - Classical/Ambient: Slow nature, timelapses, abstract art, flowing water, minimalist
-- Punk/Hardcore: DIY footage, mosh pits, political imagery, raw documentary, handheld chaos
+- Punk/Hardcore: DIY footage, mosh pits, political imagery, raw handheld footage, handheld chaos
+
+AVOID (YouTube answers these with lessons, demos and talking heads, not footage):
+- Instruments, gear and studio equipment ("synthesizer knobs close up", "drum machine", "guitar pedal",
+  "mixing desk", "turntable close up"): show the scene the sound belongs to instead (a sweaty club, a
+  crowd, stage lights, a night drive)
+- Names of products, brands, software, films, directors or artists
+- Ideas without a picture ("gentrification", "identity", "commodification"): turn them into a scene
+  ("boarded up shopfronts street footage")
+- Words that find explainers: "how to", "explained", "review", "documentary", "interview", "analysis", "tutorial"
 
 SEARCH TERM QUALITY:
 - Add qualifiers: "4k", "cinematic", "footage", "timelapse", "slow motion", "aerial drone"
 - Be SPECIFIC: "tokyo neon rain night" not "city rain"
-- Reference visual styles: "Terrence Malick style nature", "Gaspar Noé club scene"
-- Use YouTube-friendly terms: "stock footage", "b-roll", "visual"
-- NEVER use: "music video", "lyric video", "background music", "royalty free"
+- Use footage words: "b-roll", "footage", "archive film", "VJ loop"
+- NEVER use: "music video", "lyric video", "background music", "royalty free", "stock footage" (watermarked previews)
 
 VARIETY IS KEY - include:
 - 3-4 LITERAL terms (what lyrics actually describe)
@@ -177,6 +200,8 @@ class YouTubeClipService:
         self.max_cache_bytes = int(settings.YOUTUBE_CLIPS_MAX_CACHE_GB * 1024 ** 3)
         self.cache_bytes = 0
         self.downloaded_since_report = 0
+        self.rescored_kept = 0
+        self.rescored_removed = 0
         self.last_report = time.time()
 
     async def prepare(self):
@@ -471,12 +496,15 @@ class YouTubeClipService:
                 term = await self._next_term(catalog_service)
                 if term is None:
                     await self._housekeeping()
-                    await self.wait_for_work(max(gap, min(FILL_PASS_IDLE_S, self.next_fill_pass - time.time())))
+                    wait = max(gap, min(FILL_PASS_IDLE_S, self.next_fill_pass - time.time()))
+                    await self._rescore_until(time.time() + wait)
+                    await self.wait_for_work(wait)
                     continue
                 started = time.time()
                 if await self.get_clip_for_keyword(term):
                     self.downloaded_since_report += 1
                 await self._housekeeping()
+                await self._rescore_until(started + gap)
                 await asyncio.sleep(max(0.0, gap - (time.time() - started)))
             except asyncio.CancelledError:
                 raise
@@ -490,13 +518,15 @@ class YouTubeClipService:
             await self._evict_least_used()
         if self.index_dirty:
             await self._save_index()
-        if self.downloaded_since_report and time.time() - self.last_report >= REPORT_EVERY_S:
+        await asyncio.to_thread(vision.release_if_idle)
+        changed = self.downloaded_since_report or self.rescored_kept or self.rescored_removed
+        if changed and time.time() - self.last_report >= REPORT_EVERY_S:
             log_service.success(
-                f"✓ Video clips: +{self.downloaded_since_report} downloaded "
-                f"({len(self.index['clips'])} in the library, {self.cache_bytes / 1024 ** 3:.1f} GB; "
-                f"{len(self.priority) + len(self.fill_queue)} search terms waiting)"
+                f"✓ Video clips: +{self.downloaded_since_report} downloaded, {self.rescored_kept} checked and kept, "
+                f"{self.rescored_removed} removed for their look ({len(self.index['clips'])} in the library, "
+                f"{self.cache_bytes / 1024 ** 3:.1f} GB; {len(self.priority) + len(self.fill_queue)} search terms waiting)"
             )
-            self.downloaded_since_report = 0
+            self.downloaded_since_report = self.rescored_kept = self.rescored_removed = 0
             self.last_report = time.time()
 
     async def _evict_least_used(self):
@@ -506,15 +536,8 @@ class YouTubeClipService:
         for file in order:
             if self.cache_bytes <= self.max_cache_bytes:
                 break
-            path = self.cache_dir / file
-            size = path.stat().st_size if path.exists() else 0
-            _discard(path)
-            del clips[file]
-            if self.library is not None:
-                self.library.remove(file)
-            self.cache_bytes -= size
+            self._remove_clip(file)
             removed += 1
-        self.index_dirty = True
         log_service.info(f"[YOUTUBE] Removed {removed} least recently used clips to stay under "
                          f"{settings.YOUTUBE_CLIPS_MAX_CACHE_GB} GB")
 
@@ -635,22 +658,36 @@ class YouTubeClipService:
             self._note_attempt(False)
             return None
         owned = {meta.get("source_id") for meta in self.index["clips"].values()}
-        videos = [video for video in videos if video["id"] not in owned][:DOWNLOAD_TRIES]
+        videos = [video for video in videos if video["id"] not in owned]
+        if videos:
+            vectors = await run_on_gpu_executor(encode, [term] + [video["title"] or "" for video in videos])
+            closeness = [float(vectors[0] @ vector) for vector in vectors[1:]]
+            videos = [videos[i] for i in np.argsort(closeness)[::-1][:INSPECT_VIDEOS]]
         keyword_hash = self._failed_key(term).split("_")[0]
+        download_errors = 0
 
-        for video in videos:
+        windows = (await self._windows(term, videos))[:DOWNLOAD_TRIES]
+        for video, start in windows:
             if self.backing_off():
                 return None
-            start = min(START_OFFSET_S, max(0, (video.get("duration") or 0) - CLIP_SECONDS - 5))
             clip_path = await self.download_clip(video["url"], video["id"], start, CLIP_SECONDS, keyword_hash)
             self._note_attempt(clip_path is not None)
             if not clip_path:
+                download_errors += 1
+                continue
+            look = await self._look(clip_path)
+            if not _passes(look):
+                log_service.detail(f"[YOUTUBE] '{term}': {video['id']} @ {start:.0f}s looks wrong "
+                                   f"({_look_text(look)}), not kept", "external")
+                _discard(clip_path)
                 continue
             meta = {
                 "keyword": term,
                 "source_title": video["title"],
                 "source_url": video["url"],
                 "source_id": video["id"],
+                "start": round(start, 1),
+                "look": round(float(look.mean()), 3),
                 "cached_at": _now_iso(),
             }
             self.index["clips"][clip_path.name] = meta
@@ -659,10 +696,148 @@ class YouTubeClipService:
             await self._save_index()
             return clip_path
 
+        if download_errors and download_errors == len(windows):
+            return None
         log_service.detail(f"[YOUTUBE] No usable video for '{term}'", "external")
         self._mark_failed(term)
         await self._save_index()
         return None
+
+    async def _windows(self, term: str, videos: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], float]]:
+        if not videos:
+            return []
+        found = []
+        for info in await self._inspect([video["url"] for video in videos]):
+            duration = info.get("duration") or 0
+            if ((info.get("age_limit") or 0) >= 18 or info.get("live_status") in LIVE_STATUSES
+                    or not MIN_SOURCE_SECONDS <= duration <= MAX_SOURCE_SECONDS):
+                continue
+            video = {"id": info["id"], "title": info.get("title") or "", "duration": duration,
+                     "url": f"https://www.youtube.com/watch?v={info['id']}"}
+            frames = await self._storyboard(info)
+            if not frames:
+                found.append((-1.0, video, min(START_OFFSET_S, max(0, duration - CLIP_SECONDS - 5))))
+                continue
+            look, relevance = await asyncio.to_thread(vision.judge, [image for _, image in frames], term)
+            best = _best_window([at for at, _ in frames], look, relevance, duration)
+            if best is not None:
+                found.append((best[0], video, best[1]))
+        found.sort(key=lambda window: window[0], reverse=True)
+        return [(video, start) for _, video, start in found]
+
+    async def _inspect(self, urls: List[str]) -> List[Dict[str, Any]]:
+        cmd = [self.ytdlp_path, *self.runtime_args, "--dump-json", "--skip-download", "--no-warnings",
+               "--ignore-errors", "--no-playlist", *urls]
+        try:
+            _, stdout, stderr = await self._run(cmd, INSPECT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            log_service.detail(f"[YOUTUBE] Inspecting {len(urls)} videos timed out", "external")
+            return []
+        infos = []
+        for line in stdout.decode("utf-8", "replace").splitlines():
+            try:
+                info = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if info.get("id"):
+                infos.append(info)
+        if len(infos) < len(urls):
+            log_service.detail(f"[YOUTUBE] {len(urls) - len(infos)} of {len(urls)} videos not readable: "
+                               f"{_one_line(stderr)}", "external")
+        return infos
+
+    async def _storyboard(self, info: Dict[str, Any]) -> List[Tuple[float, Image.Image]]:
+        boards = [board for board in info.get("formats") or []
+                  if board.get("format_note") == "storyboard" and board.get("fragments") and board.get("fps")
+                  and board.get("width") and board.get("height")]
+        if not boards:
+            return []
+        board = max(boards, key=lambda candidate: candidate["width"] * candidate["height"])
+        rows, columns = board.get("rows") or 1, board.get("columns") or 1
+        width, height = board["width"], board["height"]
+        sheets, begin = [], 0.0
+        for fragment in board["fragments"]:
+            sheets.append((begin, fragment))
+            begin += fragment.get("duration") or 0
+        if len(sheets) > STORYBOARD_SHEETS:
+            step = len(sheets) / STORYBOARD_SHEETS
+            sheets = [sheets[int(i * step)] for i in range(STORYBOARD_SHEETS)]
+        frames = []
+        for begin, fragment in sheets:
+            try:
+                response = await fetch("GET", fragment["url"], retries=1, timeout=20)
+                if response.status_code != 200:
+                    continue
+                sheet = Image.open(io.BytesIO(response.content)).convert("RGB")
+            except Exception:
+                continue
+            end = begin + (fragment.get("duration") or 0)
+            for k in range(rows * columns):
+                at = begin + k / board["fps"]
+                x, y = (k % columns) * width, (k // columns) * height
+                if at >= end or x + width > sheet.width or y + height > sheet.height:
+                    break
+                frames.append((at, sheet.crop((x, y, x + width, y + height))))
+        return frames
+
+    async def _look(self, path: Path) -> np.ndarray:
+        frames = await asyncio.to_thread(clip_frames, str(path), CLIP_SECONDS)
+        look, _ = await asyncio.to_thread(vision.judge, frames)
+        return look
+
+    async def _rescore_until(self, deadline: float):
+        clips = self.index["clips"]
+        while time.time() < deadline and not self.priority:
+            file = next((name for name, meta in clips.items() if "look" not in meta), None)
+            if file is None:
+                return
+            look = await self._look(self.cache_dir / file)
+            if file not in clips:
+                continue
+            if _passes(look):
+                clips[file]["look"] = round(float(look.mean()), 3)
+                self.rescored_kept += 1
+            else:
+                self._remove_clip(file)
+                self.rescored_removed += 1
+            self.index_dirty = True
+
+    def _remove_clip(self, file: str):
+        path = self.cache_dir / file
+        size = path.stat().st_size if path.exists() else 0
+        _discard(path)
+        self.index["clips"].pop(file, None)
+        if self.library is not None:
+            self.library.remove(file)
+        self.cache_bytes -= size
+        self.index_dirty = True
+
+
+def _passes(look: np.ndarray) -> bool:
+    return bool(len(look)) and float(look.mean()) >= settings.YOUTUBE_CLIPS_LOOK_MEAN \
+        and float(look.min()) >= settings.YOUTUBE_CLIPS_LOOK_MIN
+
+
+def _look_text(look: np.ndarray) -> str:
+    return f"look {look.mean():.2f}, lowest {look.min():.2f}" if len(look) else "no frames"
+
+
+def _best_window(times: List[float], look: np.ndarray, relevance: np.ndarray,
+                 duration: float) -> Optional[Tuple[float, float]]:
+    best = None
+    for i, start in enumerate(times):
+        if start > duration - CLIP_SECONDS - 2:
+            break
+        inside = [j for j in range(i, len(times)) if times[j] < start + CLIP_SECONDS]
+        if len(inside) < 2:
+            continue
+        window = look[inside]
+        if window.mean() < STORYBOARD_LOOK_MEAN or window.min() < STORYBOARD_LOOK_MIN:
+            continue
+        score = float(relevance[inside].mean())
+        if best is None or score > best[0]:
+            best = (score, start)
+    return best
 
 
 def _discard(path: Path):

@@ -71,8 +71,11 @@ async def ask(model: str, batch: list) -> dict:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Fill derived_tags.video_search_terms on tracks that have none, "
+    parser = argparse.ArgumentParser(description="Fill derived_tags.video_search_terms on tracks that have none "
+                                                 "(or, with --rewrite, on every track), "
                                                  f"{BATCH} tracks per DeepSeek call (never Gemini)")
+    parser.add_argument("--rewrite", action="store_true",
+                        help="write new terms for every track with the current prompt, not only the ones without")
     parser.add_argument("--limit", type=int, default=0, help="at most this many tracks (0 = all)")
     parser.add_argument("--apply", action="store_true", help="write the results (default: dry run, no LLM calls)")
     args = parser.parse_args()
@@ -84,11 +87,13 @@ async def main():
 
     catalog = CatalogDatabaseService()
     await catalog.initialize()
-    todo = sorted((t for t in catalog.tracks.values() if missing(t)), key=lambda t: t.get("created_at", ""))
+    todo = sorted((t for t in catalog.tracks.values() if args.rewrite or missing(t)),
+                  key=lambda t: t.get("created_at", ""))
     if args.limit:
         todo = todo[:args.limit]
     batches = [todo[i:i + BATCH] for i in range(0, len(todo), BATCH)]
-    print(f"{len(todo)} track(s) without video search terms -> {len(batches)} DeepSeek call(s) on {deepseek}")
+    print(f"{len(todo)} track(s) {'to rewrite' if args.rewrite else 'without video search terms'} -> "
+          f"{len(batches)} DeepSeek call(s) on {deepseek}")
     if not args.apply:
         print("Dry run: add --apply to call DeepSeek and write.")
         return
@@ -107,6 +112,7 @@ async def main():
             if original.is_file() and not (backup_dir / original.name).exists():
                 shutil.copy2(original, backup_dir / original.name)
             track.setdefault("derived_tags", {})["video_search_terms"] = terms
+            (track.get("generation_params") or {}).pop("video_search_terms", None)
             await asyncio.to_thread(catalog.write_track_metadata, track["id"], track)
             written += 1
         print(f"batch {number}/{len(batches)}: {written} written so far, {short} skipped (fewer than {MIN_TERMS} terms)")
